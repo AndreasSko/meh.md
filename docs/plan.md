@@ -16,8 +16,10 @@ Updated: 2026-09-12
   both explicitly using TextKit 2, while syntax detection and later document
   behavior remain shared. Paint-only styles use rendering attributes; font
   styles use undo-suppressed text-storage attributes.
-- Next: exercise the remaining input-method and iOS/iPad interaction risks,
-  then define the minimum document and persistence boundary.
+- The document boundary is recorded: shared document state is authoritative,
+  while Markdown files are derived copies maintained by a separate writer.
+- Next: begin milestone 1 with the shared document core and local durability
+  contract.
 
 ## Working method
 
@@ -43,7 +45,7 @@ important unknowns.
 
 ## 0 — Foundation and editor investigation
 
-Status: in progress.
+Status: complete on 2026-09-12.
 
 ### Work
 
@@ -186,3 +188,21 @@ For each completed milestone, append a short entry with its date, commit,
 delivered behavior, automated checks, actual device checks, known limitations,
 and next step. A passing build alone does not establish reliable
 synchronization.
+
+### Milestone 0 — 2026-09-12
+
+- **Commits:** `1f3519a`, `f952a9e`, and `0c4be68` in PR #3, followed by this
+  documentation closeout.
+- **Delivered:** Multiplatform project foundation, literal-Markdown TextKit 2
+  editor spike, shared syntax detection, FSNotes investigation, and accepted
+  editor and document-boundary decisions.
+- **Automated checks:** macOS and generic iOS Simulator builds, Unicode and
+  nested-style syntax checks, clean-diff checks, and a focused macOS native
+  undo probe.
+- **Device checks:** macOS editing and undo, iPhone and iPad simulator
+  presentation, and owner-tested editing and undo on a physical iPhone.
+- **Known limitations:** No persistence or synchronization yet; larger heading
+  metrics, long-document optimization, IME behavior, external model updates,
+  and physical iPad interaction remain deferred or unverified.
+- **Next:** Milestone 1 implements one durable note behind the accepted shared
+  document boundary and maintains its derived Markdown copy.

@@ -2,8 +2,9 @@
 
 Updated: 2026-09-12
 
-This is milestone 0 research and spike evidence. It does not finalize the
-editor architecture.
+This records milestone 0 research and spike evidence. The resulting editor
+architecture is accepted in
+[ADR 001](decisions/001-native-text-editor.md).
 
 ## FSNotes revision and license
 

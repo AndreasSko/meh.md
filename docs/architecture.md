@@ -2,9 +2,9 @@
 
 Updated: 2026-09-12
 
-These notes describe a proposed implementation, not verified capabilities. The
-product requirements are agreed; dependencies and implementation details must
-be validated during milestone 0 and the sync prototype.
+These notes distinguish accepted boundaries from proposed implementation
+details. Dependencies and synchronization details still require validation in
+their respective milestones.
 
 ## Project identity and platforms
 
@@ -79,6 +79,12 @@ The internal document state is authoritative for in-app editing and
 synchronization. Ordinary Markdown files are continuously maintained derived
 copies in user-visible local storage, with no import of subsequent external
 changes in the first version.
+
+The shared document core owns stable note identity, literal Markdown text,
+metadata, and edit application. Native editor adapters do not persist data.
+The local store and Markdown writer sit behind the core, and future sync must
+use the same boundary. This is recorded in
+[ADR 002](decisions/002-document-persistence-boundary.md).
 
 - Save locally without waiting for network access. Define when an edit is
   considered durably saved.
