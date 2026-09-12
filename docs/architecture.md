@@ -13,9 +13,10 @@ be validated during milestone 0 and the sync prototype.
 - Apple development team: `9YFM7J3EH3` for the app and test targets.
 - Intended deployment targets: macOS 27, iOS 27, and iPadOS 27.
 
-The development Mac is due to be upgraded from macOS 15.7.9 to macOS 27.
-Milestone 0 must verify the installed OS, Xcode, SDKs, signing, and exact
-target versions before generating the project. Reserve a CloudKit container
+The existing Xcode project declares macOS 27 and iOS/iPadOS 27. A separate
+toolchain and signing audit was explicitly deferred during the first editor
+tranche. Successful unsigned local builds establish SDK compatibility, but do
+not verify signing or real-device deployment. Reserve a CloudKit container
 when the synchronization prototype requires it; the expected identifier is
 `iCloud.de.andreas-sk.meh-md`.
 
@@ -32,10 +33,16 @@ when the synchronization prototype requires it; the expected identifier is
 - **CloudKit transport:** Transfer document changes and report synchronization
   events.
 
-Prefer SwiftUI. Use AppKit/UIKit only if absolutely necessary.
-Share document behavior across platforms while allowing platform-specific
-editor and navigation code. Confirm the exact editor APIs through a small
-prototype.
+Use SwiftUI for the application interface. Keep the editable text surface as a
+thin AppKit/UIKit adapter, sharing syntax detection and document behavior
+across platforms. The editor spike found that SwiftUI's attributed
+`TextEditor` creates a formatting-only undo step when derived Markdown styles
+are refreshed. Native text views expose the hooks needed to avoid that behavior
+and to detect marked text from input methods. Both adapters select TextKit 2
+explicitly. Paint-only presentation uses rendering attributes; fonts that
+affect layout use text-storage attributes with undo registration suppressed.
+The no-extra-step result has been observed on macOS, and the owner has tested
+editing and undo on a physical iPhone. iPadOS interaction checks remain open.
 
 ## Editor
 
@@ -44,9 +51,23 @@ replacing source sequences with attachment characters. This matches the initial
 visible-syntax requirement and should simplify mapping edits to document
 operations.
 
+TextKit 2 rendering attributes do not participate in layout. Milestone 0 uses
+a body-sized bold heading style. Larger heading metrics are deferred to
+milestone 1 and will use managed text-storage attributes unless testing shows a
+custom layout fragment is warranted.
+
 Investigate FSNotes as an implementation reference and possible source of
 selectively reusable code, not as an assumed drop-in editor dependency. Check
 dependencies, text-index handling, and licensing before copying anything.
+
+The initial investigation found that FSNotes is MIT licensed but that its
+editor is tightly coupled to application services. Some paths replace Markdown
+with attachments and some range calculations mix native UTF-16 offsets with
+Swift character counts. The current independent native spike therefore uses
+FSNotes only as a behavioral reference. See
+[the editor investigation](editor-investigation.md) for evidence and deferred
+risks and [the editor decision](decisions/001-native-text-editor.md) for the
+accepted direction.
 
 Explicitly test the relationship between native text ranges, Swift strings, and
 the chosen Automerge text encoding. Selection, input-method composition, and
@@ -106,7 +127,6 @@ making it the permanent editor interface.
 
 ## Decisions still to resolve
 
-- Native editor implementation and parsing/styling approach; any FSNotes reuse.
 - Local storage format, transaction boundaries, Markdown-write recovery,
   external-change recovery, and revision retention.
 - Note/folder metadata schema, filename collisions, and delete-versus-edit

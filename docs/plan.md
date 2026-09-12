@@ -5,9 +5,19 @@ Updated: 2026-09-12
 ## Current state
 
 - Product scope and initial plan are documented.
-- No app code, editor prototype, or sync implementation exists yet.
-- No builds or device tests have been performed.
-- Next: milestone 0. Implementation has not started.
+- A basic multiplatform Xcode project exists for macOS, iPhone, and iPad.
+- A literal-Markdown editor spike exists and has passed macOS and generic iOS
+  simulator builds. Its macOS editing checks are recorded separately.
+- No shared document core, persistence, or sync implementation exists yet.
+- The editor has been visually checked in iPhone and iPad simulators. The owner
+  has exercised editing and undo on a physical iPhone; iPad device interaction
+  remains open.
+- The editor direction is recorded: SwiftUI hosts thin native text views,
+  both explicitly using TextKit 2, while syntax detection and later document
+  behavior remain shared. Paint-only styles use rendering attributes; font
+  styles use undo-suppressed text-storage attributes.
+- Next: exercise the remaining input-method and iOS/iPad interaction risks,
+  then define the minimum document and persistence boundary.
 
 ## Working method
 
@@ -33,27 +43,43 @@ important unknowns.
 
 ## 0 — Foundation and editor investigation
 
-Status: not started.
+Status: in progress.
 
 ### Work
 
-- Investigate how FSNotes styles Markdown and how coupled the useful code is to
-  its app. Compare selective reuse with a small native text-view
-  implementation; record licensing obligations if reusing code.
-- Prefer literal Markdown text with styling for the first editor. Build a small
-  sample before committing to a rendering approach.
-- Establish an app skeleton for macOS and a universal iPhone/iPad app, with
-  shared document logic.
-- Finalize the minimum document/persistence boundary needed to avoid replacing
-  a throwaway storage model when adding sync.
+- Reconcile the milestone with the existing multiplatform Xcode project. A
+  separate toolchain, SDK, simulator, and signing audit is not part of the
+  current editor tranche.
+- Inspect the current FSNotes editor sources, dependencies, license, and
+  text-range strategy. Identify which parts, if any, can be reused
+  independently and record obligations that copying code would introduce.
+- Compare selective FSNotes reuse with a thin native editor built on
+  `NSTextView` and `UITextView`. Consider literal-source preservation,
+  range/index conversion, composition, selection, undo, cross-platform
+  sharing, dependencies, coupling, and licensing.
+- Build the smallest native editor spike in the existing project. Keep its
+  backing value as literal Markdown and style a deliberately small syntax
+  sample without inserting attachment characters or rewriting the source.
+- Exercise plain typing, selection replacement, multiline paste, emoji,
+  accented text, and undo/redo. Do not add persistence, synchronization,
+  folders, or the complete milestone 1 syntax set to the spike.
+- After the spike is evaluated, finalize the minimum document and persistence
+  boundary needed to avoid replacing a throwaway storage model when sync is
+  added.
 
 ### Acceptance
 
-- The app builds for macOS and iOS/iPadOS with reproducible commands recorded
-  in the repository.
-- A basic editor can be exercised on Mac and in iPhone/iPad simulator layouts.
-- The editor choice, explicit deployment targets, and unresolved risks are
-  documented.
+- The FSNotes revision inspected, relevant source paths, dependencies, license,
+  and any attribution obligations are recorded.
+- A comparison explains whether selective reuse or a thin native wrapper is
+  preferred without treating FSNotes as a drop-in dependency.
+- The existing app contains a basic literal-Markdown editor whose displayed
+  styling does not change its backing source text.
+- Focused checks cover ASCII Markdown, emoji, accented text, and multiline
+  source. Manual spike notes distinguish observed selection, composition, and
+  undo/redo behavior from anything not yet verified.
+- The editor direction, explicit deployment targets, and unresolved risks are
+  documented before the milestone is completed.
 - No real notes are imported or modified.
 
 ## 1 — One pleasant, durable note
