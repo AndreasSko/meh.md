@@ -13,7 +13,8 @@ Updated: 2026-09-12
   macOS and iOS after a targeted macOS undo callback correction.
 - A production single-note core now saves serialized Automerge files, tracks
   saved state with heads, and supports explicit previous-file recovery. The
-  app exposes one editing window/scene. Sync and Markdown copies remain open.
+  app exposes one editing window/scene. The managed Markdown copy is
+  implemented and its signed Mac app checks passed. Sync remains open.
 - The editor has been visually checked in iPhone and iPad simulators. The owner
   has exercised editing and undo on a physical iPhone; iPad device interaction
   remains open.
@@ -23,8 +24,9 @@ Updated: 2026-09-12
   styles use undo-suppressed text-storage attributes.
 - The document boundary is recorded: shared document state is authoritative,
   while Markdown files are derived copies maintained by a separate writer.
-- Next: define the milestone 1 durability and recovery contract around the
-  validated Automerge files before further editor development; no SQLite.
+- Editor styling is implemented, with 14 macOS native editor tests passing.
+- Next: finish PR review. The owner deferred the iOS app test and milestone
+  closure.
 
 ## Working method
 
@@ -100,13 +102,14 @@ implementation checkpoints, and sub-agent assignments.
 
 - The [Automerge spike](automerge-spike.md) follow-up validates history through
   interrupted file saves and automatic native undo integration.
-- After the spike passes, use an Automerge-backed shared core and safe internal
-  file persistence, retaining a previous known-good version for recovery.
-- Implement headings, emphasis, lists, links, and code styling while retaining
-  visible syntax.
-- Persist edits locally and maintain an ordinary Markdown copy.
-- Materialize that copy in the platform's documented user-visible location and
-  detect external changes without importing or destroying them.
+- The Automerge-backed core and internal file persistence are implemented,
+  retaining a previous known-good version for explicit recovery.
+- Headings, emphasis, lists, links, and code styling are implemented while
+  retaining visible syntax.
+- Persist edits locally and maintain a managed, one-way Markdown copy.
+- Materialize that copy in the platform's documented user-visible location.
+  Overwrite external edits to the managed copy and recreate deletions without
+  ingesting either as document changes.
 - Establish basic selection, copy/paste, native undo, and a recovery strategy.
 
 ### Acceptance

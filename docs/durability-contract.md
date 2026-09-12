@@ -72,9 +72,12 @@ Scope: milestone 1's first usable single-note increment.
 - Keep its destination, last managed content fingerprint, and interrupted
   write bookkeeping outside the Automerge document. The copy's heads may be
   tracked as provenance; they cannot detect external file edits.
-- Reconcile the actual copy on restart before overwriting it. Missing or
-  unexpected bytes and a crash between copy replacement and bookkeeping need
-  explicit handling in step 6; no speculative queue is added now.
+- Protect an unrelated `note.md` when a destination is first selected. After
+  creation, treat the path as a one-way managed output. Overwrite external
+  edits and recreate deletions from persisted authoritative text on the next
+  publish, activation, or reopen.
+- Do not ingest copy changes or create conflict copies. The product describes
+  the copy as read-only without claiming operating-system write protection.
 
 ## Evidence required for the usable slice
 

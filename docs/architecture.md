@@ -76,9 +76,9 @@ undo must not be broken by styling or remote updates.
 ## Local persistence and Markdown copies
 
 The internal document state is authoritative for in-app editing and
-synchronization. Ordinary Markdown files are continuously maintained derived
-copies in user-visible local storage, with no import of subsequent external
-changes in the first version.
+synchronization. Ordinary Markdown files are managed, one-way product outputs
+in user-visible local storage. The first version does not ingest external
+changes.
 
 The shared document core owns stable note identity, literal Markdown text,
 metadata, and edit application. Native editor adapters do not persist data.
@@ -100,7 +100,8 @@ after a scoped macOS UndoManager callback correction. `Sources/NoteCore` now
 implements the session and serialized file storage. The
 [durability contract](durability-contract.md) uses Automerge heads for saved
 state and defines recovery behavior. Separate file writes are not one atomic
-transaction. Markdown materialization remains the next increment.
+transaction. Markdown materialization uses the approved
+[copy contract](markdown-copy-contract.md).
 
 - Save locally without waiting for network access. Define when an edit is
   considered durably saved.
@@ -114,9 +115,10 @@ transaction. Markdown materialization remains the next increment.
   security-scoped bookmark. Handle moved, missing, and inaccessible folders.
 - On iPhone and iPad, keep the projection in the app's Documents directory and
   expose it through Files.
-- Detect external changes before replacing a projection. Do not silently
-  import them or destroy the externally changed content; define the exact
-  warning and recovery behavior before implementing the writer.
+- Protect an unrelated `note.md` when a destination is first selected. Once
+  the app creates its managed copy, replace external edits on the next publish,
+  activation, or reopen, and recreate deletions. Do not ingest external edits
+  or create conflict copies.
 
 Markdown copies are not independent backups. In particular, an iOS or iPadOS
 Documents directory can be removed when the app is uninstalled. Provide an
@@ -150,9 +152,9 @@ making it the permanent editor interface.
 
 ## Decisions still to resolve
 
-- Durable-save acknowledgment, Markdown-write bookkeeping and recovery,
-  external-change recovery, and version retention around the validated
-  Automerge file layout and safe-write procedure.
+- Durable-save acknowledgment and local fallback recovery are implemented.
+  The one-way Markdown-copy ownership policy is accepted. A user-facing
+  history retention policy remains separate work.
 - Note/folder metadata schema, filename collisions, and delete-versus-edit
   semantics.
 - CloudKit record layout, snapshot discovery, initial download, and history

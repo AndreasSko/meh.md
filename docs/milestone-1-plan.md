@@ -1,7 +1,8 @@
 # Milestone 1 execution plan
 
 Prepared: 2026-09-12
-Status: local slice implemented; Mac reopen verified, iOS app check open.
+Status: styling and one-way copies implemented; signed Mac copy checks passed.
+The owner has deferred the iOS test and milestone closure.
 
 ## Outcome and scope
 
@@ -185,6 +186,10 @@ success. This is the first owner-testable increment.
 
 ### 6. Maintain the portable Markdown copy safely
 
+**Status:** implementation, fault tests, and signed Mac app checks passed.
+The one-way, read-only copy policy is approved. See the
+[copy contract](markdown-copy-contract.md).
+
 - Use a macOS-selected local folder outside iCloud Drive, read/write sandbox
   access, and a persisted security-scoped bookmark. Handle stale bookmarks,
   missing folders, moved folders, and access failures with a reconnect action.
@@ -196,21 +201,24 @@ success. This is the first owner-testable increment.
   bookkeeping. Retry after restart, including a crash after file replacement
   but before recording successful materialization.
 - Track the last managed bytes/fingerprint and the attempted snapshot heads.
-  Check for external changes before writes and on reopen/reactivation, without
-  introducing continuous file watching.
-- On unexpected content, preserve it in place and pause writes to that path.
-  Show a warning and offer a new destination/copy for the app's saved text.
-  Define external deletion separately from first creation and failed writes.
-- Evaluate coordinated access and the check-to-replace race explicitly. Test
-  changes during a write; a preflight hash alone is not sufficient evidence
-  that arbitrary concurrent writers cannot lose content.
+  On publish, activation, and reopen, overwrite external edits to the managed
+  copy and recreate it after deletion. Do not introduce continuous watching.
+- Do not ingest external edits or create conflict copies. Describe the managed
+  copy as read-only product output without claiming operating-system write
+  protection.
+- Evaluate coordinated access and replacement races explicitly. Test changes
+  during a write and confirm that the latest authoritative snapshot wins.
 
 **Checkpoint:** compare exact UTF-8 bytes with saved text. Test missing copies,
-existing unrelated files, external edits/deletion, inaccessible destinations,
-and interruption at each write/bookkeeping boundary. These failures must never
-prevent authoritative local saving.
+existing unrelated files, overwritten external edits, recreated deletions,
+inaccessible destinations, and interruption at each write/bookkeeping
+boundary. These failures must never prevent authoritative local saving.
 
 ### 7. Finish the agreed editor styling
+
+**Status:** implemented; 14 macOS native editor tests pass, including 11 new
+styling tests. Mac visual and undo checks passed. Further iOS checks are
+deferred; the milestone remains open.
 
 - Define fixtures for headings, strong/emphasis, ordered/unordered lists,
   inline links, inline code, and fenced code, including incomplete syntax while
@@ -277,8 +285,9 @@ main task's responsibility.
 
 ## Continuation instruction
 
-Read this plan, the spike report, and the accepted decisions. Finish recording
-the iOS app save/reopen check, then continue with the Markdown copy in step 6.
+Read this plan, the spike report, and the accepted decisions. The owner has
+deferred the iOS test and milestone closure. Complete the remaining
+Markdown-copy review and non-iOS verification work in this milestone.
 Use the durability contract and scalar Automerge text
 with tested UTF-16 conversion at the editor boundary. Use the validated
 file-based approach, without SQLite. Implement in small verified increments
