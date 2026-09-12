@@ -1,6 +1,6 @@
 import Foundation
 
-public struct NoteSnapshot: Equatable, Sendable {
+public struct NoteSnapshot: Codable, Equatable, Sendable {
     public let data: Data
     public let heads: Set<String>
     public let noteID: UUID

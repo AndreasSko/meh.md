@@ -19,6 +19,8 @@ public final class NoteSession {
     public private(set) var recoveryErrorMessage: String?
     public private(set) var persistedSnapshot: NoteSnapshot?
 
+    public var currentSnapshot: NoteSnapshot? { document?.snapshot() }
+
     public var isEditingEnabled: Bool {
         switch status {
         case .saved, .saving, .saveFailed:
@@ -105,6 +107,52 @@ public final class NoteSession {
     public func retrySave() {
         guard isEditingEnabled, document != nil else { return }
         queueCurrentSnapshot()
+    }
+
+    /// Apply native edits to the revision the editor actually displayed.
+    /// This preserves remote changes received while the native view was
+    /// composing marked text or waiting for a SwiftUI update.
+    @discardableResult
+    public func commitEditorText(
+        _ replacement: String,
+        basedOn serializedRevision: Data
+    ) throws -> NoteSnapshot {
+        guard isEditingEnabled, let document else {
+            throw SyncError.localSaveRequired
+        }
+        let branch = try NoteDocument(serializedData: serializedRevision)
+        try branch.replaceAll(with: replacement)
+        try document.merge(branch)
+        text = try document.text
+        queueCurrentSnapshot()
+        return document.snapshot()
+    }
+
+    /// Remote state always joins the live document, including unsaved typing.
+    /// A caller must await flush() before acknowledging download progress.
+    public func mergeRemote(_ snapshot: NoteSnapshot) throws {
+        guard isEditingEnabled, let document else {
+            throw SyncError.localSaveRequired
+        }
+        let remote = try NoteDocument(snapshot: snapshot)
+        guard remote.noteID == document.noteID else {
+            throw SyncError.identityConflict
+        }
+        let before = document.heads
+        try document.merge(remote)
+        guard document.heads != before else { return }
+        text = try document.text
+        queueCurrentSnapshot()
+    }
+
+    /// Await this session's serialized save loop without creating another
+    /// writer. A failed local save never acknowledges a remote download.
+    public func flush() async throws {
+        while let task = saveTask { await task.value }
+        guard case .saved = status,
+              let persistedHeads, document?.heads == persistedHeads else {
+            throw SyncError.localSaveRequired
+        }
     }
 
     public func recoverFromPrevious() async {
