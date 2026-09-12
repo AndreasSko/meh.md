@@ -2,7 +2,7 @@
 
 Prepared: 2026-09-12
 Status: styling and one-way copies implemented; signed Mac copy checks passed.
-The owner has deferred the iOS test and milestone closure.
+The iPhone simulator save/reopen and Files checks passed. Closure is deferred.
 
 ## Outcome and scope
 
@@ -166,8 +166,9 @@ Also exercise real process termination; distinguish it from mocked failures.
 
 ### 5. Connect the editor and deliver the first usable slice
 
-**Status:** implemented; Mac app save/undo/quit/reopen verified. The iOS app
-interaction remains open; its build and actual native adapter tests passed.
+**Status:** implemented; Mac app save/undo/quit/reopen verified. The iPhone 17
+simulator app save/reopen and Files checks passed, alongside the earlier native
+adapter tests. Physical-device acceptance remains separate.
 
 - Replace the runtime sample state with the shared session. Keep sample text
   in previews or explicit test fixtures.
@@ -286,10 +287,10 @@ main task's responsibility.
 ## Continuation instruction
 
 Read this plan, the spike report, and the accepted decisions. The owner has
-deferred the iOS test and milestone closure. Complete the remaining
-Markdown-copy review and non-iOS verification work in this milestone.
-Use the durability contract and scalar Automerge text
-with tested UTF-16 conversion at the editor boundary. Use the validated
+deferred milestone closure. The iPhone simulator save/reopen and Files checks
+have passed. Continue review follow-ups and the recorded remaining device
+checks within this milestone. Use the durability contract and scalar Automerge
+text with tested UTF-16 conversion at the editor boundary. Use the validated
 file-based approach, without SQLite. Implement in small verified increments
 and use bounded sub-agents where their dependencies are settled. Do not advance
 milestone 1 to complete without recording the acceptance evidence and

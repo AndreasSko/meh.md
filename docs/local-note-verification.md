@@ -54,9 +54,33 @@ Scope: milestone 1 local persistence, styling, and managed Markdown copies.
   `CODE_SIGNING_ALLOWED=NO`.
 - A signed Mac build contains sandbox, user-selected read/write, and scoped
   bookmark entitlements. Runtime bookmark restoration was also checked as
-  described below. No new iOS runtime test was run in this continuation.
+  described below. iOS simulator runtime checks are recorded below.
 - The final signed Mac build and unsigned iOS Simulator compilation both
   passed after the one-way copy policy changes, without compiler warnings.
+
+## Repeatable iOS app test
+
+`meh.mdUITests/NotePersistenceUITests.swift` passed on iPhone 17 / iOS 27:
+it preserved the original note, appended unique ASCII and Unicode text,
+waited for both save statuses, terminated the app, and verified exact text
+and statuses after relaunch. The result bundle reports 1 passed, 0 failed.
+Independent comparison of `Documents/note.md` matched all 185 UTF-8 bytes.
+
+Run against a booted simulator, substituting its UDID:
+
+```sh
+xcodebuild -project meh.md.xcodeproj -scheme meh.md \
+  -destination 'id=<simulator-UDID>' \
+  -parallel-testing-enabled NO \
+  CODE_SIGNING_ALLOWED=NO test \
+  -only-testing:meh.mdUITests/NotePersistenceUITests
+```
+
+Disable parallel testing for this existing-data check. The initial parallel
+run cloned the simulator and copied stale destination folder identity;
+the app correctly requested reconnection. The original simulator passed
+without any product change. Install/restore behavior remains a separate
+acceptance case. The test appends a unique section to the simulator note.
 
 ## App checks
 
@@ -82,11 +106,16 @@ Scope: milestone 1 local persistence, styling, and managed Markdown copies.
   relaunching recreated the same exact bytes. No conflict files were produced.
 - A release-optimized parser probe averaged 5.63 ms for about 15 KB across
   100 sections. This is a Mac parsing measurement, not device typing latency.
-- The iOS Simulator app save/reopen interaction remains open. Its build and
-  native adapter tests passed; these do not substitute for that app check.
-  Installation and launch on iPhone 17 succeeded. Computer Use could not
-  resolve Simulator, and opening Device Hub did not return before it was
-  aborted. No simulator test text was entered or existing data erased.
+- iPhone 17 / iOS 27: built, installed, and launched through `xcodebuild` and
+  `simctl`. Device Hub became accessible after quitting stuck GUI processes
+  and opening its `Contents/MacOS/DeviceHub` executable through macOS `open`.
+  Starting that executable directly from a shell did not fix discovery.
+- Entered a Unicode note through the accessibility control and committed it
+  through a native keystroke. The app reported Saved and an up-to-date copy;
+  independent comparison verified its exact 61 UTF-8 bytes. After terminating
+  the app with `simctl` and relaunching, the editor retained the same text and
+  statuses. Files displayed `meh.md/note.md`, and Quick Look showed its text.
+  No simulator data was erased and no physical device was used.
 
 ## Review follow-up
 
@@ -104,8 +133,9 @@ Scope: milestone 1 local persistence, styling, and managed Markdown copies.
 ## Remaining work and limits
 
 - Mac copy selection, updates, scoped-bookmark restoration, overwrite, and
-  recreation checks passed. The iOS app test and milestone closure remain
-  explicitly deferred by the owner. There is no CloudKit transport or sync.
+  recreation checks passed. The iOS simulator save/reopen and Files checks
+  also passed. Milestone closure remains explicitly deferred by the owner.
+  There is no CloudKit transport or sync.
 - Production file tests inject interruption stages in-process. Real SIGKILL
   history evidence belongs to the spike, whose file procedure the core uses.
   No sudden-power-loss guarantee is established.

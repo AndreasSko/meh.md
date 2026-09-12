@@ -25,8 +25,8 @@ Updated: 2026-09-12
 - The document boundary is recorded: shared document state is authoritative,
   while Markdown files are derived copies maintained by a separate writer.
 - Editor styling is implemented, with 14 macOS native editor tests passing.
-- Next: finish PR review. The owner deferred the iOS app test and milestone
-  closure.
+- The iPhone 17 simulator save/reopen and Files checks passed. Physical-device
+  acceptance remains separate; the owner has deferred milestone closure.
 
 ## Working method
 
