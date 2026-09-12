@@ -51,10 +51,9 @@ replacing source sequences with attachment characters. This matches the initial
 visible-syntax requirement and should simplify mapping edits to document
 operations.
 
-TextKit 2 rendering attributes do not participate in layout. Milestone 0 uses
-a body-sized bold heading style. Larger heading metrics are deferred to
-milestone 1 and will use managed text-storage attributes unless testing shows a
-custom layout fragment is warranted.
+TextKit 2 rendering attributes do not participate in layout. Milestone 1 adds
+larger heading metrics through managed, undo-suppressed text-storage
+attributes. Paint-only styles continue to use rendering attributes.
 
 Investigate FSNotes as an implementation reference and possible source of
 selectively reusable code, not as an assumed drop-in editor dependency. Check
@@ -128,8 +127,8 @@ discard CRDT state and create new identities when recovery is needed.
 
 ## Proposed synchronization
 
-Milestone 1 evaluates Automerge Swift locally, including merges between test
-replicas without network transport. Milestone 2 adds CKSyncEngine against a
+Milestone 1 validated Automerge Swift locally, including merges between test
+replicas without network transport. Milestone 2 will evaluate CKSyncEngine in a
 CloudKit private database to synchronize the existing documents. A custom
 server and a generic public sync library are outside the initial scope.
 

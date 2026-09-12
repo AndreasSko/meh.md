@@ -3,7 +3,8 @@ Stupid, minimalist, vibe-coded Note taking app that hopefully has better sync
 than Obsidian 🤞
 
 Personal native Markdown notes for Mac, iPhone, and iPad. Currently in
-early development. One note now saves locally as an Automerge document and
+early development, with milestone 1 complete. One note saves locally as an
+Automerge document and
 reopens after quitting. The app also maintains a user-visible Markdown copy as
 a one-way, read-only product output. Sync is still planned.
 

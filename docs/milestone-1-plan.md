@@ -1,8 +1,8 @@
 # Milestone 1 execution plan
 
 Prepared: 2026-09-12
-Status: styling and one-way copies implemented; signed Mac copy checks passed.
-The iPhone simulator save/reopen and Files checks passed. Closure is deferred.
+Status: complete on 2026-09-12. Mac and iPhone simulator checks passed.
+Outstanding device checks are recorded in the milestone completion record.
 
 ## Outcome and scope
 
@@ -218,8 +218,8 @@ boundary. These failures must never prevent authoritative local saving.
 ### 7. Finish the agreed editor styling
 
 **Status:** implemented; 14 macOS native editor tests pass, including 11 new
-styling tests. Mac visual and undo checks passed. Further iOS checks are
-deferred; the milestone remains open.
+styling tests. Mac visual and undo checks passed. iPhone simulator persistence
+checks passed; remaining physical-device checks stay explicitly open.
 
 - Define fixtures for headings, strong/emphasis, ordered/unordered lists,
   inline links, inline code, and fenced code, including incomplete syntax while
@@ -286,12 +286,10 @@ main task's responsibility.
 
 ## Continuation instruction
 
-Read this plan, the spike report, and the accepted decisions. The owner has
-deferred milestone closure. The iPhone simulator save/reopen and Files checks
-have passed. Continue review follow-ups and the recorded remaining device
-checks within this milestone. Use the durability contract and scalar Automerge
-text with tested UTF-16 conversion at the editor boundary. Use the validated
-file-based approach, without SQLite. Implement in small verified increments
-and use bounded sub-agents where their dependencies are settled. Do not advance
-milestone 1 to complete without recording the acceptance evidence and
-outstanding device checks.
+Milestone 1 is complete. Read the completion record in `docs/plan.md` and the
+verification limits before starting milestone 2. Preserve the Automerge core,
+local file store, and one-way Markdown writer. Begin with a bounded transport
+spike and a concrete sync plan; CloudKit delivery and remote editor updates
+are not yet validated. Carry forward physical-device persistence, iPad
+hardware-keyboard, and install/restore checks. Do not add notebook features
+until the single-note synchronization behavior is proven.

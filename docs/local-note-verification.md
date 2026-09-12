@@ -134,7 +134,7 @@ acceptance case. The test appends a unique section to the simulator note.
 
 - Mac copy selection, updates, scoped-bookmark restoration, overwrite, and
   recreation checks passed. The iOS simulator save/reopen and Files checks
-  also passed. Milestone closure remains explicitly deferred by the owner.
+  also passed. The owner authorized milestone closure on 2026-09-12.
   There is no CloudKit transport or sync.
 - Production file tests inject interruption stages in-process. Real SIGKILL
   history evidence belongs to the spike, whose file procedure the core uses.

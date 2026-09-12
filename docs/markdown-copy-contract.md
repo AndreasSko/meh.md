@@ -56,4 +56,5 @@ arriving during an older write. Signed Mac app checks passed for folder
 selection, exact UTF-8 updates, bookmark restoration, external-edit overwrite,
 and deleted-copy recreation. See [the evidence](local-note-verification.md).
 The iPhone 17 simulator also passed save/reopen, exact copy-byte comparison,
-and Files preview checks. The owner has deferred milestone closure.
+and Files preview checks. Milestone 1 is complete; remaining device checks
+are recorded in the milestone plan.

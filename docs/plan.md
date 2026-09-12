@@ -26,7 +26,7 @@ Updated: 2026-09-12
   while Markdown files are derived copies maintained by a separate writer.
 - Editor styling is implemented, with 14 macOS native editor tests passing.
 - The iPhone 17 simulator save/reopen and Files checks passed. Physical-device
-  acceptance remains separate; the owner has deferred milestone closure.
+  acceptance remains separate. Milestone 1 is complete; sync is next.
 
 ## Working method
 
@@ -93,7 +93,7 @@ Status: complete on 2026-09-12.
 
 ## 1 — One pleasant, durable note
 
-Status: in progress; local save/reopen slice implemented on 2026-09-12.
+Status: complete on 2026-09-12.
 
 See the revised [step-by-step execution plan](milestone-1-plan.md) for scope,
 implementation checkpoints, and sub-agent assignments.
@@ -223,3 +223,24 @@ synchronization.
   and physical iPad interaction remain deferred or unverified.
 - **Next:** Milestone 1 implements one durable note behind the accepted shared
   document boundary and maintains its derived Markdown copy.
+
+### Milestone 1 — 2026-09-12
+
+- **Delivery:** PR #5, including simulator regression commit `1440dc6`.
+  Milestone completion records delivered scope; PR merge is tracked separately.
+- **Delivered:** One native Markdown note with Automerge-backed local saves,
+  saved-state feedback, explicit previous-file recovery, managed Markdown
+  copies, and the agreed visible-syntax styling. No SQLite or network sync.
+- **Automated checks:** 47 core and 14 Mac native editor tests; 20 Automerge
+  spike tests; 3 iOS native adapter tests; 1 iPhone simulator app persistence
+  test. Real spike process kills exercised four save boundaries. Mac and iOS
+  builds passed. See [verification](local-note-verification.md).
+- **App checks:** Mac typing, undo, save/reopen, folder selection, bookmark
+  restoration, copy overwrite and recreation. iPhone simulator Unicode text,
+  save/relaunch, exact copy bytes, and Files preview passed.
+- **Known limitations:** Physical iPhone/iPad persistence acceptance, iPad
+  hardware-keyboard checks, and install/restore behavior remain open. No
+  sudden-power-loss guarantee, multiple notes, folders, import, or sync.
+- **Next:** Start milestone 2 with a bounded CloudKit/CKSyncEngine transport
+  spike. Prove durable delivery, offline convergence, and remote editor updates
+  for one note before expanding the data model. Carry device checks forward.
