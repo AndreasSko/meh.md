@@ -8,7 +8,12 @@ Updated: 2026-09-12
 - A basic multiplatform Xcode project exists for macOS, iPhone, and iPad.
 - A literal-Markdown editor spike exists and has passed macOS and generic iOS
   simulator builds. Its macOS editing checks are recorded separately.
-- No shared document core, persistence, or sync implementation exists yet.
+- The Automerge spike validates Unicode, history through file replacement,
+  local merges, and interrupted saves. Real native adapter tests pass on
+  macOS and iOS after a targeted macOS undo callback correction.
+- A production single-note core now saves serialized Automerge files, tracks
+  saved state with heads, and supports explicit previous-file recovery. The
+  app exposes one editing window/scene. Sync and Markdown copies remain open.
 - The editor has been visually checked in iPhone and iPad simulators. The owner
   has exercised editing and undo on a physical iPhone; iPad device interaction
   remains open.
@@ -18,8 +23,8 @@ Updated: 2026-09-12
   styles use undo-suppressed text-storage attributes.
 - The document boundary is recorded: shared document state is authoritative,
   while Markdown files are derived copies maintained by a separate writer.
-- Next: begin milestone 1 with the shared document core and local durability
-  contract.
+- Next: define the milestone 1 durability and recovery contract around the
+  validated Automerge files before further editor development; no SQLite.
 
 ## Working method
 
@@ -86,10 +91,17 @@ Status: complete on 2026-09-12.
 
 ## 1 — One pleasant, durable note
 
-Status: not started; depends on milestone 0.
+Status: in progress; local save/reopen slice implemented on 2026-09-12.
+
+See the revised [step-by-step execution plan](milestone-1-plan.md) for scope,
+implementation checkpoints, and sub-agent assignments.
 
 ### Work
 
+- The [Automerge spike](automerge-spike.md) follow-up validates history through
+  interrupted file saves and automatic native undo integration.
+- After the spike passes, use an Automerge-backed shared core and safe internal
+  file persistence, retaining a previous known-good version for recovery.
 - Implement headings, emphasis, lists, links, and code styling while retaining
   visible syntax.
 - Persist edits locally and maintain an ordinary Markdown copy.
@@ -99,6 +111,8 @@ Status: not started; depends on milestone 0.
 
 ### Acceptance
 
+- The Automerge spike records tested APIs, local merge outcomes, file recovery
+  behavior, and editor compatibility before further editor development.
 - A note survives closing/reopening and an interrupted save without losing
   acknowledged edits.
 - Markdown output matches the saved document text and can be regenerated after
@@ -114,8 +128,8 @@ Status: not started; depends on milestone 1.
 
 ### Work
 
-- Prototype Automerge with CloudKit/CKSyncEngine for the same note across
-  devices.
+- Add CloudKit/CKSyncEngine transport to the existing Automerge document core
+  for the same note across devices.
 - Persist pending uploads and received changes safely across restarts.
 - Add a small sync-status display and record actual device-handoff behavior.
 

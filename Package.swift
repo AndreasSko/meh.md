@@ -7,17 +7,29 @@ let package = Package(
     platforms: [.macOS("27.0"), .iOS("27.0")],
     products: [
         .library(name: "NativeEditor", targets: ["NativeEditor"]),
+        .library(name: "NoteCore", targets: ["NoteCore"]),
     ],
     dependencies: [
         .package(path: "Spikes/AutomergeSpike"),
+        .package(
+            url: "https://github.com/automerge/automerge-swift.git",
+            exact: "0.7.2"
+        ),
     ],
     targets: [
+        .target(
+            name: "NoteCore",
+            dependencies: [
+                .product(name: "Automerge", package: "automerge-swift"),
+            ]
+        ),
+        .testTarget(name: "NoteCoreTests", dependencies: ["NoteCore"]),
         .target(
             name: "NativeEditor",
             path: "meh.md",
             exclude: [
                 "ContentView.swift", "MyApp.swift", "Assets.xcassets",
-                "icon.icon",
+                "icon.icon", "Info.plist",
             ],
             sources: [
                 "MarkdownEditor.swift",
