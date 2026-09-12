@@ -20,13 +20,14 @@ enum MarkdownPresentation {
             return
         }
 
+        let syntaxCache = MarkdownSyntaxCache()
         layoutManager.renderingAttributesValidator = {
             [weak textView] manager, fragment in
             guard let textView else { return }
             applyRenderingAttributes(
                 to: manager,
                 fragment: fragment,
-                text: textView.string
+                result: syntaxCache.result(for: textView.string)
             )
         }
         refresh(textView)
@@ -41,7 +42,7 @@ enum MarkdownPresentation {
         applyLayoutAttributes(
             to: textStorage,
             text: textView.string,
-            bodyFont: textView.font ?? .preferredFont(forTextStyle: .body),
+            bodyFont: .preferredFont(forTextStyle: .body),
             undoManager: textView.undoManager
         )
         invalidateRenderingAttributes(in: textView.textLayoutManager)
@@ -53,13 +54,14 @@ enum MarkdownPresentation {
             return
         }
 
+        let syntaxCache = MarkdownSyntaxCache()
         layoutManager.renderingAttributesValidator = {
             [weak textView] manager, fragment in
             guard let textView else { return }
             applyRenderingAttributes(
                 to: manager,
                 fragment: fragment,
-                text: textView.text ?? ""
+                result: syntaxCache.result(for: textView.text ?? "")
             )
         }
         refresh(textView)
@@ -73,7 +75,7 @@ enum MarkdownPresentation {
         applyLayoutAttributes(
             to: textView.textStorage,
             text: textView.text ?? "",
-            bodyFont: textView.font ?? .preferredFont(forTextStyle: .body),
+            bodyFont: .preferredFont(forTextStyle: .body),
             undoManager: textView.undoManager
         )
         invalidateRenderingAttributes(in: textView.textLayoutManager)
@@ -101,8 +103,9 @@ enum MarkdownPresentation {
         textStorage.beginEditing()
         textStorage.removeAttribute(.font, range: fullRange)
         textStorage.addAttribute(.font, value: bodyFont, range: fullRange)
-        for run in MarkdownSyntax.fontRuns(in: text) {
-            let font = layoutFont(for: run.traits, bodyFont: bodyFont)
+        let result = MarkdownSyntax.parse(text)
+        for run in result.fontRuns {
+            let font = layoutFont(for: run, bodyFont: bodyFont)
             textStorage.addAttribute(.font, value: font, range: run.range)
         }
         textStorage.endEditing()
@@ -111,7 +114,7 @@ enum MarkdownPresentation {
     private static func applyRenderingAttributes(
         to layoutManager: NSTextLayoutManager,
         fragment: NSTextLayoutFragment,
-        text: String
+        result: MarkdownSyntaxResult
     ) {
         guard let contentManager = layoutManager.textContentManager else {
             return
@@ -123,7 +126,7 @@ enum MarkdownPresentation {
             contentManager: contentManager
         )
 
-        for span in MarkdownSyntax.spans(in: text) {
+        for span in result.spans {
             let attributes = renderingAttributes(for: span.role)
             guard !attributes.isEmpty else { continue }
 
@@ -181,12 +184,15 @@ enum MarkdownPresentation {
         return NSTextRange(location: start, end: end)
     }
 
-    private static func renderingAttributes(
+    static func renderingAttributes(
         for role: MarkdownStyleRole
     ) -> [NSAttributedString.Key: Any] {
         switch role {
         case .code:
-            return [.backgroundColor: PlatformColor.secondarySystemFill]
+            return [
+                .backgroundColor: PlatformColor.secondarySystemFill,
+                .foregroundColor: primaryTextColor,
+            ]
         case .link:
             return [.foregroundColor: PlatformColor.systemBlue]
         case .listMarker:
@@ -197,19 +203,32 @@ enum MarkdownPresentation {
     }
 
     private static func layoutFont(
-        for traits: MarkdownFontTraits,
+        for run: MarkdownFontRun,
         bodyFont: PlatformFont
     ) -> PlatformFont {
-        var font = traits.contains(.monospaced)
-            ? monospacedFont(size: bodyFont.pointSize)
-            : bodyFont
-        if traits.contains(.bold) {
+        let size = bodyFont.pointSize * headingScale(for: run.headingLevel)
+        var font = run.traits.contains(.monospaced)
+            ? monospacedFont(size: size)
+            : fontWithSize(bodyFont, size: size)
+        if run.traits.contains(.bold) {
             font = strongFont(font)
         }
-        if traits.contains(.italic) {
+        if run.traits.contains(.italic) {
             font = emphasisFont(font)
         }
         return font
+    }
+
+    private static func headingScale(for level: Int?) -> CGFloat {
+        switch level {
+        case 1: 2
+        case 2: 1.65
+        case 3: 1.4
+        case 4: 1.25
+        case 5: 1.15
+        case 6: 1.08
+        default: 1
+        }
     }
 
 #if os(macOS)
@@ -221,9 +240,15 @@ enum MarkdownPresentation {
         NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
     }
 
+    private static func fontWithSize(_ font: NSFont, size: CGFloat) -> NSFont {
+        NSFont(descriptor: font.fontDescriptor, size: size) ?? font
+    }
+
     private static func monospacedFont(size: CGFloat) -> NSFont {
         .monospacedSystemFont(ofSize: size, weight: .regular)
     }
+
+    private static var primaryTextColor: NSColor { .textColor }
 #else
     private static func strongFont(_ font: UIFont) -> UIFont {
         fontAddingTrait(.traitBold, to: font)
@@ -243,8 +268,30 @@ enum MarkdownPresentation {
         return UIFont(descriptor: descriptor, size: value.pointSize)
     }
 
+    private static func fontWithSize(_ font: UIFont, size: CGFloat) -> UIFont {
+        UIFont(descriptor: font.fontDescriptor, size: size)
+    }
+
     private static func monospacedFont(size: CGFloat) -> UIFont {
         .monospacedSystemFont(ofSize: size, weight: .regular)
     }
+
+    private static var primaryTextColor: UIColor { .label }
 #endif
+}
+
+private final class MarkdownSyntaxCache {
+    private var cachedText: String?
+    private var cachedResult: MarkdownSyntaxResult?
+
+    func result(for text: String) -> MarkdownSyntaxResult {
+        if let cachedText, cachedText.utf8.elementsEqual(text.utf8),
+           let cachedResult {
+            return cachedResult
+        }
+        let result = MarkdownSyntax.parse(text)
+        cachedText = text
+        cachedResult = result
+        return result
+    }
 }
