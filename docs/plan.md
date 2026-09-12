@@ -8,7 +8,13 @@ Updated: 2026-09-12
 - A basic multiplatform Xcode project exists for macOS, iPhone, and iPad.
 - A literal-Markdown editor spike exists and has passed macOS and generic iOS
   simulator builds. Its macOS editing checks are recorded separately.
-- No shared document core, persistence, or sync implementation exists yet.
+- The Automerge spike validates Unicode, history through file replacement,
+  local merges, and interrupted saves. Real native adapter tests pass on
+  macOS and iOS after a targeted macOS undo callback correction.
+- A production single-note core now saves serialized Automerge files, tracks
+  saved state with heads, and supports explicit previous-file recovery. The
+  app exposes one editing window/scene. The managed Markdown copy is
+  implemented and its signed Mac app checks passed. Sync remains open.
 - The editor has been visually checked in iPhone and iPad simulators. The owner
   has exercised editing and undo on a physical iPhone; iPad device interaction
   remains open.
@@ -18,8 +24,9 @@ Updated: 2026-09-12
   styles use undo-suppressed text-storage attributes.
 - The document boundary is recorded: shared document state is authoritative,
   while Markdown files are derived copies maintained by a separate writer.
-- Next: begin milestone 1 with the shared document core and local durability
-  contract.
+- Editor styling is implemented, with 14 macOS native editor tests passing.
+- The iPhone 17 simulator save/reopen and Files checks passed. Physical-device
+  acceptance remains separate. Milestone 1 is complete; sync is next.
 
 ## Working method
 
@@ -86,19 +93,29 @@ Status: complete on 2026-09-12.
 
 ## 1 — One pleasant, durable note
 
-Status: not started; depends on milestone 0.
+Status: complete on 2026-09-12.
+
+See the revised [step-by-step execution plan](milestone-1-plan.md) for scope,
+implementation checkpoints, and sub-agent assignments.
 
 ### Work
 
-- Implement headings, emphasis, lists, links, and code styling while retaining
-  visible syntax.
-- Persist edits locally and maintain an ordinary Markdown copy.
-- Materialize that copy in the platform's documented user-visible location and
-  detect external changes without importing or destroying them.
+- The [Automerge spike](automerge-spike.md) follow-up validates history through
+  interrupted file saves and automatic native undo integration.
+- The Automerge-backed core and internal file persistence are implemented,
+  retaining a previous known-good version for explicit recovery.
+- Headings, emphasis, lists, links, and code styling are implemented while
+  retaining visible syntax.
+- Persist edits locally and maintain a managed, one-way Markdown copy.
+- Materialize that copy in the platform's documented user-visible location.
+  Overwrite external edits to the managed copy and recreate deletions without
+  ingesting either as document changes.
 - Establish basic selection, copy/paste, native undo, and a recovery strategy.
 
 ### Acceptance
 
+- The Automerge spike records tested APIs, local merge outcomes, file recovery
+  behavior, and editor compatibility before further editor development.
 - A note survives closing/reopening and an interrupted save without losing
   acknowledged edits.
 - Markdown output matches the saved document text and can be regenerated after
@@ -114,8 +131,8 @@ Status: not started; depends on milestone 1.
 
 ### Work
 
-- Prototype Automerge with CloudKit/CKSyncEngine for the same note across
-  devices.
+- Add CloudKit/CKSyncEngine transport to the existing Automerge document core
+  for the same note across devices.
 - Persist pending uploads and received changes safely across restarts.
 - Add a small sync-status display and record actual device-handoff behavior.
 
@@ -206,3 +223,24 @@ synchronization.
   and physical iPad interaction remain deferred or unverified.
 - **Next:** Milestone 1 implements one durable note behind the accepted shared
   document boundary and maintains its derived Markdown copy.
+
+### Milestone 1 — 2026-09-12
+
+- **Delivery:** PR #5, including simulator regression commit `1440dc6`.
+  Milestone completion records delivered scope; PR merge is tracked separately.
+- **Delivered:** One native Markdown note with Automerge-backed local saves,
+  saved-state feedback, explicit previous-file recovery, managed Markdown
+  copies, and the agreed visible-syntax styling. No SQLite or network sync.
+- **Automated checks:** 47 core and 14 Mac native editor tests; 20 Automerge
+  spike tests; 3 iOS native adapter tests; 1 iPhone simulator app persistence
+  test. Real spike process kills exercised four save boundaries. Mac and iOS
+  builds passed. See [verification](local-note-verification.md).
+- **App checks:** Mac typing, undo, save/reopen, folder selection, bookmark
+  restoration, copy overwrite and recreation. iPhone simulator Unicode text,
+  save/relaunch, exact copy bytes, and Files preview passed.
+- **Known limitations:** Physical iPhone/iPad persistence acceptance, iPad
+  hardware-keyboard checks, and install/restore behavior remain open. No
+  sudden-power-loss guarantee, multiple notes, folders, import, or sync.
+- **Next:** Start milestone 2 with a bounded CloudKit/CKSyncEngine transport
+  spike. Prove durable delivery, offline convergence, and remote editor updates
+  for one note before expanding the data model. Carry device checks forward.

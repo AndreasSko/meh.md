@@ -25,79 +25,332 @@ struct MarkdownFontTraits: OptionSet, Equatable {
 struct MarkdownFontRun: Equatable {
     let range: NSRange
     let traits: MarkdownFontTraits
+    let headingLevel: Int?
+}
+
+struct MarkdownSyntaxResult: Equatable {
+    let spans: [MarkdownStyleSpan]
+    let fontRuns: [MarkdownFontRun]
 }
 
 enum MarkdownSyntax {
-    static func spans(in text: String) -> [MarkdownStyleSpan] {
-        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        var spans: [MarkdownStyleSpan] = []
-
-        matches(
-            pattern: #"(?m)^(#{1,6})(?=\s).*$"#,
-            in: text,
-            range: fullRange
-        ).forEach { match in
-            let markerRange = match.range(at: 1)
-            spans.append(
-                MarkdownStyleSpan(
-                    range: match.range,
-                    role: .heading(level: markerRange.length)
-                )
-            )
-        }
-
-        appendMatches(
-            pattern: #"\*\*(?=\S).+?(?<=\S)\*\*|__(?=\S).+?(?<=\S)__"#,
-            role: .strong,
-            text: text,
-            range: fullRange,
-            spans: &spans
-        )
-        appendMatches(
-            pattern: #"(?<!\*)\*(?!\*)(?=\S).+?(?<=\S)\*(?!\*)|(?<!_)_(?!_)(?=\S).+?(?<=\S)_(?!_)"#,
-            role: .emphasis,
-            text: text,
-            range: fullRange,
-            spans: &spans
-        )
-        appendMatches(
-            pattern: #"`[^`\n]+`"#,
-            role: .code,
-            text: text,
-            range: fullRange,
-            spans: &spans
-        )
-        appendMatches(
-            pattern: #"\[[^\]\n]+\]\([^\s)]+(?:\s+\"[^\"]*\")?\)"#,
-            role: .link,
-            text: text,
-            range: fullRange,
-            spans: &spans
-        )
-
-        matches(
-            pattern: #"(?m)^\s*([-+*]|\d+\.)\s+"#,
-            in: text,
-            range: fullRange
-        ).forEach { match in
-            spans.append(
-                MarkdownStyleSpan(
-                    range: match.range(at: 1),
-                    role: .listMarker
-                )
-            )
-        }
-
-        return spans.sorted {
-            if $0.range.location == $1.range.location {
-                return $0.range.length > $1.range.length
+    static func parse(_ text: String) -> MarkdownSyntaxResult {
+        let source = text as NSString
+        let fenced = fencedCodeRanges(in: source)
+        let inline = inlineCodeRanges(in: source, excluding: fenced)
+        let codeRanges = (fenced + inline).sorted { left, right in
+            if left.location == right.location {
+                return left.length > right.length
             }
-            return $0.range.location < $1.range.location
+            return left.location < right.location
         }
+        var spans = codeRanges.map {
+            MarkdownStyleSpan(range: $0, role: .code)
+        }
+
+        appendLineSpans(in: source, excluding: codeRanges, spans: &spans)
+        appendLinkSpans(in: source, excluding: codeRanges, spans: &spans)
+        appendEmphasisSpans(
+            in: source,
+            excluding: codeRanges,
+            spans: &spans
+        )
+        spans.sort { left, right in
+            if left.range.location == right.range.location {
+                return left.range.length > right.range.length
+            }
+            return left.range.location < right.range.location
+        }
+        return MarkdownSyntaxResult(
+            spans: spans,
+            fontRuns: fontRuns(for: spans)
+        )
+    }
+
+    static func spans(in text: String) -> [MarkdownStyleSpan] {
+        parse(text).spans
     }
 
     static func fontRuns(in text: String) -> [MarkdownFontRun] {
-        let fontSpans = spans(in: text).filter { span in
+        parse(text).fontRuns
+    }
+
+    private static func fencedCodeRanges(in source: NSString) -> [NSRange] {
+        let lines = lineRanges(in: source)
+        var ranges: [NSRange] = []
+        var lineIndex = 0
+        while lineIndex < lines.count {
+            let line = lines[lineIndex]
+            guard let fence = openingFence(in: source, line: line) else {
+                lineIndex += 1
+                continue
+            }
+
+            var end = source.length
+            var closingLineIndex: Int?
+            if lineIndex + 1 < lines.count {
+                for candidateIndex in (lineIndex + 1)..<lines.count {
+                    let candidate = lines[candidateIndex]
+                    if isClosingFence(
+                        in: source,
+                        line: candidate,
+                        marker: fence.marker,
+                        minimumLength: fence.length
+                    ) {
+                        end = NSMaxRange(candidate)
+                        closingLineIndex = candidateIndex
+                        break
+                    }
+                }
+            }
+            ranges.append(
+                NSRange(location: line.location, length: end - line.location)
+            )
+            lineIndex = (closingLineIndex ?? (lines.count - 1)) + 1
+        }
+        return ranges
+    }
+
+    private static func inlineCodeRanges(
+        in source: NSString,
+        excluding excluded: [NSRange]
+    ) -> [NSRange] {
+        var ranges: [NSRange] = []
+        var location = 0
+        while location < source.length {
+            if let range = containingRange(location, in: excluded) {
+                location = NSMaxRange(range)
+                continue
+            }
+            guard source.character(at: location) == ASCII.backtick,
+                  !isEscaped(location, in: source) else {
+                location += 1
+                continue
+            }
+
+            let markerLength = repeatedLength(
+                of: ASCII.backtick,
+                at: location,
+                in: source
+            )
+            let lineEnd = contentEndOfLine(containing: location, in: source)
+            var closing = location + markerLength
+            var matchedEnd: Int?
+            while closing < lineEnd {
+                guard source.character(at: closing) == ASCII.backtick else {
+                    closing += 1
+                    continue
+                }
+                let closingLength = repeatedLength(
+                    of: ASCII.backtick,
+                    at: closing,
+                    in: source
+                )
+                if closingLength == markerLength {
+                    matchedEnd = closing + closingLength
+                    break
+                }
+                closing += closingLength
+            }
+            let end = matchedEnd ?? lineEnd
+            ranges.append(
+                NSRange(location: location, length: end - location)
+            )
+            location = max(end, location + markerLength)
+        }
+        return ranges
+    }
+
+    private static func appendLineSpans(
+        in source: NSString,
+        excluding codeRanges: [NSRange],
+        spans: inout [MarkdownStyleSpan]
+    ) {
+        for line in lineRanges(in: source) {
+            let contentEnd = contentEnd(for: line, in: source)
+            var location = line.location
+            while location < contentEnd,
+                  source.character(at: location) == ASCII.space,
+                  location - line.location < 4 {
+                location += 1
+            }
+            guard location - line.location <= 3,
+                  !isContained(location, in: codeRanges),
+                  location < contentEnd else { continue }
+
+            if source.character(at: location) == ASCII.hash {
+                let markerLength = repeatedLength(
+                    of: ASCII.hash,
+                    at: location,
+                    in: source
+                )
+                let markerEnd = location + markerLength
+                if markerLength <= 6,
+                   markerEnd == contentEnd
+                    || isWhitespace(source.character(at: markerEnd)) {
+                    spans.append(
+                        MarkdownStyleSpan(
+                            range: NSRange(
+                                location: line.location,
+                                length: contentEnd - line.location
+                            ),
+                            role: .heading(level: markerLength)
+                        )
+                    )
+                }
+            }
+
+            if let marker = listMarker(
+                at: location,
+                lineEnd: contentEnd,
+                in: source
+            ) {
+                spans.append(
+                    MarkdownStyleSpan(range: marker, role: .listMarker)
+                )
+            }
+        }
+    }
+
+    private static func appendLinkSpans(
+        in source: NSString,
+        excluding codeRanges: [NSRange],
+        spans: inout [MarkdownStyleSpan]
+    ) {
+        var location = 0
+        while location < source.length {
+            if let range = containingRange(location, in: codeRanges) {
+                location = NSMaxRange(range)
+                continue
+            }
+            guard source.character(at: location) == ASCII.openBracket,
+                  !isEscaped(location, in: source) else {
+                location += 1
+                continue
+            }
+
+            let lineEnd = contentEndOfLine(containing: location, in: source)
+            guard let labelEnd = matchingDelimiter(
+                from: location,
+                opening: ASCII.openBracket,
+                closing: ASCII.closeBracket,
+                before: lineEnd,
+                in: source
+            ), labelEnd + 1 < lineEnd,
+                  source.character(at: labelEnd + 1)
+                    == ASCII.openParenthesis else {
+                location += 1
+                continue
+            }
+
+            let destinationStart = labelEnd + 1
+            let destinationEnd = matchingDelimiter(
+                from: destinationStart,
+                opening: ASCII.openParenthesis,
+                closing: ASCII.closeParenthesis,
+                before: lineEnd,
+                in: source
+            )
+            let end = destinationEnd.map { $0 + 1 } ?? lineEnd
+            spans.append(
+                MarkdownStyleSpan(
+                    range: NSRange(location: location, length: end - location),
+                    role: .link
+                )
+            )
+            location = max(end, location + 1)
+        }
+    }
+
+    private struct EmphasisDelimiter {
+        let marker: unichar
+        let strength: Int
+        let location: Int
+    }
+
+    private static func appendEmphasisSpans(
+        in source: NSString,
+        excluding codeRanges: [NSRange],
+        spans: inout [MarkdownStyleSpan]
+    ) {
+        var stack: [EmphasisDelimiter] = []
+        var location = 0
+        while location < source.length {
+            if let range = containingRange(location, in: codeRanges) {
+                location = NSMaxRange(range)
+                continue
+            }
+            let marker = source.character(at: location)
+            guard marker == ASCII.asterisk || marker == ASCII.underscore,
+                  !isEscaped(location, in: source) else {
+                location += 1
+                continue
+            }
+
+            let runLength = repeatedLength(of: marker, at: location, in: source)
+            let previousIsWhitespace = location == 0
+                || isWhitespace(source.character(at: location - 1))
+            let next = location + runLength
+            let nextIsWhitespace = next >= source.length
+                || isWhitespace(source.character(at: next))
+            let isInsideWord = marker == ASCII.underscore
+                && location > 0 && next < source.length
+                && isWordCharacter(at: location - 1, in: source)
+                && isWordCharacter(at: next, in: source)
+            let canOpen = !nextIsWhitespace && !isInsideWord
+            let canClose = !previousIsWhitespace && !isInsideWord
+            var remaining = runLength
+
+            if canClose {
+                for strength in delimiterStrengths(
+                    for: runLength,
+                    closing: true
+                ) {
+                    guard remaining >= strength,
+                          let openerIndex = stack.lastIndex(where: {
+                              $0.marker == marker && $0.strength == strength
+                          }) else { continue }
+                    let opener = stack.remove(at: openerIndex)
+                    let closingEnd = location + (runLength - remaining)
+                        + strength
+                    spans.append(
+                        MarkdownStyleSpan(
+                            range: NSRange(
+                                location: opener.location,
+                                length: closingEnd - opener.location
+                            ),
+                            role: strength == 2 ? .strong : .emphasis
+                        )
+                    )
+                    remaining -= strength
+                }
+            }
+
+            if canOpen && remaining > 0 {
+                let openerStart = location + (runLength - remaining)
+                var offset = 0
+                for strength in delimiterStrengths(
+                    for: remaining,
+                    closing: false
+                ) {
+                    stack.append(
+                        EmphasisDelimiter(
+                            marker: marker,
+                            strength: strength,
+                            location: openerStart + offset
+                        )
+                    )
+                    offset += strength
+                }
+            }
+            location += runLength
+        }
+    }
+
+    private static func fontRuns(
+        for spans: [MarkdownStyleSpan]
+    ) -> [MarkdownFontRun] {
+        let fontSpans = spans.filter { span in
             switch span.role {
             case .heading, .strong, .emphasis, .code:
                 return true
@@ -114,42 +367,48 @@ enum MarkdownSyntax {
         var runs: [MarkdownFontRun] = []
         for (start, end) in zip(boundaries, boundaries.dropFirst()) {
             guard start < end else { continue }
-            let coveredRange = NSRange(location: start, length: end - start)
-            let coveringSpans = fontSpans.filter { span in
-                span.range.location <= start && NSMaxRange(span.range) >= end
+            let range = NSRange(location: start, length: end - start)
+            let covering = fontSpans.filter {
+                $0.range.location <= start && NSMaxRange($0.range) >= end
             }
-            let traits = fontTraits(for: coveringSpans)
-            guard !traits.isEmpty else { continue }
+            let style = fontStyle(for: covering)
+            guard !style.traits.isEmpty || style.headingLevel != nil else {
+                continue
+            }
+            let run = MarkdownFontRun(
+                range: range,
+                traits: style.traits,
+                headingLevel: style.headingLevel
+            )
 
             if let previous = runs.last,
-               previous.traits == traits,
-               NSMaxRange(previous.range) == coveredRange.location {
+               previous.traits == run.traits,
+               previous.headingLevel == run.headingLevel,
+               NSMaxRange(previous.range) == run.range.location {
                 runs[runs.count - 1] = MarkdownFontRun(
                     range: NSRange(
                         location: previous.range.location,
-                        length: NSMaxRange(coveredRange)
-                            - previous.range.location
+                        length: NSMaxRange(run.range) - previous.range.location
                     ),
-                    traits: traits
+                    traits: run.traits,
+                    headingLevel: run.headingLevel
                 )
             } else {
-                runs.append(
-                    MarkdownFontRun(range: coveredRange, traits: traits)
-                )
+                runs.append(run)
             }
         }
         return runs
     }
 
-    private static func fontTraits(
+    private static func fontStyle(
         for spans: [MarkdownStyleSpan]
-    ) -> MarkdownFontTraits {
+    ) -> (traits: MarkdownFontTraits, headingLevel: Int?) {
         let codeRanges = spans.compactMap { span -> NSRange? in
             guard span.role == .code else { return nil }
             return span.range
         }
         var traits: MarkdownFontTraits = []
-
+        var headingLevel: Int?
         for span in spans {
             let isSyntaxInsideCode = codeRanges.contains { codeRange in
                 codeRange != span.range
@@ -159,7 +418,10 @@ enum MarkdownSyntax {
             guard !isSyntaxInsideCode else { continue }
 
             switch span.role {
-            case .heading, .strong:
+            case let .heading(level):
+                traits.insert(.bold)
+                headingLevel = min(headingLevel ?? level, level)
+            case .strong:
                 traits.insert(.bold)
             case .emphasis:
                 traits.insert(.italic)
@@ -169,33 +431,244 @@ enum MarkdownSyntax {
                 break
             }
         }
-        return traits
+        return (traits, headingLevel)
     }
 
-    private static func appendMatches(
-        pattern: String,
-        role: MarkdownStyleRole,
-        text: String,
-        range: NSRange,
-        spans: inout [MarkdownStyleSpan]
-    ) {
-        matches(pattern: pattern, in: text, range: range).forEach { match in
-            spans.append(MarkdownStyleSpan(range: match.range, role: role))
+    private static func lineRanges(in source: NSString) -> [NSRange] {
+        guard source.length > 0 else { return [] }
+        var ranges: [NSRange] = []
+        var start = 0
+        while start < source.length {
+            var end = start
+            while end < source.length,
+                  source.character(at: end) != ASCII.lineFeed {
+                end += 1
+            }
+            ranges.append(NSRange(location: start, length: end - start))
+            start = end + 1
+        }
+        return ranges
+    }
+
+    private static func openingFence(
+        in source: NSString,
+        line: NSRange
+    ) -> (marker: unichar, length: Int)? {
+        let end = contentEnd(for: line, in: source)
+        var location = line.location
+        while location < end,
+              source.character(at: location) == ASCII.space,
+              location - line.location < 4 {
+            location += 1
+        }
+        guard location - line.location <= 3, location < end else { return nil }
+        let marker = source.character(at: location)
+        guard marker == ASCII.backtick || marker == ASCII.tilde else {
+            return nil
+        }
+        let length = repeatedLength(of: marker, at: location, in: source)
+        guard length >= 3 else { return nil }
+        return (marker, length)
+    }
+
+    private static func isClosingFence(
+        in source: NSString,
+        line: NSRange,
+        marker: unichar,
+        minimumLength: Int
+    ) -> Bool {
+        let end = contentEnd(for: line, in: source)
+        var location = line.location
+        while location < end,
+              source.character(at: location) == ASCII.space,
+              location - line.location < 4 {
+            location += 1
+        }
+        let length = repeatedLength(of: marker, at: location, in: source)
+        guard location - line.location <= 3, length >= minimumLength else {
+            return false
+        }
+        location += length
+        while location < end,
+              isWhitespace(source.character(at: location)) {
+            location += 1
+        }
+        return location == end
+    }
+
+    private static func listMarker(
+        at location: Int,
+        lineEnd: Int,
+        in source: NSString
+    ) -> NSRange? {
+        let character = source.character(at: location)
+        if character == ASCII.hyphen || character == ASCII.plus
+            || character == ASCII.asterisk {
+            let end = location + 1
+            guard end == lineEnd
+                    || isWhitespace(source.character(at: end)) else {
+                return nil
+            }
+            return NSRange(location: location, length: 1)
+        }
+
+        var end = location
+        while end < lineEnd,
+              source.character(at: end) >= ASCII.zero,
+              source.character(at: end) <= ASCII.nine,
+              end - location < 9 {
+            end += 1
+        }
+        guard end > location, end < lineEnd,
+              source.character(at: end) == ASCII.period else { return nil }
+        let markerEnd = end + 1
+        guard markerEnd == lineEnd
+                || isWhitespace(source.character(at: markerEnd)) else {
+            return nil
+        }
+        return NSRange(location: location, length: markerEnd - location)
+    }
+
+    private static func matchingDelimiter(
+        from start: Int,
+        opening: unichar,
+        closing: unichar,
+        before end: Int,
+        in source: NSString
+    ) -> Int? {
+        var depth = 0
+        var location = start
+        while location < end {
+            if isEscaped(location, in: source) {
+                location += 1
+                continue
+            }
+            let character = source.character(at: location)
+            if character == opening {
+                depth += 1
+            } else if character == closing {
+                depth -= 1
+                if depth == 0 { return location }
+            }
+            location += 1
+        }
+        return nil
+    }
+
+    private static func delimiterStrengths(
+        for length: Int,
+        closing: Bool
+    ) -> [Int] {
+        var strengths = Array(repeating: 2, count: length / 2)
+        if length.isMultiple(of: 2) { return strengths }
+        if closing { strengths.insert(1, at: 0) }
+        else { strengths.append(1) }
+        return strengths
+    }
+
+    private static func repeatedLength(
+        of character: unichar,
+        at location: Int,
+        in source: NSString
+    ) -> Int {
+        guard location < source.length,
+              source.character(at: location) == character else { return 0 }
+        var end = location + 1
+        while end < source.length, source.character(at: end) == character {
+            end += 1
+        }
+        return end - location
+    }
+
+    private static func containingRange(
+        _ location: Int,
+        in ranges: [NSRange]
+    ) -> NSRange? {
+        ranges.first { NSLocationInRange(location, $0) }
+    }
+
+    private static func isContained(
+        _ location: Int,
+        in ranges: [NSRange]
+    ) -> Bool {
+        containingRange(location, in: ranges) != nil
+    }
+
+    private static func isEscaped(
+        _ location: Int,
+        in source: NSString
+    ) -> Bool {
+        var slashCount = 0
+        var cursor = location
+        while cursor > 0,
+              source.character(at: cursor - 1) == ASCII.backslash {
+            slashCount += 1
+            cursor -= 1
+        }
+        return !slashCount.isMultiple(of: 2)
+    }
+
+    private static func isWhitespace(_ character: unichar) -> Bool {
+        guard let scalar = UnicodeScalar(character) else { return false }
+        return CharacterSet.whitespacesAndNewlines.contains(scalar)
+    }
+
+    private static func isWordCharacter(
+        at location: Int,
+        in source: NSString
+    ) -> Bool {
+        let range = source.rangeOfComposedCharacterSequence(at: location)
+        return source.substring(with: range).unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0)
         }
     }
 
-    private static func matches(
-        pattern: String,
-        in text: String,
-        range: NSRange
-    ) -> [NSTextCheckingResult] {
-        guard let expression = try? NSRegularExpression(pattern: pattern) else {
-            assertionFailure("Invalid built-in Markdown expression")
-            return []
+    private static func contentEnd(for line: NSRange, in source: NSString) -> Int {
+        var end = NSMaxRange(line)
+        if end > line.location,
+           source.character(at: end - 1) == ASCII.carriageReturn {
+            end -= 1
         }
-
-        return expression.matches(in: text, range: range)
+        return end
     }
+
+    private static func contentEndOfLine(
+        containing location: Int,
+        in source: NSString
+    ) -> Int {
+        var end = location
+        while end < source.length,
+              source.character(at: end) != ASCII.lineFeed {
+            end += 1
+        }
+        if end > location,
+           source.character(at: end - 1) == ASCII.carriageReturn {
+            return end - 1
+        }
+        return end
+    }
+
+}
+
+private enum ASCII {
+    static let lineFeed: unichar = 10
+    static let carriageReturn: unichar = 13
+    static let space: unichar = 32
+    static let hash: unichar = 35
+    static let openParenthesis: unichar = 40
+    static let closeParenthesis: unichar = 41
+    static let asterisk: unichar = 42
+    static let plus: unichar = 43
+    static let hyphen: unichar = 45
+    static let period: unichar = 46
+    static let zero: unichar = 48
+    static let nine: unichar = 57
+    static let openBracket: unichar = 91
+    static let backslash: unichar = 92
+    static let closeBracket: unichar = 93
+    static let underscore: unichar = 95
+    static let backtick: unichar = 96
+    static let tilde: unichar = 126
 }
 
 extension String {

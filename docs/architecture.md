@@ -51,10 +51,9 @@ replacing source sequences with attachment characters. This matches the initial
 visible-syntax requirement and should simplify mapping edits to document
 operations.
 
-TextKit 2 rendering attributes do not participate in layout. Milestone 0 uses
-a body-sized bold heading style. Larger heading metrics are deferred to
-milestone 1 and will use managed text-storage attributes unless testing shows a
-custom layout fragment is warranted.
+TextKit 2 rendering attributes do not participate in layout. Milestone 1 adds
+larger heading metrics through managed, undo-suppressed text-storage
+attributes. Paint-only styles continue to use rendering attributes.
 
 Investigate FSNotes as an implementation reference and possible source of
 selectively reusable code, not as an assumed drop-in editor dependency. Check
@@ -76,9 +75,9 @@ undo must not be broken by styling or remote updates.
 ## Local persistence and Markdown copies
 
 The internal document state is authoritative for in-app editing and
-synchronization. Ordinary Markdown files are continuously maintained derived
-copies in user-visible local storage, with no import of subsequent external
-changes in the first version.
+synchronization. Ordinary Markdown files are managed, one-way product outputs
+in user-visible local storage. The first version does not ingest external
+changes.
 
 The shared document core owns stable note identity, literal Markdown text,
 metadata, and edit application. Native editor adapters do not persist data.
@@ -86,10 +85,27 @@ The local store and Markdown writer sit behind the core, and future sync must
 use the same boundary. This is recorded in
 [ADR 002](decisions/002-document-persistence-boundary.md).
 
+The owner-approved milestone 1 sequence began with a local Automerge spike.
+The [spike](automerge-spike.md) supports the direction of Automerge files
+in internal Application Support storage, with a previous known-good file for
+recovery. Maintain the ordinary UTF-8 Markdown copy separately. No SQLite
+database or custom journal is planned. This brings local Automerge use forward
+from milestone 2 without changing ADR 002's document boundary; CloudKit
+remains in milestone 2. See the [execution plan](milestone-1-plan.md).
+
+The spike established scalar Automerge text, UTF-16 conversion, local merge
+behavior, and history through file interruption. Real adapter probes pass
+after a scoped macOS UndoManager callback correction. `Sources/NoteCore` now
+implements the session and serialized file storage. The
+[durability contract](durability-contract.md) uses Automerge heads for saved
+state and defines recovery behavior. Separate file writes are not one atomic
+transaction. Markdown materialization uses the approved
+[copy contract](markdown-copy-contract.md).
+
 - Save locally without waiting for network access. Define when an edit is
   considered durably saved.
-- Persist document state and pending sync work consistently; a crash must not
-  leave a saved edit permanently absent from the upload queue.
+- In milestone 2, persist document state and pending sync work consistently;
+  a crash must not leave a saved edit permanently absent from upload discovery.
 - Write Markdown atomically where supported and track incomplete
   materialization so it can be retried on restart.
 - Keep managed copies outside iCloud Drive to avoid overlapping synchronization
@@ -98,9 +114,10 @@ use the same boundary. This is recorded in
   security-scoped bookmark. Handle moved, missing, and inaccessible folders.
 - On iPhone and iPad, keep the projection in the app's Documents directory and
   expose it through Files.
-- Detect external changes before replacing a projection. Do not silently
-  import them or destroy the externally changed content; define the exact
-  warning and recovery behavior before implementing the writer.
+- Protect an unrelated `note.md` when a destination is first selected. Once
+  the app creates its managed copy, replace external edits on the next publish,
+  activation, or reopen, and recreate deletions. Do not ingest external edits
+  or create conflict copies.
 
 Markdown copies are not independent backups. In particular, an iOS or iPadOS
 Documents directory can be removed when the app is uninstalled. Provide an
@@ -110,9 +127,10 @@ discard CRDT state and create new identities when recovery is needed.
 
 ## Proposed synchronization
 
-Start by evaluating Automerge Swift for merging document edits and CKSyncEngine
-against a CloudKit private database for transport. A custom server and a
-generic public sync library are outside the initial scope.
+Milestone 1 validated Automerge Swift locally, including merges between test
+replicas without network transport. Milestone 2 will evaluate CKSyncEngine in a
+CloudKit private database to synchronize the existing documents. A custom
+server and a generic public sync library are outside the initial scope.
 
 Application-level end-to-end encryption is not required initially. Rely on the
 CloudKit private database and normal platform data protection for the first
@@ -133,8 +151,9 @@ making it the permanent editor interface.
 
 ## Decisions still to resolve
 
-- Local storage format, transaction boundaries, Markdown-write recovery,
-  external-change recovery, and revision retention.
+- Durable-save acknowledgment and local fallback recovery are implemented.
+  The one-way Markdown-copy ownership policy is accepted. A user-facing
+  history retention policy remains separate work.
 - Note/folder metadata schema, filename collisions, and delete-versus-edit
   semantics.
 - CloudKit record layout, snapshot discovery, initial download, and history

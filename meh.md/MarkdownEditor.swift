@@ -32,6 +32,7 @@ struct MarkdownEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.setAccessibilityIdentifier("markdown-editor")
         MarkdownPresentation.configure(textView)
+        context.coordinator.observeUndoAndRedo(for: textView)
 
         return scrollView
     }
@@ -43,7 +44,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
         context.coordinator.parent = self
         guard !textView.hasMarkedText() else { return }
-        guard textView.string != text else { return }
+        guard !textView.string.utf8.elementsEqual(text.utf8) else { return }
 
         context.coordinator.isUpdating = true
         defer { context.coordinator.isUpdating = false }
@@ -71,18 +72,58 @@ struct MarkdownEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MarkdownEditor
         var isUpdating = false
+        private weak var observedTextView: NSTextView?
 
         init(parent: MarkdownEditor) {
             self.parent = parent
         }
 
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        func observeUndoAndRedo(for textView: NSTextView) {
+            observedTextView = textView
+
+            let center = NotificationCenter.default
+            for name in [
+                Notification.Name.NSUndoManagerDidUndoChange,
+                Notification.Name.NSUndoManagerDidRedoChange,
+            ] {
+                center.removeObserver(self, name: name, object: nil)
+                center.addObserver(
+                    self,
+                    selector: #selector(undoManagerDidChange(_:)),
+                    name: name,
+                    object: nil
+                )
+            }
+        }
+
+        @objc private func undoManagerDidChange(_ notification: Notification) {
+            guard let textView = observedTextView,
+                  let undoManager = notification.object as? UndoManager,
+                  undoManager === textView.undoManager else {
+                return
+            }
+            synchronizeBinding(from: textView)
+        }
+
         func textDidChange(_ notification: Notification) {
-            guard !isUpdating,
-                  let textView = notification.object as? NSTextView else {
+            guard let textView = notification.object as? NSTextView else {
                 return
             }
 
+            synchronizeBinding(from: textView)
+        }
+
+        private func synchronizeBinding(from textView: NSTextView) {
+            guard !isUpdating else { return }
+
             guard !textView.hasMarkedText() else { return }
+            guard !parent.text.utf8.elementsEqual(textView.string.utf8) else {
+                return
+            }
             parent.text = textView.string
             MarkdownPresentation.refresh(textView)
         }
@@ -130,7 +171,7 @@ struct MarkdownEditor: UIViewRepresentable {
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.parent = self
         guard textView.markedTextRange == nil else { return }
-        guard textView.text != text else { return }
+        guard !textView.text.utf8.elementsEqual(text.utf8) else { return }
 
         context.coordinator.isUpdating = true
         defer { context.coordinator.isUpdating = false }
