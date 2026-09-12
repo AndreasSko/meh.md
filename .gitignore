@@ -1,0 +1,16 @@
+# macOS Finder metadata
+.DS_Store
+
+# Xcode user state and build products
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# Swift Package Manager build products
+.build/
+
+# Xcode-generated project metadata
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside

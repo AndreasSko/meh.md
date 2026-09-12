@@ -1,0 +1,39 @@
+{
+  "fill" : {
+    "solid" : "display-p3:0.00000,0.00000,0.00000,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "blend-mode-specializations" : [
+            {
+              "appearance" : "tinted",
+              "value" : "normal"
+            }
+          ],
+          "image-name" : "0ff96f7b-6dd6-4ea2-ada8-84abd131a5b1.png",
+          "name" : "0ff96f7b-6dd6-4ea2-ada8-84abd131a5b1",
+          "position" : {
+            "scale" : 0.78,
+            "translation-in-points" : [
+              -16.769999999999982,
+              7.7999999999999545
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}
