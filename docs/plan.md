@@ -1,6 +1,6 @@
 # Milestone plan
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 
 ## Current state
 
@@ -27,6 +27,10 @@ Updated: 2026-09-12
 - Editor styling is implemented, with 14 macOS native editor tests passing.
 - The iPhone 17 simulator save/reopen and Files checks passed. Physical-device
   acceptance remains separate. Milestone 1 is complete; sync is next.
+- Milestone 2 now has shared durable replication, local test transports,
+  revision-aware native editing, and a CloudKit adapter awaiting live setup.
+  The iPhone/iPad localhost handoff and exact Markdown-copy checks passed.
+  See [sync verification](sync-verification.md) for evidence and open work.
 
 ## Working method
 
@@ -127,12 +131,21 @@ implementation checkpoints, and sub-agent assignments.
 
 ## 2 — Prove synchronization early
 
-Status: not started; depends on milestone 1.
+Status: in progress on `codex/milestone-2-sync`.
+
+See the [execution plan](milestone-2-plan.md). Prove the shared coordinator
+against a deterministic service and two simulator apps before iCloud device
+acceptance. The production transport boundary is pluggable; the local service
+models remote record storage without simulating Apple account services.
 
 ### Work
 
 - Add CloudKit/CKSyncEngine transport to the existing Automerge document core
   for the same note across devices.
+- First establish immutable snapshot exchange, durable bootstrap proposals,
+  account/workspace binding, and local record-store adapters.
+- Exercise offline replicas, lost acknowledgments, remote native editing, and
+  rollback recovery with a replay checkpoint tied to document history.
 - Persist pending uploads and received changes safely across restarts.
 - Add a small sync-status display and record actual device-handoff behavior.
 
