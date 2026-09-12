@@ -12,14 +12,21 @@ final class NoteSessionTests: XCTestCase {
         let session = NoteSession(storage: storage)
         await session.load()
 
+        XCTAssertEqual(session.persistedSnapshot, initial)
+
         try session.replaceAll(with: "first")
         await waitUntil { await storage.saveCount == 1 }
         try session.replaceAll(with: "second")
+        XCTAssertEqual(session.persistedSnapshot, initial)
         await storage.releaseOneSave()
         await waitUntil { await storage.saveCount == 2 }
 
         XCTAssertEqual(session.text, "second")
         XCTAssertEqual(session.status, .saving)
+        XCTAssertEqual(
+            try NoteDocument(snapshot: XCTUnwrap(session.persistedSnapshot)).text,
+            "first"
+        )
 
         await storage.releaseOneSave()
         await waitUntil { session.status == .saved }
@@ -28,6 +35,7 @@ final class NoteSessionTests: XCTestCase {
         XCTAssertEqual(try NoteDocument(snapshot: saved[0]).text, "first")
         XCTAssertEqual(try NoteDocument(snapshot: saved[1]).text, "second")
         XCTAssertEqual(session.text, "second")
+        XCTAssertEqual(session.persistedSnapshot, saved.last)
     }
 
     func testFailurePreservesTextAndLaterEditRetries() async throws {

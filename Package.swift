@@ -23,13 +23,19 @@ let package = Package(
                 .product(name: "Automerge", package: "automerge-swift"),
             ]
         ),
-        .testTarget(name: "NoteCoreTests", dependencies: ["NoteCore"]),
+        .testTarget(
+            name: "NoteCoreTests",
+            dependencies: [
+                "NoteCore",
+                .product(name: "Automerge", package: "automerge-swift"),
+            ]
+        ),
         .target(
             name: "NativeEditor",
             path: "meh.md",
             exclude: [
                 "ContentView.swift", "MyApp.swift", "Assets.xcassets",
-                "icon.icon", "Info.plist",
+                "icon.icon", "Info.plist", "macOS.entitlements",
             ],
             sources: [
                 "MarkdownEditor.swift",

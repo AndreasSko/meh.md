@@ -17,6 +17,7 @@ public final class NoteSession {
     public private(set) var text = ""
     public private(set) var status: Status = .loading
     public private(set) var recoveryErrorMessage: String?
+    public private(set) var persistedSnapshot: NoteSnapshot?
 
     public var isEditingEnabled: Bool {
         switch status {
@@ -54,6 +55,7 @@ public final class NoteSession {
         status = .loading
         document = nil
         persistedHeads = nil
+        persistedSnapshot = nil
         pendingSnapshot = nil
         recoveryErrorMessage = nil
 
@@ -70,6 +72,7 @@ public final class NoteSession {
             do {
                 let document = try NoteDocument(snapshot: snapshot)
                 try install(document, persistedHeads: snapshot.heads)
+                persistedSnapshot = snapshot
                 status = .saved
             } catch {
                 status = .loadFailed(message: Self.message(for: error))
@@ -112,6 +115,7 @@ public final class NoteSession {
             let snapshot = try await storage.recover(recovery)
             let document = try NoteDocument(snapshot: snapshot)
             try install(document, persistedHeads: snapshot.heads)
+            persistedSnapshot = snapshot
             status = .saved
         } catch {
             recoveryErrorMessage = Self.message(for: error)
@@ -142,6 +146,7 @@ public final class NoteSession {
             do {
                 try await storage.save(snapshot)
                 persistedHeads = snapshot.heads
+                persistedSnapshot = snapshot
                 if document?.heads == persistedHeads {
                     status = .saved
                 } else {

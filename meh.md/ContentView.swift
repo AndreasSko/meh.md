@@ -1,8 +1,13 @@
 import NoteCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     let session: NoteSession
+    let markdownCopy: MarkdownCopyController
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var choosingCopyFolder = false
+    @State private var copySelectionError: String?
     @State private var editError: String?
     @State private var unrecordedText: String?
 
@@ -43,8 +48,38 @@ struct ContentView: View {
                 .font(.caption)
                 .padding(.horizontal)
                 .padding(.vertical, 8)
+            Divider()
+            markdownCopyStatus
+                .font(.caption)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
         }
         .task { await session.load() }
+        .task { await markdownCopy.start() }
+        .onChange(of: session.persistedSnapshot, initial: true) { _, snapshot in
+            if let snapshot { markdownCopy.submit(snapshot) }
+        }
+        .onChange(of: markdownCopy.status) { _, status in
+            if status == .current { copySelectionError = nil }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { markdownCopy.reconcileOnActivation() }
+        }
+        #if os(macOS)
+        .fileImporter(
+            isPresented: $choosingCopyFolder,
+            allowedContentTypes: [.folder]
+        ) { result in
+            Task {
+                do {
+                    try await markdownCopy.chooseDirectory(result.get())
+                    copySelectionError = nil
+                } catch {
+                    copySelectionError = error.localizedDescription
+                }
+            }
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -81,8 +116,10 @@ struct ContentView: View {
                      ? "This note requires a newer version of meh.md."
                      : "The saved files are unavailable or damaged. They have been kept for recovery.")
                     .multilineTextAlignment(.center)
-                Button("Try Again") {
-                    Task { await session.load() }
+                if failure.current != .unsupportedSchemaVersion {
+                    Button("Try Again") {
+                        Task { await session.load() }
+                    }
                 }
             }
             .padding()
@@ -116,6 +153,94 @@ struct ContentView: View {
             Spacer(minLength: 0)
         }
         .accessibilityIdentifier("note-save-status")
+    }
+
+    private var markdownCopyStatus: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(copyStatusLabel)
+                Spacer()
+                #if os(macOS)
+                Button(markdownCopy.destinationURL == nil
+                       ? "Choose Copy Folder…" : "Change Copy Folder…") {
+                    copySelectionError = nil
+                    choosingCopyFolder = true
+                }
+                .disabled(markdownCopy.isBusy)
+                #else
+                if copyNeedsNewDestination {
+                    Button("Create New Copy") {
+                        copySelectionError = nil
+                        Task {
+                            do {
+                                try await markdownCopy.createNewCopy()
+                                copySelectionError = nil
+                            } catch {
+                                copySelectionError = error.localizedDescription
+                            }
+                        }
+                    }
+                    .disabled(markdownCopy.isBusy)
+                }
+                #endif
+                if copyCanRetry {
+                    Button("Retry Copy") {
+                        copySelectionError = nil
+                        markdownCopy.retry()
+                    }
+                    .disabled(markdownCopy.isBusy)
+                }
+            }
+            if let url = markdownCopy.destinationURL {
+                #if os(macOS)
+                Text(url.path).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                #else
+                Text("Files: meh.md / \(copyRelativePath(url))")
+                    .foregroundStyle(.secondary)
+                #endif
+                Text("Read-only copy. Edit in meh.md; outside changes are overwritten.")
+                    .foregroundStyle(.secondary)
+            }
+            if copySelectionError != nil || copyCanRetry || copyNeedsNewDestination {
+                Text(copySelectionError ?? markdownCopy.helpMessage)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityIdentifier("markdown-copy-status")
+    }
+
+    private var copyStatusLabel: String {
+        switch markdownCopy.status {
+        case .starting: "Opening Markdown copy…"
+        case .notConfigured: "Choose where to keep a Markdown copy"
+        case .idle: "Markdown copy waiting for saved text"
+        case .updating: "Updating Markdown copy…"
+        case .current: "Markdown copy up to date"
+        case .paused: "Markdown copy paused"
+        case .reconnectRequired: "Reconnect the Markdown copy folder"
+        case .failed: "Markdown copy could not be updated"
+        }
+    }
+
+    private var copyCanRetry: Bool {
+        switch markdownCopy.status {
+        case .failed, .reconnectRequired: true
+        default: false
+        }
+    }
+
+    private var copyNeedsNewDestination: Bool {
+        switch markdownCopy.status {
+        case .paused, .reconnectRequired: true
+        default: false
+        }
+    }
+
+    private func copyRelativePath(_ url: URL) -> String {
+        let folder = url.deletingLastPathComponent().lastPathComponent
+        return folder == "Documents"
+            ? url.lastPathComponent : "\(folder)/\(url.lastPathComponent)"
     }
 }
 
