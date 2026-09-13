@@ -5,17 +5,21 @@ The CloudKit adapter targets the private database in
 full-history Automerge snapshots, and `CKAsset` document payloads. It does not
 delete or compact remote history in milestone 2.
 
-The app target still needs these Xcode capabilities before real-device sync
-can run:
+The app target includes CloudKit entitlements for macOS and iOS with this
+container selected. Xcode automatic provisioning successfully signed the Mac
+Debug build for team `9YFM7J3EH3`; its embedded profile authorizes the
+container.
+Debug and Debug-iCloud select Development; Release selects Production.
+The shared `meh.md iCloud Dev` scheme enables iCloud at build time and uses
+a separate app identity. See [development builds](development-builds.md).
 
-- iCloud with CloudKit enabled and the container
-  `iCloud.de.andreas-sk.meh-md` selected.
+An active Apple Developer Program membership and valid signing assets are
+required. A signed physical iPhone round trip has also passed. An iPad run
+remains open. Unit tests do not create a container or deploy a production
+schema.
 
-Those settings require an active Apple Developer Program membership, a
-container registered for team `9YFM7J3EH3`, and regenerated signing profiles.
-The current repository does not prove that the container exists or that the
-team can sign for it. The container and production schema must not be created
-or deployed as a side effect of unit tests.
+See [live verification](icloud-live-verification.md) for the isolated Mac
+smoke check and its current evidence.
 
 Enable Background Modes with Remote notifications when adding push-driven or
 background synchronization. Manual foreground exchanges do not require it.
@@ -29,10 +33,12 @@ let transport = try await CloudKitSyncTransport.make(
 )
 ```
 
-The app's Debug launch opt-in is `MEH_SYNC_CLOUDKIT=1`. Leave
-`MEH_SYNC_URL` unset when using it. Existing local notes open before account
-discovery completes; setup failures leave editing available and show a retry
-action. The default app remains local-only until this explicit opt-in.
+The iCloud Dev scheme needs no launch variables. A fresh install must join
+iCloud successfully before creating its local note; setup failure offers a
+retry. An established note opens before account discovery completes and
+remains editable offline. The Local scheme remains local by default; its
+legacy Debug `MEH_SYNC_CLOUDKIT=1` override is retained for targeted tests.
+Use the isolated iCloud Dev scheme for manual cross-device testing.
 
 Factory creation binds persisted transport state to the current iCloud user
 record ID. Every bootstrap, fetch, and publish checks that binding again. An
@@ -53,6 +59,23 @@ inbox is rebuilt, the coordinator rejects the old cursor and replays instead
 of skipping records at an offset that now means something different.
 
 Unit tests cover durable inbox replay, duplicate delivery, cursor validation,
-and account binding without contacting iCloud. Signed Mac, iPhone, and iPad
-runs are still required to verify provisioning, push-driven scheduling,
-offline handoff, account changes, server conflicts, and observed latency.
+and account binding without contacting iCloud. Signed Mac and iPhone foreground
+round trips passed. Physical-device
+checks remain for push-driven scheduling, offline handoff, account changes,
+server conflicts, and iPad behavior.
+
+## Throttling
+
+Foreground polling does not override Apple's retry deadlines. The adapter
+persists the longest active retry-after delay, including per-record errors,
+and waits before making further requests. A small availability-only file
+also gates account discovery after app restart; it is never used as proof of
+account identity. Pending snapshots remain durable throughout the cooldown.
+If Apple reports throttling or service unavailability without a usable delay,
+the adapter waits 30 seconds. A failed cooldown write stops further requests
+until the adapter is recreated from durable state.
+
+Tests cover nested retry metadata, fallback delays, deadline persistence,
+pending uploads, and startup gating with a simulated clock. They do not
+intentionally trigger Apple's real quota or throttling mechanisms. Adaptive
+scheduling, upload batching, and push delivery are milestone 3 work.

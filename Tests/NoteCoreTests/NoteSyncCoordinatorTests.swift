@@ -88,6 +88,55 @@ final class NoteSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(b.session.text, "written after uncertain first connection")
     }
 
+    func testStrictFirstLaunchWaitsForCanonicalBootstrapAndCanRetry() async throws {
+        let remote = TestRecordStore()
+        await remote.loseNextBootstrapResponse()
+        let noteDirectory = directory.appendingPathComponent("strict")
+        let storage = SyncBootstrapStorage(
+            storage: NoteFileStorage(directory: noteDirectory),
+            transport: remote,
+            proposalURL: noteDirectory.appendingPathComponent(
+                "bootstrap-proposal.json"
+            ),
+            allowsOfflineFirstLaunch: false
+        )
+        let session = NoteSession(storage: storage)
+
+        await session.load()
+        guard case .blocked = session.status else {
+            return XCTFail("Fresh strict sync should wait for the server")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: noteDirectory.appendingPathComponent("note.automerge").path
+        ))
+
+        let acceptedPage = try await remote.fetch(after: nil)
+        let accepted = try XCTUnwrap(acceptedPage.records.first)
+        let otherAccount = TestRecordStore(scope: "other-account")
+        let mismatchedStorage = SyncBootstrapStorage(
+            storage: NoteFileStorage(directory: noteDirectory),
+            transport: otherAccount,
+            proposalURL: noteDirectory.appendingPathComponent(
+                "bootstrap-proposal.json"
+            ),
+            allowsOfflineFirstLaunch: false
+        )
+        guard case .blocked = await mismatchedStorage.load() else {
+            return XCTFail("A proposal from another account must stay blocked")
+        }
+        let setupError = await mismatchedStorage.bootstrapErrorDescription()
+        XCTAssertEqual(setupError, SyncError.scopeChanged.localizedDescription)
+        let otherAccountCalls = await otherAccount.bootstrapCalls
+        XCTAssertEqual(otherAccountCalls, 0)
+
+        await session.load()
+        XCTAssertEqual(session.status, .saved)
+        XCTAssertEqual(session.persistedSnapshot, accepted.snapshot)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: noteDirectory.appendingPathComponent("note.automerge").path
+        ))
+    }
+
     func testPreviousFileRecoveryReplaysRecordsBeyondOldCheckpoint() async throws {
         let remote = TestRecordStore()
         let a = await makeReplica("a", remote)
@@ -133,13 +182,15 @@ final class NoteSyncCoordinatorTests: XCTestCase {
         )
         let b = await makeReplica("b", remote, storage: bStore)
         await b.sync.synchronize()
-        let before = try Data(contentsOf: stateURL("b"))
+        let stateStore = SyncStateStorage(url: stateURL("b"))
+        let before = try await stateStore.load(scope: remote.scope)
         try a.session.replaceAll(with: "remote must survive retry")
         await a.sync.synchronize()
         await bStore.setFailure(true)
         await b.sync.synchronize()
         assertFailed(b.sync)
-        XCTAssertEqual(try Data(contentsOf: stateURL("b")), before)
+        let afterFailure = try await stateStore.load(scope: remote.scope)
+        XCTAssertEqual(afterFailure, before)
         XCTAssertEqual(b.session.text, "remote must survive retry")
 
         // Unsaved memory is deliberately discarded to model process loss.

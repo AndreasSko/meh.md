@@ -2,10 +2,12 @@
 
 Started: 2026-09-12. Branch: `codex/milestone-2-sync`.
 
-Checkpoint on 2026-09-13: local replication and native simulator handoff are
-verified. The CloudKit adapter is implemented, but live provisioning,
-independent-note resolution, and physical-device acceptance remain open. See
-[the verification record](sync-verification.md) before continuing.
+Checkpoint on 2026-09-13: local replication, native simulator handoff, and
+signed Mac/iPhone CloudKit exchange are verified. The owner has confirmed
+normal Mac/iPhone editing and handoff. Shared Local and iCloud Dev schemes
+keep existing local notes separate from the canonical cloud note. See
+[local evidence](sync-verification.md) and
+[live device evidence](icloud-live-verification.md) for exact coverage.
 
 ## Outcome and boundaries
 
@@ -48,8 +50,10 @@ Do not delete older records or compact history during this milestone.
 An atomic first-writer bootstrap publishes one canonical seed. Other fresh
 online installations load its actual document history. Equal UUIDs alone do
 not establish shared history. An existing independent local note is retained
-and sync pauses if the remote identity differs. A fresh offline installation
-may create a local note; a later bootstrap conflict must stay explicit.
+and sync pauses if the remote identity differs. The isolated iCloud Dev
+build requires an online first join instead of creating an unrelated offline
+root. Once joined, it remains editable offline. The Local test transport
+retains its offline-first bootstrap behavior.
 Persist the bootstrap proposal before contacting the service. A lost response
 must reuse that proposal's identity across restart.
 
@@ -87,6 +91,7 @@ deferred; this limitation must be visible in the verification record.
 
 ## Development configuration
 
+Shared Xcode schemes select Local or the isolated iCloud Dev build.
 Local transport is a Debug launch configuration. Use a workspace-specific
 Application Support directory and Markdown-copy destination so simulator
 experiments cannot replace the owner's ordinary single note. Use the same
@@ -103,6 +108,13 @@ workspace name and server endpoint on the two simulated devices.
   restart preserves the result and the Markdown copy matches saved text.
 - Both platform builds pass, with automated and manual evidence separated.
 - Actual iCloud and physical-device checks are recorded as performed or open.
+
+## Scheduling follow-up
+
+Milestone 2 must respect CloudKit retry-after deadlines and retain pending
+work during throttling. Milestone 3 will replace fixed foreground polling
+with engine scheduling and change notifications, batch local uploads, and
+measure responsiveness and battery impact. No fixed cloud latency is promised.
 
 ## Agent ownership
 

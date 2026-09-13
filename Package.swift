@@ -36,6 +36,7 @@ let package = Package(
             exclude: [
                 "ContentView.swift", "MyApp.swift", "AppWorkspace.swift", "Assets.xcassets",
                 "icon.icon", "Info.plist", "macOS.entitlements",
+                "iOS.entitlements", "CloudKitSmokeCheck.swift",
             ],
             sources: [
                 "MarkdownEditor.swift",

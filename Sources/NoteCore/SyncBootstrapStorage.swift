@@ -1,22 +1,29 @@
 import Foundation
 
 /// A fresh sync workspace joins the server's actual Automerge seed before
-/// editing. Existing notes are never replaced. A fresh offline installation
-/// can write locally; a later different server identity pauses synchronization.
+/// editing. Existing notes are never replaced. When offline-first launch is
+/// allowed, a fresh offline installation can write locally; a later different
+/// server identity pauses synchronization. Strict joining waits for the seed.
 public actor SyncBootstrapStorage: NoteStorage {
     private let storage: any NoteStorage
     private let transport: any SyncTransport
     private let proposalURL: URL
+    private let allowsOfflineFirstLaunch: Bool
+    private var bootstrapError: String?
 
     public init(
         storage: any NoteStorage,
         transport: any SyncTransport,
-        proposalURL: URL
+        proposalURL: URL,
+        allowsOfflineFirstLaunch: Bool = true
     ) {
         self.storage = storage
         self.transport = transport
         self.proposalURL = proposalURL
+        self.allowsOfflineFirstLaunch = allowsOfflineFirstLaunch
     }
+
+    public func bootstrapErrorDescription() -> String? { bootstrapError }
 
     public func load() async -> NoteLoadResult {
         let existing = await storage.load()
@@ -25,12 +32,19 @@ public actor SyncBootstrapStorage: NoteStorage {
         do {
             proposal = try durableProposal()
         } catch {
+            bootstrapError = error.localizedDescription
             return .blocked(NoteLoadFailure(current: .unreadable, previous: .absent))
         }
         let seed: SyncRecord
         do {
             seed = try await transport.bootstrap(proposing: proposal)
         } catch {
+            bootstrapError = error.localizedDescription
+            guard allowsOfflineFirstLaunch else {
+                return .blocked(NoteLoadFailure(
+                    current: .unreadable, previous: .absent
+                ))
+            }
             // The server may have accepted the proposal before the response
             // was lost. Reuse its identity even when starting offline.
             do {
@@ -43,8 +57,10 @@ public actor SyncBootstrapStorage: NoteStorage {
         do {
             try seed.validate()
             try await storage.save(seed.snapshot)
+            bootstrapError = nil
             return .current(seed.snapshot)
         } catch {
+            bootstrapError = error.localizedDescription
             return .blocked(NoteLoadFailure(
                 current: .unreadable, previous: .absent
             ))

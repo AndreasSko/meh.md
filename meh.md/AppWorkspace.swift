@@ -14,6 +14,7 @@ final class AppWorkspace {
     private(set) var label: String?
     private(set) var automaticSync = true
     private var started = false
+    private var retrying = false
 
     func start() async {
         guard !started else { return }
@@ -22,9 +23,28 @@ final class AppWorkspace {
             var directory = URL.applicationSupportDirectory.appending(path: "Notes")
             var documents = URL.documentsDirectory
             var transport: (any SyncTransport)?
-#if DEBUG
             let environment = ProcessInfo.processInfo.environment
             automaticSync = environment["MEH_SYNC_AUTOMATIC"] != "0"
+#if ICLOUD_DEV
+            label = "iCloud Dev"
+            if hasExistingNote(in: directory) {
+                // An established iCloud workspace remains editable when the
+                // account or network is temporarily unavailable.
+                session = NoteSession(storage: NoteFileStorage(directory: directory))
+                markdownCopy = MarkdownCopyController(
+                    applicationSupportDirectory: directory.appending(path: "MarkdownCopy"),
+                    documentsDirectory: documents
+                )
+            }
+            do {
+                transport = try await CloudKitSyncTransport.make(
+                    containerIdentifier: "iCloud.de.andreas-sk.meh-md",
+                    stateDirectory: directory.appending(path: "CloudKit")
+                )
+            } catch {
+                syncSetupError = error.localizedDescription
+            }
+#elseif DEBUG
             if let endpoint = environment["MEH_SYNC_URL"] {
                 guard let url = URL(string: endpoint),
                       let workspace = environment["MEH_SYNC_WORKSPACE"],
@@ -50,11 +70,7 @@ final class AppWorkspace {
             } else if environment["MEH_SYNC_CLOUDKIT"] == "1" {
                 // Explicit development opt-in; no network access by default.
                 label = "iCloud sync prototype"
-                if FileManager.default.fileExists(
-                    atPath: directory.appending(path: "note.automerge").path
-                ) || FileManager.default.fileExists(
-                    atPath: directory.appending(path: "note.previous.automerge").path
-                ) {
+                if hasExistingNote(in: directory) {
                     // Publish the existing local workspace before awaiting
                     // account discovery. Offline reopening must not wait for
                     // CloudKit to respond.
@@ -76,17 +92,47 @@ final class AppWorkspace {
                 }
             }
 #endif
+#if DEBUG
+            if environment["MEH_SYNC_SIMULATE_OFFLINE"] == "1", let connected = transport {
+                // Test a transport outage without changing the device's
+                // network or the durable account/workspace identity.
+                transport = UnavailableDevelopmentTransport(scope: connected.scope)
+            }
+#endif
             let fileStore = NoteFileStorage(directory: directory)
             let storage: any NoteStorage
+            var bootstrapStorage: SyncBootstrapStorage?
+#if ICLOUD_DEV
+            let allowsOfflineFirstLaunch = false
+#else
+            let allowsOfflineFirstLaunch = true
+#endif
             if let transport {
-                storage = SyncBootstrapStorage(
+                let bootstrap = SyncBootstrapStorage(
                     storage: fileStore, transport: transport,
-                    proposalURL: directory.appending(path: "bootstrap-proposal.json")
+                    proposalURL: directory.appending(path: "bootstrap-proposal.json"),
+                    allowsOfflineFirstLaunch: allowsOfflineFirstLaunch
                 )
+                bootstrapStorage = bootstrap
+                storage = bootstrap
             } else {
                 storage = fileStore
             }
+#if ICLOUD_DEV
+            guard transport != nil || session != nil else { return }
+#endif
             let note = session ?? NoteSession(storage: storage)
+#if ICLOUD_DEV
+            if session == nil, let bootstrapStorage {
+                await note.load()
+                guard note.isEditingEnabled else {
+                    syncSetupError = await bootstrapStorage
+                        .bootstrapErrorDescription()
+                        ?? "The canonical iCloud note is not available yet."
+                    return
+                }
+            }
+#endif
             session = note
             if markdownCopy == nil {
                 markdownCopy = MarkdownCopyController(
@@ -106,6 +152,17 @@ final class AppWorkspace {
     }
 
     func retryCloudSync() async {
+        guard !retrying else { return }
+        retrying = true
+        defer { retrying = false }
+#if ICLOUD_DEV
+        if session == nil {
+            started = false
+            syncSetupError = nil
+            await start()
+            return
+        }
+#endif
         guard let session, sync == nil else { return }
         do {
             let directory = URL.applicationSupportDirectory.appending(path: "Notes")
@@ -120,6 +177,14 @@ final class AppWorkspace {
             syncSetupError = nil
             await sync?.synchronize()
         } catch { syncSetupError = error.localizedDescription }
+    }
+
+    private func hasExistingNote(in directory: URL) -> Bool {
+        FileManager.default.fileExists(
+            atPath: directory.appending(path: "note.automerge").path
+        ) || FileManager.default.fileExists(
+            atPath: directory.appending(path: "note.previous.automerge").path
+        )
     }
 }
 
@@ -137,6 +202,16 @@ struct WorkspaceView: View {
                     syncSetupError: workspace.syncSetupError,
                     retrySyncSetup: { await workspace.retryCloudSync() }
                 )
+            } else if let error = workspace.syncSetupError {
+                ContentUnavailableView {
+                    Label("iCloud Dev unavailable", systemImage: "icloud.slash")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Retry iCloud Setup") {
+                        Task { await workspace.retryCloudSync() }
+                    }
+                }
             } else if let error = workspace.configurationError {
                 ContentUnavailableView(
                     "Workspace unavailable", systemImage: "exclamationmark.icloud",

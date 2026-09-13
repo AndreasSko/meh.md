@@ -6,6 +6,7 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
     case corruptState
     case invalidRemoteRecord
     case unexpectedDeletion
+    case uploadFailed(code: Int)
     case uploadNotAcknowledged
 
     public var errorDescription: String? {
@@ -15,6 +16,8 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
         case .invalidRemoteRecord: "CloudKit returned an invalid snapshot."
         case .unexpectedDeletion:
             "A remote snapshot was deleted. Sync is paused to preserve history."
+        case let .uploadFailed(code):
+            "CloudKit upload failed (CKError code \(code))."
         case .uploadNotAcknowledged:
             "CloudKit did not acknowledge the requested snapshot."
         }
@@ -23,19 +26,23 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
 
 struct CloudKitTransportState: Codable, Equatable {
     var accountRecordName: String
+    var zoneName: String
     var inboxGeneration: UUID
     var engineState: Data?
     var inbox: [SyncRecord]
     var outbox: [String: SyncRecord]
     var hasUnexpectedDeletion: Bool
+    var retryNotBefore: Date?
 
-    init(accountRecordName: String) {
+    init(accountRecordName: String, zoneName: String) {
         self.accountRecordName = accountRecordName
+        self.zoneName = zoneName
         inboxGeneration = UUID()
         engineState = nil
         inbox = []
         outbox = [:]
         hasUnexpectedDeletion = false
+        retryNotBefore = nil
     }
 
     mutating func appendToInbox(_ record: SyncRecord) throws {
@@ -70,7 +77,7 @@ actor CloudKitTransportStateStore {
     private let fileURL: URL
     private var state: CloudKitTransportState
 
-    init(directory: URL, accountRecordName: String) throws {
+    init(directory: URL, accountRecordName: String, zoneName: String) throws {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true
         )
@@ -90,12 +97,14 @@ actor CloudKitTransportStateStore {
             } catch {
                 throw CloudKitSyncTransportError.corruptState
             }
-            guard state.accountRecordName == accountRecordName else {
+            guard state.accountRecordName == accountRecordName,
+                  state.zoneName == zoneName else {
                 throw SyncError.scopeChanged
             }
         } else {
             state = CloudKitTransportState(
-                accountRecordName: accountRecordName
+                accountRecordName: accountRecordName,
+                zoneName: zoneName
             )
             try Self.write(state, to: fileURL)
         }
@@ -184,12 +193,120 @@ struct CloudKitAssetStaging {
     }
 }
 
+struct CloudKitRetryThrottle {
+    private(set) var notBefore: Date?
+
+    init(notBefore: Date? = nil) { self.notBefore = notBefore }
+
+    mutating func observe(retryAfter seconds: Double?, now: Date) -> Bool {
+        guard let seconds, seconds.isFinite, seconds > 0 else { return false }
+        return merge(notBefore: now.addingTimeInterval(seconds))
+    }
+
+    mutating func merge(notBefore proposed: Date) -> Bool {
+        guard notBefore.map({ proposed > $0 }) ?? true else { return false }
+        notBefore = proposed
+        return true
+    }
+
+    func remaining(at now: Date) -> TimeInterval? {
+        guard let notBefore else { return nil }
+        let interval = notBefore.timeIntervalSince(now)
+        return interval > 0 ? interval : nil
+    }
+}
+
+enum CloudKitRetryMetadata {
+    static let fallbackSeconds = 30.0
+
+    static func seconds(in error: Error) -> Double? {
+        guard let cloudError = error as? CKError else { return nil }
+        var delays: [Double] = []
+        if let value = cloudError.retryAfterSeconds,
+           value.isFinite, value > 0 {
+            delays.append(value)
+        }
+        if let partialErrors = cloudError.partialErrorsByItemID {
+            delays += partialErrors.values.compactMap(seconds)
+        }
+        if delays.isEmpty,
+           cloudError.code == .requestRateLimited
+            || cloudError.code == .serviceUnavailable {
+            return fallbackSeconds
+        }
+        return delays.max()
+    }
+}
+
+struct CloudKitAvailabilityCooldownStore {
+    private struct State: Codable { var retryNotBefore: Date? }
+
+    private let fileURL: URL
+    private(set) var throttle: CloudKitRetryThrottle
+
+    init(directory: URL) throws {
+        fileURL = directory.appendingPathComponent(
+            "cloudkit-availability-retry.json"
+        )
+        do {
+            let state = try JSONDecoder().decode(
+                State.self, from: Data(contentsOf: fileURL)
+            )
+            throttle = CloudKitRetryThrottle(notBefore: state.retryNotBefore)
+        } catch CocoaError.fileReadNoSuchFile {
+            throttle = CloudKitRetryThrottle()
+        } catch {
+            throw CloudKitSyncTransportError.corruptState
+        }
+    }
+
+    var notBefore: Date? { throttle.notBefore }
+
+    func wait() async throws {
+        try await wait(
+            now: { Date() },
+            sleep: { try await Task.sleep(for: .seconds($0)) }
+        )
+    }
+
+    func wait(
+        now: () -> Date,
+        sleep: (TimeInterval) async throws -> Void
+    ) async throws {
+        while let remaining = throttle.remaining(at: now()) {
+            try await sleep(remaining)
+        }
+    }
+
+    mutating func observe(_ error: Error, now: Date = Date()) throws {
+        try merge(
+            retryAfter: CloudKitRetryMetadata.seconds(in: error), now: now
+        )
+    }
+
+    mutating func merge(notBefore: Date?) throws {
+        guard let notBefore, throttle.merge(notBefore: notBefore) else { return }
+        try persist()
+    }
+
+    mutating func merge(retryAfter: Double?, now: Date) throws {
+        guard throttle.observe(retryAfter: retryAfter, now: now) else { return }
+        try persist()
+    }
+
+    private func persist() throws {
+        try SyncFileIO.replace(
+            JSONEncoder().encode(State(retryNotBefore: throttle.notBefore)),
+            at: fileURL
+        )
+    }
+}
+
 @available(macOS 14.0, iOS 17.0, *)
 public final actor CloudKitSyncTransport: SyncTransport {
     public nonisolated let scope: String
 
     private static let recordType = "AutomergeSnapshotV1"
-    private static let zoneName = "meh-md-sync-v1"
     private static let bootstrapName = "canonical-seed-v1"
     private static let pageSize = 100
 
@@ -201,30 +318,53 @@ public final actor CloudKitSyncTransport: SyncTransport {
     private let eventCommitter: CloudKitEventCommitter
     private let assetDirectory: URL
     private var assetStaging: CloudKitAssetStaging
+    private var availabilityCooldown: CloudKitAvailabilityCooldownStore
     private var engine: CKSyncEngine!
     private var acknowledgedIDs = Set<String>()
     private var failedUploads: [String: Error] = [:]
     private var delegateFailure: Error?
+    private var retryThrottle = CloudKitRetryThrottle()
 
     public static func make(
         containerIdentifier: String,
-        stateDirectory: URL
+        stateDirectory: URL,
+        zoneName: String = "meh-md-sync-v1"
     ) async throws -> CloudKitSyncTransport {
+        var availabilityCooldown = try CloudKitAvailabilityCooldownStore(
+            directory: stateDirectory
+        )
+        try await availabilityCooldown.wait()
         let container = CKContainer(identifier: containerIdentifier)
-        guard try await container.accountStatus() == .available else {
+        let accountStatus: CKAccountStatus
+        do {
+            accountStatus = try await container.accountStatus()
+        } catch {
+            try availabilityCooldown.observe(error)
+            throw error
+        }
+        guard accountStatus == .available else {
             throw CloudKitSyncTransportError.accountUnavailable
         }
-        let userRecordID = try await container.userRecordID()
+        let userRecordID: CKRecord.ID
+        do {
+            userRecordID = try await container.userRecordID()
+        } catch {
+            try availabilityCooldown.observe(error)
+            throw error
+        }
         let store = try CloudKitTransportStateStore(
             directory: stateDirectory,
-            accountRecordName: userRecordID.recordName
+            accountRecordName: userRecordID.recordName,
+            zoneName: zoneName
         )
         let transport = CloudKitSyncTransport(
             containerIdentifier: containerIdentifier,
             container: container,
             userRecordID: userRecordID,
+            zoneName: zoneName,
             stateDirectory: stateDirectory,
-            store: store
+            store: store,
+            availabilityCooldown: availabilityCooldown
         )
         try await transport.initialize()
         return transport
@@ -234,18 +374,21 @@ public final actor CloudKitSyncTransport: SyncTransport {
         containerIdentifier: String,
         container: CKContainer,
         userRecordID: CKRecord.ID,
+        zoneName: String,
         stateDirectory: URL,
-        store: CloudKitTransportStateStore
+        store: CloudKitTransportStateStore,
+        availabilityCooldown: CloudKitAvailabilityCooldownStore
     ) {
         self.container = container
         database = container.privateCloudDatabase
         expectedUserRecordID = userRecordID
-        zoneID = CKRecordZone.ID(zoneName: Self.zoneName)
+        zoneID = CKRecordZone.ID(zoneName: zoneName)
         self.store = store
         eventCommitter = CloudKitEventCommitter(store: store)
         assetDirectory = stateDirectory.appendingPathComponent("assets")
         assetStaging = CloudKitAssetStaging(directory: assetDirectory)
-        scope = "\(containerIdentifier)/private/\(userRecordID.recordName)"
+        self.availabilityCooldown = availabilityCooldown
+        scope = "\(containerIdentifier)/private/\(userRecordID.recordName)/\(zoneName)"
     }
 
     private func initialize() async throws {
@@ -253,6 +396,13 @@ public final actor CloudKitSyncTransport: SyncTransport {
             at: assetDirectory, withIntermediateDirectories: true
         )
         let saved = await store.snapshot()
+        let deadline = [saved.retryNotBefore, availabilityCooldown.notBefore]
+            .compactMap { $0 }.max()
+        retryThrottle = CloudKitRetryThrottle(notBefore: deadline)
+        try availabilityCooldown.merge(notBefore: deadline)
+        if saved.retryNotBefore != deadline {
+            try await store.update { $0.retryNotBefore = deadline }
+        }
         let serialization: CKSyncEngine.State.Serialization?
         if let data = saved.engineState {
             do {
@@ -283,7 +433,9 @@ public final actor CloudKitSyncTransport: SyncTransport {
             recordName: Self.bootstrapName, zoneID: zoneID
         )
         do {
-            let existing = try await database.record(for: recordID)
+            let existing = try await cloudRequest {
+                try await database.record(for: recordID)
+            }
             let canonical = try decode(existing)
             try await store.update { try $0.appendToInbox(canonical) }
             return canonical
@@ -299,13 +451,18 @@ public final actor CloudKitSyncTransport: SyncTransport {
                 record, id: recordID, assetURL: assetURL
             )
             do {
-                _ = try await database.save(cloudRecord)
+                _ = try await cloudRequest {
+                    try await database.save(cloudRecord)
+                }
                 try await store.update { try $0.appendToInbox(record) }
                 uploadCompleted = true
                 return record
             } catch let conflict as CKError
                 where conflict.code == .serverRecordChanged {
-                guard let server = conflict.serverRecord else { throw conflict }
+                await observeRetryAfter(conflict)
+                let server = try await cloudRequest {
+                    try await database.record(for: recordID)
+                }
                 let canonical = try decode(server)
                 try await store.update { try $0.appendToInbox(canonical) }
                 uploadCompleted = true
@@ -330,25 +487,35 @@ public final actor CloudKitSyncTransport: SyncTransport {
         engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
         acknowledgedIDs.remove(record.id)
         failedUploads[record.id] = nil
-        try await engine.sendChanges(
-            .init(scope: .recordIDs([recordID]))
-        )
-        if let delegateFailure {
-            throw delegateFailure
+        let sendError: Error?
+        do {
+            try await cloudRequest {
+                try await engine.sendChanges(
+                    .init(scope: .recordIDs([recordID]))
+                )
+            }
+            sendError = nil
+        } catch {
+            sendError = error
         }
+        try await assertHealthy()
         if let failure = failedUploads.removeValue(forKey: record.id) {
             throw failure
         }
-        guard acknowledgedIDs.remove(record.id) != nil else {
-            throw CloudKitSyncTransportError.uploadNotAcknowledged
+        if acknowledgedIDs.remove(record.id) != nil {
+            uploadCompleted = true
+            return
         }
-        uploadCompleted = true
+        if let sendError { throw sendError }
+        throw CloudKitSyncTransportError.uploadNotAcknowledged
     }
 
     public func fetch(after cursor: String?) async throws -> SyncPage {
         try await assertHealthy()
         try await verifyAccount()
-        try await engine.fetchChanges(.init(scope: .zoneIDs([zoneID])))
+        try await cloudRequest {
+            try await engine.fetchChanges(.init(scope: .zoneIDs([zoneID])))
+        }
         if let delegateFailure {
             throw delegateFailure
         }
@@ -360,9 +527,51 @@ public final actor CloudKitSyncTransport: SyncTransport {
     }
 
     private func verifyAccount() async throws {
-        guard try await container.accountStatus() == .available,
-              try await container.userRecordID() == expectedUserRecordID else {
+        guard try await cloudRequest({
+                  try await container.accountStatus()
+              }) == .available,
+              try await cloudRequest({
+                  try await container.userRecordID()
+              })
+                == expectedUserRecordID else {
             throw SyncError.scopeChanged
+        }
+    }
+
+    private func cloudRequest<T>(
+        _ operation: () async throws -> T
+    ) async throws -> T {
+        if let delegateFailure { throw delegateFailure }
+        try await waitForRetryWindow()
+        // Actor state can change while a cooldown suspends this request.
+        if let delegateFailure { throw delegateFailure }
+        do {
+            return try await operation()
+        } catch {
+            await observeRetryAfter(error)
+            throw error
+        }
+    }
+
+    private func waitForRetryWindow() async throws {
+        while let remaining = retryThrottle.remaining(at: Date()) {
+            try await Task.sleep(for: .seconds(remaining))
+        }
+    }
+
+    private func observeRetryAfter(_ error: Error) async {
+        let delay = CloudKitRetryMetadata.seconds(in: error)
+        guard retryThrottle.observe(retryAfter: delay, now: Date()) else {
+            return
+        }
+        let deadline = retryThrottle.notBefore
+        do {
+            try availabilityCooldown.merge(notBefore: deadline)
+            try await store.update { $0.retryNotBefore = deadline }
+        } catch {
+            // Do not continue advancing CKSyncEngine state if the cooldown
+            // cannot be made durable for a restart.
+            delegateFailure = error
         }
     }
 
@@ -374,7 +583,9 @@ public final actor CloudKitSyncTransport: SyncTransport {
     }
 
     private func ensureZone() async throws {
-        let result = try await database.recordZones(for: [zoneID])
+        let result = try await cloudRequest {
+            try await database.recordZones(for: [zoneID])
+        }
         guard let zoneResult = result[zoneID] else {
             throw CloudKitSyncTransportError.invalidRemoteRecord
         }
@@ -382,19 +593,27 @@ public final actor CloudKitSyncTransport: SyncTransport {
         case .success:
             return
         case let .failure(error):
+            await observeRetryAfter(error)
             guard let cloudError = error as? CKError,
                   cloudError.code == .unknownItem
                     || cloudError.code == .zoneNotFound else {
                 throw error
             }
         }
-        let saved = try await database.modifyRecordZones(
-            saving: [CKRecordZone(zoneID: zoneID)], deleting: []
-        ).saveResults[zoneID]
+        let saved = try await cloudRequest {
+            try await database.modifyRecordZones(
+                saving: [CKRecordZone(zoneID: zoneID)], deleting: []
+            )
+        }.saveResults[zoneID]
         guard let saved else {
             throw CloudKitSyncTransportError.invalidRemoteRecord
         }
-        _ = try saved.get()
+        do {
+            _ = try saved.get()
+        } catch {
+            await observeRetryAfter(error)
+            throw error
+        }
     }
 
     private func makeCloudRecord(
@@ -456,15 +675,25 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                 let data = try JSONEncoder().encode(update.stateSerialization)
                 try await eventCommitter.commitEngineState(data)
             case let .fetchedRecordZoneChanges(changes):
-                guard changes.deletions.isEmpty else {
+                let targetDeletions = changes.deletions.filter {
+                    $0.recordID.zoneID == zoneID
+                }
+                guard targetDeletions.isEmpty else {
                     try await store.update { $0.hasUnexpectedDeletion = true }
                     return
                 }
-                let records = try changes.modifications.map { try decode($0.record) }
+                let records = try changes.modifications
+                    .map(\.record)
+                    .filter { $0.recordID.zoneID == zoneID }
+                    .map(decode)
                 try await eventCommitter.commitFetched(records)
             case let .sentRecordZoneChanges(changes):
                 for record in changes.savedRecords {
                     let id = record.recordID.recordName
+                    let saved = try decode(record)
+                    guard saved.id == id else {
+                        throw CloudKitSyncTransportError.invalidRemoteRecord
+                    }
                     acknowledgedIDs.insert(id)
                     try await store.update { state in
                         if let value = state.outbox.removeValue(forKey: id) {
@@ -473,22 +702,52 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                     }
                 }
                 for failure in changes.failedRecordSaves {
+                    await observeRetryAfter(failure.error)
+                    if let delegateFailure { throw delegateFailure }
                     let id = failure.record.recordID.recordName
-                    if failure.error.code == .serverRecordChanged,
-                       let server = failure.error.serverRecord,
-                       let value = try? decode(server), value.id == id {
-                        acknowledgedIDs.insert(id)
-                        try await store.update { state in
-                            if let pending = state.outbox.removeValue(forKey: id) {
-                                try state.appendToInbox(pending)
+                    if failure.error.code == .serverRecordChanged {
+                        do {
+                            let server = try await cloudRequest {
+                                try await database.record(
+                                    for: failure.record.recordID
+                                )
                             }
+                            let value = try decode(server)
+                            guard value.id == id else {
+                                throw CloudKitSyncTransportError
+                                    .invalidRemoteRecord
+                            }
+                            try await store.update { state in
+                                if let pending = state.outbox.removeValue(
+                                    forKey: id
+                                ) {
+                                    try state.appendToInbox(pending)
+                                }
+                            }
+                            syncEngine.state.remove(
+                                pendingRecordZoneChanges: [
+                                    .saveRecord(failure.record.recordID)
+                                ]
+                            )
+                            acknowledgedIDs.insert(id)
+                        } catch {
+                            failedUploads[id] = error
                         }
                     } else {
-                        failedUploads[id] = failure.error
+                        failedUploads[id] = CloudKitSyncTransportError
+                            .uploadFailed(code: failure.error.code.rawValue)
                     }
                 }
-            case .accountChange:
-                delegateFailure = SyncError.scopeChanged
+            case let .accountChange(change):
+                switch change.changeType {
+                case let .signIn(currentUser)
+                    where currentUser == expectedUserRecordID:
+                    break
+                case .signIn, .signOut, .switchAccounts:
+                    delegateFailure = SyncError.scopeChanged
+                @unknown default:
+                    delegateFailure = SyncError.scopeChanged
+                }
             case let .fetchedDatabaseChanges(changes):
                 if changes.deletions.contains(where: { $0.zoneID == zoneID }) {
                     try await store.update { $0.hasUnexpectedDeletion = true }
