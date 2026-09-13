@@ -67,3 +67,6 @@ activating version 2 notebook sync.
   thin native text views inside SwiftUI.
 - [Document decision](docs/decisions/002-document-persistence-boundary.md):
   where editing, authoritative state, and Markdown copies are separated.
+
+- [Writing experience plan](docs/milestone-4-plan.md): milestone-four scope,
+  issues, privacy boundary, and the standalone fictional editor preview.

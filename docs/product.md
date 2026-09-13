@@ -1,6 +1,6 @@
 # Product brief
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 
 ## Idea
 
@@ -45,7 +45,8 @@ Target iOS 27, iPadOS 27, and macOS 27 on the owner's devices.
 - Public release preparation, commercial features, support for other users'
   older devices, and non-Apple platforms.
 
-Syntax hiding/revealing around the cursor is an optional later milestone.
+Syntax hiding/revealing around the cursor is now in milestone 4, alongside
+search, richer Markdown presentation, and everyday writing conveniences.
 Advanced cursor preservation and undo behavior across remote changes can also
 be refined later; ordinary typing, selection, and undo must work from the
 beginning.
