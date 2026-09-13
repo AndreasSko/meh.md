@@ -32,7 +32,7 @@ struct NotebookApplicationView: View {
         .task { await workspace.start() }
         .onChange(of: scenePhase) { oldPhase, newPhase in
             if oldPhase != .active, newPhase == .active, workspace.automaticSync {
-                Task { await workspace.refresh() }
+                Task { await workspace.refresh(trigger: "foreground activation") }
             }
         }
         .task(id: scenePhase) {
@@ -42,7 +42,7 @@ struct NotebookApplicationView: View {
             // Engine-driven background delivery remains a separate stage.
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
-                await workspace.refresh()
+                await workspace.refresh(trigger: "foreground timer")
             }
         }
     }

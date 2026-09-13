@@ -230,3 +230,28 @@ Dev build and iPhone iCloud Dev app/UI-test compilation also pass.
 Next: owner feedback on sync visibility with the imported library, then
 permanent deletion and content cleanup. Full background scheduling and broader
 device/scale acceptance remain outstanding.
+
+
+## Sync diagnostics checkpoint: 2026-09-13
+
+The owner reported an iPhone upload after receiving the library, followed by
+a smaller upload count. Added bounded local event history to distinguish
+missing acknowledgements, changed revisions, and partial-batch retries.
+Sync Details exposes viewing, copying, sharing, and clearing the latest 500
+events. Error summaries omit user content and identifiers. Logging is local
+and best effort, with no change to sync decisions or document formats.
+
+A diagnostic reproduction confirmed that an older build's advanced download
+cursor with missing upload acknowledgements can cause unnecessary uploads
+after upgrading. This is a possible explanation, not a confirmed diagnosis
+of the owner's device. The 124-to-74 count is consistent with one completed
+batch of 50 before retry. No upgrade reconciliation is included here; logs
+from the affected device are the next evidence needed.
+
+The Mac log UI showed a fresh 120-note loopback download with no outgoing
+notes, followed by an unchanged manual sync. Full device-specific CloudKit
+behavior remains an owner feedback checkpoint.
+
+All 261 Swift tests pass, including log persistence, error redaction,
+partial-retry diagnostics, and real HTTP replica tests. Signed Mac iCloud
+Dev and iPhone app/UI-test builds pass.

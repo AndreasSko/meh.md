@@ -63,3 +63,29 @@ upload indicator, folder phase, sync details, and disappearance on completion.
 This establishes UI behavior without timing claims about the owner's iCloud
 library. Existing saved notes and pending uploads can continue on the new
 build.
+
+
+## Local event diagnostics
+
+Sync Details opens Sync Event Log on Mac and iPhone. Copy Log or Share Log
+exports recent events from that device; Clear Log removes that local history.
+The log retains the latest 500 events across app launches. It is diagnostic
+state only and is not included in Automerge documents, CloudKit records, or
+Markdown copies. A log persistence failure does not stop note synchronization.
+
+Events describe refresh triggers, compatibility sync, download pages, saved
+checkpoint counts, upload selection reasons, batch acknowledgements, known
+cooldowns, errors, and pass outcomes. Counts distinguish notes with no saved
+upload acknowledgement from revisions changed since their acknowledgement.
+A match with an applied checkpoint is diagnostic evidence only: it is not
+proof that the current revision already exists remotely.
+
+Exports include app version/build and OS version, timestamps, event names,
+counts, and sanitized error categories/codes. They exclude note text, titles,
+paths, document IDs, revision hashes, account identifiers, and raw error
+descriptions. Nothing is sent automatically; sharing is initiated by the user.
+
+For an unexpected upload, copy the log soon after the event on each affected
+device. A completed batch followed by a failed pass and another smaller batch
+target identifies a retry. Logs begin with this build and cannot reconstruct
+events from earlier builds.

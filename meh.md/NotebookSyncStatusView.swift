@@ -1,5 +1,10 @@
 import NoteCore
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 struct NotebookWorkspaceStatusView: View {
     let workspace: NotebookWorkspace
@@ -57,6 +62,7 @@ struct NotebookWorkspaceStatusView: View {
 struct NotebookSyncDetailsView: View {
     let workspace: NotebookWorkspace
     @Environment(\.dismiss) private var dismiss
+    @State private var showingEventLog = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -90,6 +96,8 @@ struct NotebookSyncDetailsView: View {
                 }
                 Text("Progress counts saved revisions acknowledged by the sync service. Other devices receive them when they synchronize.")
                     .font(.caption).foregroundStyle(.secondary)
+                Button("Sync Event Log") { showingEventLog = true }
+                    .accessibilityIdentifier("notebook-sync-event-log")
                 Button("Sync Now") { Task { await workspace.refresh(manual: true) } }
                     .disabled(workspace.isRefreshing)
                     .accessibilityIdentifier("sync-now")
@@ -98,6 +106,9 @@ struct NotebookSyncDetailsView: View {
             .frame(idealWidth: 340, maxWidth: 420)
         }
         .presentationDetents([.medium, .large])
+        .sheet(isPresented: $showingEventLog) {
+            NotebookSyncEventLogView(log: workspace.syncEventLog)
+        }
     }
 
     private var lastSyncText: String {
@@ -154,5 +165,64 @@ private struct NotebookSyncPresentation {
         if retryDeadline != nil { return "pause.circle" }
         if !workspace.isSyncing, summary != nil { return "exclamationmark.icloud" }
         return "arrow.triangle.2.circlepath"
+    }
+}
+
+
+private struct NotebookSyncEventLogView: View {
+    let log: NotebookSyncEventLog
+    @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Sync Event Log").font(.headline)
+                Spacer()
+                Button("Done") { dismiss() }
+            }
+            Text("Recent events from this device. No note contents, names, paths, or account identifiers are recorded.")
+                .font(.caption).foregroundStyle(.secondary)
+            if log.persistenceError {
+                Text("Some log history could not be loaded or saved. Current events are available below.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            ScrollView {
+                Text(diagnosticText)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityIdentifier("notebook-sync-event-log-text")
+            HStack {
+                Button(copied ? "Copied" : "Copy Log") {
+                    #if os(macOS)
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(diagnosticText, forType: .string)
+                    #else
+                    UIPasteboard.general.string = diagnosticText
+                    #endif
+                    copied = true
+                }
+                .accessibilityIdentifier("notebook-sync-event-log-copy")
+                ShareLink("Share Log", item: diagnosticText)
+                Spacer()
+                Button("Clear Log") { log.clear(); copied = false }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 300, idealWidth: 680, minHeight: 360, idealHeight: 540)
+    }
+
+    private var diagnosticText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        #if os(macOS)
+        let platform = "macOS"
+        #else
+        let platform = "iOS"
+        #endif
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return "meh.md \(version) (\(build)); \(platform) \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)\n" + log.exportText
     }
 }

@@ -51,6 +51,7 @@ final class NotebookWorkspace {
     private(set) var syncRetryNotBefore: Date?
     private(set) var lastSuccessfulSync: Date?
     private(set) var checkingLegacySync = false
+    @ObservationIgnored lazy var syncEventLog = NotebookSyncEventLog(directory: directory)
     private var syncMonitor: Task<Void, Never>?
     private var slowSyncIndicator: Task<Void, Never>?
     private(set) var recoveryAction: RecoveryAction?
@@ -125,6 +126,7 @@ final class NotebookWorkspace {
     func start() async {
         guard !isLoading else { return }
         isLoading = true
+        if usesSync { syncEventLog.record("workspace opening") }
         errorMessage = nil
         recoveryAction = nil
         defer { isLoading = false }
@@ -143,7 +145,7 @@ final class NotebookWorkspace {
                 // any network request, so offline reopening remains useful.
                 replica = loaded
             }
-            await refresh(whileLoading: true)
+            await refresh(whileLoading: true, trigger: "startup")
         } catch {
             setRecoveryAction(for: error)
             errorMessage = error.localizedDescription
@@ -201,7 +203,7 @@ final class NotebookWorkspace {
         }
     }
 
-    func contentDidSave() {
+    func contentDidSave(trigger: String = "saved content or catalog update") {
         guard !isPreview else { return }
         scheduledRefresh?.cancel()
         scheduledRefresh = Task { @MainActor in
@@ -212,15 +214,18 @@ final class NotebookWorkspace {
             scheduledRefresh = nil
             if usesSync && !automaticSync {
                 await publishCopies()
-            } else { await refresh() }
+            } else { await refresh(trigger: trigger) }
         }
     }
 
-    func refresh(whileLoading: Bool = false, manual: Bool = false) async {
+    func refresh(
+        whileLoading: Bool = false, manual: Bool = false, trigger: String = "recovery"
+    ) async {
         guard whileLoading || !isLoading else { return }
         guard let replica else { return }
         guard !isRefreshing else {
             if manual { showSyncCheck = true }
+            if usesSync { syncEventLog.record("refresh coalesced: " + trigger) }
             needsAnotherRefresh = true
             return
         }
@@ -229,14 +234,18 @@ final class NotebookWorkspace {
             isRefreshing = false
             if needsAnotherRefresh {
                 needsAnotherRefresh = false
-                contentDidSave()
+                contentDidSave(trigger: "coalesced follow-up")
             }
         }
         if usesSync {
+            syncEventLog.record("refresh started: " + (manual ? "manual" : trigger))
+            let refreshStarted = Date()
             beginSyncPresentation(manual: manual)
             var hasBinding = false
             do {
+                syncEventLog.record("notebook transport preparing")
                 try await prepareNotebookTransport()
+                syncEventLog.record("notebook transport ready")
                 guard let notebookTransport else {
                     throw SyncError.unavailable(
                         "Notebook sync setup has not completed."
@@ -244,12 +253,14 @@ final class NotebookWorkspace {
                 }
                 let coordinator = sync ?? NotebookSyncCoordinator(
                     replica: replica,
-                    transport: notebookTransport
+                    transport: notebookTransport,
+                    diagnosticLog: syncEventLog
                 )
                 sync = coordinator
                 hasBinding = try coordinator.hasDurableBinding()
                 var legacy: NoteSnapshot?
                 checkingLegacySync = true
+                syncEventLog.record("legacy bridge started")
                 do {
                     try await prepareLegacyTransport()
                     guard let legacyTransport else {
@@ -266,12 +277,14 @@ final class NotebookWorkspace {
                         legacyTransport: legacyTransport,
                         notebookScope: notebookTransport.scope
                     )
+                    syncEventLog.record("legacy bridge completed")
                     legacySyncError = nil
                     if recoveryAction?.kind == .bridgeSource
                         || recoveryAction?.kind == .bridgeCopy {
                         recoveryAction = nil
                     }
                 } catch {
+                    syncEventLog.record("legacy bridge failed: " + NotebookSyncEventLog.errorCode(error))
                     legacySyncError = error.localizedDescription
                     setRecoveryAction(for: error)
                     // Initial joining must include the old canonical note.
@@ -289,12 +302,16 @@ final class NotebookWorkspace {
                     if !hasBinding { errorMessage = message }
                 } else { errorMessage = nil }
             } catch {
+                syncEventLog.record("sync setup failed: " + NotebookSyncEventLog.errorCode(error))
                 syncSetupError = error.localizedDescription
                 setRecoveryAction(for: error)
                 if !hasBinding { errorMessage = error.localizedDescription }
             }
             await updateRetryDeadline()
             endSyncPresentation()
+            syncEventLog.record("refresh ended", counts: [
+                "duration_ms": Int(Date().timeIntervalSince(refreshStarted) * 1_000)
+            ])
         }
         await publishCopies()
     }
@@ -338,7 +355,17 @@ final class NotebookWorkspace {
                     stateDirectory: legacyDirectory.appending(path: "CloudKit"))
             }
         }
-        syncRetryNotBefore = [notebook, legacy].compactMap { $0 }.filter { $0 > Date() }.max()
+        let deadline = [notebook, legacy].compactMap { $0 }.filter { $0 > Date() }.max()
+        if deadline != syncRetryNotBefore {
+            if let deadline {
+                syncEventLog.record("retry cooldown observed", counts: [
+                    "remaining_seconds": max(0, Int(ceil(deadline.timeIntervalSinceNow)))
+                ])
+            } else if syncRetryNotBefore != nil {
+                syncEventLog.record("retry cooldown elapsed")
+            }
+        }
+        syncRetryNotBefore = deadline
     }
 
     private func prepareNotebookTransport() async throws {

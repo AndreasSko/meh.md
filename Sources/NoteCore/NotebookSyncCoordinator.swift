@@ -23,11 +23,17 @@ public final class NotebookSyncCoordinator {
     @ObservationIgnored private let transport: any SyncTransport
     @ObservationIgnored private let stateURL: URL
     @ObservationIgnored private let proposalURL: URL
+    @ObservationIgnored private let diagnosticLog: NotebookSyncEventLog?
     @ObservationIgnored private var inFlight = false
 
-    public init(replica: NotebookReplica, transport: any SyncTransport) {
+    public init(
+        replica: NotebookReplica,
+        transport: any SyncTransport,
+        diagnosticLog: NotebookSyncEventLog? = nil
+    ) {
         self.replica = replica
         self.transport = transport
+        self.diagnosticLog = diagnosticLog
         stateURL = replica.directory.appending(path: "notebook-sync-state.json")
         proposalURL = replica.directory.appending(path: "notebook-proposal.json")
     }
@@ -42,8 +48,10 @@ public final class NotebookSyncCoordinator {
 
     public func synchronize(legacyNote: NoteSnapshot? = nil) async {
         guard !inFlight else { return }
+        let startedAt = Date()
         inFlight = true
         status = .syncing
+        diagnosticLog?.record("pass_start")
         updateProgress(
             phase: .checking,
             receivedRecords: 0,
@@ -53,13 +61,38 @@ public final class NotebookSyncCoordinator {
         defer { inFlight = false }
         do {
             try await exchange(legacyNote: legacyNote)
+            let isPending = status == .pending
+            diagnosticLog?.record(
+                "pass_end",
+                counts: [
+                    "durationMilliseconds": Self.durationMilliseconds(since: startedAt),
+                    "pending": isPending ? 1 : 0,
+                ]
+            )
+            if isPending { diagnosticLog?.record("pass_pending") }
             progress = nil
-        } catch { status = .failed(error.localizedDescription) }
+        } catch {
+            diagnosticLog?.record(
+                "pass_error:" + NotebookSyncEventLog.errorCode(error),
+                counts: [
+                    "durationMilliseconds": Self.durationMilliseconds(since: startedAt)
+                ]
+            )
+            status = .failed(error.localizedDescription)
+        }
     }
 
     private func exchange(legacyNote: NoteSnapshot?) async throws {
         try await replica.load()
         var state = try loadState()
+        diagnosticLog?.record(
+            "checkpoints_loaded",
+            counts: [
+                "acknowledgedDocuments": state.acknowledgedHeads.count,
+                "appliedDocuments": state.appliedHeads.count,
+                "cursorPresent": state.cursor == nil ? 0 : 1,
+            ]
+        )
         // Bind before any network mutation. Deletions survive a catalog
         // rollback and are reapplied before old files can be republished.
         try await replica.rememberDeletions(state.deletedIDs)
@@ -90,6 +123,7 @@ public final class NotebookSyncCoordinator {
         let remembered = state.deletedIDs.union(try replica.deletedIDs)
         let checkpoints = state.appliedHeads.merging(state.acknowledgedHeads) { $0.union($1) }
         if try await !replica.containsHistory(checkpoints, deleted: remembered) {
+            diagnosticLog?.record("replay_missing_history")
             state.cursor = nil
             state.appliedHeads = [:]
             state.acknowledgedHeads = [:]
@@ -105,6 +139,7 @@ public final class NotebookSyncCoordinator {
             do { page = try await transport.fetch(after: state.cursor) } catch SyncError
                 .invalidCursor where !replayedInvalidCursor
             {
+                diagnosticLog?.record("replay_invalid_cursor")
                 state.cursor = nil
                 try save(state)
                 replayedInvalidCursor = true
@@ -121,15 +156,24 @@ public final class NotebookSyncCoordinator {
             let persisted = try await replica.records(includeUnlisted: true)
             let persistedByKey = Dictionary(
                 uniqueKeysWithValues: persisted.map { ($0.documentKey, $0) })
+            var exactAcknowledgements = 0
             for record in page.records
             where persistedByKey[record.documentKey]?.snapshot.heads == record.snapshot.heads {
                 state.acknowledgedHeads[record.documentKey] = record.snapshot.heads
+                exactAcknowledgements += 1
             }
             state.appliedHeads = Dictionary(
                 uniqueKeysWithValues: persisted.map { ($0.documentKey, $0.snapshot.heads) })
             state.deletedIDs.formUnion(try replica.deletedIDs)
             state.cursor = page.cursor
             try save(state)
+            diagnosticLog?.record(
+                "page_received",
+                counts: [
+                    "exactAcknowledgements": exactAcknowledgements,
+                    "records": page.records.count,
+                ]
+            )
             pages += 1
             if !page.hasMore { break }
             if pages >= 1_000 {
@@ -147,6 +191,30 @@ public final class NotebookSyncCoordinator {
             $0.kind == .catalog
                 && state.acknowledgedHeads[$0.documentKey] != $0.snapshot.heads
         }
+        let notes = outgoing.filter { $0.kind == .note }
+        let noAcknowledgement = notes.filter {
+            state.acknowledgedHeads[$0.documentKey] == nil
+        }.count
+        let changedSinceAcknowledgement = notes.filter {
+            guard let acknowledged = state.acknowledgedHeads[$0.documentKey] else {
+                return false
+            }
+            return acknowledged != $0.snapshot.heads
+        }.count
+        let matchingAppliedWithoutAcknowledgement = notes.filter {
+            state.acknowledgedHeads[$0.documentKey] == nil
+                && state.appliedHeads[$0.documentKey] == $0.snapshot.heads
+        }.count
+        diagnosticLog?.record(
+            "pending_notes",
+            counts: [
+                "changedSinceAcknowledgement": changedSinceAcknowledgement,
+                "matchingAppliedWithoutAcknowledgement":
+                    matchingAppliedWithoutAcknowledgement,
+                "noAcknowledgement": noAcknowledgement,
+                "total": pendingNotes.count,
+            ]
+        )
         updateProgress(
             phase: .uploadingNotes,
             completedNotes: 0,
@@ -194,7 +262,27 @@ public final class NotebookSyncCoordinator {
         let expectedIDs = Set(records.map(\.id))
         guard expectedIDs.count == records.count else { throw SyncError.invalidRecord }
         let byID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
-        let result = try await transport.publishBatch(records)
+        let startEvent = completedNoteCount > 0 ? "note_batch_start" : "catalog_batch_start"
+        let resultEvent = completedNoteCount > 0 ? "note_batch_result" : "catalog_batch_result"
+        diagnosticLog?.record(startEvent, counts: ["requested": records.count])
+        let result: SyncBatchResult
+        do {
+            result = try await transport.publishBatch(records)
+        } catch {
+            diagnosticLog?.record(
+                resultEvent,
+                counts: ["acknowledged": 0, "error": 1, "requested": records.count]
+            )
+            throw error
+        }
+        diagnosticLog?.record(
+            resultEvent,
+            counts: [
+                "acknowledged": result.acknowledgedIDs.count,
+                "error": result.error == nil ? 0 : 1,
+                "requested": records.count,
+            ]
+        )
         guard result.acknowledgedIDs.isSubset(of: expectedIDs) else {
             throw SyncError.invalidRecord
         }
@@ -205,6 +293,9 @@ public final class NotebookSyncCoordinator {
         if !result.acknowledgedIDs.isEmpty {
             state.deletedIDs.formUnion(try replica.deletedIDs)
             try save(state)
+            diagnosticLog?.record("batch_checkpoint_saved", counts: [
+                "acknowledged": result.acknowledgedIDs.count
+            ])
             if completedNoteCount > 0 {
                 updateProgress(
                     phase: .uploadingNotes,
@@ -232,6 +323,10 @@ public final class NotebookSyncCoordinator {
             totalNotes: totalNotes ?? progress?.totalNotes ?? 0,
             lastProgressAt: Date()
         )
+    }
+
+    private static func durationMilliseconds(since start: Date) -> Int {
+        max(0, Int(Date().timeIntervalSince(start) * 1_000))
     }
 
     private struct Proposal: Codable {
