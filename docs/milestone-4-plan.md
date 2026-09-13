@@ -1,6 +1,6 @@
 # Milestone 4: Pleasant everyday writing
 
-Updated: 2026-09-13
+Updated: 2026-09-14
 
 ## Outcome and working method
 
@@ -183,3 +183,95 @@ Reassess #4 against the existing syntax cache before duplicating that work.
 - Next: owner feedback on the fictional Mac preview, then refine appearance
   and proceed to the remaining issues. Issue #26 remains open for guides,
   code-language presentation, and further visual acceptance.
+
+## Combined writing-tools increment
+
+Issues #27, #28, and #29 are delivered together in one PR stacked on #33 to
+limit review overhead. Search (#30) is explicitly deferred from this increment.
+Neither PR is merged automatically. Reuse the existing native preview and app
+simulator tests; do not introduce another test application.
+
+Editing rules:
+
+- Return continues the exact bullet style, indentation, ordered number, and
+  quote containers. On an empty continuation it exits the innermost container;
+  an outermost empty item becomes a plain blank line.
+- Tab and Shift-Tab move whole selected lines by two spaces, including bare
+  list markers. A selection ending at a new line's start excludes that line.
+- Formatting uses native undoable replacements. Inline formats apply to each
+  nonempty selected line; an empty selection places the caret inside a pair.
+- Heading toggles H2. Applying it to another heading changes that heading to
+  H2. Link inserts a label and URL, selecting the URL for immediate editing;
+  invoking it inside an existing link selects that URL without a source edit.
+- Commands wait for composition. Pasted multiline text remains literal, and
+  list continuation does not run inside code.
+- Live Preview is the default in the notebook, with the chosen mode remembered
+  on the current device. The active paragraph exposes its syntax for editing.
+  Changing modes must not change Markdown bytes or create an undo entry.
+- On iPhone and iPad, common formatting and indentation actions live in a
+  continuous bar above the keyboard, with evenly spaced controls and an
+  overflow menu. Indent comes before Outdent. Long-pressing a command lets
+  the user rearrange it without leaving the editor; the order is saved on
+  this device. More stays at the end and offers Reset Toolbar Order.
+  Scrolling still dismisses the keyboard; there is no Done button.
+  The accessory uses native collection-view movement and an anchored native
+  popover for overflow actions, keeping the menu above the keyboard.
+
+Validation must distinguish shared rule tests, actual native adapter tests,
+app simulator interaction, and physical-device acceptance. Source fidelity,
+composition, selection, undo/redo, and remote replacement remain requirements.
+
+The initial Live Preview collapses headings, bold/italic, highlight,
+strikethrough, inline-code delimiters, and link destinations. Unordered list markers render as native bullets, and quote markers are
+hidden outside the active paragraph while retaining their layout width.
+Ordered list numbers and fenced-code boundaries remain visible. The active paragraph exposes all syntax while editing;
+with no editor focus, all supported inline syntax is collapsed.
+
+Shared and native validation: 376 Swift tests ran with zero failures and one
+explicit headless native-indicator skip; all 16 Python tests passed. Native
+adapter tests cover command undo/redo, list Return/exit, composition, literal
+multiline insertion, mode changes, and commands after remote replacement.
+Live Preview has a native geometry check for a long hidden link destination.
+The existing Mac preview verified Return, whole-item indentation, menu undo,
+readable dark-mode text, and rendered inline syntax. The Mac app builds.
+
+The final iPhone simulator suite passes all three tests: keyboard dismissal
+and reopening, list continuation and formatting (including overflow actions),
+mode changes, and drag reordering that survives app relaunch without changing
+the note. Reset and overflow dismissal are explicitly verified. The iPad app
+builds and its bar was visually inspected, but final iPad UI automation stalled
+waiting for an animation-completion notification. A sampled app main thread
+was idle; this is inconclusive automation evidence. Device Hub UI control also
+timed out. Physical-device and external-keyboard acceptance remain open.
+
+## Owner follow-up: editor comfort and performance
+
+The owner reports successful use on iPad. This is owner device feedback;
+it does not turn the previously stalled automated iPad run into a pass.
+
+Follow-up work:
+
+- Investigate typing that appears blocked when starting strikethrough after
+  existing bold text in Live Preview. Cover manual delimiters and formatting
+  commands, source preservation, native selection, and subsequent typing.
+- Render unordered list markers as bullets and hide quote markers outside
+  the active paragraph in Live Preview, preserving editable Markdown source.
+- Offer native font choices beside text size, remembered on this device.
+- Track larger-note scrolling and Markdown rendering stutter in
+  [#37](https://github.com/AndreasSko/meh.md/issues/37). Profile rendering,
+  layout, and presentation refresh before optimizing; this is distinct from
+  sync replication performance and belongs to milestone four.
+
+The short strikethrough sequence passed in the iPad simulator with the actual
+app: manual tildes after bold text and subsequent typing preserve all source.
+A macOS debug probe with 2,000 fictional paragraphs measured roughly 1.1–1.2
+seconds for insertion plus presentation refresh in both Source and Live
+Preview. This suggests general refresh cost, not a demonstrated tilde-specific
+failure; physical-iPad long-note performance remains open in #37.
+
+Final follow-up checks: 94 native editor tests pass with zero failures and
+one existing headless caret skip. Three focused iPad UI tests pass for font
+selection, preview bullets/quote rails with Source switching, and manual
+strikethrough typing. The captured font popover and text-anchored markers
+were visually inspected. Mac and generic iOS builds pass; the earlier full
+iPad toolbar automation limitation is distinct from these focused checks.

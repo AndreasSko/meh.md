@@ -6,6 +6,7 @@ import SwiftUI
 final class MarkdownEditorNavigation {
     var prepareToLeave: (() -> Bool)?
     var resumeEditing: (() -> Void)?
+    var performCommand: ((MarkdownEditingCommand) -> Void)?
 }
 
 struct MarkdownEditorCommit {
@@ -116,6 +117,61 @@ import AppKit
 final class MarkdownTextView: NSTextView {
     let markdownSyntaxCache = MarkdownSyntaxCache()
 
+    @discardableResult
+    func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
+        guard isEditable, !hasMarkedText(),
+              let change = MarkdownEditingRules.change(
+                for: command, text: string, selection: selectedRange()
+              ) else { return false }
+        let expected = (string as NSString).replacingCharacters(
+            in: change.range, with: change.replacement
+        )
+        window?.makeFirstResponder(self)
+        if string.utf8.elementsEqual(expected.utf8) {
+            setSelectedRange(expected.clampedSelection(change.selection))
+            return true
+        }
+        breakUndoCoalescing()
+        insertText(change.replacement, replacementRange: change.range)
+        breakUndoCoalescing()
+        // A synchronous commit may merge remote text and remap the selection.
+        if string.utf8.elementsEqual(expected.utf8) {
+            setSelectedRange(expected.clampedSelection(change.selection))
+            scrollRangeToVisible(selectedRange())
+        }
+        return true
+    }
+
+    override func insertNewline(_ sender: Any?) {
+        if !performMarkdownCommand(.continueLine) { super.insertNewline(sender) }
+    }
+
+    override func insertTab(_ sender: Any?) {
+        if !performMarkdownCommand(.indent) { super.insertTab(sender) }
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        if !performMarkdownCommand(.outdent) { super.insertBacktab(sender) }
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard window?.firstResponder === self else {
+            return super.performKeyEquivalent(with: event)
+        }
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        let command: MarkdownEditingCommand?
+        switch (event.charactersIgnoringModifiers?.lowercased(), flags) {
+        case ("b", .command): command = .bold
+        case ("i", .command): command = .italic
+        case ("k", .command): command = .link
+        case ("h", [.command, .shift]): command = .heading
+        case ("c", [.command, .shift]): command = .inlineCode
+        default: command = nil
+        }
+        if let command, performMarkdownCommand(command) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         MarkdownPresentation.drawBlockBackgrounds(in: self, dirtyRect: rect)
@@ -129,6 +185,8 @@ struct MarkdownEditor: NSViewRepresentable {
     var onEditError: ((Error) -> Void)?
     var navigation: MarkdownEditorNavigation?
     var fontSize: Double
+    var fontFamily: EditorFontFamily
+    var mode: MarkdownEditorMode
 
     init(
         text: Binding<String>,
@@ -136,7 +194,9 @@ struct MarkdownEditor: NSViewRepresentable {
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
         onEditError: ((Error) -> Void)? = nil,
         navigation: MarkdownEditorNavigation? = nil,
-        fontSize: Double = 17
+        fontSize: Double = 17,
+        fontFamily: EditorFontFamily = .system,
+        mode: MarkdownEditorMode = .source
     ) {
         _text = text
         self.editRevision = editRevision
@@ -144,6 +204,8 @@ struct MarkdownEditor: NSViewRepresentable {
         self.onEditError = onEditError
         self.navigation = navigation
         self.fontSize = fontSize
+        self.fontFamily = fontFamily
+        self.mode = mode
     }
 
     func makeCoordinator() -> Coordinator {
@@ -163,8 +225,9 @@ struct MarkdownEditor: NSViewRepresentable {
         textView.isRichText = false
         textView.allowsUndo = true
         textView.drawsBackground = false
-        textView.font = .systemFont(
-            ofSize: MarkdownPresentation.normalizedFontSize(fontSize)
+        textView.font = MarkdownPresentation.bodyFont(
+            for: fontFamily,
+            pointSize: MarkdownPresentation.normalizedFontSize(fontSize)
         )
         textView.textColor = .textColor
         textView.textContainerInset = NSSize(width: 22, height: 20)
@@ -174,7 +237,12 @@ struct MarkdownEditor: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.setAccessibilityIdentifier("markdown-editor")
-        MarkdownPresentation.configure(textView, fontSize: fontSize)
+        MarkdownPresentation.configure(
+            textView,
+            fontSize: fontSize,
+            fontFamily: fontFamily,
+            mode: mode
+        )
         context.coordinator.observeUndoAndRedo(for: textView)
 
         context.coordinator.attachNavigation(to: textView)
@@ -197,11 +265,15 @@ struct MarkdownEditor: NSViewRepresentable {
         private var isUpdating = false
         private weak var observedTextView: NSTextView?
         private var displayedFontSize: CGFloat
+        private var displayedFontFamily: EditorFontFamily
+        private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
 
         init(parent: MarkdownEditor) {
             self.parent = parent
             displayedText = parent.text
+            displayedMode = parent.mode
+            displayedFontFamily = parent.fontFamily
             displayedRevision = parent.editRevision
             displayedFontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
@@ -239,6 +311,9 @@ struct MarkdownEditor: NSViewRepresentable {
                 textView.isEditable = false
                 return true
             }
+            parent.navigation?.performCommand = { [weak textView] command in
+                _ = (textView as? MarkdownTextView)?.performMarkdownCommand(command)
+            }
             parent.navigation?.resumeEditing = { [weak textView] in
                 textView?.isEditable = true
             }
@@ -251,8 +326,12 @@ struct MarkdownEditor: NSViewRepresentable {
             let fontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
             )
-            if displayedFontSize != fontSize {
+            if displayedFontSize != fontSize
+                || displayedFontFamily != parent.fontFamily
+                || displayedMode != parent.mode {
+                displayedMode = parent.mode
                 displayedFontSize = fontSize
+                displayedFontFamily = parent.fontFamily
                 schedulePresentationRefresh(for: textView)
             }
             guard !hasUncommittedText else { return }
@@ -283,6 +362,12 @@ struct MarkdownEditor: NSViewRepresentable {
                 return
             }
             synchronizeBinding(from: textView)
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !isUpdating, parent.mode == .livePreview,
+                  let textView = notification.object as? NSTextView else { return }
+            schedulePresentationRefresh(for: textView)
         }
 
         func textDidChange(_ notification: Notification) {
@@ -345,7 +430,9 @@ struct MarkdownEditor: NSViewRepresentable {
                 guard let textView, !textView.hasMarkedText() else { return }
                 MarkdownPresentation.refresh(
                     textView,
-                    fontSize: self.parent.fontSize
+                    fontSize: self.parent.fontSize,
+                    fontFamily: self.parent.fontFamily,
+                    mode: self.parent.mode
                 )
                 // Deferred TextKit styling can leave the native indicator
                 // hidden after successive empty lines. Restore its normal
@@ -392,8 +479,15 @@ struct MarkdownEditor: NSViewRepresentable {
             undoManager?.removeAllActions()
             MarkdownPresentation.refresh(
                 textView,
-                fontSize: parent.fontSize
+                fontSize: parent.fontSize,
+                fontFamily: parent.fontFamily,
+                mode: parent.mode
             )
+        }
+
+        func textDidBeginEditing(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            schedulePresentationRefresh(for: textView)
         }
 
         func textDidEndEditing(_ notification: Notification) {
@@ -402,7 +496,9 @@ struct MarkdownEditor: NSViewRepresentable {
             }
             MarkdownPresentation.refresh(
                 textView,
-                fontSize: parent.fontSize
+                fontSize: parent.fontSize,
+                fontFamily: parent.fontFamily,
+                mode: parent.mode
             )
         }
     }
@@ -438,6 +534,76 @@ final class MarkdownTextView: UITextView {
         markdownState.syntaxCache
     }
 
+    @discardableResult
+    func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
+        guard isEditable, markedTextRange == nil,
+              !markdownState.isApplyingCommand,
+              let change = MarkdownEditingRules.change(
+                for: command, text: text ?? "", selection: selectedRange
+              ) else { return false }
+        let expected = ((text ?? "") as NSString).replacingCharacters(
+            in: change.range, with: change.replacement
+        )
+        becomeFirstResponder()
+        if (text ?? "").utf8.elementsEqual(expected.utf8) {
+            selectedRange = expected.clampedSelection(change.selection)
+            return true
+        }
+        markdownState.isApplyingCommand = true
+        defer { markdownState.isApplyingCommand = false }
+        selectedRange = change.range
+        super.insertText(change.replacement)
+        if (text ?? "").utf8.elementsEqual(expected.utf8) {
+            selectedRange = expected.clampedSelection(change.selection)
+            scrollRangeToVisible(selectedRange)
+        }
+        // UIKit programmatic insertion does not consistently notify delegates.
+        delegate?.textViewDidChange?(self)
+        return true
+    }
+
+    override func insertText(_ text: String) {
+        if !markdownState.isApplyingCommand, !markdownState.isPasting {
+            let command: MarkdownEditingCommand? = text == "\n"
+                ? .continueLine : (text == "\t" ? .indent : nil)
+            if let command, performMarkdownCommand(command) { return }
+        }
+        super.insertText(text)
+    }
+
+    override func paste(_ sender: Any?) {
+        markdownState.isPasting = true
+        defer { markdownState.isPasting = false }
+        super.paste(sender)
+    }
+
+    override var keyCommands: [UIKeyCommand]? {
+        let commands: [(String, UIKeyModifierFlags, Selector)] = [
+            ("\t", [], #selector(indentMarkdown)),
+            ("\t", .shift, #selector(outdentMarkdown)),
+            ("b", .command, #selector(boldMarkdown)),
+            ("i", .command, #selector(italicMarkdown)),
+            ("k", .command, #selector(linkMarkdown)),
+            ("h", [.command, .shift], #selector(headingMarkdown)),
+            ("c", [.command, .shift], #selector(codeMarkdown)),
+        ]
+        return (super.keyCommands ?? []) + commands.map { input, flags, action in
+            let key = UIKeyCommand(input: input, modifierFlags: flags, action: action)
+            key.wantsPriorityOverSystemBehavior = true
+            return key
+        }
+    }
+
+    @objc private func indentMarkdown() {
+        if !performMarkdownCommand(.indent) { insertText("\t") }
+    }
+    @objc private func outdentMarkdown() { _ = performMarkdownCommand(.outdent) }
+    @objc private func boldMarkdown() { _ = performMarkdownCommand(.bold) }
+    @objc private func italicMarkdown() { _ = performMarkdownCommand(.italic) }
+    @objc private func linkMarkdown() { _ = performMarkdownCommand(.link) }
+    @objc private func headingMarkdown() { _ = performMarkdownCommand(.heading) }
+    @objc private func codeMarkdown() { _ = performMarkdownCommand(.inlineCode) }
+
     func installMarkdownLayoutManagerDelegate(
         on layoutManager: NSTextLayoutManager
     ) {
@@ -461,6 +627,8 @@ final class MarkdownTextView: UITextView {
 }
 
 private final class MarkdownTextViewState: NSObject {
+    var isApplyingCommand = false
+    var isPasting = false
     let syntaxCache = MarkdownSyntaxCache()
     var layoutDelegate: MarkdownLayoutManagerDelegate?
 }
@@ -579,6 +747,8 @@ struct MarkdownEditor: UIViewRepresentable {
     var onEditError: ((Error) -> Void)?
     var navigation: MarkdownEditorNavigation?
     var fontSize: Double
+    var fontFamily: EditorFontFamily
+    var mode: MarkdownEditorMode
 
     init(
         text: Binding<String>,
@@ -586,7 +756,9 @@ struct MarkdownEditor: UIViewRepresentable {
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
         onEditError: ((Error) -> Void)? = nil,
         navigation: MarkdownEditorNavigation? = nil,
-        fontSize: Double = 17
+        fontSize: Double = 17,
+        fontFamily: EditorFontFamily = .system,
+        mode: MarkdownEditorMode = .source
     ) {
         _text = text
         self.editRevision = editRevision
@@ -594,6 +766,8 @@ struct MarkdownEditor: UIViewRepresentable {
         self.onEditError = onEditError
         self.navigation = navigation
         self.fontSize = fontSize
+        self.fontFamily = fontFamily
+        self.mode = mode
     }
 
     func makeCoordinator() -> Coordinator {
@@ -607,12 +781,14 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         textView.delegate = context.coordinator
+        textView.installMarkdownKeyboardToolbar()
         textView.keyboardDismissMode = .onDrag
         textView.alwaysBounceVertical = true
         textView.text = text
         textView.allowsEditingTextAttributes = false
-        textView.font = .systemFont(
-            ofSize: MarkdownPresentation.normalizedFontSize(fontSize)
+        textView.font = MarkdownPresentation.bodyFont(
+            for: fontFamily,
+            pointSize: MarkdownPresentation.normalizedFontSize(fontSize)
         )
         textView.textColor = .label
         textView.backgroundColor = .clear
@@ -624,7 +800,12 @@ struct MarkdownEditor: UIViewRepresentable {
         )
         textView.textContainer.lineFragmentPadding = 4
         textView.accessibilityIdentifier = "markdown-editor"
-        MarkdownPresentation.configure(textView, fontSize: fontSize)
+        MarkdownPresentation.configure(
+            textView,
+            fontSize: fontSize,
+            fontFamily: fontFamily,
+            mode: mode
+        )
 
         context.coordinator.attachNavigation(to: textView)
         return textView
@@ -642,6 +823,8 @@ struct MarkdownEditor: UIViewRepresentable {
         private var hasUncommittedText = false
         private var isUpdating = false
         private var displayedFontSize: CGFloat
+        private var displayedFontFamily: EditorFontFamily
+        private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -651,6 +834,8 @@ struct MarkdownEditor: UIViewRepresentable {
         init(parent: MarkdownEditor) {
             self.parent = parent
             displayedText = parent.text
+            displayedMode = parent.mode
+            displayedFontFamily = parent.fontFamily
             displayedRevision = parent.editRevision
             displayedFontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
@@ -666,6 +851,9 @@ struct MarkdownEditor: UIViewRepresentable {
                 textView.isEditable = false
                 return true
             }
+            parent.navigation?.performCommand = { [weak textView] command in
+                _ = (textView as? MarkdownTextView)?.performMarkdownCommand(command)
+            }
             parent.navigation?.resumeEditing = { [weak textView] in
                 textView?.isEditable = true
             }
@@ -678,8 +866,12 @@ struct MarkdownEditor: UIViewRepresentable {
             let fontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
             )
-            if displayedFontSize != fontSize {
+            if displayedFontSize != fontSize
+                || displayedFontFamily != parent.fontFamily
+                || displayedMode != parent.mode {
+                displayedMode = parent.mode
                 displayedFontSize = fontSize
+                displayedFontFamily = parent.fontFamily
                 schedulePresentationRefresh(for: textView)
             }
             guard !hasUncommittedText else { return }
@@ -701,6 +893,11 @@ struct MarkdownEditor: UIViewRepresentable {
                 revision: parent.editRevision,
                 in: textView
             )
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            guard !isUpdating, parent.mode == .livePreview else { return }
+            schedulePresentationRefresh(for: textView)
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -758,7 +955,9 @@ struct MarkdownEditor: UIViewRepresentable {
                 }
                 MarkdownPresentation.refresh(
                     textView,
-                    fontSize: self.parent.fontSize
+                    fontSize: self.parent.fontSize,
+                    fontFamily: self.parent.fontFamily,
+                    mode: self.parent.mode
                 )
             }
         }
@@ -794,14 +993,22 @@ struct MarkdownEditor: UIViewRepresentable {
             textView.undoManager?.removeAllActions()
             MarkdownPresentation.refresh(
                 textView,
-                fontSize: parent.fontSize
+                fontSize: parent.fontSize,
+                fontFamily: parent.fontFamily,
+                mode: parent.mode
             )
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            schedulePresentationRefresh(for: textView)
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
             MarkdownPresentation.refresh(
                 textView,
-                fontSize: parent.fontSize
+                fontSize: parent.fontSize,
+                fontFamily: parent.fontFamily,
+                mode: parent.mode
             )
         }
     }

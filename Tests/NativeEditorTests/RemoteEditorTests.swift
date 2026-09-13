@@ -11,6 +11,27 @@ import UIKit
 
 @MainActor
 final class RemoteEditorTests: XCTestCase {
+    func testCommandAfterRemoteUpdateUsesFreshRevisionInLivePreview() throws {
+        let model = EditorModel(text: "* Moon", revision: revision(0))
+        model.mode = .livePreview
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+        model.receiveRemote(text: "* Remote Moon", revision: revision(9))
+        mounted.flushUpdates()
+        moveInsertionPointToEnd(of: textView)
+        model.navigation.performCommand?(.continueLine)
+        XCTAssertEqual(nativeText(in: textView), "* Remote Moon\n* ")
+        XCTAssertEqual(model.requests.map(\.revision), [revision(9)])
+        mounted.flushUpdates()
+        model.mode = .source
+        mounted.flushUpdates()
+        XCTAssertEqual(nativeText(in: textView), "* Remote Moon\n* ")
+        XCTAssertEqual(model.requests.count, 1)
+        textView.undoManager?.undo()
+        XCTAssertEqual(nativeText(in: textView), "* Remote Moon")
+    }
+
     func testRemoteUpdateBetweenLocalEditsUsesDisplayedRevision() throws {
         let model = EditorModel(text: "hello", revision: revision(0))
         let mounted = mount(model)
@@ -180,7 +201,7 @@ final class RemoteEditorTests: XCTestCase {
         XCTAssertEqual(model.errorCount, 2)
     }
 
-    func testTextSizeChangesAfterFailedSavePreservePendingEdit() throws {
+    func testFontChangesAfterFailedSavePreservePendingEdit() throws {
         enum TestError: Error { case failed }
         let model = EditorModel(text: "hello", revision: revision(0))
         model.commitResult = { _, _ in throw TestError.failed }
@@ -193,11 +214,19 @@ final class RemoteEditorTests: XCTestCase {
         mounted.flushUpdates()
         let originalSize = try XCTUnwrap(textView.font).pointSize
         model.fontSize = 24
+        model.fontFamily = .serif
         model.receiveRemote(text: "remote replacement", revision: revision(9))
         mounted.flushUpdates()
         mounted.flushUpdates()
 
         XCTAssertGreaterThan(try XCTUnwrap(textView.font).pointSize, originalSize)
+        XCTAssertEqual(
+            try XCTUnwrap(textView.font).fontName,
+            MarkdownPresentation.bodyFont(
+                for: .serif,
+                pointSize: 24
+            ).fontName
+        )
         XCTAssertEqual(nativeText(in: textView), "hello!")
         XCTAssertEqual(selectedRange(in: textView), NSRange(location: 6, length: 0))
         XCTAssertTrue(textView.undoManager?.canUndo == true)
@@ -221,6 +250,9 @@ private final class EditorModel: ObservableObject {
     @Published var text: String
     @Published var revision: Data
     @Published var fontSize: Double = 17
+    @Published var fontFamily: EditorFontFamily = .system
+    @Published var mode: MarkdownEditorMode = .source
+    let navigation = MarkdownEditorNavigation()
     var requests: [Request] = []
     @Published var errorCount = 0
     var commitResult: ((String, Data) throws -> MarkdownEditorCommit)?
@@ -266,7 +298,10 @@ private struct EditorHost: View {
                 try model.commit(replacement, basedOn: revision)
             },
             onEditError: { _ in model.errorCount += 1 },
-            fontSize: model.fontSize
+            navigation: model.navigation,
+            fontSize: model.fontSize,
+            fontFamily: model.fontFamily,
+            mode: model.mode
         )
     }
 }

@@ -627,6 +627,87 @@ final class MarkdownPresentationTests: XCTestCase {
         XCTAssertFalse(textView.undoManager?.canUndo == true)
     }
 
+    func testFontFamiliesPreserveSemanticFacesAndMonospacedCode() throws {
+        let source = "Body **bold** *italic* `code`"
+        var bodyFontNames: Set<String> = []
+
+        for family in EditorFontFamily.allCases {
+            let textView = NSTextView(usingTextLayoutManager: true)
+            textView.string = source
+            MarkdownPresentation.configure(
+                textView,
+                fontFamily: family
+            )
+
+            let body = try font(at: "Body", in: source, textView: textView)
+            let bold = try font(at: "bold", in: source, textView: textView)
+            let italic = try font(
+                at: "italic",
+                in: source,
+                textView: textView
+            )
+            let code = try font(at: "code", in: source, textView: textView)
+            let expectedBody = MarkdownPresentation.bodyFont(
+                for: family,
+                pointSize: 17
+            )
+            let expectedCode = MarkdownPresentation.codeFont(pointSize: 17)
+
+            bodyFontNames.insert(body.fontName)
+            XCTAssertEqual(body.fontName, expectedBody.fontName)
+            XCTAssertTrue(
+                NSFontManager.shared.traits(of: bold).contains(.boldFontMask)
+            )
+            let italicLocation = (source as NSString).range(
+                of: "italic"
+            ).location
+            let obliqueness = (textView.textStorage?.attribute(
+                .obliqueness,
+                at: italicLocation,
+                effectiveRange: nil
+            ) as? NSNumber)?.doubleValue ?? 0
+            XCTAssertTrue(
+                NSFontManager.shared.traits(of: italic).contains(
+                    .italicFontMask
+                ) || obliqueness > 0,
+                "Expected italic styling for \(family.title)"
+            )
+            XCTAssertEqual(code.fontName, expectedCode.fontName)
+            XCTAssertEqual(
+                ("iiii" as NSString).size(withAttributes: [.font: code]).width,
+                ("WWWW" as NSString).size(withAttributes: [.font: code]).width,
+                accuracy: 0.01
+            )
+        }
+
+        XCTAssertEqual(bodyFontNames.count, EditorFontFamily.allCases.count)
+    }
+
+    func testFontFamilyRefreshPreservesSelectionAndUndoState() throws {
+        let source = "Body with a selected phrase"
+        let textView = NSTextView(usingTextLayoutManager: true)
+        textView.allowsUndo = true
+        textView.string = source
+        MarkdownPresentation.configure(textView, fontFamily: .system)
+        textView.undoManager?.removeAllActions()
+        let selection = (source as NSString).range(of: "selected")
+        textView.setSelectedRange(selection)
+
+        MarkdownPresentation.refresh(textView, fontFamily: .serif)
+
+        let body = try font(at: "Body", in: source, textView: textView)
+        XCTAssertEqual(
+            body.fontName,
+            MarkdownPresentation.bodyFont(
+                for: .serif,
+                pointSize: 17
+            ).fontName
+        )
+        XCTAssertEqual(textView.string, source)
+        XCTAssertEqual(textView.selectedRange(), selection)
+        XCTAssertFalse(textView.undoManager?.canUndo == true)
+    }
+
     func testFontSizeNormalizationRejectsInvalidAndClampsBounds() {
         XCTAssertEqual(MarkdownPresentation.normalizedFontSize(.nan), 17)
         XCTAssertEqual(MarkdownPresentation.normalizedFontSize(.infinity), 17)

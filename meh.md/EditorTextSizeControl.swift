@@ -2,6 +2,15 @@ import SwiftUI
 
 struct EditorTextSizeControl: View {
     @Binding var fontSize: Double
+    @Binding var fontFamily: EditorFontFamily
+
+    init(
+        fontSize: Binding<Double>,
+        fontFamily: Binding<EditorFontFamily> = .constant(.system)
+    ) {
+        _fontSize = fontSize
+        _fontFamily = fontFamily
+    }
 
     private var displayedSize: Double {
         Double(MarkdownPresentation.normalizedFontSize(fontSize))
@@ -13,6 +22,19 @@ struct EditorTextSizeControl: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Font").font(.headline)
+                Spacer()
+                Picker("Font", selection: $fontFamily) {
+                    ForEach(EditorFontFamily.allCases) { family in
+                        Text(family.title).tag(family)
+                    }
+                }
+                .labelsHidden()
+                .accessibilityLabel("Editor font")
+                .accessibilityIdentifier("editor-font-family")
+            }
+            Divider()
             HStack {
                 Text("Text size").font(.headline)
                 Spacer()
@@ -42,8 +64,11 @@ struct EditorTextSizeControl: View {
                 .accessibilityLabel("Increase text size")
                 .disabled(displayedSize >= 28)
             }
-            Button("Reset to Default") { fontSize = 17 }
-                .disabled(displayedSize == 17)
+            Button("Reset to Defaults") {
+                fontFamily = .system
+                fontSize = 17
+            }
+            .disabled(displayedSize == 17 && fontFamily == .system)
         }
         .padding(16)
         .frame(width: 260)

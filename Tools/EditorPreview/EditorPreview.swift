@@ -28,14 +28,17 @@ private struct EditorPreviewView: View {
     @State private var appearance = PreviewAppearance.system
     @State private var narrowColumn = false
     @State private var fontSize = 17.0
+    @State private var fontFamily = EditorFontFamily.system
     @State private var showingTextSize = false
+    @State private var mode = MarkdownEditorMode.livePreview
+    @State private var navigation = MarkdownEditorNavigation()
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Markdown appearance").font(.headline)
-                    Text("Source visible · Fictional sample · Edits are temporary")
+                    Text("Fictional sample · Edits are temporary")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -49,6 +52,10 @@ private struct EditorPreviewView: View {
                 .labelsHidden()
                 .frame(width: 110)
                 Button("Reset Sample") { text = Self.sample }
+                EditorWritingControls(
+                    navigation: navigation,
+                    isEnabled: true
+                )
                 Button {
                     showingTextSize = true
                 } label: {
@@ -57,12 +64,26 @@ private struct EditorPreviewView: View {
                 .labelStyle(.iconOnly)
                 .accessibilityIdentifier("editor-options")
                 .popover(isPresented: $showingTextSize) {
-                    EditorTextSizeControl(fontSize: $fontSize)
+                    VStack(alignment: .leading, spacing: 12) {
+                        EditorModeControl(mode: $mode, isEnabled: true)
+                        Divider()
+                        EditorTextSizeControl(
+                            fontSize: $fontSize,
+                            fontFamily: $fontFamily
+                        )
+                    }
+                    .padding()
                 }
             }
             .padding(16)
             Divider()
-            MarkdownEditor(text: $text, fontSize: fontSize)
+            MarkdownEditor(
+                text: $text,
+                navigation: navigation,
+                fontSize: fontSize,
+                fontFamily: fontFamily,
+                mode: mode
+            )
                 .accessibilityIdentifier("editor-appearance-preview")
                 .frame(maxWidth: narrowColumn ? 440 : .infinity)
                 .frame(maxWidth: .infinity)

@@ -41,6 +41,103 @@ final class NativeEditorIntegrationTests: XCTestCase {
         }
     }
 
+    func testWritingCommandsReachBindingAndNativeUndo() throws {
+        let source = "Moon 🪐"
+        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))
+        let navigation = MarkdownEditorNavigation()
+        let editor = MarkdownEditor(
+            text: Binding(get: { boundary.text }, set: { boundary.text = $0 }),
+            navigation: navigation,
+            mode: .livePreview
+        )
+        let mounted = mount(editor)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+#if os(macOS)
+        textView.setSelectedRange(NSRange(location: 0, length: (source as NSString).length))
+#else
+        textView.selectedRange = NSRange(location: 0, length: (source as NSString).length)
+#endif
+        navigation.performCommand?(.bold)
+        XCTAssertEqual(nativeText(in: textView), "**Moon 🪐**")
+        XCTAssertEqual(try boundary.note.text, "**Moon 🪐**")
+        let undo = try XCTUnwrap(textView.undoManager)
+        undo.undo()
+        XCTAssertEqual(nativeText(in: textView), source)
+        XCTAssertEqual(try boundary.note.text, source)
+        undo.redo()
+        XCTAssertEqual(try boundary.note.text, "**Moon 🪐**")
+    }
+
+    func testNativeReturnContinuesListAndEmptyItemExits() throws {
+        let source = "* Moon 🪐"
+        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))
+        let editor = MarkdownEditor(
+            text: Binding(get: { boundary.text }, set: { boundary.text = $0 })
+        )
+        let mounted = mount(editor)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+        moveInsertionPointToEnd(of: textView)
+#if os(macOS)
+        textView.insertNewline(nil)
+#else
+        textView.insertText("\n")
+#endif
+        XCTAssertEqual(nativeText(in: textView), source + "\n* ")
+        XCTAssertEqual(try boundary.note.text, source + "\n* ")
+#if os(macOS)
+        textView.insertNewline(nil)
+#else
+        textView.insertText("\n")
+#endif
+        XCTAssertEqual(nativeText(in: textView), source + "\n")
+        XCTAssertEqual(try boundary.note.text, source + "\n")
+    }
+
+    func testLivePreviewAndSourceSwitchPreserveBufferSelectionAndUndo() throws {
+        let source = "# Moon\n\n**Orbit** and [map](https://example.test)"
+        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))
+        let editor = MarkdownEditor(
+            text: Binding(get: { boundary.text }, set: { boundary.text = $0 })
+        )
+        let mounted = mount(editor)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+        moveInsertionPointToEnd(of: textView)
+        textView.undoManager?.removeAllActions()
+        for mode in [MarkdownEditorMode.livePreview, .source, .livePreview] {
+            MarkdownPresentation.refresh(textView, mode: mode)
+            XCTAssertEqual(nativeText(in: textView), source)
+            XCTAssertEqual(try boundary.note.text, source)
+            XCTAssertFalse(textView.undoManager?.canUndo == true)
+        }
+        XCTAssertTrue(boundary.receivedTexts.isEmpty)
+    }
+
+    func testFormattingWaitsForCompositionAndMultilineInsertionStaysLiteral() throws {
+        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: "* Moon"))
+        let navigation = MarkdownEditorNavigation()
+        let editor = MarkdownEditor(
+            text: Binding(get: { boundary.text }, set: { boundary.text = $0 }),
+            navigation: navigation
+        )
+        let mounted = mount(editor)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+        moveInsertionPointToEnd(of: textView)
+        setMarkedText("世界", in: textView)
+        let markedBuffer = nativeText(in: textView)
+        navigation.performCommand?(.bold)
+        XCTAssertEqual(nativeText(in: textView), markedBuffer)
+        XCTAssertTrue(hasMarkedText(in: textView))
+        unmarkText(in: textView)
+        moveInsertionPointToEnd(of: textView)
+        insert("\n* pasted\n* literal", in: textView)
+        XCTAssertEqual(nativeText(in: textView), markedBuffer + "\n* pasted\n* literal")
+        XCTAssertEqual(try boundary.note.text, nativeText(in: textView))
+    }
+
     func testNativeTypingUndoAndRedoReachAutomergeBinding() throws {
         let source = "* > ==hello== and ~~old~~"
         let boundary = try DocumentBinding(
@@ -137,10 +234,94 @@ final class NativeEditorIntegrationTests: XCTestCase {
     }
 
 #if os(macOS)
+    func testEditorKeyboardShortcutsOnlyRunForFocusedEditor() throws {
+        let shortcuts: [(String, NSEvent.ModifierFlags, String)] = [
+            ("b", .command, "**hello**"),
+            ("i", .command, "*hello*"),
+            ("k", .command, "[hello](https://)"),
+            ("h", [.command, .shift], "## hello"),
+            ("c", [.command, .shift], "`hello`"),
+        ]
+
+        for (key, modifiers, expected) in shortcuts {
+            let window = shortcutWindow()
+            let textView = try XCTUnwrap(
+                window.contentView?.subviews.compactMap {
+                    $0 as? MarkdownTextView
+                }.first
+            )
+            defer { window.orderOut(nil) }
+            textView.string = "hello"
+            textView.setSelectedRange(NSRange(location: 0, length: 5))
+            XCTAssertTrue(window.makeFirstResponder(textView))
+
+            XCTAssertTrue(textView.performKeyEquivalent(with:
+                try shortcutEvent(key, modifiers: modifiers, window: window)
+            ))
+
+            XCTAssertEqual(textView.string, expected)
+            XCTAssertTrue(window.firstResponder === textView)
+        }
+    }
+
+    func testUnfocusedEditorDoesNotClaimKeyboardShortcut() throws {
+        let shortcuts: [(String, NSEvent.ModifierFlags)] = [
+            ("b", .command),
+            ("i", .command),
+            ("k", .command),
+            ("h", [.command, .shift]),
+            ("c", [.command, .shift]),
+        ]
+        let window = shortcutWindow()
+        let textView = try XCTUnwrap(
+            window.contentView?.subviews.compactMap {
+                $0 as? MarkdownTextView
+            }.first
+        )
+        let otherField = try XCTUnwrap(
+            window.contentView?.subviews.compactMap { $0 as? NSTextField }.first
+        )
+        defer { window.orderOut(nil) }
+        for (key, modifiers) in shortcuts {
+            textView.string = "hello"
+            textView.setSelectedRange(NSRange(location: 0, length: 5))
+            XCTAssertTrue(window.makeFirstResponder(otherField))
+
+            _ = textView.performKeyEquivalent(with:
+                try shortcutEvent(key, modifiers: modifiers, window: window)
+            )
+
+            XCTAssertEqual(textView.string, "hello")
+            XCTAssertTrue(window.firstResponder === otherField.currentEditor())
+        }
+    }
+
+    func testFormattingMenuCommandExplicitlyActivatesEditor() throws {
+        let source = "hello"
+        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))
+        let navigation = MarkdownEditorNavigation()
+        let editor = MarkdownEditor(
+            text: Binding(get: { boundary.text }, set: { boundary.text = $0 }),
+            navigation: navigation
+        )
+        let mounted = mount(editor)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+        textView.setSelectedRange(NSRange(location: 0, length: source.utf16.count))
+        XCTAssertTrue(mounted.window.makeFirstResponder(nil))
+        XCTAssertFalse(mounted.window.firstResponder === textView)
+
+        navigation.performCommand?(.bold)
+
+        XCTAssertEqual(textView.string, "**hello**")
+        XCTAssertEqual(try boundary.note.text, "**hello**")
+        XCTAssertTrue(mounted.window.firstResponder === textView)
+    }
+
     func testReturnKeepsCaretGeometryViewportAndBlockDecorations() async throws {
         var lines = (0..<80).map { "Line \($0) with ordinary body text" }
         lines[39] = "> Quote near the edit"
-        lines[40] = "* Middle list item with ==highlight=="
+        lines[40] = "Middle paragraph with ==highlight=="
         lines[41] = ""
         let source = lines.joined(separator: "\n")
         let boundary = try DocumentBinding(
@@ -379,6 +560,49 @@ private extension NativeEditorIntegrationTests {
             window.makeFirstResponder(textView)
         }
         return MountedEditor(window: window, textView: textView)
+    }
+
+    func shortcutWindow() -> NSWindow {
+        _ = NSApplication.shared
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let content = NSView(frame: window.contentView?.bounds ?? .zero)
+        let textView = MarkdownTextView(
+            frame: NSRect(x: 0, y: 40, width: 320, height: 200)
+        )
+        textView.isEditable = true
+        textView.isRichText = false
+        let otherField = NSTextField(
+            frame: NSRect(x: 0, y: 0, width: 160, height: 30)
+        )
+        content.addSubview(textView)
+        content.addSubview(otherField)
+        window.contentView = content
+        window.makeKeyAndOrderFront(nil)
+        return window
+    }
+
+    func shortcutEvent(
+        _ key: String,
+        modifiers: NSEvent.ModifierFlags,
+        window: NSWindow
+    ) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: key,
+            charactersIgnoringModifiers: key,
+            isARepeat: false,
+            keyCode: 0
+        ))
     }
 
     func findTextView(in view: NSView) -> NSTextView? {

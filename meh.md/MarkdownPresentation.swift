@@ -4,13 +4,33 @@ import Foundation
 import AppKit
 
 typealias PlatformFont = NSFont
+typealias PlatformFontDescriptor = NSFontDescriptor
 typealias PlatformColor = NSColor
 #else
 import UIKit
 
 typealias PlatformFont = UIFont
+typealias PlatformFontDescriptor = UIFontDescriptor
 typealias PlatformColor = UIColor
 #endif
+
+enum EditorFontFamily: String, CaseIterable, Identifiable {
+    case system
+    case serif
+    case rounded
+    case monospaced
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system: "System"
+        case .serif: "Serif"
+        case .rounded: "Rounded"
+        case .monospaced: "Monospaced"
+        }
+    }
+}
 
 enum MarkdownPresentation {
     static let defaultFontSize: CGFloat = 17
@@ -36,13 +56,17 @@ enum MarkdownPresentation {
         }
     }
 
+    struct ListBulletDecoration: Equatable {
+        let rect: CGRect
+    }
+
 #if os(macOS)
     static var editorBodyFont: PlatformFont {
-        bodyFont(pointSize: defaultFontSize)
+        bodyFont(for: .system, pointSize: defaultFontSize)
     }
 #else
     static var editorBodyFont: PlatformFont {
-        bodyFont(pointSize: defaultFontSize)
+        bodyFont(for: .system, pointSize: defaultFontSize)
     }
 #endif
 
@@ -53,45 +77,92 @@ enum MarkdownPresentation {
     }
 
 #if os(macOS)
-    static func configure(_ textView: NSTextView, fontSize: Double = 17) {
+    static func configure(
+        _ textView: NSTextView,
+        fontSize: Double = 17,
+        fontFamily: EditorFontFamily = .system,
+        mode: MarkdownEditorMode = .source
+    ) {
         guard let layoutManager = textView.textLayoutManager else {
             assertionFailure("Markdown editor requires TextKit 2")
             return
         }
 
+        MarkdownLivePreview.update(
+            textView,
+            mode: mode,
+            selection: textView.selectedRange(),
+            isEditing: textView.window?.firstResponder === textView
+        )
         let syntaxCache = syntaxCache(for: textView)
         layoutManager.renderingAttributesValidator = {
             [weak textView] manager, fragment in
             guard let textView else { return }
+            let text = textView.string
+            let result = syntaxCache.result(for: text)
+            let previewRanges = MarkdownLivePreview.ranges(
+                in: text,
+                result: result,
+                snapshot: MarkdownLivePreview.snapshot(for: textView)
+            )
             _ = applyRenderingAttributes(
                 to: manager,
                 fragment: fragment,
-                result: syntaxCache.result(for: textView.string)
+                result: result,
+                hiddenRanges: previewRanges.collapsed
+                    + previewRanges.transparent
             )
         }
-        let font = bodyFont(pointSize: normalizedFontSize(fontSize))
+        let font = bodyFont(
+            for: fontFamily,
+            pointSize: normalizedFontSize(fontSize)
+        )
         textView.font = font
-        refresh(textView, fontSize: fontSize, syntaxCache: syntaxCache)
+        refresh(
+            textView,
+            fontSize: fontSize,
+            fontFamily: fontFamily,
+            mode: mode,
+            syntaxCache: syntaxCache
+        )
     }
 
     static func refresh(
         _ textView: NSTextView,
         fontSize: Double = 17,
+        fontFamily: EditorFontFamily = .system,
+        mode: MarkdownEditorMode = .source,
         syntaxCache suppliedSyntaxCache: MarkdownSyntaxCache? = nil
     ) {
+        let selection = textView.selectedRange()
+        MarkdownLivePreview.update(
+            textView,
+            mode: mode,
+            selection: selection,
+            isEditing: textView.window?.firstResponder === textView
+        )
         guard !textView.hasMarkedText(),
               let textStorage = textView.textStorage else { return }
 
         let syntaxCache = suppliedSyntaxCache ?? Self.syntaxCache(for: textView)
         let text = textView.string
         let result = syntaxCache.result(for: text)
-        let bodyFont = bodyFont(pointSize: normalizedFontSize(fontSize))
-        let selection = textView.selectedRange()
+        let bodyFont = bodyFont(
+            for: fontFamily,
+            pointSize: normalizedFontSize(fontSize)
+        )
+        let previewRanges = MarkdownLivePreview.ranges(
+            in: text,
+            result: result,
+            snapshot: MarkdownLivePreview.snapshot(for: textView)
+        )
         applyLayoutAttributes(
             to: textStorage,
             text: text,
             result: result,
             bodyFont: bodyFont,
+            hiddenRanges: previewRanges.collapsed,
+            transparentRanges: previewRanges.transparent,
             undoManager: textView.undoManager
         )
         if textView.selectedRange() != selection {
@@ -101,7 +172,8 @@ enum MarkdownPresentation {
         refreshVisibleRenderingAttributes(
             in: textView.textLayoutManager,
             text: text,
-            syntaxCache: syntaxCache
+            syntaxCache: syntaxCache,
+            hiddenRanges: previewRanges.collapsed + previewRanges.transparent
         )
         textView.needsDisplay = true
     }
@@ -134,9 +206,11 @@ enum MarkdownPresentation {
             return
         }
         guard let visibleRange = visibleRange(in: layoutManager) else { return }
+        let text = textView.string
+        let syntaxCache = syntaxCache(for: textView)
         drawBlockBackgrounds(
-            text: textView.string,
-            syntaxCache: syntaxCache(for: textView),
+            text: text,
+            syntaxCache: syntaxCache,
             layoutManager: layoutManager,
             containerWidth: textContainer.size.width,
             lineFragmentPadding: textContainer.lineFragmentPadding,
@@ -145,9 +219,27 @@ enum MarkdownPresentation {
             dirtyRect: dirtyRect,
             context: context
         )
+        let result = syntaxCache.result(for: text)
+        drawListBullets(
+            listBulletDecorations(
+                text: text,
+                result: result,
+                layoutManager: layoutManager,
+                snapshot: MarkdownLivePreview.snapshot(for: textView),
+                visibleRange: visibleRange
+            ),
+            offset: textView.textContainerOrigin,
+            dirtyRect: dirtyRect,
+            context: context
+        )
     }
 #else
-    static func configure(_ textView: UITextView, fontSize: Double = 17) {
+    static func configure(
+        _ textView: UITextView,
+        fontSize: Double = 17,
+        fontFamily: EditorFontFamily = .system,
+        mode: MarkdownEditorMode = .source
+    ) {
         guard let layoutManager = textView.textLayoutManager else {
             assertionFailure("Markdown editor requires TextKit 2")
             return
@@ -160,38 +252,80 @@ enum MarkdownPresentation {
             on: layoutManager
         )
 
+        MarkdownLivePreview.update(
+            textView,
+            mode: mode,
+            selection: textView.selectedRange,
+            isEditing: textView.isFirstResponder
+        )
         let syntaxCache = syntaxCache(for: textView)
         layoutManager.renderingAttributesValidator = {
             [weak textView] manager, fragment in
             guard let textView else { return }
+            let text = textView.text ?? ""
+            let result = syntaxCache.result(for: text)
+            let previewRanges = MarkdownLivePreview.ranges(
+                in: text,
+                result: result,
+                snapshot: MarkdownLivePreview.snapshot(for: textView)
+            )
             _ = applyRenderingAttributes(
                 to: manager,
                 fragment: fragment,
-                result: syntaxCache.result(for: textView.text ?? "")
+                result: result,
+                hiddenRanges: previewRanges.collapsed
+                    + previewRanges.transparent
             )
         }
-        let font = bodyFont(pointSize: normalizedFontSize(fontSize))
+        let font = bodyFont(
+            for: fontFamily,
+            pointSize: normalizedFontSize(fontSize)
+        )
         textView.font = font
-        refresh(textView, fontSize: fontSize, syntaxCache: syntaxCache)
+        refresh(
+            textView,
+            fontSize: fontSize,
+            fontFamily: fontFamily,
+            mode: mode,
+            syntaxCache: syntaxCache
+        )
     }
 
     static func refresh(
         _ textView: UITextView,
         fontSize: Double = 17,
+        fontFamily: EditorFontFamily = .system,
+        mode: MarkdownEditorMode = .source,
         syntaxCache suppliedSyntaxCache: MarkdownSyntaxCache? = nil
     ) {
+        let selection = textView.selectedRange
+        MarkdownLivePreview.update(
+            textView,
+            mode: mode,
+            selection: selection,
+            isEditing: textView.isFirstResponder
+        )
         guard textView.markedTextRange == nil else { return }
 
         let syntaxCache = suppliedSyntaxCache ?? Self.syntaxCache(for: textView)
         let text = textView.text ?? ""
         let result = syntaxCache.result(for: text)
-        let bodyFont = bodyFont(pointSize: normalizedFontSize(fontSize))
-        let selection = textView.selectedRange
+        let bodyFont = bodyFont(
+            for: fontFamily,
+            pointSize: normalizedFontSize(fontSize)
+        )
+        let previewRanges = MarkdownLivePreview.ranges(
+            in: text,
+            result: result,
+            snapshot: MarkdownLivePreview.snapshot(for: textView)
+        )
         applyLayoutAttributes(
             to: textView.textStorage,
             text: text,
             result: result,
             bodyFont: bodyFont,
+            hiddenRanges: previewRanges.collapsed,
+            transparentRanges: previewRanges.transparent,
             undoManager: textView.undoManager
         )
         if textView.selectedRange != selection {
@@ -201,7 +335,8 @@ enum MarkdownPresentation {
         refreshVisibleRenderingAttributes(
             in: textView.textLayoutManager,
             text: text,
-            syntaxCache: syntaxCache
+            syntaxCache: syntaxCache,
+            hiddenRanges: previewRanges.collapsed + previewRanges.transparent
         )
         textView.setNeedsDisplay()
     }
@@ -242,6 +377,7 @@ enum MarkdownPresentation {
         )
         let text = textView.text ?? ""
         let syntaxCache = syntaxCache(for: textView)
+        let result = syntaxCache.result(for: text)
         let decorations = fragmentBlockDecorations(
             fragmentRange: fragmentRange,
             fragmentFrame: fragment.layoutFragmentFrame,
@@ -272,6 +408,18 @@ enum MarkdownPresentation {
             )
             draw(decoration, in: rect, context: context)
         }
+        drawListBullets(
+            listBulletDecorations(
+                text: text,
+                result: result,
+                layoutManager: layoutManager,
+                snapshot: MarkdownLivePreview.snapshot(for: textView),
+                visibleRange: fragmentRange
+            ),
+            offset: drawingOffset,
+            dirtyRect: surfaceBounds,
+            context: context
+        )
     }
 
     private static func fragmentBlockDecorations(
@@ -436,11 +584,81 @@ enum MarkdownPresentation {
         )
     }
 
+    static func listBulletDecorations(
+        text: String,
+        result: MarkdownSyntaxResult,
+        layoutManager: NSTextLayoutManager,
+        snapshot: MarkdownLivePreviewSnapshot,
+        visibleRange: NSRange? = nil
+    ) -> [ListBulletDecoration] {
+        guard let contentManager = layoutManager.textContentManager else {
+            return []
+        }
+        let source = text as NSString
+        if let contentStorage = contentManager as? NSTextContentStorage,
+           contentStorage.textStorage?.length != source.length {
+            return []
+        }
+        var decorations: [ListBulletDecoration] = []
+        for span in result.spans {
+            if let visibleRange,
+               NSMaxRange(span.range) <= visibleRange.location {
+                continue
+            }
+            if let visibleRange,
+               span.range.location >= NSMaxRange(visibleRange) {
+                break
+            }
+            guard span.role == .listMarker, span.range.length == 1,
+                  MarkdownLivePreview.conceals(
+                      span.range,
+                      in: source,
+                      snapshot: snapshot
+                  ),
+                  span.range.location < source.length else { continue }
+            let marker = source.character(at: span.range.location)
+            guard marker == 42 || marker == 43 || marker == 45,
+                  let markerFrame = textSegmentFrames(
+                      for: span.range,
+                      layoutManager: layoutManager,
+                      contentManager: contentManager
+                  ).first else { continue }
+            let diameter = min(5, max(3, markerFrame.height * 0.2))
+            decorations.append(ListBulletDecoration(
+                rect: CGRect(
+                    x: markerFrame.midX - diameter / 2,
+                    y: markerFrame.midY - diameter / 2,
+                    width: diameter,
+                    height: diameter
+                )
+            ))
+        }
+        return decorations
+    }
+
+    private static func drawListBullets(
+        _ decorations: [ListBulletDecoration],
+        offset: CGPoint,
+        dirtyRect: CGRect,
+        context: CGContext
+    ) {
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.setFillColor(secondaryTextColor.cgColor)
+        for decoration in decorations {
+            let rect = decoration.rect.offsetBy(dx: offset.x, dy: offset.y)
+            guard rect.intersects(dirtyRect) else { continue }
+            context.fillEllipse(in: rect)
+        }
+    }
+
     private static func applyLayoutAttributes(
         to textStorage: NSTextStorage,
         text: String,
         result: MarkdownSyntaxResult,
         bodyFont: PlatformFont,
+        hiddenRanges: [NSRange],
+        transparentRanges: [NSRange],
         undoManager: UndoManager?
     ) {
         let fullRange = NSRange(location: 0, length: (text as NSString).length)
@@ -459,6 +677,11 @@ enum MarkdownPresentation {
         let desired = NSMutableAttributedString(string: text)
         desired.addAttribute(.font, value: bodyFont, range: fullRange)
         desired.addAttribute(
+            .foregroundColor,
+            value: primaryTextColor,
+            range: fullRange
+        )
+        desired.addAttribute(
             .paragraphStyle,
             value: bodyParagraphStyle(for: bodyFont),
             range: fullRange
@@ -466,6 +689,10 @@ enum MarkdownPresentation {
         for run in result.fontRuns {
             let font = layoutFont(for: run, bodyFont: bodyFont)
             desired.addAttribute(.font, value: font, range: run.range)
+            if run.traits.contains(.italic), !hasItalicTrait(font) {
+                // The rounded system design has no native italic face.
+                desired.addAttribute(.obliqueness, value: 0.18, range: run.range)
+            }
         }
         for run in result.paragraphRuns {
             let style = paragraphStyle(
@@ -488,11 +715,35 @@ enum MarkdownPresentation {
                 range: span.range
             )
         }
+        let collapsedFont = fontWithSize(
+            bodyFont,
+            size: MarkdownLivePreview.collapsedFontSize
+        )
+        for range in hiddenRanges {
+            desired.addAttributes(
+                [
+                    .font: collapsedFont,
+                    .foregroundColor: PlatformColor.clear,
+                    .kern: -MarkdownLivePreview.collapsedFontSize,
+                ],
+                range: range
+            )
+        }
+        for range in transparentRanges {
+            desired.addAttribute(
+                .foregroundColor,
+                value: PlatformColor.clear,
+                range: range
+            )
+        }
 
         var changes: [AttributeChange] = []
         for key in [
             NSAttributedString.Key.font,
             .paragraphStyle,
+            .foregroundColor,
+            .kern,
+            .obliqueness,
             .strikethroughColor,
             .strikethroughStyle,
         ] {
@@ -587,7 +838,8 @@ enum MarkdownPresentation {
     private static func applyRenderingAttributes(
         to layoutManager: NSTextLayoutManager,
         fragment: NSTextLayoutFragment,
-        result: MarkdownSyntaxResult
+        result: MarkdownSyntaxResult,
+        hiddenRanges: [NSRange] = []
     ) -> Int {
         guard let contentManager = layoutManager.textContentManager else {
             return 0
@@ -614,6 +866,20 @@ enum MarkdownPresentation {
             layoutManager.setRenderingAttributes(attributes, for: textRange)
             appliedCount += 1
         }
+        for range in hiddenRanges {
+            let intersection = NSIntersectionRange(range, fragmentRange)
+            guard intersection.length > 0,
+                  let textRange = textRange(
+                      for: intersection,
+                      documentStart: documentStart,
+                      contentManager: contentManager
+                  ) else { continue }
+            layoutManager.setRenderingAttributes(
+                [.foregroundColor: PlatformColor.clear],
+                for: textRange
+            )
+            appliedCount += 1
+        }
         return appliedCount
     }
 
@@ -621,7 +887,8 @@ enum MarkdownPresentation {
     static func refreshVisibleRenderingAttributes(
         in layoutManager: NSTextLayoutManager?,
         text: String,
-        syntaxCache: MarkdownSyntaxCache? = nil
+        syntaxCache: MarkdownSyntaxCache? = nil,
+        hiddenRanges: [NSRange] = []
     ) -> Int {
         guard let layoutManager,
               let contentManager = layoutManager.textContentManager else {
@@ -661,7 +928,8 @@ enum MarkdownPresentation {
                 appliedCount += applyRenderingAttributes(
                     to: layoutManager,
                     fragment: fragment,
-                    result: result
+                    result: result,
+                    hiddenRanges: hiddenRanges
                 )
             }
             return true
@@ -1112,7 +1380,7 @@ enum MarkdownPresentation {
     ) -> PlatformFont {
         let size = bodyFont.pointSize * headingScale(for: run.headingLevel)
         var font = run.traits.contains(.monospaced)
-            ? monospacedFont(size: size)
+            ? codeFont(pointSize: size)
             : fontWithSize(bodyFont, size: size)
         if run.traits.contains(.bold) {
             font = strongFont(font)
@@ -1136,8 +1404,18 @@ enum MarkdownPresentation {
     }
 
 #if os(macOS)
-    private static func bodyFont(pointSize: CGFloat) -> NSFont {
-        .systemFont(ofSize: pointSize)
+    static func bodyFont(
+        for family: EditorFontFamily,
+        pointSize: CGFloat
+    ) -> NSFont {
+        let base = NSFont.systemFont(ofSize: pointSize)
+        guard family != .system,
+              let descriptor = base.fontDescriptor.withDesign(
+                  systemDesign(for: family)
+              ),
+              let font = NSFont(descriptor: descriptor, size: pointSize)
+        else { return base }
+        return font
     }
 
     private static func strongFont(_ font: NSFont) -> NSFont {
@@ -1148,21 +1426,38 @@ enum MarkdownPresentation {
         NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
     }
 
+    private static func hasItalicTrait(_ font: NSFont) -> Bool {
+        NSFontManager.shared.traits(of: font).contains(.italicFontMask)
+    }
+
     private static func fontWithSize(_ font: NSFont, size: CGFloat) -> NSFont {
         NSFont(descriptor: font.fontDescriptor, size: size) ?? font
     }
 
-    private static func monospacedFont(size: CGFloat) -> NSFont {
-        .monospacedSystemFont(ofSize: size, weight: .regular)
+    static func codeFont(pointSize: CGFloat) -> NSFont {
+        .monospacedSystemFont(ofSize: pointSize, weight: .regular)
     }
 
     private static var primaryTextColor: NSColor { .textColor }
     private static var secondaryTextColor: NSColor { .secondaryLabelColor }
     private static var tertiaryTextColor: NSColor { .tertiaryLabelColor }
 #else
-    private static func bodyFont(pointSize: CGFloat) -> UIFont {
-        UIFontMetrics(forTextStyle: .body).scaledFont(
-            for: .systemFont(ofSize: pointSize)
+    static func bodyFont(
+        for family: EditorFontFamily,
+        pointSize: CGFloat
+    ) -> UIFont {
+        let base = UIFont.systemFont(ofSize: pointSize)
+        let designedFont: UIFont
+        if family != .system,
+           let descriptor = base.fontDescriptor.withDesign(
+               systemDesign(for: family)
+           ) {
+            designedFont = UIFont(descriptor: descriptor, size: pointSize)
+        } else {
+            designedFont = base
+        }
+        return UIFontMetrics(forTextStyle: .body).scaledFont(
+            for: designedFont
         )
     }
 
@@ -1172,6 +1467,10 @@ enum MarkdownPresentation {
 
     private static func emphasisFont(_ font: UIFont) -> UIFont {
         fontAddingTrait(.traitItalic, to: font)
+    }
+
+    private static func hasItalicTrait(_ font: UIFont) -> Bool {
+        font.fontDescriptor.symbolicTraits.contains(.traitItalic)
     }
 
     private static func fontAddingTrait(
@@ -1188,14 +1487,27 @@ enum MarkdownPresentation {
         UIFont(descriptor: font.fontDescriptor, size: size)
     }
 
-    private static func monospacedFont(size: CGFloat) -> UIFont {
-        .monospacedSystemFont(ofSize: size, weight: .regular)
+    static func codeFont(pointSize: CGFloat) -> UIFont {
+        UIFontMetrics(forTextStyle: .body).scaledFont(
+            for: .monospacedSystemFont(ofSize: pointSize, weight: .regular)
+        )
     }
 
     private static var primaryTextColor: UIColor { .label }
     private static var secondaryTextColor: UIColor { .secondaryLabel }
     private static var tertiaryTextColor: UIColor { .tertiaryLabel }
 #endif
+
+    private static func systemDesign(
+        for family: EditorFontFamily
+    ) -> PlatformFontDescriptor.SystemDesign {
+        switch family {
+        case .system: .default
+        case .serif: .serif
+        case .rounded: .rounded
+        case .monospaced: .monospaced
+        }
+    }
 }
 
 struct MarkdownDecorationRun {
