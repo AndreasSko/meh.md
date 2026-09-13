@@ -142,6 +142,11 @@
 				TargetAttributes = {
 					000000000000000100000000 = {
 						CreatedOnToolsVersion = 26.3;
+						SystemCapabilities = {
+							com.apple.iCloud = {
+								enabled = 1;
+							};
+						};
 					};
 					000000000000000100000001 = {
 						CreatedOnToolsVersion = 27.0;
@@ -345,12 +350,15 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
 				CODE_SIGN_STYLE = Automatic;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "meh.md/macOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "meh.md/iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "meh.md/iOS.entitlements";
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 9YFM7J3EH3;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				ICLOUD_CONTAINER_ENVIRONMENT = Development;
 				INFOPLIST_FILE = "meh.md/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = meh.md;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -407,12 +415,15 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
 				CODE_SIGN_STYLE = Automatic;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "meh.md/macOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "meh.md/iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "meh.md/iOS.entitlements";
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 9YFM7J3EH3;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				ICLOUD_CONTAINER_ENVIRONMENT = Production;
 				INFOPLIST_FILE = "meh.md/Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = meh.md;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";

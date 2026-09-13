@@ -1,3 +1,4 @@
+import CloudKit
 import Foundation
 @testable import NoteCore
 import XCTest
@@ -14,24 +15,51 @@ final class CloudKitTransportStateTests: XCTestCase {
         let directory = temporaryDirectory()
         let record = try makeRecord(text: "saved")
         let store = try CloudKitTransportStateStore(
-            directory: directory, accountRecordName: "account-a"
+            directory: directory, accountRecordName: "account-a",
+            zoneName: "zone-a"
         )
         try await store.update { try $0.appendToInbox(record) }
 
         let reopened = try CloudKitTransportStateStore(
-            directory: directory, accountRecordName: "account-a"
+            directory: directory, accountRecordName: "account-a",
+            zoneName: "zone-a"
         )
         let reopenedState = await reopened.snapshot()
         XCTAssertEqual(reopenedState.inbox, [record])
         XCTAssertThrowsError(
             try CloudKitTransportStateStore(
-                directory: directory, accountRecordName: "account-b"
+                directory: directory, accountRecordName: "account-b",
+                zoneName: "zone-a"
             )
         ) { XCTAssertEqual($0 as? SyncError, .scopeChanged) }
     }
 
+    func testStateCannotBeReusedForAnotherZone() async throws {
+        let directory = temporaryDirectory()
+        let store = try CloudKitTransportStateStore(
+            directory: directory, accountRecordName: "account",
+            zoneName: "ordinary-notes"
+        )
+        let record = try makeRecord(text: "ordinary note")
+        try await store.update { try $0.appendToInbox(record) }
+        XCTAssertThrowsError(
+            try CloudKitTransportStateStore(
+                directory: directory, accountRecordName: "account",
+                zoneName: "smoke-test"
+            )
+        ) { XCTAssertEqual($0 as? SyncError, .scopeChanged) }
+        let reopened = try CloudKitTransportStateStore(
+            directory: directory, accountRecordName: "account",
+            zoneName: "ordinary-notes"
+        )
+        let state = await reopened.snapshot()
+        XCTAssertEqual(state.inbox, [record])
+    }
+
     func testReplayIsPagedAndRejectsInvalidCursor() throws {
-        var state = CloudKitTransportState(accountRecordName: "account")
+        var state = CloudKitTransportState(
+            accountRecordName: "account", zoneName: "zone"
+        )
         let records = try (0..<3).map { try makeRecord(text: "note \($0)") }
         for record in records { try state.appendToInbox(record) }
         let first = try state.page(after: nil, limit: 2)
@@ -45,19 +73,122 @@ final class CloudKitTransportStateTests: XCTestCase {
     }
 
     func testDuplicateInboxDeliveryIsIdempotent() throws {
-        var state = CloudKitTransportState(accountRecordName: "account")
+        var state = CloudKitTransportState(
+            accountRecordName: "account", zoneName: "zone"
+        )
         let record = try makeRecord(text: "same")
         try state.appendToInbox(record)
         try state.appendToInbox(record)
         XCTAssertEqual(state.inbox, [record])
     }
 
+    func testRetryDeadlineAndPendingOutboxPersistTogether() async throws {
+        let directory = temporaryDirectory()
+        let record = try makeRecord(text: "pending")
+        let deadline = Date().addingTimeInterval(30)
+        let store = try CloudKitTransportStateStore(
+            directory: directory, accountRecordName: "account",
+            zoneName: "zone"
+        )
+        try await store.update {
+            $0.outbox[record.id] = record
+            $0.retryNotBefore = deadline
+        }
+
+        let reopened = try CloudKitTransportStateStore(
+            directory: directory, accountRecordName: "account",
+            zoneName: "zone"
+        )
+        let state = await reopened.snapshot()
+        XCTAssertEqual(state.outbox, [record.id: record])
+        XCTAssertEqual(state.retryNotBefore, deadline)
+    }
+
+    func testRetryThrottleKeepsLongestActiveCooldown() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        var throttle = CloudKitRetryThrottle()
+        XCTAssertTrue(throttle.observe(retryAfter: 10, now: now))
+        XCTAssertFalse(throttle.observe(retryAfter: 2, now: now))
+        XCTAssertEqual(throttle.remaining(at: now), 10)
+        XCTAssertNil(throttle.remaining(at: now.addingTimeInterval(10)))
+    }
+
+    func testRetryMetadataIncludesNestedPerItemErrors() {
+        let child = NSError(
+            domain: CKErrorDomain,
+            code: CKError.requestRateLimited.rawValue,
+            userInfo: [CKErrorRetryAfterKey: 12.0]
+        )
+        let parent = NSError(
+            domain: CKErrorDomain,
+            code: CKError.partialFailure.rawValue,
+            userInfo: [CKPartialErrorsByItemIDKey: ["record": child]]
+        )
+
+        XCTAssertEqual(CloudKitRetryMetadata.seconds(in: parent), 12)
+    }
+
+    func testRetryMetadataFallsBackForThrottleWithoutValidDelay() {
+        for value: Any? in [nil, -1.0, Double.nan] {
+            var userInfo: [String: Any] = [:]
+            if let value { userInfo[CKErrorRetryAfterKey] = value }
+            let error = NSError(
+                domain: CKErrorDomain,
+                code: CKError.serviceUnavailable.rawValue,
+                userInfo: userInfo
+            )
+            XCTAssertEqual(
+                CloudKitRetryMetadata.seconds(in: error),
+                CloudKitRetryMetadata.fallbackSeconds
+            )
+        }
+    }
+
+    func testStartupCooldownGatesRequestsAndPersistsWithoutIdentity() async throws {
+        let directory = temporaryDirectory()
+        let start = Date(timeIntervalSince1970: 1_000)
+        var store = try CloudKitAvailabilityCooldownStore(directory: directory)
+        try store.merge(retryAfter: 10, now: start)
+        var now = start
+        var requestCount = 0
+        var sleepCount = 0
+
+        try await store.wait(
+            now: { now },
+            sleep: { interval in
+                XCTAssertEqual(requestCount, 0)
+                sleepCount += 1
+                now.addTimeInterval(interval)
+            }
+        )
+        requestCount += 1
+
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(sleepCount, 1)
+        let reopened = try CloudKitAvailabilityCooldownStore(
+            directory: directory
+        )
+        XCTAssertEqual(reopened.notBefore, start.addingTimeInterval(10))
+        let persisted = try String(
+            contentsOf: directory.appendingPathComponent(
+                "cloudkit-availability-retry.json"
+            ),
+            encoding: .utf8
+        )
+        XCTAssertFalse(persisted.contains("account"))
+        XCTAssertFalse(persisted.contains("zone"))
+    }
+
     func testRebuiltInboxRejectsCursorFromPreviousGeneration() throws {
         let record = try makeRecord(text: "same-length rebuilt inbox")
-        var old = CloudKitTransportState(accountRecordName: "account")
+        var old = CloudKitTransportState(
+            accountRecordName: "account", zoneName: "zone"
+        )
         try old.appendToInbox(record)
         let cursor = try old.page(after: nil, limit: 10).cursor
-        var rebuilt = CloudKitTransportState(accountRecordName: "account")
+        var rebuilt = CloudKitTransportState(
+            accountRecordName: "account", zoneName: "zone"
+        )
         try rebuilt.appendToInbox(record)
         XCTAssertThrowsError(try rebuilt.page(after: cursor, limit: 10)) {
             XCTAssertEqual($0 as? SyncError, .invalidCursor)
@@ -74,7 +205,8 @@ final class CloudKitTransportStateTests: XCTestCase {
         )
         XCTAssertThrowsError(
             try CloudKitTransportStateStore(
-                directory: directory, accountRecordName: "account"
+                directory: directory, accountRecordName: "account",
+                zoneName: "zone"
             )
         ) {
             XCTAssertEqual(
@@ -103,7 +235,8 @@ final class CloudKitTransportStateTests: XCTestCase {
     func testInboxFailurePreventsLaterEngineStateAdvance() async throws {
         let directory = temporaryDirectory()
         let store = try CloudKitTransportStateStore(
-            directory: directory, accountRecordName: "account"
+            directory: directory, accountRecordName: "account",
+            zoneName: "zone"
         )
         let committer = CloudKitEventCommitter(store: store)
         try FileManager.default.removeItem(at: directory)

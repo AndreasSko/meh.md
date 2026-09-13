@@ -5,17 +5,20 @@ The CloudKit adapter targets the private database in
 full-history Automerge snapshots, and `CKAsset` document payloads. It does not
 delete or compact remote history in milestone 2.
 
-The app target still needs these Xcode capabilities before real-device sync
-can run:
+The app target includes CloudKit entitlements for macOS and iOS with this
+container selected. Xcode automatic provisioning successfully signed the Mac
+Debug build for team `9YFM7J3EH3`; its embedded profile authorizes the
+container.
+Debug selects the Development environment and Release selects Production.
+Cloud sync itself remains a Debug-only opt-in.
 
-- iCloud with CloudKit enabled and the container
-  `iCloud.de.andreas-sk.meh-md` selected.
+An active Apple Developer Program membership and valid signing assets are
+required. A signed physical iPhone round trip has also passed. An iPad run
+remains open. Unit tests do not create a container or deploy a production
+schema.
 
-Those settings require an active Apple Developer Program membership, a
-container registered for team `9YFM7J3EH3`, and regenerated signing profiles.
-The current repository does not prove that the container exists or that the
-team can sign for it. The container and production schema must not be created
-or deployed as a side effect of unit tests.
+See [live verification](icloud-live-verification.md) for the isolated Mac
+smoke check and its current evidence.
 
 Enable Background Modes with Remote notifications when adding push-driven or
 background synchronization. Manual foreground exchanges do not require it.
@@ -53,6 +56,7 @@ inbox is rebuilt, the coordinator rejects the old cursor and replays instead
 of skipping records at an offset that now means something different.
 
 Unit tests cover durable inbox replay, duplicate delivery, cursor validation,
-and account binding without contacting iCloud. Signed Mac, iPhone, and iPad
-runs are still required to verify provisioning, push-driven scheduling,
-offline handoff, account changes, server conflicts, and observed latency.
+and account binding without contacting iCloud. Signed Mac and iPhone foreground
+round trips passed. Physical-device
+checks remain for push-driven scheduling, offline handoff, account changes,
+server conflicts, and iPad behavior.
