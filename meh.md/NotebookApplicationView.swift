@@ -30,20 +30,17 @@ struct NotebookApplicationView: View {
             }
         }
         .task { await workspace.start() }
-        .onChange(of: scenePhase) { oldPhase, newPhase in
-            if oldPhase != .active, newPhase == .active, workspace.automaticSync {
-                Task { await workspace.refresh(trigger: "foreground activation") }
-            }
+        .onChange(of: scenePhase, initial: true) { _, newPhase in
+            workspace.sceneActivityChanged(isActive: newPhase == .active)
         }
         .task(id: scenePhase) {
-            guard scenePhase == .active, workspace.automaticSync,
-                  workspace.usesSync else { return }
-            // Initial activation and saved edits already request exchanges.
-            // Quiet foreground checks discover changes from other devices.
-            // Engine-driven background delivery remains a separate stage.
+            // The loopback development service has no push channel. Only
+            // that explicit test mode retains foreground polling.
+            guard case .development = workspace.mode,
+                  scenePhase == .active, workspace.automaticSync else { return }
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
-                await workspace.refresh(trigger: "foreground timer")
+                await workspace.refresh(trigger: "local service foreground check")
             }
         }
     }

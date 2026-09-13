@@ -97,6 +97,9 @@ struct NotebookSyncDetailsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let error = workspace.syncSetupError { Text(error).font(.caption) }
+                if let error = workspace.notificationRegistrationError {
+                    Text(error).font(.caption)
+                }
                 if case .failed(let error) = workspace.sync?.status {
                     Text(error).font(.caption)
                 }

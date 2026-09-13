@@ -2,7 +2,15 @@ import SwiftUI
 import NoteCore
 
 @main struct MyApp: App {
-    @State private var workspace = NotebookWorkspace(preview: NotebookWorkspace.isPreviewEnabled)
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(NotebookAppDelegate.self)
+    private var appDelegate
+    #elseif os(macOS)
+    @NSApplicationDelegateAdaptor(NotebookAppDelegate.self)
+    private var appDelegate
+    #endif
+
+    @State private var workspace = NotebookWorkspace.shared
 
     var body: some Scene {
         #if os(macOS)
