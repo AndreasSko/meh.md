@@ -19,6 +19,7 @@ struct NotebookSyncState: Codable {
 public final class NotebookSyncCoordinator {
     public private(set) var status: NoteSyncCoordinator.Status = .idle
     public private(set) var progress: NotebookSyncProgress?
+    @ObservationIgnored public private(set) var lastError: (any Error)?
     @ObservationIgnored private let replica: NotebookReplica
     @ObservationIgnored private let transport: any SyncTransport
     @ObservationIgnored private let stateURL: URL
@@ -51,6 +52,7 @@ public final class NotebookSyncCoordinator {
         let startedAt = Date()
         inFlight = true
         status = .syncing
+        lastError = nil
         diagnosticLog?.record("pass_start")
         updateProgress(
             phase: .checking,
@@ -72,6 +74,7 @@ public final class NotebookSyncCoordinator {
             if isPending { diagnosticLog?.record("pass_pending") }
             progress = nil
         } catch {
+            lastError = error
             diagnosticLog?.record(
                 "pass_error:" + NotebookSyncEventLog.errorCode(error),
                 counts: [

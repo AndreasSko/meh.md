@@ -680,6 +680,175 @@ final class CloudKitTransportStateTests: XCTestCase {
         )
     }
 
+    func testBatchPartialFailureKeepsTransientChildRetryable() throws {
+        let records = try [
+            makeRecord(text: "acknowledged"),
+            makeRecord(text: "retry"),
+        ]
+        let recordID = CKRecord.ID(
+            recordName: records[1].id,
+            zoneID: CKRecordZone.ID(zoneName: "zone")
+        )
+        let error = partialFailure([
+            recordID: cloudError(.networkFailure),
+        ])
+        let result = CloudKitBatchResultResolver.resolve(
+            records: records,
+            acknowledgedIDs: [records[0].id],
+            failures: [:],
+            delegateFailure: nil,
+            sendError: error
+        )
+
+        XCTAssertEqual(result.acknowledgedIDs, [records[0].id])
+        XCTAssertEqual(
+            result.error as? CloudKitSyncTransportError,
+            .uploadFailed(code: CKError.networkFailure.rawValue)
+        )
+        XCTAssertTrue(NotebookSyncRetryPolicy.isTransient(result.error!))
+    }
+
+    func testBatchPartialFailurePrefersPermanentChild() throws {
+        let records = try [
+            makeRecord(text: "acknowledged"),
+            makeRecord(text: "retry"),
+            makeRecord(text: "stop"),
+        ]
+        let error = partialFailure([
+            records[1].id: cloudError(.requestRateLimited),
+            records[2].id: cloudError(.permissionFailure),
+        ])
+        let result = CloudKitBatchResultResolver.resolve(
+            records: records,
+            acknowledgedIDs: [records[0].id],
+            failures: [:],
+            delegateFailure: nil,
+            sendError: error
+        )
+
+        XCTAssertEqual(result.acknowledgedIDs, [records[0].id])
+        XCTAssertEqual(
+            result.error as? CloudKitSyncTransportError,
+            .uploadFailed(code: CKError.permissionFailure.rawValue)
+        )
+        XCTAssertFalse(NotebookSyncRetryPolicy.isTransient(result.error!))
+    }
+
+    func testBatchCombinesRecordedAndRawPartialFailures() throws {
+        let records = try [
+            makeRecord(text: "recorded retry"),
+            makeRecord(text: "raw stop"),
+        ]
+        let result = CloudKitBatchResultResolver.resolve(
+            records: records,
+            acknowledgedIDs: [],
+            failures: [
+                records[0].id: partialFailure([
+                    "retry": cloudError(.networkFailure),
+                ]),
+            ],
+            delegateFailure: nil,
+            sendError: partialFailure([
+                records[1].id: cloudError(.permissionFailure),
+            ])
+        )
+
+        XCTAssertEqual(
+            result.error as? CloudKitSyncTransportError,
+            .uploadFailed(code: CKError.permissionFailure.rawValue)
+        )
+        XCTAssertFalse(NotebookSyncRetryPolicy.isTransient(result.error!))
+    }
+
+    func testBatchEmptyPartialFailureDoesNotRetryForever() throws {
+        let records = try [makeRecord(text: "unacknowledged")]
+        let result = CloudKitBatchResultResolver.resolve(
+            records: records,
+            acknowledgedIDs: [],
+            failures: [:],
+            delegateFailure: nil,
+            sendError: partialFailure([:])
+        )
+
+        XCTAssertEqual(
+            result.error as? CloudKitSyncTransportError,
+            .uploadFailed(code: CKError.partialFailure.rawValue)
+        )
+        XCTAssertFalse(NotebookSyncRetryPolicy.isTransient(result.error!))
+    }
+
+    func testBatchConfirmedAcknowledgementIgnoresRawPartialFailure() throws {
+        let records = try [makeRecord(text: "acknowledged")]
+        let result = CloudKitBatchResultResolver.resolve(
+            records: records,
+            acknowledgedIDs: [records[0].id],
+            failures: [:],
+            delegateFailure: nil,
+            sendError: partialFailure([
+                records[0].id: cloudError(.networkFailure),
+            ])
+        )
+
+        XCTAssertEqual(result.acknowledgedIDs, [records[0].id])
+        XCTAssertNil(result.error)
+    }
+
+    func testBatchNestedPartialFailureUsesLeafPolicy() throws {
+        let records = try [makeRecord(text: "nested")]
+        let nested = partialFailure([
+            records[0].id: cloudError(.zoneBusy),
+        ])
+        let zoneID = CKRecordZone.ID(zoneName: "zone")
+        let result = CloudKitBatchResultResolver.resolve(
+            records: records,
+            acknowledgedIDs: [],
+            failures: [:],
+            delegateFailure: nil,
+            sendError: partialFailure([zoneID: nested])
+        )
+
+        XCTAssertEqual(
+            result.error as? CloudKitSyncTransportError,
+            .uploadFailed(code: CKError.zoneBusy.rawValue)
+        )
+        XCTAssertTrue(NotebookSyncRetryPolicy.isTransient(result.error!))
+    }
+
+    func testBatchDeepPartialFailureStopsAtBound() throws {
+        let records = try [makeRecord(text: "deep")]
+        var nested: Error = cloudError(.networkFailure)
+        for level in 0..<10 {
+            nested = partialFailure(["level-\(level)": nested])
+        }
+        let result = CloudKitBatchResultResolver.resolve(
+            records: records,
+            acknowledgedIDs: [],
+            failures: [:],
+            delegateFailure: nil,
+            sendError: partialFailure([records[0].id: nested])
+        )
+
+        XCTAssertEqual(
+            result.error as? CloudKitSyncTransportError,
+            .uploadFailed(code: CKError.partialFailure.rawValue)
+        )
+        XCTAssertFalse(NotebookSyncRetryPolicy.isTransient(result.error!))
+    }
+
+    private func cloudError(_ code: CKError.Code) -> NSError {
+        NSError(domain: CKErrorDomain, code: code.rawValue)
+    }
+
+    private func partialFailure(
+        _ itemErrors: [AnyHashable: Error]
+    ) -> NSError {
+        NSError(
+            domain: CKErrorDomain,
+            code: CKError.partialFailure.rawValue,
+            userInfo: [CKPartialErrorsByItemIDKey: itemErrors]
+        )
+    }
+
     private func makeRecord(text: String) throws -> SyncRecord {
         let document = try NoteDocument(noteID: UUID())
         try document.replaceAll(with: text)
