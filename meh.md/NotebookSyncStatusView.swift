@@ -14,7 +14,8 @@ struct NotebookWorkspaceStatusView: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
             if presentation.summary != nil || workspace.copyError != nil
-                || workspace.recoveryAction != nil {
+                || workspace.recoveryAction != nil
+                || workspace.replica?.deletionCleanupErrorMessage != nil {
                 VStack(alignment: .leading, spacing: 6) {
                     if let summary = presentation.summary {
                         Button { showingDetails = true } label: {
@@ -41,6 +42,14 @@ struct NotebookWorkspaceStatusView: View {
                     if let error = workspace.copyError {
                         Text("Markdown copies paused: \(error)")
                             .accessibilityIdentifier("markdown-copy-status")
+                    }
+                    if let error = workspace.replica?.deletionCleanupErrorMessage {
+                        Text("Deleted note cleanup paused: \(error)")
+                            .accessibilityIdentifier("notebook-deletion-cleanup-status")
+                        Button("Retry Cleanup") {
+                            Task { await workspace.refresh(manual: true) }
+                        }
+                        .disabled(workspace.isRefreshing)
                     }
                     if let action = workspace.recoveryAction {
                         Text(action.details + " Restoring may lose newer changes.")
@@ -77,7 +86,7 @@ struct NotebookSyncDetailsView: View {
                 Text(presentation.summary ?? lastSyncText)
                     .accessibilityIdentifier("note-sync-status")
                 if presentation.summary != nil { Text(lastSyncText).font(.caption) }
-                if let progress = workspace.sync?.progress, !workspace.checkingLegacySync {
+                if let progress = workspace.sync?.progress {
                     if progress.totalNotes > 0 {
                         Text("Notes uploaded this pass: \(progress.completedNotes) of \(progress.totalNotes)")
                     }
@@ -90,9 +99,6 @@ struct NotebookSyncDetailsView: View {
                 if let error = workspace.syncSetupError { Text(error).font(.caption) }
                 if case .failed(let error) = workspace.sync?.status {
                     Text(error).font(.caption)
-                }
-                if let error = workspace.legacySyncError {
-                    Text("Older-note compatibility: \(error)").font(.caption)
                 }
                 Text("Progress counts saved revisions acknowledged by the sync service. Other devices receive them when they synchronize.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -135,11 +141,12 @@ private struct NotebookSyncPresentation {
             return "Sync paused · retry available in \(seconds)s"
         }
         if workspace.isSyncing {
-            if !workspace.checkingLegacySync, let progress = workspace.sync?.progress {
+            if let progress = workspace.sync?.progress {
                 switch progress.phase {
                 case .uploadingNotes:
                     return "Uploading notes · \(progress.completedNotes) of \(progress.totalNotes)"
                 case .uploadingCatalog: return "Updating folder structure…"
+                case .cleaningUp: return "Removing deleted note copies…"
                 case .receiving where progress.receivedRecords > 0:
                     return "Receiving changes · \(progress.receivedRecords) received"
                 default: break
@@ -149,13 +156,12 @@ private struct NotebookSyncPresentation {
         }
         if workspace.syncSetupError != nil { return "Sync paused · open for details" }
         if case .failed = workspace.sync?.status { return "Sync paused · open for details" }
-        if workspace.legacySyncError != nil { return "Some changes could not sync · open for details" }
         if case .pending = workspace.sync?.status { return "Changes waiting to sync" }
         return nil
     }
 
     var fraction: Double? {
-        guard workspace.isSyncing, !workspace.checkingLegacySync, retryDeadline == nil,
+        guard workspace.isSyncing, retryDeadline == nil,
               let progress = workspace.sync?.progress, progress.phase == .uploadingNotes,
               progress.totalNotes > 0 else { return nil }
         return min(1, max(0, Double(progress.completedNotes) / Double(progress.totalNotes)))

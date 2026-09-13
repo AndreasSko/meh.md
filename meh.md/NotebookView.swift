@@ -20,6 +20,7 @@ struct NotebookView: View {
     var workspace: NotebookWorkspace? = nil
     @State private var showingImport = false
     @State private var showingSyncDetails = false
+    @State private var deletionSelection: NotebookDeletionSelection?
     @State private var selectedID: UUID?
     @State private var session: NoteSession?
     @State private var expandedIDs: Set<UUID> = []
@@ -66,9 +67,15 @@ struct NotebookView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .contextMenu { emptyTrashAction }
 
                         if trashExpanded {
                             ForEach(trashRows) { row in sidebarRow(row) }
+                            if replica.placements.contains(where: \.isInTrash) {
+                                emptyTrashAction
+                                    .font(.caption)
+                                    .padding(.leading, 24)
+                            }
                         }
                     }
                 }
@@ -157,6 +164,22 @@ struct NotebookView: View {
         ) { moveSheet }
         .sheet(isPresented: $showingImport) {
             NotebookImportView(replica: replica, onImport: importMarkdown)
+        }
+        .confirmationDialog(
+            deletionSelection?.rootID == nil ? "Empty Trash?" : "Delete permanently?",
+            isPresented: Binding(
+                get: { deletionSelection != nil },
+                set: { if !$0 { deletionSelection = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: deletionSelection
+        ) { selection in
+            Button("Delete Permanently", role: .destructive) {
+                deletePermanently(selection)
+            }
+            Button("Cancel", role: .cancel) { deletionSelection = nil }
+        } message: { selection in
+            Text(deletionMessage(selection))
         }
         .task { if replica.hasPendingImport { showingImport = true } }
     }
@@ -323,6 +346,11 @@ struct NotebookView: View {
             } else {
                 Text("Restore the parent folder, or move this item out.")
             }
+            Divider()
+            Button("Delete Permanently…", role: .destructive) {
+                prepareDeletion(rootID: placement.item.id)
+            }
+            .disabled(busy)
         } else {
             Button("Move to Trash", role: .destructive) {
                 changeTrash(placement, trashed: true)
@@ -447,6 +475,49 @@ struct NotebookView: View {
             try await replica.setTrashed(placement.item.id, trashed)
             if trashed { trashExpanded = true }
             reveal(placement.item.id)
+        }
+    }
+
+    private var emptyTrashAction: some View {
+        Button("Empty Trash…", role: .destructive) { prepareDeletion(rootID: nil) }
+            .disabled(busy || !replica.placements.contains(where: \.isInTrash))
+            .accessibilityIdentifier("notebook-empty-trash")
+    }
+
+    private func prepareDeletion(rootID: UUID?) {
+        perform {
+            try await flushEditor()
+            deletionSelection = try replica.deletionSelection(rootID: rootID)
+        }
+    }
+
+    private func deletionMessage(_ selection: NotebookDeletionSelection) -> String {
+        let notes = selection.items.filter { $0.kind == .note }.count
+        let folders = selection.items.count - notes
+        let counts = [
+            notes > 0 ? "\(notes) \(notes == 1 ? "note" : "notes")" : nil,
+            folders > 0 ? "\(folders) \(folders == 1 ? "folder" : "folders")" : nil,
+        ].compactMap { $0 }.joined(separator: " and ")
+        let names = selection.items.prefix(5).map(\.name).joined(separator: ", ")
+        let remainder = selection.items.count > 5 ? ", …" : ""
+        return "Delete \(counts): \(names)\(remainder)? "
+            + "This cannot be undone. Other devices remove these items when they sync. "
+            + "Original files you imported are kept."
+    }
+
+    private func deletePermanently(_ selection: NotebookDeletionSelection) {
+        deletionSelection = nil
+        perform {
+            try await flushEditor()
+            try await replica.permanentlyDelete(selection)
+            if let selectedID, selection.ids.contains(selectedID) {
+                session = nil
+                self.selectedID = nil
+                unrecordedEdit = false
+                preferredCompactColumn = .sidebar
+            }
+            expandedIDs.subtract(selection.ids)
+            workspace?.contentDidSave(trigger: "permanent deletion")
         }
     }
 

@@ -8,15 +8,14 @@ iCloud Dev builds now activate the notebook coordinator by default.
 A canonical catalog establishes the notebook identity and shared history.
 Fresh clients persist a proposal before bootstrap and join the winning seed.
 An existing unrelated notebook fails explicitly instead of being overwritten.
-A durable proposal retains any legacy body across retries. Adoption merges
-that body idempotently, including after a local file rollback. Legacy writers
-must be flushed and stopped before notebook storage activates. The one-way
-bridge then imports newer version 1 source edits without writing notebook
-changes back to `Notes`.
+The development app no longer migrates or synchronizes the earlier single-note
+system. Ordinary notebook sync ignores and removes any legacy body embedded
+in an old bootstrap proposal. Existing notebook data remains intact.
 
-A first iCloud activation must be online to join the canonical version 1 note
-before proposing or joining its version 2 notebook. An already activated
-notebook opens from its local durable state while CloudKit is unavailable.
+A first iCloud activation must be online to join the version 2 notebook.
+An existing notebook opens from local durable state before cloud discovery,
+even when CloudKit is unavailable. A failed join offers Retry without
+replacing a remote notebook with an empty one.
 
 Version 1 note records retain their original JSON and snapshot hashes.
 Version 2 records explicitly identify protocol, notebook, and document kind.
@@ -59,10 +58,12 @@ Existing editor sessions become noneditable and deleted bodies are excluded
 from publication. An unknown child of a deleted folder survives at a flagged
 recovery root.
 
-This stage does not erase content bytes. Cleanup must later remove note files,
-recovery versions, managed copies, legacy/proposal bodies where applicable,
-transport inbox/outbox copies, and cloud snapshots with retryable progress.
-Do not expose Delete Permanently or Empty Trash before that work is complete.
+[Permanent deletion cleanup](notebook-permanent-deletion.md) now removes note
+files, recovery versions, retained import bodies, managed copies, transport
+inbox/outbox copies, and remote note snapshots. An independent local ledger
+survives catalog recovery. Cloud cleanup follows acknowledged catalog markers
+and preserves cursor positions. Delete Permanently and Empty Trash expose
+this contract with confirmation and retryable failures.
 
 ## Verification
 
