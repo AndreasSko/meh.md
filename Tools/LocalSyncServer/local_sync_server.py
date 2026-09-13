@@ -106,8 +106,55 @@ class WorkspaceStore:
                     409,
                 )
             self._bind_notebook(state, checked_record, checked_version)
+            if (
+                checked_version == 2
+                and checked_record["kind"] == "note"
+                and checked_record["snapshot"]["noteID"]
+                in state["deletedNoteIDs"]
+            ):
+                return
             if self._append(state, checked_record):
                 self._write(storage_scope, state)
+
+    def purge_deleted_notes(
+        self,
+        scope: object,
+        notebook_id: object,
+        note_ids: object,
+    ) -> None:
+        checked_scope = self._validate_scope(scope)
+        checked_notebook_id = self._validate_uuid(
+            notebook_id, "The notebook identifier is invalid."
+        )
+        checked_note_ids = self._validate_uuid_list(note_ids)
+        storage_scope = self._storage_scope(checked_scope, 2)
+        with self._lock:
+            state = self._load(storage_scope, 2)
+            if state["seedID"] is None:
+                raise StoreError(
+                    "bootstrap_required",
+                    "Version 2 workspaces require a catalog bootstrap.",
+                    409,
+                )
+            if state["notebookID"] != checked_notebook_id:
+                raise StoreError(
+                    "notebook_conflict",
+                    "The cleanup belongs to a different notebook.",
+                    409,
+                )
+
+            deleted = set(state["deletedNoteIDs"])
+            deleted.update(checked_note_ids)
+            state["deletedNoteIDs"] = sorted(deleted)
+            state["records"] = [
+                None
+                if record is not None
+                and record["kind"] == "note"
+                and record["snapshot"]["noteID"] in deleted
+                else record
+                for record in state["records"]
+            ]
+            self._write(storage_scope, state)
 
     def fetch(
         self,
@@ -151,12 +198,14 @@ class WorkspaceStore:
     def _page(
         self,
         scope: str,
-        records: list[dict[str, Any]],
+        records: list[dict[str, Any] | None],
         offset: int,
         end: int,
     ) -> dict[str, Any]:
         return {
-            "records": records[offset:end],
+            "records": [
+                record for record in records[offset:end] if record is not None
+            ],
             "cursor": self._encode_cursor(scope, end),
             "hasMore": end < len(records),
         }
@@ -176,6 +225,7 @@ class WorkspaceStore:
             }
             if protocol_version == 2:
                 state["notebookID"] = None
+                state["deletedNoteIDs"] = []
             return state
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
@@ -189,17 +239,26 @@ class WorkspaceStore:
                 )
             ):
                 raise ValueError("invalid workspace envelope")
+            if protocol_version == 1 and any(
+                item is None for item in state["records"]
+            ):
+                raise ValueError("version 1 workspace contains tombstones")
             checked_records = [
-                self._validate_record(item, protocol_version)
+                None
+                if item is None
+                else self._validate_record(item, protocol_version)
                 for item in state["records"]
             ]
-            if len({item["id"] for item in checked_records}) != len(
-                checked_records
+            live_records = [
+                item for item in checked_records if item is not None
+            ]
+            if len({item["id"] for item in live_records}) != len(
+                live_records
             ):
                 raise ValueError("duplicate record identifier")
             seed_id = state["seedID"]
             if seed_id is not None and seed_id not in {
-                item["id"] for item in checked_records
+                item["id"] for item in live_records
             }:
                 raise ValueError("missing seed record")
             if protocol_version == 2:
@@ -209,14 +268,24 @@ class WorkspaceStore:
                 parsed_notebook_id = str(uuid.UUID(notebook_id)).upper()
                 if any(
                     item["notebookID"] != parsed_notebook_id
-                    for item in checked_records
+                    for item in live_records
                 ):
                     raise ValueError("mixed notebook identifiers")
                 if seed_id is not None and self._record_by_id(
-                    {"records": checked_records}, seed_id
+                    {"records": live_records}, seed_id
                 )["kind"] != "catalog":
                     raise ValueError("version 2 seed is not a catalog")
+                deleted_note_ids = self._validate_uuid_list(
+                    state.get("deletedNoteIDs", [])
+                )
+                if any(
+                    item["kind"] == "note"
+                    and item["snapshot"]["noteID"] in deleted_note_ids
+                    for item in live_records
+                ):
+                    raise ValueError("deleted note body remains stored")
                 state["notebookID"] = parsed_notebook_id
+                state["deletedNoteIDs"] = deleted_note_ids
             state["records"] = checked_records
             return state
         except StoreError as error:
@@ -263,6 +332,8 @@ class WorkspaceStore:
         record: dict[str, Any],
     ) -> bool:
         for existing in state["records"]:
+            if existing is None:
+                continue
             if existing["id"] != record["id"]:
                 continue
             if existing != record:
@@ -281,6 +352,8 @@ class WorkspaceStore:
         record_id: str,
     ) -> dict[str, Any]:
         for record in state["records"]:
+            if record is None:
+                continue
             if record["id"] == record_id:
                 return record
         raise StoreError(
@@ -354,6 +427,33 @@ class WorkspaceStore:
                 f"Limit must be between 1 and {MAX_PAGE_SIZE}.",
             )
         return limit
+
+    @staticmethod
+    def _validate_uuid(value: object, message: str) -> str:
+        if not isinstance(value, str):
+            raise StoreError("invalid_record", message)
+        try:
+            return str(uuid.UUID(value)).upper()
+        except ValueError as error:
+            raise StoreError("invalid_record", message) from error
+
+    @classmethod
+    def _validate_uuid_list(cls, value: object) -> list[str]:
+        if not isinstance(value, list) or len(value) > 100_000:
+            raise StoreError(
+                "invalid_record", "Deleted note identifiers are invalid."
+            )
+        checked = [
+            cls._validate_uuid(
+                item, "A deleted note identifier is invalid."
+            )
+            for item in value
+        ]
+        if len(set(checked)) != len(checked):
+            raise StoreError(
+                "invalid_record", "Deleted note identifiers must be unique."
+            )
+        return sorted(checked)
 
     @staticmethod
     def _validate_record(
@@ -539,6 +639,13 @@ class SyncRequestHandler(BaseHTTPRequestHandler):
                     body.get("scope"),
                     body.get("record"),
                     version,
+                )
+                self._send_json(200, {"stored": True})
+            elif path == "/v2/purge":
+                self.store.purge_deleted_notes(
+                    body.get("scope"),
+                    body.get("notebookID"),
+                    body.get("noteIDs"),
                 )
                 self._send_json(200, {"stored": True})
             else:

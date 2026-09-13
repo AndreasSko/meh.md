@@ -248,6 +248,23 @@ public final class NotebookSyncCoordinator {
         }
         state.deletedIDs.formUnion(try replica.deletedIDs)
         try save(state)
+        // Purge only identities represented by a remotely acknowledged catalog.
+        // A deletion made during an upload remains pending until its own marker
+        // has been published; removing its body earlier could strand a peer.
+        if let publishedCatalog = outgoing.first(where: { $0.kind == .catalog }),
+            state.acknowledgedHeads[publishedCatalog.documentKey]
+                == publishedCatalog.snapshot.heads,
+            let snapshot = publishedCatalog.catalogSnapshot
+        {
+            let deleted = Set(try NotebookCatalogDocument(snapshot: snapshot)
+                .items().filter(\.isPermanentlyDeleted).map(\.id))
+            if !deleted.isEmpty {
+                updateProgress(phase: .cleaningUp)
+                diagnosticLog?.record("deletion_cleanup_start", counts: ["items": deleted.count])
+                try await transport.purgeDeletedNotes(deleted, notebookID: notebookID)
+                diagnosticLog?.record("deletion_cleanup_end", counts: ["items": deleted.count])
+            }
+        }
         let current = try await replica.records()
         status =
             current.allSatisfy { state.acknowledgedHeads[$0.documentKey] == $0.snapshot.heads }
@@ -333,9 +350,71 @@ public final class NotebookSyncCoordinator {
         let scope: String
         let record: SyncRecord
         let legacyNote: NoteSnapshot?
+        var retiredLegacyNoteID: UUID? = nil
+    }
+
+    /// The active V2 path intentionally does not decode a retained V1 body.
+    /// This lets it recover the durable catalog even when that obsolete field
+    /// can no longer be decoded as a `NoteSnapshot`.
+    private struct ProposalWithoutLegacy: Decodable {
+        let scope: String
+        let record: SyncRecord
+        let retiredLegacyNoteID: UUID?
+        let containsLegacyNote: Bool
+
+        private enum CodingKeys: String, CodingKey {
+            case scope
+            case record
+            case legacyNote
+            case retiredLegacyNoteID
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            scope = try container.decode(String.self, forKey: .scope)
+            record = try container.decode(SyncRecord.self, forKey: .record)
+            retiredLegacyNoteID = try container.decodeIfPresent(
+                UUID.self, forKey: .retiredLegacyNoteID)
+            if container.contains(.legacyNote) {
+                containsLegacyNote = try !container.decodeNil(forKey: .legacyNote)
+            } else {
+                containsLegacyNote = false
+            }
+        }
+    }
+
+    /// The development app no longer consumes legacy proposal bodies. Drop
+    /// them during local cleanup too, even when cloud setup is unavailable.
+    static func removeDeletedLegacyProposal(
+        in directory: URL, notebookID: UUID, deletedIDs: Set<UUID>
+    ) throws {
+        guard !deletedIDs.isEmpty else { return }
+        let url = directory.appending(path: "notebook-proposal.json")
+        let data: Data
+        do { data = try Data(contentsOf: url) }
+        catch CocoaError.fileReadNoSuchFile { return }
+        let metadata = try JSONDecoder().decode(ProposalWithoutLegacy.self, from: data)
+        if metadata.record.notebookID != notebookID {
+            let state = try JSONDecoder().decode(NotebookSyncState.self, from: Data(
+                contentsOf: directory.appending(path: "notebook-sync-state.json")))
+            guard state.notebookID == notebookID, state.scope == metadata.scope else {
+                throw SyncError.identityConflict
+            }
+        }
+        try metadata.record.validate()
+        guard metadata.containsLegacyNote else { return }
+        // Retain a readable old identity for the explicit legacy test adapter;
+        // malformed, unused V1 payloads must not block notebook cleanup.
+        let old = try? JSONDecoder().decode(Proposal.self, from: data)
+        let retired = Proposal(
+            scope: metadata.scope, record: metadata.record, legacyNote: nil,
+            retiredLegacyNoteID: metadata.retiredLegacyNoteID ?? old?.legacyNote?.noteID)
+        try SyncFileIO.replace(JSONEncoder().encode(retired), at: url)
     }
 
     private func durableProposal(legacyNote: NoteSnapshot?) throws -> Proposal {
+        if legacyNote == nil { return try durableProposalWithoutLegacy() }
+
         let proposal: Proposal
         do {
             proposal = try JSONDecoder().decode(Proposal.self, from: Data(contentsOf: proposalURL))
@@ -361,6 +440,10 @@ public final class NotebookSyncCoordinator {
         guard proposal.record.protocolVersion == 2, proposal.record.kind == .catalog else {
             throw SyncError.invalidRecord
         }
+        if let retired = proposal.retiredLegacyNoteID {
+            if let legacyNote, legacyNote.noteID != retired { throw SyncError.identityConflict }
+            return proposal
+        }
         if let legacy = proposal.legacyNote { _ = try NoteDocument(snapshot: legacy) }
         if let legacyNote {
             guard let prior = proposal.legacyNote, prior.noteID == legacyNote.noteID else {
@@ -374,6 +457,49 @@ public final class NotebookSyncCoordinator {
                 scope: proposal.scope, record: proposal.record, legacyNote: merged.snapshot())
             try SyncFileIO.replace(JSONEncoder().encode(updated), at: proposalURL)
             return updated
+        }
+        return proposal
+    }
+
+    private func durableProposalWithoutLegacy() throws -> Proposal {
+        var proposal: Proposal
+        do {
+            let stored = try JSONDecoder().decode(
+                ProposalWithoutLegacy.self,
+                from: Data(contentsOf: proposalURL)
+            )
+            guard stored.scope == transport.scope else { throw SyncError.scopeChanged }
+            try stored.record.validate()
+            guard stored.record.protocolVersion == 2, stored.record.kind == .catalog else {
+                throw SyncError.invalidRecord
+            }
+            proposal = Proposal(
+                scope: stored.scope,
+                record: stored.record,
+                legacyNote: nil,
+                retiredLegacyNoteID: stored.retiredLegacyNoteID
+            )
+            if stored.containsLegacyNote {
+                try SyncFileIO.replace(JSONEncoder().encode(proposal), at: proposalURL)
+            }
+        } catch CocoaError.fileReadNoSuchFile {
+            let snapshot: NotebookCatalogSnapshot
+            if let existing = replica.catalogSnapshot {
+                snapshot = existing
+            } else {
+                snapshot = try NotebookCatalogDocument().snapshot()
+            }
+            proposal = Proposal(
+                scope: transport.scope,
+                record: SyncRecord(catalog: snapshot),
+                legacyNote: nil
+            )
+            try SyncFileIO.replace(JSONEncoder().encode(proposal), at: proposalURL)
+        }
+        guard proposal.scope == transport.scope else { throw SyncError.scopeChanged }
+        try proposal.record.validate()
+        guard proposal.record.protocolVersion == 2, proposal.record.kind == .catalog else {
+            throw SyncError.invalidRecord
         }
         return proposal
     }

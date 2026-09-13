@@ -100,6 +100,253 @@ final class CloudKitTransportStateTests: XCTestCase {
         XCTAssertEqual(state.inbox, [record])
     }
 
+    func testCleanupTombstonesInboxAndOutboxWithoutMovingCursor() throws {
+        let notebookID = UUID()
+        let deletedID = UUID()
+        let retainedID = UUID()
+        var state = CloudKitTransportState(
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        let catalog = try makeCatalog(notebookID: notebookID)
+        let deleted = try makeNotebookRecord(
+            text: "deleted", noteID: deletedID, notebookID: notebookID
+        )
+        let retained = try makeNotebookRecord(
+            text: "retained", noteID: retainedID, notebookID: notebookID
+        )
+        try state.appendToInbox(catalog)
+        try state.appendToInbox(deleted)
+        let catalogCursor = try state.page(after: nil, limit: 1).cursor
+        try state.appendToInbox(retained)
+        state.outbox[deleted.id] = deleted
+
+        let pending = try state.purgeDeletedNotes(
+            [deletedID], notebookID: notebookID
+        )
+
+        let tombstonePage = try state.page(
+            after: catalogCursor, limit: 1
+        )
+        let retainedPage = try state.page(
+            after: tombstonePage.cursor, limit: 1
+        )
+        XCTAssertTrue(tombstonePage.records.isEmpty)
+        XCTAssertTrue(tombstonePage.hasMore)
+        XCTAssertEqual(retainedPage.records, [retained])
+        XCTAssertEqual(pending, [deleted.id])
+        XCTAssertTrue(state.outbox.isEmpty)
+        XCTAssertEqual(state.inbox, [catalog, retained])
+    }
+
+    func testCleanupStatePersistsAndLateBodyQueuesOneNewDeletion()
+        async throws
+    {
+        let directory = temporaryDirectory()
+        let notebookID = UUID()
+        let noteID = UUID()
+        let catalog = try makeCatalog(notebookID: notebookID)
+        let original = try makeNotebookRecord(
+            text: "original", noteID: noteID, notebookID: notebookID
+        )
+        let late = try makeNotebookRecord(
+            text: "late", noteID: noteID, notebookID: notebookID
+        )
+        let store = try CloudKitTransportStateStore(
+            directory: directory,
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        try await store.update {
+            try $0.appendToInbox(catalog)
+            try $0.appendToInbox(original)
+            _ = try $0.purgeDeletedNotes([noteID], notebookID: notebookID)
+            $0.pendingRemoteDeletionIDs.remove(original.id)
+            try $0.appendToInbox(original)
+            XCTAssertEqual($0.pendingRemoteDeletionIDs, [original.id])
+            $0.pendingRemoteDeletionIDs.remove(original.id)
+            try $0.appendToInbox(late)
+            try $0.appendToInbox(late)
+        }
+
+        let reopened = try CloudKitTransportStateStore(
+            directory: directory,
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        let state = await reopened.snapshot()
+        XCTAssertEqual(state.inbox, [catalog])
+        XCTAssertEqual(state.deletedNoteIDs, [noteID])
+        XCTAssertEqual(state.pendingRemoteDeletionIDs, [late.id])
+        XCTAssertEqual(state.purgedRecordIDs, [original.id, late.id])
+    }
+
+    func testKnownActiveNoteDeletionRemainsRetryableUntilResolved() throws {
+        let notebookID = UUID()
+        let noteID = UUID()
+        var state = CloudKitTransportState(
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        let catalog = try makeCatalog(notebookID: notebookID)
+        let note = try makeNotebookRecord(
+            text: "peer-purged", noteID: noteID,
+            notebookID: notebookID
+        )
+        try state.appendToInbox(catalog)
+        try state.appendToInbox(note)
+
+        state.observeRemoteDeletions(
+            [note.id, String(repeating: "f", count: 64)],
+            bootstrapRecordName: "canonical-notebook-v2"
+        )
+
+        XCTAssertFalse(state.hasUnexpectedDeletion)
+        XCTAssertEqual(
+            state.unresolvedRemoteDeletionRecordIDs, [note.id]
+        )
+        try state.resolveRemoteNoteDeletions()
+        XCTAssertThrowsError(try state.validateRemoteDeletions()) {
+            XCTAssertEqual(
+                $0 as? CloudKitSyncTransportError,
+                .unexpectedDeletion
+            )
+        }
+    }
+
+    func testPermanentMarkerResolvesPeerDeletionInEitherOrder() throws {
+        let notebookID = UUID()
+        let noteID = UUID()
+        let catalogs = try makeCatalogHistory(
+            notebookID: notebookID, deletedNoteID: noteID
+        )
+        let note = try makeNotebookRecord(
+            text: "peer-purged", noteID: noteID,
+            notebookID: notebookID
+        )
+        var deletionFirst = CloudKitTransportState(
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        try deletionFirst.appendToInbox(catalogs.active)
+        try deletionFirst.appendToInbox(note)
+        deletionFirst.observeRemoteDeletions(
+            [note.id], bootstrapRecordName: "canonical-notebook-v2"
+        )
+        try deletionFirst.appendToInbox(catalogs.marked)
+        try deletionFirst.resolveRemoteNoteDeletions()
+        XCTAssertNoThrow(try deletionFirst.validateRemoteDeletions())
+
+        var markerFirst = CloudKitTransportState(
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        try markerFirst.appendToInbox(catalogs.active)
+        try markerFirst.appendToInbox(note)
+        try markerFirst.appendToInbox(catalogs.marked)
+        markerFirst.observeRemoteDeletions(
+            [note.id], bootstrapRecordName: "canonical-notebook-v2"
+        )
+        try markerFirst.resolveRemoteNoteDeletions()
+        XCTAssertNoThrow(try markerFirst.validateRemoteDeletions())
+    }
+
+    func testExactReuploadResolvesKnownNoteDeletion() throws {
+        let notebookID = UUID()
+        let noteID = UUID()
+        var state = CloudKitTransportState(
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        let catalog = try makeCatalog(notebookID: notebookID)
+        let note = try makeNotebookRecord(
+            text: "recreated", noteID: noteID,
+            notebookID: notebookID
+        )
+        try state.appendToInbox(catalog)
+        try state.appendToInbox(note)
+        state.observeRemoteDeletions(
+            [note.id], bootstrapRecordName: "canonical-notebook-v2"
+        )
+
+        try state.appendToInbox(note)
+
+        XCTAssertNoThrow(try state.validateRemoteDeletions())
+    }
+
+    func testUnresolvedKnownNoteDeletionPersistsAcrossRestart()
+        async throws
+    {
+        let directory = temporaryDirectory()
+        let notebookID = UUID()
+        let noteID = UUID()
+        let catalog = try makeCatalog(notebookID: notebookID)
+        let note = try makeNotebookRecord(
+            text: "missing", noteID: noteID,
+            notebookID: notebookID
+        )
+        let store = try CloudKitTransportStateStore(
+            directory: directory,
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        try await store.update {
+            try $0.appendToInbox(catalog)
+            try $0.appendToInbox(note)
+            $0.observeRemoteDeletions(
+                [note.id],
+                bootstrapRecordName: "canonical-notebook-v2"
+            )
+        }
+
+        let reopened = try CloudKitTransportStateStore(
+            directory: directory,
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        let state = await reopened.snapshot()
+        XCTAssertEqual(
+            state.unresolvedRemoteDeletionRecordIDs, [note.id]
+        )
+        XCTAssertThrowsError(try state.validateRemoteDeletions())
+    }
+
+    func testCanonicalNotebookDeletionStillPoisonsTransport() throws {
+        var state = CloudKitTransportState(
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        state.observeRemoteDeletions(
+            ["canonical-notebook-v2"],
+            bootstrapRecordName: "canonical-notebook-v2"
+        )
+        XCTAssertTrue(state.hasUnexpectedDeletion)
+
+        let notebookID = UUID()
+        let catalog = try makeCatalog(notebookID: notebookID)
+        var catalogState = CloudKitTransportState(
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        try catalogState.appendToInbox(catalog)
+        catalogState.observeRemoteDeletions(
+            [catalog.id],
+            bootstrapRecordName: "canonical-notebook-v2"
+        )
+        XCTAssertTrue(catalogState.hasUnexpectedDeletion)
+    }
+
     func testRetryDeadlineAndPendingOutboxPersistTogether() async throws {
         let directory = temporaryDirectory()
         let record = try makeRecord(text: "pending")
@@ -312,6 +559,38 @@ final class CloudKitTransportStateTests: XCTestCase {
         XCTAssertEqual(Set(state.inbox.map(\.id)), Set(records.map(\.id)))
     }
 
+    func testLateSentAcknowledgementRequeuesPurgedSnapshot() async throws {
+        let directory = temporaryDirectory()
+        let notebookID = UUID()
+        let noteID = UUID()
+        let catalog = try makeCatalog(notebookID: notebookID)
+        let note = try makeNotebookRecord(
+            text: "late sent", noteID: noteID,
+            notebookID: notebookID
+        )
+        let store = try CloudKitTransportStateStore(
+            directory: directory,
+            accountRecordName: "account",
+            zoneName: "meh-md-notebook-v2",
+            protocolVersion: 2
+        )
+        try await store.update {
+            try $0.appendToInbox(catalog)
+            try $0.appendToInbox(note)
+            _ = try $0.purgeDeletedNotes([noteID], notebookID: notebookID)
+            $0.pendingRemoteDeletionIDs.removeAll()
+        }
+        let committer = CloudKitEventCommitter(store: store)
+
+        try await committer.commitSent([
+            CloudKitAcknowledgedRecord(id: note.id, record: note)
+        ])
+
+        let state = await store.snapshot()
+        XCTAssertEqual(state.inbox, [catalog])
+        XCTAssertEqual(state.pendingRemoteDeletionIDs, [note.id])
+    }
+
     func testAssetIsRemovedOnlyAfterCompletedUploadAndLastUser() throws {
         let directory = temporaryDirectory()
         try FileManager.default.createDirectory(
@@ -405,6 +684,36 @@ final class CloudKitTransportStateTests: XCTestCase {
         let document = try NoteDocument(noteID: UUID())
         try document.replaceAll(with: text)
         return SyncRecord(snapshot: document.snapshot())
+    }
+
+    private func makeCatalog(notebookID: UUID) throws -> SyncRecord {
+        SyncRecord(
+            catalog: try NotebookCatalogDocument(
+                notebookID: notebookID
+            ).snapshot()
+        )
+    }
+
+    private func makeCatalogHistory(
+        notebookID: UUID, deletedNoteID: UUID
+    ) throws -> (active: SyncRecord, marked: SyncRecord) {
+        let catalog = try NotebookCatalogDocument(notebookID: notebookID)
+        try catalog.add(
+            id: deletedNoteID, kind: .note, name: "Deleted.md"
+        )
+        let active = SyncRecord(catalog: catalog.snapshot())
+        try catalog.markPermanentlyDeleted([deletedNoteID])
+        return (active, SyncRecord(catalog: catalog.snapshot()))
+    }
+
+    private func makeNotebookRecord(
+        text: String, noteID: UUID, notebookID: UUID
+    ) throws -> SyncRecord {
+        let document = try NoteDocument(noteID: noteID)
+        try document.replaceAll(with: text)
+        return SyncRecord(
+            snapshot: document.snapshot(), notebookID: notebookID
+        )
     }
 
     private func temporaryDirectory() -> URL {

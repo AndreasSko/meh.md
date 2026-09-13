@@ -7,6 +7,46 @@ public enum NotebookReplicaError: Error, Equatable {
     case permanentlyDeleted(UUID)
 }
 
+public enum NotebookDeletionError: Error, Equatable, LocalizedError {
+    case invalidSelection
+    case notebookIdentityMismatch
+    case itemNoLongerInTrash(UUID)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidSelection:
+            "The permanent deletion selection is invalid."
+        case .notebookIdentityMismatch:
+            "The deletion selection belongs to another notebook."
+        case .itemNoLongerInTrash:
+            "An item in the selection is no longer in Trash. Review the selection again."
+        }
+    }
+}
+
+/// The exact identities shown to the user before permanent deletion. A later
+/// child is never added implicitly when this snapshot is executed.
+public struct NotebookDeletionSelection: Equatable, Sendable {
+    public let notebookID: UUID
+    public let ids: Set<UUID>
+    public let items: [NotebookItem]
+    public let rootID: UUID?
+
+    public var count: Int { ids.count }
+
+    fileprivate init(
+        notebookID: UUID,
+        ids: Set<UUID>,
+        items: [NotebookItem],
+        rootID: UUID?
+    ) {
+        self.notebookID = notebookID
+        self.ids = ids
+        self.items = items
+        self.rootID = rootID
+    }
+}
+
 /// Owns one local notebook. Only opened notes retain editor sessions; remote
 /// updates to unopened notes are merged directly through their file stores.
 @MainActor
@@ -16,9 +56,11 @@ public final class NotebookReplica {
     public private(set) var catalogSnapshot: NotebookCatalogSnapshot?
     public private(set) var placements: [NotebookPlacement] = []
     public private(set) var hasPendingImport: Bool
+    public private(set) var deletionCleanupErrorMessage: String?
     @ObservationIgnored private var catalog: NotebookCatalogDocument?
     @ObservationIgnored private let storage: NotebookCatalogStorage
     @ObservationIgnored private let importStorage: NotebookImportStorage
+    @ObservationIgnored private let deletionStorage: NotebookDeletionStorage
     @ObservationIgnored private var sessions: [UUID: NoteSession] = [:]
     @ObservationIgnored private var sessionLoads: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var rememberedDeletions: Set<UUID> = []
@@ -26,11 +68,13 @@ public final class NotebookReplica {
     @ObservationIgnored private var writingCatalog = false
     @ObservationIgnored private var writeWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored var importFaultInjector: ((NotebookImportStage) throws -> Void)?
+    @ObservationIgnored var deletionFaultInjector: ((NotebookDeletionStage) throws -> Void)?
 
     public init(directory: URL) {
         self.directory = directory
         storage = NotebookCatalogStorage(directory: directory)
         importStorage = NotebookImportStorage(directory: directory)
+        deletionStorage = NotebookDeletionStorage(directory: directory)
         hasPendingImport = importStorage.hasPendingImport
     }
 
@@ -45,13 +89,34 @@ public final class NotebookReplica {
             for waiter in waiters { waiter.resume() }
         }
         switch await storage.load() {
-        case .firstLaunch: break
-        case .current(let snapshot): try install(snapshot)
+        case .firstLaunch:
+            guard !deletionStorage.hasLedger else {
+                throw NotebookReplicaError.catalogUnavailable
+            }
+        case .current(let snapshot):
+            let document = try NotebookCatalogDocument(snapshot: snapshot)
+            rememberedDeletions = try deletionStorage.load(
+                notebookID: document.notebookID
+            )
+            try install(snapshot)
+            let observed = Set(try document.items()
+                .filter(\.isPermanentlyDeleted).map(\.id))
+            rememberedDeletions = try deletionStorage.record(
+                observed,
+                notebookID: document.notebookID
+            )
+            let represented = Set(try document.items().map(\.id))
+            if !rememberedDeletions.intersection(represented)
+                .subtracting(observed).isEmpty
+            {
+                try await persistCatalog(document.fork())
+            }
         case .recoveryRequired: throw NotebookReplicaError.catalogNeedsRecovery
         case .blocked: throw NotebookReplicaError.catalogUnavailable
         }
         hasPendingImport = importStorage.hasPendingImport
         loaded = true
+        tryBestEffortDeletionCleanup()
     }
 
     public var deletedIDs: Set<UUID> {
@@ -184,8 +249,116 @@ public final class NotebookReplica {
         try await saveCatalog(next)
     }
 
-    /// Record confirmed permanent intent. Physical cleanup and user controls
-    /// remain separate; this layer prevents subsequent edits/resurrection.
+    /// Capture all items currently shown in Trash, or one Trash subtree. The
+    /// returned IDs are the complete destructive scope presented for review.
+    public func deletionSelection(
+        rootID: UUID? = nil
+    ) throws -> NotebookDeletionSelection {
+        guard let catalog else { throw NotebookReplicaError.notJoined }
+        let trash = placements.filter(\.isInTrash)
+        let byID = Dictionary(uniqueKeysWithValues: trash.map { ($0.item.id, $0) })
+        let selectedIDs: Set<UUID>
+        if let rootID {
+            guard byID[rootID] != nil else {
+                throw NotebookDeletionError.itemNoLongerInTrash(rootID)
+            }
+            var descendants: Set<UUID> = [rootID]
+            var changed = true
+            while changed {
+                let before = descendants.count
+                for placement in trash where placement.parentID.map(descendants.contains) == true {
+                    descendants.insert(placement.item.id)
+                }
+                changed = descendants.count != before
+            }
+            selectedIDs = descendants
+        } else {
+            selectedIDs = Set(trash.map(\.item.id))
+        }
+        let items = trash
+            .filter { selectedIDs.contains($0.item.id) }
+            .sorted { left, right in
+                if left.displayName != right.displayName {
+                    return left.displayName.localizedStandardCompare(right.displayName)
+                        == .orderedAscending
+                }
+                return left.item.id.uuidString < right.item.id.uuidString
+            }
+            .map(\.item)
+        return NotebookDeletionSelection(
+            notebookID: catalog.notebookID,
+            ids: selectedIDs,
+            items: items,
+            rootID: rootID
+        )
+    }
+
+    /// Persist the exact confirmed identities before removing any local body.
+    /// Cleanup failures remain retryable and do not undo durable markers.
+    public func permanentlyDelete(
+        _ selection: NotebookDeletionSelection
+    ) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                throw NotebookReplicaError.notJoined
+            }
+            guard selection.notebookID == catalog.notebookID else {
+                throw NotebookDeletionError.notebookIdentityMismatch
+            }
+            guard selection.ids == Set(selection.items.map(\.id)) else {
+                throw NotebookDeletionError.invalidSelection
+            }
+
+            let items = Dictionary(uniqueKeysWithValues: try catalog.items().map {
+                ($0.id, $0)
+            })
+            let trashIDs = Set(self.placements.filter(\.isInTrash).map(\.item.id))
+            for id in selection.ids {
+                guard let item = items[id] else {
+                    throw NotebookDeletionError.invalidSelection
+                }
+                guard item.isPermanentlyDeleted || trashIDs.contains(id) else {
+                    throw NotebookDeletionError.itemNoLongerInTrash(id)
+                }
+            }
+
+            self.rememberedDeletions = try self.deletionStorage.record(
+                selection.ids,
+                notebookID: catalog.notebookID
+            )
+            self.applyRememberedDeletions()
+            try self.deletionFaultInjector?(.ledgerSaved)
+
+            let next = try catalog.fork()
+            try next.markPermanentlyDeleted(selection.ids)
+            try await self.persistCatalog(next)
+            try self.deletionFaultInjector?(.catalogSaved)
+            await self.drainDeletedSessions(selection.ids)
+            self.tryBestEffortDeletionCleanup()
+        }
+    }
+
+    /// Retry cleanup after a permissions or filesystem failure. The durable
+    /// deletion ledger remains authoritative whether this succeeds or throws.
+    public func cleanupDeletedContent() async throws {
+        try await withCatalogWrite {
+            do {
+                guard !self.rememberedDeletions.isEmpty else {
+                    self.deletionCleanupErrorMessage = nil
+                    return
+                }
+                try await self.reconcileDeletionLedgerIntoCatalog()
+                await self.drainDeletedSessions(self.rememberedDeletions)
+                try self.performDeletionCleanup()
+                self.deletionCleanupErrorMessage = nil
+            } catch {
+                self.deletionCleanupErrorMessage = Self.message(for: error)
+                throw error
+            }
+        }
+    }
+
+    /// Record permanent intent received through synchronization.
     func markPermanentlyDeleted(_ ids: Set<UUID>) async throws {
         guard let catalog else { throw NotebookReplicaError.notJoined }
         let next = try catalog.fork()
@@ -250,8 +423,13 @@ public final class NotebookReplica {
         case .firstLaunch, .blocked:
             throw NotebookReplicaError.catalogUnavailable
         }
+        let recovered = try NotebookCatalogDocument(snapshot: snapshot)
+        rememberedDeletions.formUnion(try deletionStorage.load(
+            notebookID: recovered.notebookID
+        ))
         try await persistCatalog(NotebookCatalogDocument(snapshot: snapshot))
         loaded = true
+        tryBestEffortDeletionCleanup()
     }
 
     public func persistedNoteSnapshots() async throws -> [NoteSnapshot] {
@@ -270,6 +448,9 @@ public final class NotebookReplica {
         } else {
             try await saveCatalog(NotebookCatalogDocument(snapshot: snapshot))
         }
+        let deleted = try deletedIDs
+        await drainDeletedSessions(deleted)
+        tryBestEffortDeletionCleanup()
     }
 
     func apply(_ record: SyncRecord) async throws {
@@ -324,6 +505,9 @@ public final class NotebookReplica {
 
     func records(includeUnlisted: Bool = false) async throws -> [SyncRecord] {
         await waitForWrites()
+        try await withCatalogWrite {
+            try await self.reconcileDeletionLedgerIntoCatalog()
+        }
         guard let catalog else { throw NotebookReplicaError.notJoined }
         for (id, session) in sessions where !(try deletedIDs.contains(id)) {
             if let load = sessionLoads[id] { await load.value }
@@ -372,15 +556,20 @@ public final class NotebookReplica {
     }
 
     func rememberDeletions(_ ids: Set<UUID>) async throws {
-        rememberedDeletions.formUnion(ids)
-        for id in ids { sessions[id]?.markPermanentlyDeleted() }
-        placements.removeAll { ids.contains($0.item.id) }
-        if let catalog {
-            let represented = Set(try catalog.items().map(\.id))
-            let deleted = Set(try catalog.items().filter(\.isPermanentlyDeleted).map(\.id))
-            if !ids.intersection(represented).subtracting(deleted).isEmpty {
-                try await saveCatalog(catalog.fork())
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                self.rememberedDeletions.formUnion(ids)
+                self.applyRememberedDeletions()
+                return
             }
+            self.rememberedDeletions = try self.deletionStorage.record(
+                ids,
+                notebookID: catalog.notebookID
+            )
+            self.applyRememberedDeletions()
+            try await self.reconcileDeletionLedgerIntoCatalog()
+            await self.drainDeletedSessions(self.rememberedDeletions)
+            self.tryBestEffortDeletionCleanup()
         }
     }
 
@@ -616,6 +805,12 @@ public final class NotebookReplica {
         let alreadyDeleted = Set(try next.items().filter(\.isPermanentlyDeleted).map(\.id))
         let missing = rememberedDeletions.intersection(represented).subtracting(alreadyDeleted)
         if !missing.isEmpty { try next.markPermanentlyDeleted(missing) }
+        let durableIDs = Set(try next.items()
+            .filter(\.isPermanentlyDeleted).map(\.id))
+        rememberedDeletions = try deletionStorage.record(
+            rememberedDeletions.union(durableIDs),
+            notebookID: next.notebookID
+        )
         try await storage.save(next.snapshot())
         try install(next.snapshot())
     }
@@ -629,6 +824,73 @@ public final class NotebookReplica {
         catalogSnapshot = snapshot
         placements = nextPlacements
         for id in try deletedIDs { sessions[id]?.markPermanentlyDeleted() }
+    }
+
+    private func applyRememberedDeletions() {
+        for id in rememberedDeletions { sessions[id]?.markPermanentlyDeleted() }
+        placements.removeAll { rememberedDeletions.contains($0.item.id) }
+    }
+
+    private func drainDeletedSessions(_ ids: Set<UUID>) async {
+        for id in ids.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let session = sessions[id] else { continue }
+            session.markPermanentlyDeleted()
+            if let load = sessionLoads[id] { await load.value }
+            session.markPermanentlyDeleted()
+            await session.waitForPendingSave()
+            session.discardPermanentlyDeletedContent()
+        }
+    }
+
+    private func tryBestEffortDeletionCleanup() {
+        do {
+            try performDeletionCleanup()
+            deletionCleanupErrorMessage = nil
+        } catch {
+            deletionCleanupErrorMessage = Self.message(for: error)
+        }
+    }
+
+    private func performDeletionCleanup() throws {
+        guard !rememberedDeletions.isEmpty,
+            let notebookID = catalog?.notebookID
+        else { return }
+        try deletionStorage.cleanupNoteDirectories(
+            rememberedDeletions,
+            afterStage: { try deletionFaultInjector?($0) }
+        )
+        for id in rememberedDeletions {
+            sessions[id] = nil
+            sessionLoads[id] = nil
+        }
+        try importStorage.scrub(
+            deletedIDs: rememberedDeletions,
+            notebookID: notebookID
+        )
+        hasPendingImport = importStorage.hasPendingImport
+        try NotebookSyncCoordinator.removeDeletedLegacyProposal(
+            in: directory,
+            notebookID: notebookID,
+            deletedIDs: rememberedDeletions
+        )
+        try deletionFaultInjector?(.importJournalsScrubbed)
+    }
+
+    private func reconcileDeletionLedgerIntoCatalog() async throws {
+        guard let catalog else { throw NotebookReplicaError.notJoined }
+        let represented = Set(try catalog.items().map(\.id))
+        let deleted = Set(try catalog.items()
+            .filter(\.isPermanentlyDeleted).map(\.id))
+        let missing = rememberedDeletions.intersection(represented)
+            .subtracting(deleted)
+        if !missing.isEmpty { try await persistCatalog(catalog.fork()) }
+    }
+
+    private static func message(for error: Error) -> String {
+        let message = error.localizedDescription.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        return message.isEmpty ? String(describing: error) : message
     }
 }
 

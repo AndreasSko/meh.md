@@ -142,4 +142,132 @@ struct NotebookImportStorage {
         try afterMove(destination)
         return destination
     }
+
+    /// Remove confirmed identities and embedded note bodies from both the
+    /// active journal and retained recovery journals. Children absent from the
+    /// confirmed set are detached instead of being deleted implicitly.
+    func scrub(deletedIDs: Set<UUID>, notebookID: UUID) throws {
+        guard !deletedIDs.isEmpty else { return }
+        if hasPendingImport {
+            try scrub(
+                journalURL,
+                deletedIDs: deletedIDs,
+                notebookID: notebookID
+            )
+        }
+        try scrubInterruptedFiles(
+            in: directory,
+            deletedIDs: deletedIDs,
+            notebookID: notebookID
+        )
+        let recoveryDirectory = directory.appending(path: "import-recovery")
+        let recoveryURLs = try contentsIfPresent(of: recoveryDirectory)
+        for url in recoveryURLs where url.pathExtension == "json" {
+            try scrub(url, deletedIDs: deletedIDs, notebookID: notebookID)
+        }
+        try scrubInterruptedFiles(
+            in: recoveryDirectory,
+            deletedIDs: deletedIDs,
+            notebookID: notebookID
+        )
+    }
+
+    private func scrubInterruptedFiles(
+        in directory: URL,
+        deletedIDs: Set<UUID>,
+        notebookID: UUID
+    ) throws {
+        for url in try contentsIfPresent(of: directory)
+        where isOwnedInterruptedFile(url.lastPathComponent) {
+            try scrub(url, deletedIDs: deletedIDs, notebookID: notebookID)
+        }
+    }
+
+    private func contentsIfPresent(of directory: URL) throws -> [URL] {
+        do {
+            return try FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: []
+            )
+        } catch CocoaError.fileReadNoSuchFile {
+            return []
+        }
+    }
+
+    private func isOwnedInterruptedFile(_ name: String) -> Bool {
+        (name.hasPrefix(".pending-import-")
+            || name.hasPrefix(".scrubbed-import-"))
+            && name.hasSuffix(".tmp")
+    }
+
+    private func scrub(
+        _ url: URL,
+        deletedIDs: Set<UUID>,
+        notebookID: UUID
+    ) throws {
+        let journal: NotebookImportJournal
+        do {
+            journal = try JSONDecoder().decode(
+                NotebookImportJournal.self,
+                from: Data(contentsOf: url)
+            )
+            guard journal.schemaVersion == 1 else {
+                throw NotebookDeletionStorageError.invalidImportJournal(url)
+            }
+            guard journal.notebookID == notebookID else {
+                throw NotebookDeletionStorageError.invalidImportJournal(url)
+            }
+        } catch is NotebookDeletionStorageError {
+            throw NotebookDeletionStorageError.invalidImportJournal(url)
+        } catch {
+            throw NotebookDeletionStorageError.invalidImportJournal(url)
+        }
+
+        guard journal.plan.entries.contains(where: {
+            deletedIDs.contains($0.id)
+                || $0.parentID.map(deletedIDs.contains) == true
+        }) || journal.snapshots.contains(where: { deletedIDs.contains($0.noteID) }) else {
+            return
+        }
+        let retainedEntries: [NotebookImportEntry] = journal.plan.entries.compactMap { entry in
+            guard !deletedIDs.contains(entry.id) else { return nil }
+            return NotebookImportEntry(
+                id: entry.id,
+                kind: entry.kind,
+                name: entry.name,
+                parentID: entry.parentID.flatMap {
+                    deletedIDs.contains($0) ? nil : $0
+                },
+                text: entry.text
+            )
+        }
+        let retainedSnapshots = journal.snapshots.filter {
+            !deletedIDs.contains($0.noteID)
+        }
+        if retainedEntries.isEmpty {
+            try FileManager.default.removeItem(at: url)
+            try DurableFileIO.syncDirectory(url.deletingLastPathComponent())
+            return
+        }
+
+        let replacement = NotebookImportJournal(
+            notebookID: journal.notebookID,
+            plan: NotebookImportPlan(
+                id: journal.plan.id,
+                entries: retainedEntries,
+                skippedPaths: journal.plan.skippedPaths
+            ),
+            snapshots: retainedSnapshots
+        )
+        let temporary = url.deletingLastPathComponent().appending(
+            path: ".scrubbed-import-\(UUID().uuidString).tmp"
+        )
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try DurableFileIO.writeAndSync(try encoder.encode(replacement), to: temporary)
+        try DurableFileIO.renameReplacing(temporary, with: url)
+        try DurableFileIO.syncDirectory(url.deletingLastPathComponent())
+    }
 }

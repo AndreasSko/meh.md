@@ -5,8 +5,10 @@ import Foundation
 public actor InMemorySyncStore {
     private struct Workspace {
         var seedID: String?
-        var records: [SyncRecord] = []
+        var records: [SyncRecord?] = []
         var recordsByID: [String: SyncRecord] = [:]
+        var notebookID: UUID?
+        var deletedNoteIDs = Set<UUID>()
     }
 
     private var workspaces: [String: Workspace] = [:]
@@ -40,6 +42,7 @@ public actor InMemorySyncStore {
         } else {
             try append(record, to: &workspace)
             workspace.seedID = record.id
+            workspace.notebookID = record.notebookID
             canonical = record
         }
         workspaces[scope] = workspace
@@ -52,6 +55,19 @@ public actor InMemorySyncStore {
         try validate(record)
 
         var workspace = workspaces[scope, default: Workspace()]
+        if record.protocolVersion == 2 {
+            if let notebookID = workspace.notebookID,
+               notebookID != record.notebookID {
+                throw SyncError.invalidRecord
+            }
+            workspace.notebookID = record.notebookID
+        }
+        if record.protocolVersion == 2, record.kind == .note,
+           workspace.deletedNoteIDs.contains(record.snapshot.noteID) {
+            workspaces[scope] = workspace
+            try acknowledgeMutation()
+            return
+        }
         try append(record, to: &workspace)
         workspaces[scope] = workspace
         try acknowledgeMutation()
@@ -71,7 +87,7 @@ public actor InMemorySyncStore {
 
         let end = min(offset + pageSize, workspace.records.count)
         return SyncPage(
-            records: Array(workspace.records[offset..<end]),
+            records: workspace.records[offset..<end].compactMap { $0 },
             cursor: encodeCursor(scope: scope, offset: end),
             hasMore: end < workspace.records.count
         )
@@ -89,6 +105,27 @@ public actor InMemorySyncStore {
         }
         workspace.records.append(record)
         workspace.recordsByID[record.id] = record
+    }
+
+    fileprivate func purgeDeletedNotes(
+        scope: String, noteIDs: Set<UUID>, notebookID: UUID
+    ) throws {
+        try requireDelivery()
+        var workspace = workspaces[scope, default: Workspace()]
+        guard workspace.notebookID == notebookID else {
+            throw SyncError.invalidRecord
+        }
+        workspace.deletedNoteIDs.formUnion(noteIDs)
+        for index in workspace.records.indices {
+            guard let record = workspace.records[index],
+                  record.kind == .note,
+                  workspace.deletedNoteIDs.contains(record.snapshot.noteID)
+            else { continue }
+            workspace.records[index] = nil
+            workspace.recordsByID[record.id] = nil
+        }
+        workspaces[scope] = workspace
+        try acknowledgeMutation()
     }
 
     private func requireDelivery() throws {
@@ -167,6 +204,14 @@ public struct InMemorySyncTransport: SyncTransport, Sendable {
             scope: scope,
             after: cursor,
             pageSize: pageSize
+        )
+    }
+
+    public func purgeDeletedNotes(
+        _ noteIDs: Set<UUID>, notebookID: UUID
+    ) async throws {
+        try await store.purgeDeletedNotes(
+            scope: scope, noteIDs: noteIDs, notebookID: notebookID
         )
     }
 }

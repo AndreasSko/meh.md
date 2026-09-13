@@ -30,8 +30,13 @@ struct CloudKitTransportState: Codable, Equatable {
     var protocolVersion: Int
     var inboxGeneration: UUID
     var engineState: Data?
-    var inbox: [SyncRecord]
+    private var inboxSlots: [SyncRecord?]
     var outbox: [String: SyncRecord]
+    var deletedNoteIDs: Set<UUID>
+    var purgedRecordIDs: Set<String>
+    var pendingRemoteDeletionIDs: Set<String>
+    var scannedDeletedNoteIDs: Set<UUID>
+    var unresolvedRemoteDeletionRecordIDs: Set<String>
     var hasUnexpectedDeletion: Bool
     var retryNotBefore: Date?
 
@@ -45,15 +50,23 @@ struct CloudKitTransportState: Codable, Equatable {
         self.protocolVersion = protocolVersion
         inboxGeneration = UUID()
         engineState = nil
-        inbox = []
+        inboxSlots = []
         outbox = [:]
+        deletedNoteIDs = []
+        purgedRecordIDs = []
+        pendingRemoteDeletionIDs = []
+        scannedDeletedNoteIDs = []
+        unresolvedRemoteDeletionRecordIDs = []
         hasUnexpectedDeletion = false
         retryNotBefore = nil
     }
 
     private enum CodingKeys: String, CodingKey {
         case accountRecordName, zoneName, protocolVersion, inboxGeneration
-        case engineState, inbox, outbox, hasUnexpectedDeletion, retryNotBefore
+        case engineState, inbox, outbox, deletedNoteIDs, purgedRecordIDs
+        case pendingRemoteDeletionIDs, scannedDeletedNoteIDs
+        case unresolvedRemoteDeletionRecordIDs
+        case hasUnexpectedDeletion, retryNotBefore
     }
 
     init(from decoder: any Decoder) throws {
@@ -65,8 +78,24 @@ struct CloudKitTransportState: Codable, Equatable {
         ) ?? 1
         inboxGeneration = try values.decode(UUID.self, forKey: .inboxGeneration)
         engineState = try values.decodeIfPresent(Data.self, forKey: .engineState)
-        inbox = try values.decode([SyncRecord].self, forKey: .inbox)
+        inboxSlots = try values.decode([SyncRecord?].self, forKey: .inbox)
         outbox = try values.decode([String: SyncRecord].self, forKey: .outbox)
+        deletedNoteIDs = try values.decodeIfPresent(
+            Set<UUID>.self, forKey: .deletedNoteIDs
+        ) ?? []
+        purgedRecordIDs = try values.decodeIfPresent(
+            Set<String>.self, forKey: .purgedRecordIDs
+        ) ?? []
+        pendingRemoteDeletionIDs = try values.decodeIfPresent(
+            Set<String>.self, forKey: .pendingRemoteDeletionIDs
+        ) ?? purgedRecordIDs
+        scannedDeletedNoteIDs = try values.decodeIfPresent(
+            Set<UUID>.self, forKey: .scannedDeletedNoteIDs
+        ) ?? []
+        unresolvedRemoteDeletionRecordIDs = try values.decodeIfPresent(
+            Set<String>.self,
+            forKey: .unresolvedRemoteDeletionRecordIDs
+        ) ?? []
         hasUnexpectedDeletion = try values.decode(
             Bool.self, forKey: .hasUnexpectedDeletion
         )
@@ -75,13 +104,151 @@ struct CloudKitTransportState: Codable, Equatable {
         )
     }
 
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(accountRecordName, forKey: .accountRecordName)
+        try values.encode(zoneName, forKey: .zoneName)
+        try values.encode(protocolVersion, forKey: .protocolVersion)
+        try values.encode(inboxGeneration, forKey: .inboxGeneration)
+        try values.encodeIfPresent(engineState, forKey: .engineState)
+        try values.encode(inboxSlots, forKey: .inbox)
+        try values.encode(outbox, forKey: .outbox)
+        try values.encode(deletedNoteIDs, forKey: .deletedNoteIDs)
+        try values.encode(purgedRecordIDs, forKey: .purgedRecordIDs)
+        try values.encode(
+            pendingRemoteDeletionIDs,
+            forKey: .pendingRemoteDeletionIDs
+        )
+        try values.encode(
+            scannedDeletedNoteIDs, forKey: .scannedDeletedNoteIDs
+        )
+        try values.encode(
+            unresolvedRemoteDeletionRecordIDs,
+            forKey: .unresolvedRemoteDeletionRecordIDs
+        )
+        try values.encode(hasUnexpectedDeletion, forKey: .hasUnexpectedDeletion)
+        try values.encodeIfPresent(retryNotBefore, forKey: .retryNotBefore)
+    }
+
+    var inbox: [SyncRecord] { inboxSlots.compactMap { $0 } }
+
     mutating func appendToInbox(_ record: SyncRecord) throws {
         try record.validate()
         guard record.protocolVersion == protocolVersion else {
             throw SyncError.invalidRecord
         }
-        guard !inbox.contains(where: { $0.id == record.id }) else { return }
-        inbox.append(record)
+        unresolvedRemoteDeletionRecordIDs.remove(record.id)
+        if purgedRecordIDs.contains(record.id) {
+            if record.protocolVersion == 2, record.kind == .note,
+               deletedNoteIDs.contains(record.snapshot.noteID) {
+                pendingRemoteDeletionIDs.insert(record.id)
+            }
+            return
+        }
+        guard !inboxSlots.contains(where: { $0?.id == record.id }) else {
+            return
+        }
+        if record.protocolVersion == 2, record.kind == .note,
+           deletedNoteIDs.contains(record.snapshot.noteID) {
+            inboxSlots.append(nil)
+            purgedRecordIDs.insert(record.id)
+            pendingRemoteDeletionIDs.insert(record.id)
+        } else {
+            inboxSlots.append(record)
+        }
+    }
+
+    mutating func purgeDeletedNotes(
+        _ noteIDs: Set<UUID>, notebookID: UUID
+    ) throws -> Set<String> {
+        guard protocolVersion == 2 else {
+            throw SyncError.unavailable(
+                "Permanent body cleanup requires notebook sync."
+            )
+        }
+        guard inbox.contains(where: {
+            $0.kind == .catalog && $0.notebookID == notebookID
+        }) else { throw SyncError.invalidRecord }
+        for record in inbox where record.notebookID != notebookID {
+            throw SyncError.invalidRecord
+        }
+        for record in outbox.values where record.notebookID != notebookID {
+            throw SyncError.invalidRecord
+        }
+        deletedNoteIDs.formUnion(noteIDs)
+        for index in inboxSlots.indices {
+            guard let record = inboxSlots[index], record.kind == .note,
+                  deletedNoteIDs.contains(record.snapshot.noteID) else {
+                continue
+            }
+            purgedRecordIDs.insert(record.id)
+            pendingRemoteDeletionIDs.insert(record.id)
+            inboxSlots[index] = nil
+        }
+        let outboxIDsToRemove = outbox.values.compactMap { record in
+            record.kind == .note
+                && deletedNoteIDs.contains(record.snapshot.noteID)
+                ? record.id : nil
+        }
+        for id in outboxIDsToRemove {
+            purgedRecordIDs.insert(id)
+            pendingRemoteDeletionIDs.insert(id)
+            outbox[id] = nil
+        }
+        return pendingRemoteDeletionIDs
+    }
+
+    mutating func observeRemoteDeletions(
+        _ recordNames: Set<String>, bootstrapRecordName: String
+    ) {
+        pendingRemoteDeletionIDs.subtract(recordNames)
+        if protocolVersion == 1 {
+            hasUnexpectedDeletion = hasUnexpectedDeletion
+                || !recordNames.isEmpty
+            return
+        }
+        let catalogRecordIDs = Set(inbox.lazy.filter {
+            $0.kind == .catalog
+        }.map(\.id))
+        let knownNoteRecordIDs = Set(inbox.lazy.filter {
+            $0.kind == .note
+        }.map(\.id))
+        let unexpectedNoteRecordIDs = recordNames
+            .intersection(knownNoteRecordIDs)
+            .subtracting(purgedRecordIDs)
+        unresolvedRemoteDeletionRecordIDs.formUnion(
+            unexpectedNoteRecordIDs
+        )
+        hasUnexpectedDeletion = hasUnexpectedDeletion
+            || recordNames.contains(bootstrapRecordName)
+            || !catalogRecordIDs.isDisjoint(with: recordNames)
+    }
+
+    mutating func resolveRemoteNoteDeletions() throws {
+        unresolvedRemoteDeletionRecordIDs.subtract(purgedRecordIDs)
+        guard !unresolvedRemoteDeletionRecordIDs.isEmpty else { return }
+        let permanentlyDeletedIDs = try inbox.reduce(
+            into: Set<UUID>()
+        ) { result, record in
+            guard record.kind == .catalog,
+                  let snapshot = record.catalogSnapshot else { return }
+            let catalog = try NotebookCatalogDocument(snapshot: snapshot)
+            result.formUnion(try catalog.items().lazy.filter {
+                $0.isPermanentlyDeleted
+            }.map(\.id))
+        }
+        let resolvedRecordIDs = Set(inbox.lazy.filter { record in
+            record.kind == .note
+                && permanentlyDeletedIDs.contains(record.snapshot.noteID)
+        }.map(\.id))
+        unresolvedRemoteDeletionRecordIDs.subtract(resolvedRecordIDs)
+    }
+
+    func validateRemoteDeletions() throws {
+        guard !hasUnexpectedDeletion,
+              unresolvedRemoteDeletionRecordIDs.isEmpty else {
+            throw CloudKitSyncTransportError.unexpectedDeletion
+        }
     }
 
     func validate(expectedProtocolVersion: Int) throws {
@@ -101,6 +268,23 @@ struct CloudKitTransportState: Codable, Equatable {
                 throw SyncError.invalidRecord
             }
         }
+        guard purgedRecordIDs.allSatisfy({ id in
+            id.count == 64 && id.utf8.allSatisfy {
+                ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+            }
+        }) else { throw SyncError.invalidRecord }
+        guard pendingRemoteDeletionIDs.isSubset(of: purgedRecordIDs),
+              scannedDeletedNoteIDs.isSubset(of: deletedNoteIDs) else {
+            throw SyncError.invalidRecord
+        }
+        try unresolvedRemoteDeletionRecordIDs.forEach {
+            try CloudKitRemoteRecordValidator.validateSnapshotID($0)
+        }
+        guard !inbox.contains(where: {
+            $0.kind == .note && deletedNoteIDs.contains($0.snapshot.noteID)
+        }), !outbox.values.contains(where: {
+            $0.kind == .note && deletedNoteIDs.contains($0.snapshot.noteID)
+        }) else { throw SyncError.invalidRecord }
     }
 
     func page(after cursor: String?, limit: Int) throws -> SyncPage {
@@ -109,24 +293,24 @@ struct CloudKitTransportState: Codable, Equatable {
             let prefix = "v2:\(inboxGeneration.uuidString):"
             guard cursor.hasPrefix(prefix),
                   let parsed = Int(cursor.dropFirst(prefix.count)),
-                  parsed >= 0, parsed <= inbox.count else {
+                  parsed >= 0, parsed <= inboxSlots.count else {
                 throw SyncError.invalidCursor
             }
             offset = parsed
         } else {
             offset = 0
         }
-        let end = min(offset + max(1, limit), inbox.count)
+        let end = min(offset + max(1, limit), inboxSlots.count)
         return SyncPage(
-            records: Array(inbox[offset..<end]),
+            records: inboxSlots[offset..<end].compactMap { $0 },
             cursor: "v2:\(inboxGeneration.uuidString):\(end)",
-            hasMore: end < inbox.count
+            hasMore: end < inboxSlots.count
         )
     }
 
     func bufferedPage(after cursor: String?, limit: Int) throws -> SyncPage? {
         let page = try page(after: cursor, limit: limit)
-        guard !page.records.isEmpty else { return nil }
+        guard !page.records.isEmpty || page.hasMore else { return nil }
         return SyncPage(
             records: page.records,
             cursor: page.cursor,
@@ -230,11 +414,10 @@ actor CloudKitEventCommitter {
         do {
             try await store.update { state in
                 for record in records {
-                    if let value = state.outbox.removeValue(
+                    let value = state.outbox.removeValue(
                         forKey: record.id
-                    ) {
-                        try state.appendToInbox(value)
-                    }
+                    ) ?? record.record
+                    try state.appendToInbox(value)
                 }
             }
         } catch {
@@ -456,6 +639,22 @@ struct CloudKitAssetStaging {
         users[url] = nil
         guard completedUploads.remove(url) != nil else { return }
         try? FileManager.default.removeItem(at: url)
+    }
+
+    mutating func purge(recordIDs: Set<String>) throws {
+        for id in recordIDs {
+            let url = directory.appendingPathComponent(id)
+            guard users[url] == nil else {
+                throw SyncError.unavailable(
+                    "A snapshot is still being staged for upload."
+                )
+            }
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                continue
+            }
+            try FileManager.default.removeItem(at: url)
+            completedUploads.remove(url)
+        }
     }
 }
 
@@ -834,6 +1033,18 @@ public final actor CloudKitSyncTransport: SyncTransport {
         try await assertHealthy()
         for record in records { try mode.validate(record) }
         try await verifyAccount()
+        let deletedNoteIDs = await store.snapshot().deletedNoteIDs
+        let suppressedIDs = Set(records.compactMap { record in
+            record.kind == .note
+                && deletedNoteIDs.contains(record.snapshot.noteID)
+                ? record.id : nil
+        })
+        let records = records.filter { !suppressedIDs.contains($0.id) }
+        guard !records.isEmpty else {
+            return SyncBatchResult(
+                acknowledgedIDs: suppressedIDs, error: nil
+            )
+        }
         try await store.update { state in
             for record in records { state.outbox[record.id] = record }
         }
@@ -883,17 +1094,23 @@ public final actor CloudKitSyncTransport: SyncTransport {
         completedIDs = result.acknowledgedIDs
         acknowledgedIDs.subtract(ids)
         for id in ids { failedUploads[id] = nil }
-        return result
+        return SyncBatchResult(
+            acknowledgedIDs: result.acknowledgedIDs.union(suppressedIDs),
+            error: result.error
+        )
     }
 
     public func fetch(after cursor: String?) async throws -> SyncPage {
         try await assertHealthy()
         try await verifyAccount()
-        if let buffered = try await store.snapshot().bufferedPage(
-            after: cursor,
-            limit: Self.pageSize
-        ) {
-            return buffered
+        let current = await store.snapshot()
+        if current.unresolvedRemoteDeletionRecordIDs.isEmpty {
+            if let buffered = try current.bufferedPage(
+                after: cursor,
+                limit: Self.pageSize
+            ) {
+                return buffered
+            }
         }
         try await cloudRequest {
             try await engine.fetchChanges(.init(scope: .zoneIDs([zoneID])))
@@ -901,11 +1118,126 @@ public final actor CloudKitSyncTransport: SyncTransport {
         if let delegateFailure {
             throw delegateFailure
         }
-        let state = await store.snapshot()
-        guard !state.hasUnexpectedDeletion else {
-            throw CloudKitSyncTransportError.unexpectedDeletion
+        let fetched = await store.snapshot()
+        if !fetched.unresolvedRemoteDeletionRecordIDs.isEmpty {
+            try await store.update {
+                try $0.resolveRemoteNoteDeletions()
+            }
         }
+        let state = await store.snapshot()
+        try state.validateRemoteDeletions()
         return try state.page(after: cursor, limit: Self.pageSize)
+    }
+
+    public func purgeDeletedNotes(
+        _ noteIDs: Set<UUID>, notebookID: UUID
+    ) async throws {
+        guard mode == .notebook else {
+            throw SyncError.unavailable(
+                "Permanent body cleanup requires notebook sync."
+            )
+        }
+        await acquirePublishLease()
+        defer { releasePublishLease() }
+        try await assertHealthy()
+        var state = await store.snapshot()
+        guard state.inbox.contains(where: {
+            $0.kind == .catalog && $0.notebookID == notebookID
+        }) else { throw SyncError.identityConflict }
+        if !noteIDs.isSubset(of: state.deletedNoteIDs) {
+            try await store.update { state in
+                _ = try state.purgeDeletedNotes(
+                    noteIDs, notebookID: notebookID
+                )
+            }
+            state = await store.snapshot()
+        }
+        let requiresScan = !noteIDs.isSubset(
+            of: state.scannedDeletedNoteIDs
+        )
+        let requiresFetch = requiresScan
+            || !state.unresolvedRemoteDeletionRecordIDs.isEmpty
+        if state.pendingRemoteDeletionIDs.isEmpty && !requiresFetch {
+            return
+        }
+
+        try await verifyAccount()
+        try await ensureZone()
+        if requiresFetch {
+            try await cloudRequest {
+                try await engine.fetchChanges(
+                    .init(scope: .zoneIDs([zoneID]))
+                )
+            }
+            if let delegateFailure { throw delegateFailure }
+            let fetched = await store.snapshot()
+            if !fetched.unresolvedRemoteDeletionRecordIDs.isEmpty
+                || requiresScan {
+                try await store.update {
+                    if !$0.unresolvedRemoteDeletionRecordIDs.isEmpty {
+                        try $0.resolveRemoteNoteDeletions()
+                    }
+                    if requiresScan {
+                        $0.scannedDeletedNoteIDs.formUnion(noteIDs)
+                    }
+                }
+            }
+            state = await store.snapshot()
+            try state.validateRemoteDeletions()
+        }
+
+        let pendingIDs = state.pendingRemoteDeletionIDs
+        let changes = pendingIDs.map {
+            CKSyncEngine.PendingRecordZoneChange.saveRecord(
+                CKRecord.ID(recordName: $0, zoneID: zoneID)
+            )
+        }
+        engine.state.remove(pendingRecordZoneChanges: changes)
+        try assetStaging.purge(recordIDs: pendingIDs)
+
+        let sortedPendingIDs = pendingIDs.sorted()
+        for start in stride(
+            from: 0, to: sortedPendingIDs.count, by: 200
+        ) {
+            let batch = sortedPendingIDs[
+                start..<min(start + 200, sortedPendingIDs.count)
+            ]
+            let ids = batch.map {
+                CKRecord.ID(recordName: $0, zoneID: zoneID)
+            }
+            let results = try await cloudRequest {
+                try await database.modifyRecords(
+                    saving: [],
+                    deleting: ids,
+                    atomically: false
+                ).deleteResults
+            }
+            var completed = Set<String>()
+            var failure: Error?
+            for id in ids {
+                guard let result = results[id] else {
+                    failure = failure
+                        ?? CloudKitSyncTransportError.uploadNotAcknowledged
+                    continue
+                }
+                switch result {
+                case .success:
+                    completed.insert(id.recordName)
+                case .failure(let error as CKError)
+                    where error.code == .unknownItem:
+                    completed.insert(id.recordName)
+                case .failure(let error):
+                    await observeRetryAfter(error)
+                    failure = failure ?? error
+                }
+            }
+            if !completed.isEmpty {
+                try await store.update {
+                    $0.pendingRemoteDeletionIDs.subtract(completed)
+                }
+            }
+            if let failure { throw failure }
+        }
     }
 
     public func retryNotBefore() async -> Date? {
@@ -1048,9 +1380,17 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                 let targetDeletions = changes.deletions.filter {
                     $0.recordID.zoneID == zoneID
                 }
-                guard targetDeletions.isEmpty else {
-                    try await store.update { $0.hasUnexpectedDeletion = true }
-                    return
+                if !targetDeletions.isEmpty {
+                    let recordNames = Set(targetDeletions.map {
+                        $0.recordID.recordName
+                    })
+                    let bootstrapRecordName = mode.bootstrapName
+                    try await store.update { state in
+                        state.observeRemoteDeletions(
+                            recordNames,
+                            bootstrapRecordName: bootstrapRecordName
+                        )
+                    }
                 }
                 let records = try changes.modifications
                     .map(\.record)
@@ -1090,11 +1430,10 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                                     .invalidRemoteRecord
                             }
                             try await store.update { state in
-                                if let pending = state.outbox.removeValue(
+                                let pending = state.outbox.removeValue(
                                     forKey: id
-                                ) {
-                                    try state.appendToInbox(pending)
-                                }
+                                ) ?? value
+                                try state.appendToInbox(pending)
                             }
                             syncEngine.state.remove(
                                 pendingRecordZoneChanges: [
