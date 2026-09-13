@@ -7,8 +7,9 @@ xcuserdata/
 DerivedData/
 build/
 
-# Swift Package Manager build products
+# Swift Package Manager build products and generated Xcode schemes
 .build/
+.swiftpm/xcode/
 
 # Xcode-generated project metadata
 *.xcscmblueprint
