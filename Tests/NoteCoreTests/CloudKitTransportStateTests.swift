@@ -72,6 +72,24 @@ final class CloudKitTransportStateTests: XCTestCase {
         XCTAssertThrowsError(try state.page(after: "bad", limit: 2))
     }
 
+    func testBufferedReplayDefersCloudFetchUntilInboxIsDrained() throws {
+        var state = CloudKitTransportState(
+            accountRecordName: "account", zoneName: "zone"
+        )
+        let records = try (0..<3).map { try makeRecord(text: "note \($0)") }
+        for record in records { try state.appendToInbox(record) }
+
+        let first = try XCTUnwrap(state.bufferedPage(after: nil, limit: 2))
+        XCTAssertEqual(first.records, Array(records.prefix(2)))
+        XCTAssertTrue(first.hasMore)
+        let second = try XCTUnwrap(
+            state.bufferedPage(after: first.cursor, limit: 2)
+        )
+        XCTAssertEqual(second.records, [records[2]])
+        XCTAssertTrue(second.hasMore)
+        XCTAssertNil(try state.bufferedPage(after: second.cursor, limit: 2))
+    }
+
     func testDuplicateInboxDeliveryIsIdempotent() throws {
         var state = CloudKitTransportState(
             accountRecordName: "account", zoneName: "zone"
@@ -179,6 +197,21 @@ final class CloudKitTransportStateTests: XCTestCase {
         XCTAssertFalse(persisted.contains("zone"))
     }
 
+    func testTransportReadsPersistedStartupRetryDeadline() throws {
+        let directory = temporaryDirectory()
+        let deadline = Date(timeIntervalSince1970: 2_000)
+        var store = try CloudKitAvailabilityCooldownStore(
+            directory: directory
+        )
+        try store.merge(notBefore: deadline)
+
+        let persisted = try CloudKitSyncTransport.persistedRetryNotBefore(
+            stateDirectory: directory
+        )
+
+        XCTAssertEqual(persisted, deadline)
+    }
+
     func testRebuiltInboxRejectsCursorFromPreviousGeneration() throws {
         let record = try makeRecord(text: "same-length rebuilt inbox")
         var old = CloudKitTransportState(
@@ -254,6 +287,31 @@ final class CloudKitTransportStateTests: XCTestCase {
         XCTAssertNil(finalState.engineState)
     }
 
+    func testSentBatchCommitsAllAcknowledgementsTogether() async throws {
+        let directory = temporaryDirectory()
+        let records = try [
+            makeRecord(text: "first acknowledged"),
+            makeRecord(text: "second acknowledged"),
+        ]
+        let store = try CloudKitTransportStateStore(
+            directory: directory,
+            accountRecordName: "account",
+            zoneName: "zone"
+        )
+        try await store.update { state in
+            for record in records { state.outbox[record.id] = record }
+        }
+        let committer = CloudKitEventCommitter(store: store)
+
+        try await committer.commitSent(records.map {
+            CloudKitAcknowledgedRecord(id: $0.id, record: $0)
+        })
+
+        let state = await store.snapshot()
+        XCTAssertTrue(state.outbox.isEmpty)
+        XCTAssertEqual(Set(state.inbox.map(\.id)), Set(records.map(\.id)))
+    }
+
     func testAssetIsRemovedOnlyAfterCompletedUploadAndLastUser() throws {
         let directory = temporaryDirectory()
         try FileManager.default.createDirectory(
@@ -285,6 +343,62 @@ final class CloudKitTransportStateTests: XCTestCase {
         let retryURL = try staging.retain(record)
         staging.release(retryURL, uploadCompleted: true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testBatchStagesIndependentAssetsAndKeepsOnlyFailedUpload() throws {
+        let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        var staging = CloudKitAssetStaging(directory: directory)
+        let sent = try makeRecord(text: "sent")
+        let failed = try makeRecord(text: "failed")
+        let sentURL = try staging.retain(sent)
+        let failedURL = try staging.retain(failed)
+
+        staging.release(sentURL, uploadCompleted: true)
+        staging.release(failedURL, uploadCompleted: false)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sentURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: failedURL.path))
+    }
+
+    func testBatchScopeAndPartialFailurePreserveAcknowledgements() throws {
+        let zoneID = CKRecordZone.ID(zoneName: "zone")
+        let records = try [
+            makeRecord(text: "first"),
+            makeRecord(text: "second"),
+        ]
+        let batch = CloudKitUploadBatch(records: records, zoneID: zoneID)
+        XCTAssertEqual(Set(batch.recordIDs.map(\.recordName)), batch.ids)
+        XCTAssertTrue(batch.recordIDs.allSatisfy { $0.zoneID == zoneID })
+
+        let failure = NSError(domain: "batch-test", code: 7)
+        let result = CloudKitBatchResultResolver.resolve(
+            records: records,
+            acknowledgedIDs: [records[0].id],
+            failures: [records[1].id: failure],
+            delegateFailure: nil,
+            sendError: nil
+        )
+        XCTAssertEqual(result.acknowledgedIDs, [records[0].id])
+        XCTAssertEqual((result.error as NSError?)?.domain, "batch-test")
+        XCTAssertEqual((result.error as NSError?)?.code, 7)
+    }
+
+    func testUnacknowledgedBatchWithoutExplicitErrorStillFails() throws {
+        let records = try [makeRecord(text: "unconfirmed")]
+        let result = CloudKitBatchResultResolver.resolve(
+            records: records,
+            acknowledgedIDs: [],
+            failures: [:],
+            delegateFailure: nil,
+            sendError: nil
+        )
+        XCTAssertEqual(
+            result.error as? CloudKitSyncTransportError,
+            .uploadNotAcknowledged
+        )
     }
 
     private func makeRecord(text: String) throws -> SyncRecord {

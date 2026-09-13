@@ -151,6 +151,22 @@ final class SyncTransportTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(transport.scope.contains("#device tests & spaces"))
     }
 
+    func testDefaultBatchStopsAtFailureAndReturnsPartialAcknowledgements()
+        async throws
+    {
+        let records = try (0..<3).map { try record(text: "batch-\($0)") }
+        let transport = FailingBatchTransport(failingID: records[1].id)
+
+        let result = try await transport.publishBatch(records)
+        let publishedIDs = await transport.publishedIDs
+        let retryNotBefore = await transport.retryNotBefore()
+
+        XCTAssertEqual(result.acknowledgedIDs, [records[0].id])
+        XCTAssertNotNil(result.error)
+        XCTAssertEqual(publishedIDs, records.prefix(2).map(\.id))
+        XCTAssertNil(retryNotBefore)
+    }
+
     private func record(text: String) throws -> SyncRecord {
         SyncRecord(snapshot: try NoteDocument(noteID: noteID, text: text).snapshot())
     }
@@ -167,6 +183,27 @@ final class SyncTransportTests: XCTestCase, @unchecked Sendable {
         } catch {
             XCTFail("Expected SyncError, got \(error)")
         }
+    }
+}
+
+private actor FailingBatchTransport: SyncTransport {
+    nonisolated let scope = "batch-test"
+    let failingID: String
+    private(set) var publishedIDs: [String] = []
+
+    init(failingID: String) { self.failingID = failingID }
+
+    func bootstrap(proposing record: SyncRecord) -> SyncRecord { record }
+
+    func publish(_ record: SyncRecord) throws {
+        publishedIDs.append(record.id)
+        if record.id == failingID {
+            throw SyncError.unavailable("simulated batch failure")
+        }
+    }
+
+    func fetch(after cursor: String?) -> SyncPage {
+        SyncPage(records: [], cursor: cursor ?? "done", hasMore: false)
     }
 }
 
