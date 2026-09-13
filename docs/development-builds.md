@@ -16,7 +16,8 @@ commands continue to work. All schemes use the same app target.
 2. Select the same scheme and run it on your iPhone. Both devices must use the
    same iCloud account.
 3. Edit notes or folder metadata while both apps are open. The prototype
-   checks while foregrounded; Sync Now is also available.
+   checks while foregrounded. Open Sync Details from the cloud toolbar button
+   for Sync Now, progress, and errors. The bottom indicator hides when idle.
 4. Quit and reopen the installed `meh.md iCloud Dev` app normally. The build
    keeps using iCloud without Xcode or launch environment variables.
 

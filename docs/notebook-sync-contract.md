@@ -46,7 +46,9 @@ Bodies upload before catalog references, but download works in either order.
 A body received before its catalog entry is retained and included in recovery
 checkpoints, but is not uploaded until listed. This prevents accidental
 publication while ensuring that a lost staged body triggers replay.
-Overlapping exchanges are prevented. Scheduling and batching remain separate
+Overlapping exchanges are prevented. See the
+[progress and batching contract](notebook-sync-progress.md) for current
+upload grouping and foreground checks. Background scheduling remains separate
 work; no background delivery or large-library performance claim is made.
 
 ## Permanent deletion boundary

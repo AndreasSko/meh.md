@@ -115,17 +115,21 @@ final class ICloudDevelopmentUITests: XCTestCase {
     }
 
     private func waitForOutage() {
+        app.openSyncDetails()
         let status = app.staticTexts["note-sync-status"]
         expectation(for: NSPredicate(
             format: "label CONTAINS %@ OR value CONTAINS %@",
             "Simulated network outage", "Simulated network outage"
         ), evaluatedWith: status)
         waitForExpectations(timeout: 20)
+        app.closeSyncDetails()
     }
 
     private func openEditor() throws -> XCUIElement {
         let editor = try app.openOrCreateNotebookEditor(timeout: 60)
-        XCTAssertTrue(app.buttons["sync-now"].waitForExistence(timeout: 15))
+        XCTAssertTrue(
+            app.buttons["notebook-sync-details"].waitForExistence(timeout: 15)
+        )
         return editor
     }
 
@@ -144,6 +148,7 @@ final class ICloudDevelopmentUITests: XCTestCase {
     }
 
     private func exchange() {
+        app.openSyncDetails()
         let button = app.buttons["sync-now"]
         expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: button)
         waitForExpectations(timeout: 30)
@@ -161,6 +166,7 @@ final class ICloudDevelopmentUITests: XCTestCase {
         waitForExpectations(timeout: 60)
         let text = status.label + " " + (status.value as? String ?? "")
         XCTAssertTrue(text.contains("Last sync"), text)
+        app.closeSyncDetails()
     }
 
     private func waitForText(_ text: String) {

@@ -30,65 +30,21 @@ struct NotebookApplicationView: View {
             }
         }
         .task { await workspace.start() }
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            if oldPhase != .active, newPhase == .active, workspace.automaticSync {
+                Task { await workspace.refresh() }
+            }
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active, workspace.automaticSync,
                   workspace.usesSync else { return }
+            // Initial activation and saved edits already request exchanges.
+            // Quiet foreground checks discover changes from other devices.
+            // Engine-driven background delivery remains a separate stage.
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
                 await workspace.refresh()
             }
-        }
-    }
-}
-
-struct NotebookWorkspaceStatusView: View {
-    let workspace: NotebookWorkspace
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(workspace.label)
-                Spacer(minLength: 8)
-                if workspace.usesSync {
-                    Text(syncStatusText).accessibilityIdentifier("note-sync-status")
-                    Button("Sync Now") { Task { await workspace.refresh() } }
-                        .disabled(workspace.isRefreshing)
-                        .accessibilityIdentifier("sync-now")
-                }
-            }
-            if let error = workspace.legacySyncError {
-                Text("Older-note sync paused: \(error)")
-            }
-            if let action = workspace.recoveryAction {
-                Text(action.details + " Restoring may lose newer changes.")
-                Button(action.title) { Task { await workspace.recoverPendingIssue() } }
-                    .disabled(workspace.isLoading || workspace.isRefreshing)
-            }
-            if let error = workspace.copyError {
-                Text("Markdown copies paused: \(error)")
-                    .accessibilityIdentifier("markdown-copy-status")
-            } else if let url = workspace.copiesURL {
-                Text("Markdown copies: \(url.path)")
-                    .lineLimit(1).truncationMode(.middle)
-                    .help(url.path)
-                    .accessibilityIdentifier("markdown-copy-status")
-            }
-        }
-        .font(.caption).foregroundStyle(.secondary)
-        .padding(8).frame(maxWidth: .infinity)
-        .background(.bar)
-    }
-
-    private var syncStatusText: String {
-        if let error = workspace.syncSetupError { return "Sync paused: \(error)" }
-        if workspace.isRefreshing { return "Syncing…" }
-        guard let sync = workspace.sync else { return "Ready to sync" }
-        switch sync.status {
-        case .idle: return "Ready to sync"
-        case .syncing: return "Syncing…"
-        case .pending: return "Changes waiting to sync"
-        case .exchanged(let date):
-            return "Last sync: \(date.formatted(date: .omitted, time: .standard))"
-        case .failed(let message): return "Sync paused: \(message)"
         }
     }
 }

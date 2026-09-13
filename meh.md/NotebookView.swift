@@ -19,6 +19,7 @@ struct NotebookView: View {
     let replica: NotebookReplica
     var workspace: NotebookWorkspace? = nil
     @State private var showingImport = false
+    @State private var showingSyncDetails = false
     @State private var selectedID: UUID?
     @State private var session: NoteSession?
     @State private var expandedIDs: Set<UUID> = []
@@ -77,6 +78,17 @@ struct NotebookView: View {
             .navigationTitle("meh.md")
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
+                if let workspace, workspace.usesSync {
+                    ToolbarItem {
+                        Button { showingSyncDetails = true } label: {
+                            Label("Sync Details", systemImage: "icloud")
+                        }
+                        .accessibilityIdentifier("notebook-sync-details")
+                        .popover(isPresented: $showingSyncDetails) {
+                            NotebookSyncDetailsView(workspace: workspace)
+                        }
+                    }
+                }
                 ToolbarItem {
                     Button { showingImport = true } label: {
                         Label("Import Markdown", systemImage: "square.and.arrow.down")
