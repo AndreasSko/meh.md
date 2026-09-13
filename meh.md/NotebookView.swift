@@ -113,7 +113,7 @@ struct NotebookView: View {
                         session: session, navigation: editorNavigation,
                         isInTrash: selectedPlacement?.isInTrash == true,
                         hasUnrecordedEdit: $unrecordedEdit,
-                        onPersist: { workspace?.contentDidSave() }
+                        onPersist: { workspace?.contentDidSave(trigger: "note persisted") }
                     )
                     .id(selectedID)
                     .navigationTitle(selectedPlacement?.displayName ?? "Note")
@@ -137,7 +137,9 @@ struct NotebookView: View {
         .safeAreaInset(edge: .bottom) {
             if let workspace { NotebookWorkspaceStatusView(workspace: workspace) }
         }
-        .onChange(of: replica.catalogSnapshot) { _, _ in workspace?.contentDidSave() }
+        .onChange(of: replica.catalogSnapshot) { _, _ in
+            workspace?.contentDidSave(trigger: "catalog snapshot changed")
+        }
         .alert(
             "Couldn’t complete the action",
             isPresented: Binding(
@@ -528,7 +530,7 @@ struct NotebookView: View {
         } else {
             try await replica.resumePendingImport()
         }
-        workspace?.contentDidSave()
+        workspace?.contentDidSave(trigger: "import completed")
         preferredCompactColumn = .sidebar
     }
 

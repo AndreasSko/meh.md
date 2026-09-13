@@ -18,6 +18,8 @@ commands continue to work. All schemes use the same app target.
 3. Edit notes or folder metadata while both apps are open. The prototype
    checks while foregrounded. Open Sync Details from the cloud toolbar button
    for Sync Now, progress, and errors. The bottom indicator hides when idle.
+   Sync Event Log retains recent local diagnostics; use Copy Log or Share Log
+   after an unexpected upload or retry.
 4. Quit and reopen the installed `meh.md iCloud Dev` app normally. The build
    keeps using iCloud without Xcode or launch environment variables.
 

@@ -243,13 +243,16 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
             options: .atomic
         )
         let recording = RecordingTransport(base: base)
+        let log = NotebookSyncEventLog(directory: root)
         await NotebookSyncCoordinator(
             replica: NotebookReplica(directory: root),
-            transport: recording
+            transport: recording,
+            diagnosticLog: log
         ).synchronize()
 
         let cursors = await recording.fetchCursors
         XCTAssertEqual(try XCTUnwrap(cursors.first), nil)
+        XCTAssertTrue(log.entries.contains { $0.event == "replay_missing_history" })
     }
 
     func testCatalogPreviousFileRollbackAlsoForcesReplay() async throws {
@@ -410,6 +413,60 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
             .filter { $0.kind == .note }
         XCTAssertEqual(retriedNotes.count, 2)
         XCTAssertFalse(retriedNotes.contains { $0.id == acknowledged.id })
+        assertExchanged(coordinator.status)
+    }
+
+    func testDiagnosticLogExplainsPendingHeadsAndPartialRetry() async throws {
+        let base = InMemorySyncTransport(scope: "diagnostic-retry")
+        let transport = BatchRecordingTransport(base: base)
+        let root = directory()
+        let replica = NotebookReplica(directory: root)
+        let log = NotebookSyncEventLog(directory: root)
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica,
+            transport: transport,
+            diagnosticLog: log
+        )
+        await coordinator.synchronize()
+        log.clear()
+        _ = try await replica.createNote(name: "one.md", text: "one")
+        _ = try await replica.createNote(name: "two.md", text: "two")
+        await transport.failNextNoteBatchPartially()
+
+        await coordinator.synchronize()
+
+        let pending = try XCTUnwrap(
+            log.entries.first { $0.event == "pending_notes" }
+        )
+        XCTAssertEqual(pending.counts["total"], 2)
+        XCTAssertEqual(pending.counts["noAcknowledgement"], 2)
+        XCTAssertEqual(
+            pending.counts["matchingAppliedWithoutAcknowledgement"],
+            2
+        )
+        let failedBatch = try XCTUnwrap(
+            log.entries.first { $0.event == "note_batch_result" }
+        )
+        XCTAssertEqual(failedBatch.counts["acknowledged"], 1)
+        XCTAssertEqual(failedBatch.counts["error"], 1)
+        XCTAssertTrue(log.entries.contains { $0.event.hasPrefix("pass_error:") })
+
+        log.clear()
+        await coordinator.synchronize()
+
+        let retryCheckpoint = try XCTUnwrap(
+            log.entries.first { $0.event == "checkpoints_loaded" }
+        )
+        XCTAssertGreaterThanOrEqual(
+            retryCheckpoint.counts["acknowledgedDocuments"] ?? 0,
+            1
+        )
+        let retryBatch = try XCTUnwrap(
+            log.entries.first { $0.event == "note_batch_result" }
+        )
+        XCTAssertEqual(retryBatch.counts["requested"], 1)
+        XCTAssertEqual(retryBatch.counts["acknowledged"], 1)
+        XCTAssertTrue(log.entries.contains { $0.event == "pass_end" })
         assertExchanged(coordinator.status)
     }
 
