@@ -8,9 +8,8 @@ separate `NotebookPreview` store under Application Support for isolated UI
 work. Preview edits save locally but do not sync or update the activated
 notebook's managed Markdown copies.
 
-Normal launches use the activated notebook store. Its one-way legacy bridge
-imports the retained single note without changing its source files. See the
-[core contract](notebook-core-contract.md) for that boundary.
+Normal launches use the activated notebook store. Single-note migration and
+compatibility sync are no longer active. Existing notebooks remain intact.
 
 ## Behavior available for feedback
 

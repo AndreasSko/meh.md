@@ -9,10 +9,6 @@ final class NotebookWorkspace {
     struct RecoveryAction: Equatable {
         fileprivate enum Kind: Equatable {
             case catalog
-            case migrationSource
-            case migratedDestination
-            case bridgeSource
-            case bridgeCopy
         }
 
         let title: String
@@ -41,7 +37,6 @@ final class NotebookWorkspace {
     private(set) var sync: NotebookSyncCoordinator?
     private(set) var errorMessage: String?
     private(set) var syncSetupError: String?
-    private(set) var legacySyncError: String?
     private(set) var copyError: String?
     private(set) var copiesURL: URL?
     private(set) var isLoading = false
@@ -50,7 +45,6 @@ final class NotebookWorkspace {
     private(set) var showSyncCheck = false
     private(set) var syncRetryNotBefore: Date?
     private(set) var lastSuccessfulSync: Date?
-    private(set) var checkingLegacySync = false
     @ObservationIgnored lazy var syncEventLog = NotebookSyncEventLog(directory: directory)
     private var syncMonitor: Task<Void, Never>?
     private var slowSyncIndicator: Task<Void, Never>?
@@ -58,11 +52,8 @@ final class NotebookWorkspace {
     let automaticSync: Bool
     let mode: Mode
     let directory: URL
-    private let legacyDirectory: URL
     private let documentsDirectory: URL
-    private var legacyTransport: (any SyncTransport)?
     private var notebookTransport: (any SyncTransport)?
-    private var bridge: NotebookLegacyBridge?
     private var publisher: NotebookMarkdownPublisher?
     private var scheduledRefresh: Task<Void, Never>?
     private var needsAnotherRefresh = false
@@ -108,17 +99,19 @@ final class NotebookWorkspace {
         self.mode = mode
         let support = URL.applicationSupportDirectory
         if case .development(let endpoint, let name) = mode {
-            let old = LocalSyncTransport(baseURL: endpoint, workspace: name)
-            let key = SHA256.hash(data: Data(old.scope.utf8)).map {
+            // Keep the established on-disk workspace key while the transport
+            // itself uses only the notebook protocol below.
+            let workspaceScope = endpoint.absoluteString.trimmingCharacters(
+                in: CharacterSet(charactersIn: "/")
+            ) + "#" + name
+            let key = SHA256.hash(data: Data(workspaceScope.utf8)).map {
                 String(format: "%02x", $0)
             }.joined()
             let root = support.appending(path: "SyncWorkspaces/\(key)")
             directory = root.appending(path: "Notebook")
-            legacyDirectory = root.appending(path: "Notes")
             documentsDirectory = URL.documentsDirectory.appending(path: "SyncWorkspaces/\(name)")
         } else {
             directory = support.appending(path: preview ? "NotebookPreview" : "Notebook")
-            legacyDirectory = support.appending(path: "Notes")
             documentsDirectory = URL.documentsDirectory
         }
     }
@@ -135,12 +128,11 @@ final class NotebookWorkspace {
                 throw SyncError.unavailable("Set a valid local sync URL and workspace name.")
             }
             if replica == nil {
-                if !usesSync {
-                    _ = try await NotebookMigration(directory: directory)
-                        .migrateLegacyNote(from: legacyDirectory)
-                }
                 let loaded = NotebookReplica(directory: directory)
                 try await loaded.load()
+                if !usesSync, loaded.catalogSnapshot == nil {
+                    try await loaded.createLocalNotebook()
+                }
                 // Existing catalogs are visible before account discovery or
                 // any network request, so offline reopening remains useful.
                 replica = loaded
@@ -172,25 +164,6 @@ final class NotebookWorkspace {
                 let recovering = replica ?? NotebookReplica(directory: directory)
                 try await recovering.recoverCatalogFromPrevious()
                 replica = recovering
-                if !usesSync {
-                    try await finishLocalMigration(
-                        using: NotebookMigration(directory: directory)
-                    )
-                }
-            case .migrationSource:
-                let migration = NotebookMigration(directory: directory)
-                _ = try await migration.recoverLegacyNoteFromPrevious(
-                    from: legacyDirectory
-                )
-                try await finishLocalMigration(using: migration)
-            case .migratedDestination:
-                let migration = NotebookMigration(directory: directory)
-                _ = try await migration.recoverMigratedNoteFromPrevious()
-                try await finishLocalMigration(using: migration)
-            case .bridgeSource:
-                _ = try await legacyBridge().recoverSourceFromPrevious()
-            case .bridgeCopy:
-                _ = try await legacyBridge().recoverBridgeFromPrevious()
             }
             recoveryAction = nil
             errorMessage = nil
@@ -258,42 +231,8 @@ final class NotebookWorkspace {
                 )
                 sync = coordinator
                 hasBinding = try coordinator.hasDurableBinding()
-                var legacy: NoteSnapshot?
-                checkingLegacySync = true
-                syncEventLog.record("legacy bridge started")
-                do {
-                    try await prepareLegacyTransport()
-                    guard let legacyTransport else {
-                        throw SyncError.unavailable(
-                            "Legacy compatibility sync setup has not completed."
-                        )
-                    }
-                    let bridge = self.bridge ?? NotebookLegacyBridge(
-                        directory: directory.appending(path: "LegacyBridge"),
-                        legacyDirectory: legacyDirectory
-                    )
-                    self.bridge = bridge
-                    legacy = try await bridge.synchronize(
-                        legacyTransport: legacyTransport,
-                        notebookScope: notebookTransport.scope
-                    )
-                    syncEventLog.record("legacy bridge completed")
-                    legacySyncError = nil
-                    if recoveryAction?.kind == .bridgeSource
-                        || recoveryAction?.kind == .bridgeCopy {
-                        recoveryAction = nil
-                    }
-                } catch {
-                    syncEventLog.record("legacy bridge failed: " + NotebookSyncEventLog.errorCode(error))
-                    legacySyncError = error.localizedDescription
-                    setRecoveryAction(for: error)
-                    // Initial joining must include the old canonical note.
-                    // Once joined, a bridge outage does not stop notebook sync.
-                    if !hasBinding { throw error }
-                }
-                checkingLegacySync = false
                 syncSetupError = nil
-                await coordinator.synchronize(legacyNote: legacy)
+                await coordinator.synchronize()
                 if case .exchanged(let date) = coordinator.status {
                     lastSuccessfulSync = date
                 }
@@ -313,12 +252,18 @@ final class NotebookWorkspace {
                 "duration_ms": Int(Date().timeIntervalSince(refreshStarted) * 1_000)
             ])
         }
+        do { try await replica.cleanupDeletedContent() }
+        catch {
+            if usesSync {
+                syncEventLog.record("local deletion cleanup failed: "
+                    + NotebookSyncEventLog.errorCode(error))
+            }
+        }
         await publishCopies()
     }
 
     private func beginSyncPresentation(manual: Bool) {
         isSyncing = true
-        checkingLegacySync = true
         showSyncCheck = manual
         slowSyncIndicator?.cancel()
         slowSyncIndicator = Task { @MainActor in
@@ -338,24 +283,18 @@ final class NotebookWorkspace {
         slowSyncIndicator?.cancel()
         syncMonitor?.cancel()
         isSyncing = false
-        checkingLegacySync = false
         showSyncCheck = false
     }
 
     private func updateRetryDeadline() async {
         var notebook = await notebookTransport?.retryNotBefore()
-        var legacy = checkingLegacySync ? await legacyTransport?.retryNotBefore() : nil
         if case .cloud = mode {
             if notebookTransport == nil {
                 notebook = try? CloudKitSyncTransport.persistedRetryNotBefore(
                     stateDirectory: directory.appending(path: "CloudKit"))
             }
-            if checkingLegacySync, legacyTransport == nil {
-                legacy = try? CloudKitSyncTransport.persistedRetryNotBefore(
-                    stateDirectory: legacyDirectory.appending(path: "CloudKit"))
-            }
         }
-        let deadline = [notebook, legacy].compactMap { $0 }.filter { $0 > Date() }.max()
+        let deadline = notebook.flatMap { $0 > Date() ? $0 : nil }
         if deadline != syncRetryNotBefore {
             if let deadline {
                 syncEventLog.record("retry cooldown observed", counts: [
@@ -388,22 +327,6 @@ final class NotebookWorkspace {
         notebookTransport = unavailableWhenRequested(transport)
     }
 
-    private func prepareLegacyTransport() async throws {
-        guard legacyTransport == nil else { return }
-        let transport: any SyncTransport
-        switch mode {
-        case .cloud:
-            transport = try await CloudKitSyncTransport.make(
-                containerIdentifier: "iCloud.de.andreas-sk.meh-md",
-                stateDirectory: legacyDirectory.appending(path: "CloudKit")
-            )
-        case .development(let endpoint, let name):
-            transport = LocalSyncTransport(baseURL: endpoint, workspace: name)
-        default: return
-        }
-        legacyTransport = unavailableWhenRequested(transport)
-    }
-
     private func unavailableWhenRequested(
         _ transport: any SyncTransport
     ) -> any SyncTransport {
@@ -415,71 +338,16 @@ final class NotebookWorkspace {
         return transport
     }
 
-    private func finishLocalMigration(
-        using migration: NotebookMigration
-    ) async throws {
-        _ = try await migration.migrateLegacyNote(from: legacyDirectory)
-        let loaded = NotebookReplica(directory: directory)
-        try await loaded.load()
-        replica = loaded
-    }
-
-    private func legacyBridge() -> NotebookLegacyBridge {
-        if let bridge { return bridge }
-        let bridge = NotebookLegacyBridge(
-            directory: directory.appending(path: "LegacyBridge"),
-            legacyDirectory: legacyDirectory
-        )
-        self.bridge = bridge
-        return bridge
-    }
-
     private func setRecoveryAction(for error: Error) {
-        let kind: RecoveryAction.Kind
-        if error as? NotebookReplicaError == .catalogNeedsRecovery
-            || error as? NotebookMigrationError == .catalogNeedsRecovery {
-            kind = .catalog
-        } else if error as? NotebookMigrationError == .legacyNoteNeedsRecovery {
-            kind = .migrationSource
-        } else if error as? NotebookMigrationError == .destinationNoteNeedsRecovery {
-            kind = .migratedDestination
-        } else if error as? NotebookLegacyBridgeError == .sourceNeedsRecovery {
-            kind = .bridgeSource
-        } else if error as? NotebookLegacyBridgeError == .bridgeNeedsRecovery {
-            kind = .bridgeCopy
-        } else { return }
-
-        switch kind {
-        case .catalog:
-            recoveryAction = RecoveryAction(
-                title: "Recover Notebook Catalog",
-                details: "Restore the previous saved catalog. The damaged "
-                    + "current catalog will be kept for diagnosis.",
-                kind: kind
-            )
-        case .migrationSource, .bridgeSource:
-            recoveryAction = RecoveryAction(
-                title: "Recover Legacy Note",
-                details: "Restore the previous saved legacy note before "
-                    + "importing it. The damaged current file will be kept "
-                    + "for diagnosis.",
-                kind: kind
-            )
-        case .migratedDestination:
-            recoveryAction = RecoveryAction(
-                title: "Recover Migrated Note",
-                details: "Restore the previous saved migrated note. The "
-                    + "damaged current file will be kept for diagnosis.",
-                kind: kind
-            )
-        case .bridgeCopy:
-            recoveryAction = RecoveryAction(
-                title: "Recover Compatibility Copy",
-                details: "Restore the previous saved compatibility copy. "
-                    + "The damaged current file will be kept for diagnosis.",
-                kind: kind
-            )
+        guard error as? NotebookReplicaError == .catalogNeedsRecovery else {
+            return
         }
+        recoveryAction = RecoveryAction(
+            title: "Recover Notebook Catalog",
+            details: "Restore the previous saved catalog. The damaged "
+                + "current catalog will be kept for diagnosis.",
+            kind: .catalog
+        )
     }
 
     private func publishCopies() async {

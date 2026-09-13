@@ -255,3 +255,37 @@ behavior remains an owner feedback checkpoint.
 All 261 Swift tests pass, including log persistence, error redaction,
 partial-retry diagnostics, and real HTTP replica tests. Signed Mac iCloud
 Dev and iPhone app/UI-test builds pass.
+
+## Permanent deletion checkpoint: 2026-09-13
+
+Delete Permanently and Empty Trash now capture exact Trash identities before
+confirmation. Durable local and replicated markers precede cleanup. Retryable
+cleanup removes note/recovery files, retained import bodies, managed Markdown
+copies, transport caches, and cloud note snapshots. Catalog markers remain.
+An unseen offline child of a deleted folder survives at the recovery root.
+See the [deletion contract](notebook-permanent-deletion.md).
+
+The owner explicitly permits a development compatibility cut. The running
+app no longer migrates or synchronizes the earlier single-note system.
+Existing version 2 notebooks and imported notes stay intact, and open before
+cloud discovery. Ordinary sync discards unused legacy proposal bodies without
+requiring them to decode. Historical migration helpers remain covered as
+isolated core utilities; they are no longer activation dependencies.
+
+A Mac fixture verified Empty Trash confirmation, cancellation, successful
+removal, cleared editor selection, and subsequent manual sync. The fixture
+used an isolated loopback workspace, not the owner's iCloud notes.
+
+The owner also raised recovery from broken cloud storage. The
+[cloud recovery proposal](notebook-cloud-recovery.md) separates local access
+and retry from a deliberate rebuild with a new cloud generation. No reset
+button or cloud reset is included in this checkpoint.
+
+All 284 Swift tests pass: 258 core and 26 native editor tests, including real
+loopback HTTP exchanges. The local service passes 16 Python tests. Mac Local
+and signed iCloud Dev builds pass, as does iPhone app/UI-test compilation.
+Physical-device deletion acceptance remains an owner feedback check.
+
+Next: owner feedback with disposable notes across Mac/iPhone. Full background
+scheduling, broader offline/device acceptance, and cloud recovery remain
+separate follow-ups.

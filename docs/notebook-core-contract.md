@@ -55,11 +55,12 @@ Moving a child out of a trashed ancestor can recover that child. Restoring an
 individual child whose ancestor remains trashed does not restore the ancestor.
 The eventual UI must explain that distinction.
 
-## Agreed permanent deletion: later milestone 3 stages
+## Agreed permanent deletion
 
 The owner approved Delete Permanently and Empty Trash, with confirmation.
-The replication core now implements durable permanent markers. User-facing
-actions and actual content cleanup remain planned.
+The replication core implements durable permanent markers. The confirmed
+actions and cleanup are now implemented; see the
+[permanent deletion contract](notebook-permanent-deletion.md).
 
 Record a permanent marker for every confirmed note/folder identity. Permanent
 deletion wins over subsequent offline edits and restores of that identity.
@@ -74,7 +75,7 @@ marker and must remain eligible for cleanup.
 Empty Trash targets the identities included in the confirmation. A previously
 unseen note created offline inside a permanently deleted folder is retained
 in a recovery location, rather than being deleted without confirmation.
-Do not expose these actions until both markers and content cleanup work.
+The actions are exposed together with marker durability and retryable cleanup.
 
 ## Files and migration
 
