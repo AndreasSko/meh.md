@@ -163,6 +163,12 @@ final class NoteDocument {
         guard noteID == other.noteID else {
             throw NoteDocumentError.noteIdentityMismatch
         }
+        // ObjId's opaque bytes may contain replica-local lookup hints. Shared
+        // change hashes, rather than byte equality of handles from different
+        // Document instances, establish a common persisted history.
+        guard !historyHeads.isDisjoint(with: other.historyHeads) else {
+            throw SyncError.disconnectedHistory
+        }
         try document.merge(other: other.document)
     }
 }

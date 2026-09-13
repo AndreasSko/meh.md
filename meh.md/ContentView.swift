@@ -5,6 +5,11 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     let session: NoteSession
     let markdownCopy: MarkdownCopyController
+    var sync: NoteSyncCoordinator? = nil
+    var workspaceLabel: String? = nil
+    var automaticSync = true
+    var syncSetupError: String? = nil
+    var retrySyncSetup: (() async -> Void)? = nil
     @Environment(\.scenePhase) private var scenePhase
     @State private var choosingCopyFolder = false
     @State private var copySelectionError: String?
@@ -13,6 +18,9 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let workspaceLabel {
+                Text(workspaceLabel).font(.caption).foregroundStyle(.secondary)
+            }
             if session.isEditingEnabled {
                 MarkdownEditor(text: Binding(
                     get: { unrecordedText ?? session.text },
@@ -26,7 +34,15 @@ struct ContentView: View {
                             editError = error.localizedDescription
                         }
                     }
-                ))
+                ), editRevision: session.currentSnapshot?.data,
+                commitEdit: { newText, revision in
+                    let snapshot = try session.commitEditorText(newText, basedOn: revision)
+                    unrecordedText = nil
+                    editError = nil
+                    return MarkdownEditorCommit(text: session.text, revision: snapshot.data)
+                }, onEditError: { error in
+                    editError = error.localizedDescription
+                })
             } else {
                 unavailableContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -39,7 +55,7 @@ struct ContentView: View {
                     .padding()
             }
             Group {
-                if unrecordedText != nil {
+                if unrecordedText != nil || editError != nil {
                     Text("Unsaved changes — keep this note open.")
                 } else {
                     saveStatus
@@ -53,17 +69,50 @@ struct ContentView: View {
                 .font(.caption)
                 .padding(.horizontal)
                 .padding(.vertical, 8)
+            if let sync {
+                Divider()
+                syncStatus(sync)
+                    .font(.caption)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+            } else if let syncSetupError {
+                HStack {
+                    Text("Sync unavailable: \(syncSetupError)")
+                    Button("Retry Sync Setup") {
+                        Task { await retrySyncSetup?() }
+                    }
+                }
+                .font(.caption)
+                .padding()
+            }
         }
         .task { await session.load() }
         .task { await markdownCopy.start() }
         .onChange(of: session.persistedSnapshot, initial: true) { _, snapshot in
             if let snapshot { markdownCopy.submit(snapshot) }
+            sync?.noteDidSave()
+            Task { await sync?.restoreStatus() }
+        }
+        .task(id: sync != nil) {
+            guard let sync, automaticSync else { return }
+            // One foreground poll loop; CloudKit's own scheduling is disabled
+            // in the prototype. Explicit retry remains available after errors.
+            while !Task.isCancelled {
+                if scenePhase == .active, session.isEditingEnabled {
+                    await sync.synchronize()
+                }
+                do { try await Task.sleep(for: .seconds(3)) }
+                catch { return }
+            }
         }
         .onChange(of: markdownCopy.status) { _, status in
             if status == .current { copySelectionError = nil }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { markdownCopy.reconcileOnActivation() }
+            if phase == .active {
+                markdownCopy.reconcileOnActivation()
+                if automaticSync { Task { await sync?.synchronize() } }
+            }
         }
         #if os(macOS)
         .fileImporter(
@@ -80,6 +129,27 @@ struct ContentView: View {
             }
         }
         #endif
+    }
+
+    @ViewBuilder
+    private func syncStatus(_ sync: NoteSyncCoordinator) -> some View {
+        HStack {
+            Group {
+                switch sync.status {
+                case .idle: Text("Sync ready")
+                case .syncing: Text("Syncing…")
+                case .pending: Text("Changes waiting to sync")
+                case let .exchanged(date):
+                    Text("Last sync: \(date.formatted(date: .omitted, time: .standard))")
+                case let .failed(message): Text("Sync paused: \(message)")
+                }
+            }
+            .accessibilityIdentifier("note-sync-status")
+            Spacer(minLength: 8)
+            Button("Sync Now") { Task { await sync.synchronize() } }
+                .disabled(sync.status == .syncing)
+                .accessibilityIdentifier("sync-now")
+        }
     }
 
     @ViewBuilder
@@ -238,6 +308,11 @@ struct ContentView: View {
     }
 
     private func copyRelativePath(_ url: URL) -> String {
+        let root = URL.documentsDirectory.standardizedFileURL.pathComponents
+        let components = url.standardizedFileURL.pathComponents
+        if components.starts(with: root) {
+            return components.dropFirst(root.count).joined(separator: "/")
+        }
         let folder = url.deletingLastPathComponent().lastPathComponent
         return folder == "Documents"
             ? url.lastPathComponent : "\(folder)/\(url.lastPathComponent)"

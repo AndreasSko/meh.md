@@ -34,7 +34,7 @@ let package = Package(
             name: "NativeEditor",
             path: "meh.md",
             exclude: [
-                "ContentView.swift", "MyApp.swift", "Assets.xcassets",
+                "ContentView.swift", "MyApp.swift", "AppWorkspace.swift", "Assets.xcassets",
                 "icon.icon", "Info.plist", "macOS.entitlements",
             ],
             sources: [

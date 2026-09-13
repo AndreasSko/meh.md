@@ -1,6 +1,6 @@
 # Architecture notes
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 
 These notes distinguish accepted boundaries from proposed implementation
 details. Dependencies and synchronization details still require validation in
@@ -125,12 +125,39 @@ explicit full-library export to an independently chosen location. Maintain
 recovery versions separately from the latest projection. Do not silently
 discard CRDT state and create new identities when recovery is needed.
 
-## Proposed synchronization
+## Synchronization prototype
 
 Milestone 1 validated Automerge Swift locally, including merges between test
-replicas without network transport. Milestone 2 will evaluate CKSyncEngine in a
-CloudKit private database to synchronize the existing documents. A custom
-server and a generic public sync library are outside the initial scope.
+replicas without network transport. Milestone 2 adds a shared synchronization
+coordinator over a small record-store transport interface. An in-process test
+store and a persistent localhost HTTP service exercise the same production
+merge/save path. The CloudKit adapter uses CKSyncEngine in a private database;
+real iCloud behavior remains subject to signed-device validation. The localhost
+service is a development tool, not a hosted product backend.
+
+Records contain immutable full-history Automerge snapshots, addressed by their
+SHA-256 digest. Bootstrap chooses a canonical seed atomically. A fresh client
+persists its proposal before sending it, so losing the response cannot create
+a second local identity. Existing independent notes are preserved and produce
+an explicit identity conflict rather than being silently combined.
+
+The coordinator saves merged downloads before advancing its cursor, and
+compares cursor/acknowledgment checkpoints with local history on reopening.
+Restoring an older local file therefore triggers replay. Upload discovery uses
+the persisted document; it does not depend on a transient notification.
+
+CloudKit fetched assets are retained in a durable inbox before engine progress
+is persisted. A failed inbox commit stops that adapter instance from saving
+later engine tokens. Inbox cursors include a persisted generation identifier
+so a rebuilt inbox cannot silently reuse an old offset. The initial adapter
+uses manual engine exchanges requested by the foreground app and explicit
+retry. Background/push scheduling remains a separate acceptance item.
+
+Native editor views retain the revision they actually display. A committed
+whole-text edit updates a branch at that revision and merges it into the live
+document, retaining remote edits received during composition. Remote buffer
+replacement clears stale native undo/redo entries; subsequent local editing
+builds a new undo history. Failed native commits retain their visible buffer.
 
 Application-level end-to-end encryption is not required initially. Rely on the
 CloudKit private database and normal platform data protection for the first
@@ -139,7 +166,7 @@ version; revisit encryption only through a later explicit product decision.
 - Use stable note identities independent of filenames. Determine the
   folder/metadata representation before milestone 3.
 - Store pending changes durably, and handle duplicate delivery idempotently.
-- Evaluate immutable change bundles and snapshots. Retain history initially; do
+- Exchange immutable full-history snapshots initially. Retain history; do
   not delete old changes before defining safe recovery for long-offline
   devices.
 - Treat CloudKit scheduling and CRDT merging as separate concerns. Measure
@@ -156,8 +183,8 @@ making it the permanent editor interface.
   history retention policy remains separate work.
 - Note/folder metadata schema, filename collisions, and delete-versus-edit
   semantics.
-- CloudKit record layout, snapshot discovery, initial download, and history
-  growth.
+- Signed CloudKit record delivery, fresh-device download, account transitions,
+  background scheduling, and the cost of retained snapshot history.
 
 Resolve these when needed by the milestones. Keep this document aligned with
 the implemented design and explain the reasons for material changes.
