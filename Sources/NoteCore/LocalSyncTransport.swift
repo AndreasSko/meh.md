@@ -13,41 +13,47 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
     private let session: URLSession
     private let timeout: TimeInterval
     private let pageSize: Int
+    private let protocolVersion: Int
 
     public init(
         baseURL: URL,
         workspace: String,
         session: URLSession = .shared,
         timeout: TimeInterval = 5,
-        pageSize: Int = 100
+        pageSize: Int = 100,
+        protocolVersion: Int = 1
     ) {
         endpoint = baseURL
         self.workspace = workspace
-        scope = baseURL.absoluteString.trimmingCharacters(
+        let legacyScope = baseURL.absoluteString.trimmingCharacters(
             in: CharacterSet(charactersIn: "/")
         ) + "#" + workspace
+        scope = protocolVersion == 1
+            ? legacyScope
+            : legacyScope + "#v\(protocolVersion)"
         self.session = session
         self.timeout = min(max(timeout, 0.25), 30)
         self.pageSize = min(max(pageSize, 1), 1_000)
+        self.protocolVersion = protocolVersion
     }
 
     public func bootstrap(proposing record: SyncRecord) async throws
         -> SyncRecord {
-        try validate(record)
+        try validate(record, bootstrapping: true)
         let canonical: SyncRecord = try await send(
-            path: "/v1/bootstrap",
+            path: "/v\(protocolVersion)/bootstrap",
             method: "POST",
             body: MutationRequest(scope: workspace, record: record),
             response: SyncRecord.self
         )
-        try validate(canonical)
+        try validate(canonical, bootstrapping: true)
         return canonical
     }
 
     public func publish(_ record: SyncRecord) async throws {
         try validate(record)
         let acknowledgement: EmptyResponse = try await send(
-            path: "/v1/records",
+            path: "/v\(protocolVersion)/records",
             method: "POST",
             body: MutationRequest(scope: workspace, record: record),
             response: EmptyResponse.self
@@ -60,6 +66,7 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
     }
 
     public func fetch(after cursor: String?) async throws -> SyncPage {
+        try validateProtocolVersion()
         var query = [
             URLQueryItem(name: "scope", value: workspace),
             URLQueryItem(name: "limit", value: String(pageSize)),
@@ -68,7 +75,7 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
             query.append(URLQueryItem(name: "after", value: cursor))
         }
         let page: SyncPage = try await send(
-            path: "/v1/records",
+            path: "/v\(protocolVersion)/records",
             method: "GET",
             query: query,
             response: SyncPage.self
@@ -81,6 +88,33 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
             throw SyncError.invalidRecord
         }
         return page
+    }
+
+    public func purgeDeletedNotes(
+        _ noteIDs: Set<UUID>, notebookID: UUID
+    ) async throws {
+        guard protocolVersion == 2 else {
+            throw SyncError.unavailable(
+                "Permanent body cleanup requires notebook sync."
+            )
+        }
+        let acknowledgement: EmptyResponse = try await send(
+            path: "/v2/purge",
+            method: "POST",
+            body: PurgeRequest(
+                scope: workspace,
+                notebookID: notebookID,
+                noteIDs: noteIDs.sorted {
+                    $0.uuidString < $1.uuidString
+                }
+            ),
+            response: EmptyResponse.self
+        )
+        guard acknowledgement.stored else {
+            throw SyncError.unavailable(
+                "The sync service did not acknowledge durable cleanup."
+            )
+        }
     }
 
     private func send<Response: Decodable>(
@@ -195,7 +229,9 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
         switch envelope?.error {
         case "invalid_cursor":
             return .invalidCursor
-        case "invalid_record", "immutable_record_conflict":
+        case "invalid_record", "immutable_record_conflict",
+            "invalid_protocol_version", "notebook_conflict",
+            "bootstrap_required":
             return .invalidRecord
         default:
             let detail = envelope?.message ?? "HTTP \(status)"
@@ -203,10 +239,26 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
         }
     }
 
-    private func validate(_ record: SyncRecord) throws {
+    private func validate(
+        _ record: SyncRecord,
+        bootstrapping: Bool = false
+    ) throws {
         do {
+            try validateProtocolVersion()
+            guard record.protocolVersion == protocolVersion else {
+                throw SyncError.invalidRecord
+            }
+            if bootstrapping && protocolVersion == 2 && record.kind != .catalog {
+                throw SyncError.invalidRecord
+            }
             try record.validate()
         } catch {
+            throw SyncError.invalidRecord
+        }
+    }
+
+    private func validateProtocolVersion() throws {
+        guard protocolVersion == 1 || protocolVersion == 2 else {
             throw SyncError.invalidRecord
         }
     }
@@ -215,6 +267,12 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
 private struct MutationRequest: Encodable {
     let scope: String
     let record: SyncRecord
+}
+
+private struct PurgeRequest: Encodable {
+    let scope: String
+    let notebookID: UUID
+    let noteIDs: [UUID]
 }
 
 private struct EmptyResponse: Decodable {

@@ -112,9 +112,10 @@ workspace name and server endpoint on the two simulated devices.
 ## Scheduling follow-up
 
 Milestone 2 must respect CloudKit retry-after deadlines and retain pending
-work during throttling. Milestone 3 will replace fixed foreground polling
-with engine scheduling and change notifications, batch local uploads, and
-measure responsiveness and battery impact. No fixed cloud latency is promised.
+work during throttling. A later milestone 3 scheduling stage will replace
+fixed foreground polling with engine scheduling and change notifications,
+batch local uploads, and measure responsiveness and battery impact. No fixed
+cloud latency is promised.
 
 ## Agent ownership
 

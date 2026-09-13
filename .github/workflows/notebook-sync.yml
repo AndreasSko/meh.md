@@ -1,0 +1,58 @@
+name: Notebook sync validation
+
+on:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 2"
+  workflow_dispatch:
+    inputs:
+      scheduled_scale:
+        description: Run the larger seeded and scale matrix
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notebook-sync-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  sync:
+    name: Deterministic replica and loopback checks
+    runs-on: xcode-27
+    timeout-minutes: >-
+      ${{ (github.event_name == 'schedule' || inputs.scheduled_scale == true)
+          && 60 || 30 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Record hosted toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          xcrun --sdk macosx --show-sdk-version
+      - name: Run validation
+        id: validation
+        env:
+          SCHEDULED_SCALE: >-
+            ${{ github.event_name == 'schedule' ||
+                inputs.scheduled_scale == true }}
+        run: |
+          if [[ "$SCHEDULED_SCALE" == "true" ]]; then
+            scripts/run_notebook_sync_validation.sh --scheduled
+          else
+            scripts/run_notebook_sync_validation.sh
+          fi
+      - name: Upload validation logs
+        if: always() && steps.validation.outputs.evidence_root != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: notebook-sync-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.validation.outputs.evidence_root }}/*.log
+          if-no-files-found: warn
+          retention-days: 14

@@ -7,11 +7,10 @@ final class NotePersistenceUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testTypedTextSurvivesRelaunchAndUpdatesMarkdownCopy() throws {
+    func testTypedTextSurvivesRelaunch() throws {
         app.launch()
 
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        let editor = try app.openOrCreateNotebookEditor(timeout: 15)
 
         let original = try XCTUnwrap(editor.value as? String)
         let marker = UUID().uuidString
@@ -33,26 +32,15 @@ final class NotePersistenceUITests: XCTestCase {
             identifier: "note-save-status",
             containing: "Saved on this device"
         )
-        try waitForStatus(
-            identifier: "markdown-copy-status",
-            containing: "Markdown copy up to date"
-        )
-
         app.terminate()
         app.launch()
 
-        let relaunchedEditor = app.textViews["markdown-editor"]
-        XCTAssertTrue(relaunchedEditor.waitForExistence(timeout: 15))
+        let relaunchedEditor = try app.openOrCreateNotebookEditor(timeout: 15)
         XCTAssertEqual(relaunchedEditor.value as? String, expected)
         try waitForStatus(
             identifier: "note-save-status",
             containing: "Saved on this device"
         )
-        try waitForStatus(
-            identifier: "markdown-copy-status",
-            containing: "Markdown copy up to date"
-        )
-
         let details = """
         Preserved \(original.utf8.count) original UTF-8 bytes.
         Appended marker: \(marker)

@@ -108,7 +108,7 @@ public actor NoteFileStorage: NoteStorage {
         } else if case let .valid(current) = observedCurrent,
                   current == previous,
                   retainedURL != nil || expectedMarker == .absent {
-            try Self.syncDirectory(directory)
+            try DurableFileIO.syncDirectory(directory)
             return previous
         } else if case .absent = observedCurrent, retainedURL != nil {
             sourceAlreadyRetained = true
@@ -118,7 +118,7 @@ public actor NoteFileStorage: NoteStorage {
 
         let temporary = temporaryURL(in: directory, prefix: "recovery")
         defer { try? fileManager.removeItem(at: temporary) }
-        try Self.writeAndSync(previous.data, to: temporary)
+        try DurableFileIO.writeAndSync(previous.data, to: temporary)
 
         if expectedMarker != .absent, !sourceAlreadyRetained {
             let quarantineURL = directory.appendingPathComponent(
@@ -126,19 +126,22 @@ public actor NoteFileStorage: NoteStorage {
             )
             switch expectedMarker {
             case let .bytes(data):
-                try Self.writeAndSync(data, to: quarantineURL)
+                try DurableFileIO.writeAndSync(data, to: quarantineURL)
             case .unreadable:
-                try Self.renameReplacing(currentURL, with: quarantineURL)
+                try DurableFileIO.renameReplacing(
+                    currentURL,
+                    with: quarantineURL
+                )
             case .absent:
                 break
             }
-            try Self.syncDirectory(directory)
+            try DurableFileIO.syncDirectory(directory)
             try afterStage(.sourceRetained)
         }
 
-        try Self.renameReplacing(temporary, with: currentURL)
+        try DurableFileIO.renameReplacing(temporary, with: currentURL)
         try afterStage(.currentRestored)
-        try Self.syncDirectory(directory)
+        try DurableFileIO.syncDirectory(directory)
         try afterStage(.directorySynced)
         return previous
     }
@@ -185,7 +188,7 @@ public actor NoteFileStorage: NoteStorage {
             try? fileManager.removeItem(at: previousTemporary)
         }
 
-        try Self.writeAndSync(snapshot.data, to: temporary)
+        try DurableFileIO.writeAndSync(snapshot.data, to: temporary)
         try afterStage(.temporarySynced)
 
         switch candidate(at: currentURL) {
@@ -199,20 +202,23 @@ public actor NoteFileStorage: NoteStorage {
             guard current.heads.isSubset(of: incoming.historyHeads) else {
                 throw NoteFileStorageError.disconnectedHistory
             }
-            try Self.writeAndSync(
+            try DurableFileIO.writeAndSync(
                 currentSnapshot.data,
                 to: previousTemporary
             )
-            try Self.renameReplacing(previousTemporary, with: previousURL)
-            try Self.syncDirectory(directory)
+            try DurableFileIO.renameReplacing(
+                previousTemporary,
+                with: previousURL
+            )
+            try DurableFileIO.syncDirectory(directory)
             try afterStage(.previousReplaced)
         case .corrupt, .unreadable, .unsupportedSchemaVersion:
             throw NoteFileStorageError.invalidCurrentDocument
         }
 
-        try Self.renameReplacing(temporary, with: currentURL)
+        try DurableFileIO.renameReplacing(temporary, with: currentURL)
         try afterStage(.currentReplaced)
-        try Self.syncDirectory(directory)
+        try DurableFileIO.syncDirectory(directory)
         try afterStage(.directorySynced)
     }
 
@@ -293,58 +299,6 @@ public actor NoteFileStorage: NoteStorage {
         directory.appendingPathComponent(
             ".\(prefix)-\(UUID().uuidString).tmp"
         )
-    }
-
-    private static func writeAndSync(_ data: Data, to url: URL) throws {
-        let descriptor = open(
-            url.path,
-            O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
-            S_IRUSR | S_IWUSR
-        )
-        guard descriptor >= 0 else { throw posixError() }
-        defer { close(descriptor) }
-
-        try data.withUnsafeBytes { rawBuffer in
-            guard let baseAddress = rawBuffer.baseAddress else { return }
-            var written = 0
-            while written < rawBuffer.count {
-                let result = Darwin.write(
-                    descriptor,
-                    baseAddress.advanced(by: written),
-                    rawBuffer.count - written
-                )
-                if result < 0, errno == EINTR {
-                    continue
-                }
-                guard result > 0 else { throw posixError() }
-                written += result
-            }
-        }
-        guard fsync(descriptor) == 0 else { throw posixError() }
-    }
-
-    private static func renameReplacing(
-        _ source: URL,
-        with destination: URL
-    ) throws {
-        let result = source.withUnsafeFileSystemRepresentation { sourcePath in
-            destination.withUnsafeFileSystemRepresentation {
-                destinationPath in
-                rename(sourcePath, destinationPath)
-            }
-        }
-        guard result == 0 else { throw posixError() }
-    }
-
-    private static func syncDirectory(_ directory: URL) throws {
-        let descriptor = open(directory.path, O_RDONLY | O_CLOEXEC)
-        guard descriptor >= 0 else { throw posixError() }
-        defer { close(descriptor) }
-        guard fsync(descriptor) == 0 else { throw posixError() }
-    }
-
-    private static func posixError() -> NSError {
-        NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
     }
 
     private static func identity(for information: stat) -> String {

@@ -2,7 +2,15 @@ import SwiftUI
 import NoteCore
 
 @main struct MyApp: App {
-    @State private var workspace = AppWorkspace()
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(NotebookAppDelegate.self)
+    private var appDelegate
+    #elseif os(macOS)
+    @NSApplicationDelegateAdaptor(NotebookAppDelegate.self)
+    private var appDelegate
+    #endif
+
+    @State private var workspace = NotebookWorkspace.shared
 
     var body: some Scene {
         #if os(macOS)
@@ -11,10 +19,10 @@ import NoteCore
             if let launch = CloudKitSmokeLaunch.current {
                 CloudKitSmokeCheckView(launch: launch)
             } else {
-                WorkspaceView(workspace: workspace)
+                NotebookApplicationView(workspace: workspace)
             }
             #else
-            WorkspaceView(workspace: workspace)
+            NotebookApplicationView(workspace: workspace)
             #endif
         }
         #else
@@ -23,10 +31,10 @@ import NoteCore
             if let launch = CloudKitSmokeLaunch.current {
                 CloudKitSmokeCheckView(launch: launch)
             } else {
-                WorkspaceView(workspace: workspace)
+                NotebookApplicationView(workspace: workspace)
             }
             #else
-            WorkspaceView(workspace: workspace)
+            NotebookApplicationView(workspace: workspace)
             #endif
         }
         #endif

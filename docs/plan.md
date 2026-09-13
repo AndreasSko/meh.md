@@ -11,10 +11,10 @@ Updated: 2026-09-13
 - The Automerge spike validates Unicode, history through file replacement,
   local merges, and interrupted saves. Real native adapter tests pass on
   macOS and iOS after a targeted macOS undo callback correction.
-- A production single-note core now saves serialized Automerge files, tracks
-  saved state with heads, and supports explicit previous-file recovery. The
-  app exposes one editing window/scene. The managed Markdown copy is
-  implemented and its signed Mac app checks passed. Sync remains open.
+- The milestone 1 single-note core saves serialized Automerge files, tracks
+  saved state with heads, and supports explicit previous-file recovery. Its
+  managed Markdown copy and signed Mac app checks passed. The activated app
+  now imports that state into the milestone 3 notebook.
 - The editor has been visually checked in iPhone and iPad simulators. The owner
   has exercised editing and undo on a physical iPhone; iPad device interaction
   remains open.
@@ -31,6 +31,11 @@ Updated: 2026-09-13
   revision-aware native editing, and a CloudKit adapter awaiting live setup.
   The iPhone/iPad localhost handoff and exact Markdown-copy checks passed.
   See [sync verification](sync-verification.md) for evidence and open work.
+- Milestone 3 notebook storage, replication, navigation, legacy bridging, and
+  structured Markdown copies are integrated into the default Local and iCloud
+  Dev builds. Signed Mac activation passed and the owner confirmed the
+  iPhone iCloud Dev activation test works. Broader cross-device operation
+  checks and physical iPad acceptance remain open.
 
 ## Working method
 
@@ -133,7 +138,7 @@ implementation checkpoints, and sub-agent assignments.
 
 Status: Mac/iPhone physical acceptance and iPad simulator convergence verified.
 Physical iPad checks remain open as follow-up validation.
-PR #6 and stacked PR #7 await review/merge.
+PR #6 and stacked PR #7 are merged as of 2026-09-13.
 
 See the [execution plan](milestone-2-plan.md). Prove the shared coordinator
 against a deterministic service and two simulator apps before iCloud device
@@ -166,7 +171,10 @@ models remote record storage without simulating Apple account services.
 
 ## 3 — A usable notebook
 
-Status: not started; depends on milestone 2.
+Status: core, replication, navigation, structured copies, permanent deletion,
+and automatic scheduling implemented on 2026-09-13. The development
+single-note compatibility bridge has been removed. See the
+[execution plan](milestone-3-plan.md).
 
 ### Work
 
@@ -176,11 +184,15 @@ Status: not started; depends on milestone 2.
   content.
 - Define and test rename collisions, folder moves, and delete-versus-edit
   behavior.
+- Publish active notes to the app-owned structured Markdown hierarchy without
+  ingesting external edits. Preserve earlier single-note copies without
+  maintaining them.
 - Replace fixed foreground polling with CloudKit scheduling and change
   notifications. Batch local uploads, retain activation/manual refresh, and
   measure responsiveness and battery impact as the note count grows.
   Milestone 2 already establishes retry-after handling and durable pending
-  work; production background delivery belongs to this scheduling work.
+  work. Deterministic local and CI coverage exercises sync without iCloud;
+  actual APNs delivery remains a physical-device check.
 
 ### Acceptance
 
@@ -190,6 +202,8 @@ Status: not started; depends on milestone 2.
   syntax.
 - Folder/note operations synchronize consistently across all three devices.
 - Concurrent deletion and editing leave edited content recoverable.
+- Existing activated notebooks reopen offline. A fresh cloud installation
+  joins the canonical version 2 notebook online.
 
 ## 4 — Daily-use hardening
 
@@ -206,6 +220,16 @@ Status: not started; depends on milestone 3.
   new account automatically.
 - Use a copied library for daily writing; fix observed editor, performance, and
   sync problems before adopting the app as the primary notebook.
+- Profile and improve large-notebook replication. The Milestone 3 synthetic
+  1,000-note debug run took 515.2 seconds for initial replication and 15.3
+  seconds for an incremental exchange. Compare release builds, investigate
+  replica application and Automerge decoding/merging, and retain the existing
+  convergence and durability tests. These are local synthetic measurements,
+  not CloudKit or device latency; see the
+  [validation record][scale-validation].
+
+[scale-validation]:
+  notebook-sync-validation.md#recorded-synthetic-run-2026-09-13
 
 ## 5 — Optional editor refinement
 

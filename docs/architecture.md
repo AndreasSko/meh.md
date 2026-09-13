@@ -76,8 +76,8 @@ undo must not be broken by styling or remote updates.
 
 The internal document state is authoritative for in-app editing and
 synchronization. Ordinary Markdown files are managed, one-way product outputs
-in user-visible local storage. The first version does not ingest external
-changes.
+in user-visible local storage. The activated notebook does not ingest external
+changes to these managed Markdown copies.
 
 The shared document core owns stable note identity, literal Markdown text,
 metadata, and edit application. Native editor adapters do not persist data.
@@ -112,16 +112,19 @@ transaction. Markdown materialization uses the approved
   systems.
 - On macOS, use a user-selected local folder and retain access with a
   security-scoped bookmark. Handle moved, missing, and inaccessible folders.
-- On iPhone and iPad, keep the projection in the app's Documents directory and
-  expose it through Files.
+- The notebook writes active notes beneath
+  `Documents/Notebook Copies/Markdown` and exposes that hierarchy through
+  Files. Trashed notes are omitted.
 - Protect an unrelated `note.md` when a destination is first selected. Once
   the app creates its managed copy, replace external edits on the next publish,
   activation, or reopen, and recreate deletions. Do not ingest external edits
   or create conflict copies.
 
-Markdown copies are not independent backups. In particular, an iOS or iPadOS
-Documents directory can be removed when the app is uninstalled. Provide an
-explicit full-library export to an independently chosen location. Maintain
+Earlier single-note copies remain where they were created, but activation no
+longer maintains them. Markdown copies are not independent backups. In
+particular, an iOS or iPadOS Documents directory can be removed when the app
+is uninstalled. Provide an explicit full-library export to an independently
+chosen location. Maintain
 recovery versions separately from the latest projection. Do not silently
 discard CRDT state and create new identities when recovery is needed.
 
@@ -153,6 +156,12 @@ so a rebuilt inbox cannot silently reuse an old offset. The initial adapter
 uses manual engine exchanges requested by the foreground app and explicit
 retry. Background/push scheduling remains a separate acceptance item.
 
+Notebook activation retains foreground polling. A fresh iCloud installation
+first joins the canonical version 1 note online, then activates its isolated
+version 2 catalog and note records. Existing activated notebooks open from
+local state while offline. The bridge imports later version 1 edits one way;
+it does not publish notebook changes into the old note.
+
 Native editor views retain the revision they actually display. A committed
 whole-text edit updates a branch at that revision and merges it into the live
 document, retaining remote edits received during composition. Remote buffer
@@ -181,10 +190,11 @@ making it the permanent editor interface.
 - Durable-save acknowledgment and local fallback recovery are implemented.
   The one-way Markdown-copy ownership policy is accepted. A user-facing
   history retention policy remains separate work.
-- Note/folder metadata schema, filename collisions, and delete-versus-edit
-  semantics.
-- Signed CloudKit record delivery, fresh-device download, account transitions,
-  background scheduling, and the cost of retained snapshot history.
+- Full-library import is implemented and tested. Permanent content cleanup
+  and explicit export remain separate work.
+- Signed notebook CloudKit delivery, fresh-device download, account
+  transitions, background scheduling, and the cost of retained snapshot
+  history.
 
 Resolve these when needed by the milestones. Keep this document aligned with
 the implemented design and explain the reasons for material changes.

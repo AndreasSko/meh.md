@@ -14,6 +14,7 @@ public final class NoteSession {
         case loadFailed(message: String)
     }
 
+    public private(set) var isPermanentlyDeleted = false
     public private(set) var text = ""
     public private(set) var status: Status = .loading
     public private(set) var recoveryErrorMessage: String?
@@ -22,7 +23,8 @@ public final class NoteSession {
     public var currentSnapshot: NoteSnapshot? { document?.snapshot() }
 
     public var isEditingEnabled: Bool {
-        switch status {
+        if isPermanentlyDeleted { return false }
+        return switch status {
         case .saved, .saving, .saveFailed:
             true
         case .loading, .recoveryRequired, .blocked, .loadFailed:
@@ -37,6 +39,8 @@ public final class NoteSession {
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var loadStarted = false
     @ObservationIgnored private var loadInFlight = false
+    @ObservationIgnored private var recoveryInFlight = false
+    @ObservationIgnored private var operationWaiters: [CheckedContinuation<Void, Never>] = []
 
     public init(storage: any NoteStorage) {
         self.storage = storage
@@ -53,7 +57,10 @@ public final class NoteSession {
 
         loadStarted = true
         loadInFlight = true
-        defer { loadInFlight = false }
+        defer {
+            loadInFlight = false
+            resumeOperationWaiters()
+        }
         status = .loading
         document = nil
         persistedHeads = nil
@@ -84,6 +91,33 @@ public final class NoteSession {
         case let .blocked(failure):
             status = .blocked(failure)
         }
+    }
+
+    func markPermanentlyDeleted() {
+        isPermanentlyDeleted = true
+    }
+
+    /// Permanent deletion disables new edits first, then waits for the one
+    /// serialized writer that may already have captured a snapshot.
+    func waitForPendingSave() async {
+        while loadInFlight || recoveryInFlight || saveTask != nil {
+            if let task = saveTask {
+                await task.value
+            } else {
+                await withCheckedContinuation { operationWaiters.append($0) }
+            }
+        }
+    }
+
+    func discardPermanentlyDeletedContent() {
+        guard isPermanentlyDeleted, !loadInFlight, !recoveryInFlight,
+            saveTask == nil
+        else { return }
+        document = nil
+        persistedHeads = nil
+        pendingSnapshot = nil
+        persistedSnapshot = nil
+        text = ""
     }
 
     public func replaceText(
@@ -156,11 +190,20 @@ public final class NoteSession {
     }
 
     public func recoverFromPrevious() async {
-        guard case let .recoveryRequired(recovery) = status else { return }
+        guard !isPermanentlyDeleted,
+            !recoveryInFlight,
+            case let .recoveryRequired(recovery) = status
+        else { return }
+        recoveryInFlight = true
+        defer {
+            recoveryInFlight = false
+            resumeOperationWaiters()
+        }
         status = .loading
         recoveryErrorMessage = nil
         do {
             let snapshot = try await storage.recover(recovery)
+            guard !isPermanentlyDeleted else { return }
             let document = try NoteDocument(snapshot: snapshot)
             try install(document, persistedHeads: snapshot.heads)
             persistedSnapshot = snapshot
@@ -206,6 +249,13 @@ public final class NoteSession {
             }
         }
         saveTask = nil
+        resumeOperationWaiters()
+    }
+
+    private func resumeOperationWaiters() {
+        let waiters = operationWaiters
+        operationWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
     }
 
     private static func message(for error: Error) -> String {

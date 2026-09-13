@@ -27,28 +27,285 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
 struct CloudKitTransportState: Codable, Equatable {
     var accountRecordName: String
     var zoneName: String
+    var protocolVersion: Int
     var inboxGeneration: UUID
     var engineState: Data?
-    var inbox: [SyncRecord]
+    private var inboxSlots: [SyncRecord?]
     var outbox: [String: SyncRecord]
+    var deletedNoteIDs: Set<UUID>
+    var purgedRecordIDs: Set<String>
+    var pendingRemoteDeletionIDs: Set<String>
+    var scannedDeletedNoteIDs: Set<UUID>
+    var unresolvedRemoteDeletionRecordIDs: Set<String>
     var hasUnexpectedDeletion: Bool
     var retryNotBefore: Date?
 
-    init(accountRecordName: String, zoneName: String) {
+    init(
+        accountRecordName: String,
+        zoneName: String,
+        protocolVersion: Int = 1
+    ) {
         self.accountRecordName = accountRecordName
         self.zoneName = zoneName
+        self.protocolVersion = protocolVersion
         inboxGeneration = UUID()
         engineState = nil
-        inbox = []
+        inboxSlots = []
         outbox = [:]
+        deletedNoteIDs = []
+        purgedRecordIDs = []
+        pendingRemoteDeletionIDs = []
+        scannedDeletedNoteIDs = []
+        unresolvedRemoteDeletionRecordIDs = []
         hasUnexpectedDeletion = false
         retryNotBefore = nil
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case accountRecordName, zoneName, protocolVersion, inboxGeneration
+        case engineState, inbox, outbox, deletedNoteIDs, purgedRecordIDs
+        case pendingRemoteDeletionIDs, scannedDeletedNoteIDs
+        case unresolvedRemoteDeletionRecordIDs
+        case hasUnexpectedDeletion, retryNotBefore
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        accountRecordName = try values.decode(String.self, forKey: .accountRecordName)
+        zoneName = try values.decode(String.self, forKey: .zoneName)
+        protocolVersion = try values.decodeIfPresent(
+            Int.self, forKey: .protocolVersion
+        ) ?? 1
+        inboxGeneration = try values.decode(UUID.self, forKey: .inboxGeneration)
+        engineState = try values.decodeIfPresent(Data.self, forKey: .engineState)
+        inboxSlots = try values.decode([SyncRecord?].self, forKey: .inbox)
+        outbox = try values.decode([String: SyncRecord].self, forKey: .outbox)
+        deletedNoteIDs = try values.decodeIfPresent(
+            Set<UUID>.self, forKey: .deletedNoteIDs
+        ) ?? []
+        purgedRecordIDs = try values.decodeIfPresent(
+            Set<String>.self, forKey: .purgedRecordIDs
+        ) ?? []
+        pendingRemoteDeletionIDs = try values.decodeIfPresent(
+            Set<String>.self, forKey: .pendingRemoteDeletionIDs
+        ) ?? purgedRecordIDs
+        scannedDeletedNoteIDs = try values.decodeIfPresent(
+            Set<UUID>.self, forKey: .scannedDeletedNoteIDs
+        ) ?? []
+        unresolvedRemoteDeletionRecordIDs = try values.decodeIfPresent(
+            Set<String>.self,
+            forKey: .unresolvedRemoteDeletionRecordIDs
+        ) ?? []
+        hasUnexpectedDeletion = try values.decode(
+            Bool.self, forKey: .hasUnexpectedDeletion
+        )
+        retryNotBefore = try values.decodeIfPresent(
+            Date.self, forKey: .retryNotBefore
+        )
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(accountRecordName, forKey: .accountRecordName)
+        try values.encode(zoneName, forKey: .zoneName)
+        try values.encode(protocolVersion, forKey: .protocolVersion)
+        try values.encode(inboxGeneration, forKey: .inboxGeneration)
+        try values.encodeIfPresent(engineState, forKey: .engineState)
+        try values.encode(inboxSlots, forKey: .inbox)
+        try values.encode(outbox, forKey: .outbox)
+        try values.encode(deletedNoteIDs, forKey: .deletedNoteIDs)
+        try values.encode(purgedRecordIDs, forKey: .purgedRecordIDs)
+        try values.encode(
+            pendingRemoteDeletionIDs,
+            forKey: .pendingRemoteDeletionIDs
+        )
+        try values.encode(
+            scannedDeletedNoteIDs, forKey: .scannedDeletedNoteIDs
+        )
+        try values.encode(
+            unresolvedRemoteDeletionRecordIDs,
+            forKey: .unresolvedRemoteDeletionRecordIDs
+        )
+        try values.encode(hasUnexpectedDeletion, forKey: .hasUnexpectedDeletion)
+        try values.encodeIfPresent(retryNotBefore, forKey: .retryNotBefore)
+    }
+
+    var inbox: [SyncRecord] { inboxSlots.compactMap { $0 } }
+
     mutating func appendToInbox(_ record: SyncRecord) throws {
         try record.validate()
-        guard !inbox.contains(where: { $0.id == record.id }) else { return }
-        inbox.append(record)
+        guard record.protocolVersion == protocolVersion else {
+            throw SyncError.invalidRecord
+        }
+        unresolvedRemoteDeletionRecordIDs.remove(record.id)
+        if purgedRecordIDs.contains(record.id) {
+            if record.protocolVersion == 2, record.kind == .note,
+               deletedNoteIDs.contains(record.snapshot.noteID) {
+                pendingRemoteDeletionIDs.insert(record.id)
+            }
+            return
+        }
+        guard !inboxSlots.contains(where: { $0?.id == record.id }) else {
+            return
+        }
+        if record.protocolVersion == 2, record.kind == .note,
+           deletedNoteIDs.contains(record.snapshot.noteID) {
+            inboxSlots.append(nil)
+            purgedRecordIDs.insert(record.id)
+            pendingRemoteDeletionIDs.insert(record.id)
+        } else {
+            inboxSlots.append(record)
+        }
+    }
+
+    mutating func appendToInboxIfChanged(
+        _ record: SyncRecord
+    ) throws -> Bool {
+        let priorInboxCount = inboxSlots.count
+        let priorPendingDeletionIDs = pendingRemoteDeletionIDs
+        let priorPurgedRecordIDs = purgedRecordIDs
+        let priorUnresolvedDeletionIDs = unresolvedRemoteDeletionRecordIDs
+        try appendToInbox(record)
+        return inboxSlots.count != priorInboxCount
+            || pendingRemoteDeletionIDs != priorPendingDeletionIDs
+            || purgedRecordIDs != priorPurgedRecordIDs
+            || unresolvedRemoteDeletionRecordIDs != priorUnresolvedDeletionIDs
+    }
+
+    mutating func purgeDeletedNotes(
+        _ noteIDs: Set<UUID>, notebookID: UUID
+    ) throws -> Set<String> {
+        guard protocolVersion == 2 else {
+            throw SyncError.unavailable(
+                "Permanent body cleanup requires notebook sync."
+            )
+        }
+        guard inbox.contains(where: {
+            $0.kind == .catalog && $0.notebookID == notebookID
+        }) else { throw SyncError.invalidRecord }
+        for record in inbox where record.notebookID != notebookID {
+            throw SyncError.invalidRecord
+        }
+        for record in outbox.values where record.notebookID != notebookID {
+            throw SyncError.invalidRecord
+        }
+        deletedNoteIDs.formUnion(noteIDs)
+        for index in inboxSlots.indices {
+            guard let record = inboxSlots[index], record.kind == .note,
+                  deletedNoteIDs.contains(record.snapshot.noteID) else {
+                continue
+            }
+            purgedRecordIDs.insert(record.id)
+            pendingRemoteDeletionIDs.insert(record.id)
+            inboxSlots[index] = nil
+        }
+        let outboxIDsToRemove = outbox.values.compactMap { record in
+            record.kind == .note
+                && deletedNoteIDs.contains(record.snapshot.noteID)
+                ? record.id : nil
+        }
+        for id in outboxIDsToRemove {
+            purgedRecordIDs.insert(id)
+            pendingRemoteDeletionIDs.insert(id)
+            outbox[id] = nil
+        }
+        return pendingRemoteDeletionIDs
+    }
+
+    @discardableResult
+    mutating func observeRemoteDeletions(
+        _ recordNames: Set<String>, bootstrapRecordName: String
+    ) -> Int {
+        let priorUnresolved = unresolvedRemoteDeletionRecordIDs
+        let previouslyUnexpected = hasUnexpectedDeletion
+        pendingRemoteDeletionIDs.subtract(recordNames)
+        if protocolVersion == 1 {
+            hasUnexpectedDeletion = hasUnexpectedDeletion
+                || !recordNames.isEmpty
+            return !previouslyUnexpected && hasUnexpectedDeletion ? 1 : 0
+        }
+        let catalogRecordIDs = Set(inbox.lazy.filter {
+            $0.kind == .catalog
+        }.map(\.id))
+        let knownNoteRecordIDs = Set(inbox.lazy.filter {
+            $0.kind == .note
+        }.map(\.id))
+        let unexpectedNoteRecordIDs = recordNames
+            .intersection(knownNoteRecordIDs)
+            .subtracting(purgedRecordIDs)
+        unresolvedRemoteDeletionRecordIDs.formUnion(
+            unexpectedNoteRecordIDs
+        )
+        hasUnexpectedDeletion = hasUnexpectedDeletion
+            || recordNames.contains(bootstrapRecordName)
+            || !catalogRecordIDs.isDisjoint(with: recordNames)
+        let newlyUnresolved = unresolvedRemoteDeletionRecordIDs
+            .subtracting(priorUnresolved).count
+        return newlyUnresolved
+            + (!previouslyUnexpected && hasUnexpectedDeletion ? 1 : 0)
+    }
+
+    mutating func resolveRemoteNoteDeletions() throws {
+        unresolvedRemoteDeletionRecordIDs.subtract(purgedRecordIDs)
+        guard !unresolvedRemoteDeletionRecordIDs.isEmpty else { return }
+        let permanentlyDeletedIDs = try inbox.reduce(
+            into: Set<UUID>()
+        ) { result, record in
+            guard record.kind == .catalog,
+                  let snapshot = record.catalogSnapshot else { return }
+            let catalog = try NotebookCatalogDocument(snapshot: snapshot)
+            result.formUnion(try catalog.items().lazy.filter {
+                $0.isPermanentlyDeleted
+            }.map(\.id))
+        }
+        let resolvedRecordIDs = Set(inbox.lazy.filter { record in
+            record.kind == .note
+                && permanentlyDeletedIDs.contains(record.snapshot.noteID)
+        }.map(\.id))
+        unresolvedRemoteDeletionRecordIDs.subtract(resolvedRecordIDs)
+    }
+
+    func validateRemoteDeletions() throws {
+        guard !hasUnexpectedDeletion,
+              unresolvedRemoteDeletionRecordIDs.isEmpty else {
+            throw CloudKitSyncTransportError.unexpectedDeletion
+        }
+    }
+
+    func validate(expectedProtocolVersion: Int) throws {
+        guard protocolVersion == expectedProtocolVersion else {
+            throw SyncError.scopeChanged
+        }
+        for record in inbox {
+            try record.validate()
+            guard record.protocolVersion == protocolVersion else {
+                throw SyncError.invalidRecord
+            }
+        }
+        for (id, record) in outbox {
+            try record.validate()
+            guard id == record.id,
+                  record.protocolVersion == protocolVersion else {
+                throw SyncError.invalidRecord
+            }
+        }
+        guard purgedRecordIDs.allSatisfy({ id in
+            id.count == 64 && id.utf8.allSatisfy {
+                ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+            }
+        }) else { throw SyncError.invalidRecord }
+        guard pendingRemoteDeletionIDs.isSubset(of: purgedRecordIDs),
+              scannedDeletedNoteIDs.isSubset(of: deletedNoteIDs) else {
+            throw SyncError.invalidRecord
+        }
+        try unresolvedRemoteDeletionRecordIDs.forEach {
+            try CloudKitRemoteRecordValidator.validateSnapshotID($0)
+        }
+        guard !inbox.contains(where: {
+            $0.kind == .note && deletedNoteIDs.contains($0.snapshot.noteID)
+        }), !outbox.values.contains(where: {
+            $0.kind == .note && deletedNoteIDs.contains($0.snapshot.noteID)
+        }) else { throw SyncError.invalidRecord }
     }
 
     func page(after cursor: String?, limit: Int) throws -> SyncPage {
@@ -57,30 +314,47 @@ struct CloudKitTransportState: Codable, Equatable {
             let prefix = "v2:\(inboxGeneration.uuidString):"
             guard cursor.hasPrefix(prefix),
                   let parsed = Int(cursor.dropFirst(prefix.count)),
-                  parsed >= 0, parsed <= inbox.count else {
+                  parsed >= 0, parsed <= inboxSlots.count else {
                 throw SyncError.invalidCursor
             }
             offset = parsed
         } else {
             offset = 0
         }
-        let end = min(offset + max(1, limit), inbox.count)
+        let end = min(offset + max(1, limit), inboxSlots.count)
         return SyncPage(
-            records: Array(inbox[offset..<end]),
+            records: inboxSlots[offset..<end].compactMap { $0 },
             cursor: "v2:\(inboxGeneration.uuidString):\(end)",
-            hasMore: end < inbox.count
+            hasMore: end < inboxSlots.count
+        )
+    }
+
+    func bufferedPage(after cursor: String?, limit: Int) throws -> SyncPage? {
+        let page = try page(after: cursor, limit: limit)
+        guard !page.records.isEmpty || page.hasMore else { return nil }
+        return SyncPage(
+            records: page.records,
+            cursor: page.cursor,
+            hasMore: true
         )
     }
 }
 
 actor CloudKitTransportStateStore {
     private let fileURL: URL
+    private let protocolVersion: Int
     private var state: CloudKitTransportState
 
-    init(directory: URL, accountRecordName: String, zoneName: String) throws {
+    init(
+        directory: URL,
+        accountRecordName: String,
+        zoneName: String,
+        protocolVersion: Int = 1
+    ) throws {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true
         )
+        self.protocolVersion = protocolVersion
         fileURL = directory.appendingPathComponent("cloudkit-sync-state.json")
         if FileManager.default.fileExists(atPath: fileURL.path) {
             do {
@@ -92,9 +366,9 @@ actor CloudKitTransportStateStore {
                 throw CloudKitSyncTransportError.corruptState
             }
             do {
-                for record in state.inbox { try record.validate() }
-                for record in state.outbox.values { try record.validate() }
+                try state.validate(expectedProtocolVersion: protocolVersion)
             } catch {
+                if error as? SyncError == .scopeChanged { throw error }
                 throw CloudKitSyncTransportError.corruptState
             }
             guard state.accountRecordName == accountRecordName,
@@ -104,7 +378,8 @@ actor CloudKitTransportStateStore {
         } else {
             state = CloudKitTransportState(
                 accountRecordName: accountRecordName,
-                zoneName: zoneName
+                zoneName: zoneName,
+                protocolVersion: protocolVersion
             )
             try Self.write(state, to: fileURL)
         }
@@ -112,11 +387,15 @@ actor CloudKitTransportStateStore {
 
     func snapshot() -> CloudKitTransportState { state }
 
-    func update(_ body: (inout CloudKitTransportState) throws -> Void) throws {
+    func update<Result: Sendable>(
+        _ body: (inout CloudKitTransportState) throws -> Result
+    ) throws -> Result {
         var next = state
-        try body(&next)
+        let result = try body(&next)
+        try next.validate(expectedProtocolVersion: protocolVersion)
         try Self.write(next, to: fileURL)
         state = next
+        return result
     }
 
     private static func write(
@@ -132,12 +411,54 @@ actor CloudKitEventCommitter {
 
     init(store: CloudKitTransportStateStore) { self.store = store }
 
-    func commitFetched(_ records: [SyncRecord]) async throws {
+    @discardableResult
+    func commitFetched(
+        _ records: [SyncRecord],
+        deleting recordNames: Set<String> = [],
+        bootstrapRecordName: String = ""
+    ) async throws -> CloudKitFetchedCommit {
+        guard failure == nil else { throw failure! }
+        guard !records.isEmpty || !recordNames.isEmpty else {
+            return CloudKitFetchedCommit()
+        }
+        do {
+            return try await store.update { state in
+                var result = CloudKitFetchedCommit()
+                result.deletionCount = state.observeRemoteDeletions(
+                    recordNames,
+                    bootstrapRecordName: bootstrapRecordName
+                )
+                for record in records {
+                    if try state.appendToInboxIfChanged(record) {
+                        result.recordCount += 1
+                    }
+                }
+                return result
+            }
+        } catch {
+            failure = error
+            throw error
+        }
+    }
+
+    func finishFetch() async throws {
         guard failure == nil else { throw failure! }
         do {
-            try await store.update { state in
-                for record in records { try state.appendToInbox(record) }
+            let current = await store.snapshot()
+            if current.unresolvedRemoteDeletionRecordIDs.isEmpty {
+                try current.validateRemoteDeletions()
+                return
             }
+            try await store.update { state in
+                try state.resolveRemoteNoteDeletions()
+                try state.validateRemoteDeletions()
+            }
+        } catch let error as CloudKitSyncTransportError
+            where error == .unexpectedDeletion
+        {
+            // A note deletion can arrive before its permanent catalog marker.
+            // Keep accepting later fetch events so that marker can resolve it.
+            throw error
         } catch {
             failure = error
             throw error
@@ -153,6 +474,37 @@ actor CloudKitEventCommitter {
             throw error
         }
     }
+
+    @discardableResult
+    func commitSent(
+        _ records: [CloudKitAcknowledgedRecord]
+    ) async throws -> Int {
+        guard failure == nil else { throw failure! }
+        do {
+            return try await store.update { state in
+                var committedCount = 0
+                for record in records {
+                    if let value = state.outbox.removeValue(
+                        forKey: record.id
+                    ) {
+                        committedCount += 1
+                        try state.appendToInbox(value)
+                    } else if try state.appendToInboxIfChanged(record.record) {
+                        committedCount += 1
+                    }
+                }
+                return committedCount
+            }
+        } catch {
+            failure = error
+            throw error
+        }
+    }
+}
+
+struct CloudKitAcknowledgedRecord: Sendable {
+    let id: String
+    let record: SyncRecord
 }
 
 enum CloudKitRemoteRecordValidator {
@@ -165,6 +517,178 @@ enum CloudKitRemoteRecordValidator {
               }) else {
             throw CloudKitSyncTransportError.invalidRemoteRecord
         }
+    }
+}
+
+enum CloudKitTransportMode: Equatable, Sendable {
+    case legacy
+    case notebook
+
+    var protocolVersion: Int { self == .legacy ? 1 : 2 }
+    var zoneName: String {
+        self == .legacy ? "meh-md-sync-v1" : "meh-md-notebook-v2"
+    }
+    var recordType: String {
+        self == .legacy
+            ? "AutomergeSnapshotV1"
+            : "AutomergeNotebookSnapshotV2"
+    }
+    var bootstrapName: String {
+        self == .legacy ? "canonical-seed-v1" : "canonical-notebook-v2"
+    }
+
+    func validate(zoneName: String) throws {
+        switch self {
+        case .legacy:
+            guard zoneName != CloudKitTransportMode.notebook.zoneName else {
+                throw SyncError.scopeChanged
+            }
+        case .notebook:
+            guard zoneName == self.zoneName else {
+                throw SyncError.scopeChanged
+            }
+        }
+    }
+
+    func validate(_ record: SyncRecord, bootstrap: Bool = false) throws {
+        try record.validate()
+        guard record.protocolVersion == protocolVersion else {
+            throw SyncError.invalidRecord
+        }
+        if self == .notebook, bootstrap, record.kind != .catalog {
+            throw SyncError.invalidRecord
+        }
+    }
+}
+
+struct CloudKitRecordCodec: @unchecked Sendable {
+    let mode: CloudKitTransportMode
+    let zoneID: CKRecordZone.ID
+
+    func encode(
+        _ value: SyncRecord,
+        id: CKRecord.ID,
+        assetURL: URL
+    ) throws -> CKRecord {
+        try mode.validate(
+            value,
+            bootstrap: id.recordName == mode.bootstrapName
+        )
+        guard id.zoneID == zoneID,
+              id.recordName == value.id
+                || id.recordName == mode.bootstrapName else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        let record = CKRecord(recordType: mode.recordType, recordID: id)
+        record["snapshotID"] = value.id
+        if mode == .legacy {
+            record["noteID"] = value.snapshot.noteID.uuidString
+        } else {
+            record["protocolVersion"] = NSNumber(value: value.protocolVersion)
+            record["kind"] = value.kind.rawValue
+            record["notebookID"] = value.notebookID?.uuidString
+            record["documentID"] = value.snapshot.noteID.uuidString
+        }
+        record["heads"] = try JSONEncoder().encode(value.snapshot.heads)
+        record["document"] = CKAsset(fileURL: assetURL)
+        return record
+    }
+
+    func decode(_ record: CKRecord) throws -> SyncRecord {
+        do {
+            return try decodeRemoteRecord(record)
+        } catch {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+    }
+
+    private func decodeRemoteRecord(_ record: CKRecord) throws -> SyncRecord {
+        guard record.recordType == mode.recordType,
+              record.recordID.zoneID == zoneID,
+              let id: String = record["snapshotID"],
+              let headsData: Data = record["heads"],
+              let asset: CKAsset = record["document"],
+              let source = asset.fileURL else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        try CloudKitRemoteRecordValidator.validateSnapshotID(id)
+        guard record.recordID.recordName == id
+                || record.recordID.recordName == mode.bootstrapName else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        let documentID: UUID
+        let version: Int
+        let kind: SyncDocumentKind
+        let notebookID: UUID?
+        switch mode {
+        case .legacy:
+            guard record["protocolVersion"] == nil,
+                  record["kind"] == nil,
+                  record["notebookID"] == nil,
+                  record["documentID"] == nil,
+                  let noteIDString: String = record["noteID"],
+                  let noteID = UUID(uuidString: noteIDString) else {
+                throw CloudKitSyncTransportError.invalidRemoteRecord
+            }
+            documentID = noteID
+            version = 1
+            kind = .note
+            notebookID = nil
+        case .notebook:
+            guard record["noteID"] == nil,
+                  let number: NSNumber = record["protocolVersion"],
+                  number.intValue == 2,
+                  number.doubleValue == 2,
+                  let kindValue: String = record["kind"],
+                  let decodedKind = SyncDocumentKind(rawValue: kindValue),
+                  let notebookIDString: String = record["notebookID"],
+                  let decodedNotebookID = UUID(uuidString: notebookIDString),
+                  let documentIDString: String = record["documentID"],
+                  let decodedDocumentID = UUID(uuidString: documentIDString)
+            else { throw CloudKitSyncTransportError.invalidRemoteRecord }
+            documentID = decodedDocumentID
+            version = number.intValue
+            kind = decodedKind
+            notebookID = decodedNotebookID
+        }
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: source.path
+        )
+        guard let size = attributes[.size] as? NSNumber,
+              size.intValue <= CloudKitRemoteRecordValidator.maximumAssetSize
+        else { throw CloudKitSyncTransportError.invalidRemoteRecord }
+        let snapshot = NoteSnapshot(
+            data: try Data(contentsOf: source),
+            heads: try JSONDecoder().decode(Set<String>.self, from: headsData),
+            noteID: documentID
+        )
+        let value: SyncRecord
+        if version == 1 {
+            value = SyncRecord(snapshot: snapshot)
+        } else if kind == .note, let notebookID {
+            value = SyncRecord(snapshot: snapshot, notebookID: notebookID)
+        } else if kind == .catalog, let notebookID,
+                  snapshot.noteID == notebookID {
+            value = SyncRecord(catalog: NotebookCatalogSnapshot(
+                data: snapshot.data,
+                heads: snapshot.heads,
+                notebookID: notebookID
+            ))
+        } else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        guard value.id == id else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        do {
+            try mode.validate(
+                value,
+                bootstrap: record.recordID.recordName == mode.bootstrapName
+            )
+        } catch {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        return value
     }
 }
 
@@ -191,6 +715,31 @@ struct CloudKitAssetStaging {
         guard completedUploads.remove(url) != nil else { return }
         try? FileManager.default.removeItem(at: url)
     }
+
+    mutating func purge(recordIDs: Set<String>) throws {
+        for id in recordIDs {
+            let url = directory.appendingPathComponent(id)
+            guard users[url] == nil else {
+                throw SyncError.unavailable(
+                    "A snapshot is still being staged for upload."
+                )
+            }
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                continue
+            }
+            try FileManager.default.removeItem(at: url)
+            completedUploads.remove(url)
+        }
+    }
+
+    mutating func discardAcknowledgedAssets(recordIDs: Set<String>) {
+        for id in recordIDs {
+            let url = directory.appendingPathComponent(id)
+            guard users[url] == nil else { continue }
+            try? FileManager.default.removeItem(at: url)
+            completedUploads.remove(url)
+        }
+    }
 }
 
 struct CloudKitRetryThrottle {
@@ -213,6 +762,136 @@ struct CloudKitRetryThrottle {
         guard let notBefore else { return nil }
         let interval = notBefore.timeIntervalSince(now)
         return interval > 0 ? interval : nil
+    }
+}
+
+struct CloudKitUploadBatch {
+    let ids: Set<String>
+    let recordIDs: [CKRecord.ID]
+
+    init(records: [SyncRecord], zoneID: CKRecordZone.ID) {
+        ids = Set(records.map(\.id))
+        recordIDs = ids.map {
+            CKRecord.ID(recordName: $0, zoneID: zoneID)
+        }
+    }
+}
+
+enum CloudKitBatchResultResolver {
+    static func resolve(
+        records: [SyncRecord],
+        acknowledgedIDs: Set<String>,
+        failures: [String: Error],
+        delegateFailure: Error?,
+        sendError: Error?
+    ) -> SyncBatchResult {
+        let requestedIDs = Set(records.map(\.id))
+        let durableAcknowledgements = acknowledgedIDs.intersection(requestedIDs)
+        let unacknowledgedIDs = requestedIDs.subtracting(
+            durableAcknowledgements
+        )
+        var failureCandidates = records.flatMap { record -> [Error] in
+            guard unacknowledgedIDs.contains(record.id),
+                  let failure = failures[record.id]
+            else { return [] }
+            return resolvedErrors(
+                failure,
+                unacknowledgedIDs: unacknowledgedIDs,
+                appliesToRecord: true
+            )
+        }
+        if let delegateFailure {
+            failureCandidates += resolvedErrors(
+                delegateFailure,
+                unacknowledgedIDs: unacknowledgedIDs
+            )
+        }
+        if !unacknowledgedIDs.isEmpty, let sendError {
+            failureCandidates += resolvedErrors(
+                sendError, unacknowledgedIDs: unacknowledgedIDs
+            )
+        }
+        var error = preferred(failureCandidates)
+        if error == nil, durableAcknowledgements != requestedIDs {
+            error = CloudKitSyncTransportError.uploadNotAcknowledged
+        }
+        return SyncBatchResult(
+            acknowledgedIDs: durableAcknowledgements,
+            error: error
+        )
+    }
+
+    private static func resolvedErrors(
+        _ error: Error,
+        unacknowledgedIDs: Set<String>,
+        appliesToRecord: Bool = false
+    ) -> [Error] {
+        guard let cloudError = error as? CKError,
+              cloudError.code == .partialFailure
+        else { return [error] }
+        let matchingErrors = leafFailures(
+            in: cloudError,
+            unacknowledgedIDs: unacknowledgedIDs,
+            appliesToRecord: appliesToRecord,
+            remainingDepth: 8
+        )
+        if !matchingErrors.isEmpty { return matchingErrors }
+        return [partialFailureFallback]
+    }
+
+    private static func leafFailures(
+        in error: Error,
+        unacknowledgedIDs: Set<String>,
+        appliesToRecord: Bool,
+        remainingDepth: Int
+    ) -> [Error] {
+        guard remainingDepth > 0 else {
+            return appliesToRecord ? [partialFailureFallback] : []
+        }
+        guard let cloudError = error as? CKError else {
+            return appliesToRecord ? [error] : []
+        }
+        guard cloudError.code == .partialFailure else {
+            return appliesToRecord
+                ? [CloudKitSyncTransportError.uploadFailed(
+                    code: cloudError.code.rawValue
+                )]
+                : []
+        }
+        guard let partialErrors = cloudError.partialErrorsByItemID,
+              !partialErrors.isEmpty
+        else {
+            return appliesToRecord ? [partialFailureFallback] : []
+        }
+        return partialErrors.flatMap { key, child in
+            let childApplies = appliesToRecord
+                || recordName(for: key).map(unacknowledgedIDs.contains)
+                == true
+            return leafFailures(
+                in: child,
+                unacknowledgedIDs: unacknowledgedIDs,
+                appliesToRecord: childApplies,
+                remainingDepth: remainingDepth - 1
+            )
+        }
+    }
+
+    private static var partialFailureFallback: Error {
+        CloudKitSyncTransportError.uploadFailed(
+            code: CKError.partialFailure.rawValue
+        )
+    }
+
+    private static func preferred(_ errors: [Error]) -> Error? {
+        errors.first(where: { !NotebookSyncRetryPolicy.isTransient($0) })
+            ?? errors.first
+    }
+
+    private static func recordName(for key: AnyHashable) -> String? {
+        if let recordID = key.base as? CKRecord.ID {
+            return recordID.recordName
+        }
+        return key.base as? String
     }
 }
 
@@ -305,31 +984,78 @@ struct CloudKitAvailabilityCooldownStore {
 @available(macOS 14.0, iOS 17.0, *)
 public final actor CloudKitSyncTransport: SyncTransport {
     public nonisolated let scope: String
+    public nonisolated let activity: AsyncStream<CloudKitSyncActivity>
 
-    private static let recordType = "AutomergeSnapshotV1"
-    private static let bootstrapName = "canonical-seed-v1"
     private static let pageSize = 100
 
     private let container: CKContainer
     private let database: CKDatabase
     private let expectedUserRecordID: CKRecord.ID
     private let zoneID: CKRecordZone.ID
+    private let mode: CloudKitTransportMode
+    private let codec: CloudKitRecordCodec
     private let store: CloudKitTransportStateStore
     private let eventCommitter: CloudKitEventCommitter
     private let assetDirectory: URL
+    private let automaticallySync: Bool
     private var assetStaging: CloudKitAssetStaging
+    private var engineAssetLeases: [String: [URL]] = [:]
     private var availabilityCooldown: CloudKitAvailabilityCooldownStore
     private var engine: CKSyncEngine!
+    private var awaitedUploadIDs = Set<String>()
     private var acknowledgedIDs = Set<String>()
     private var failedUploads: [String: Error] = [:]
     private var delegateFailure: Error?
     private var retryThrottle = CloudKitRetryThrottle()
+    private var publishInProgress = false
+    private var publishWaiters: [CheckedContinuation<Void, Never>] = []
+    private let activityChannel: CloudKitSyncActivityChannel
+    private var activityTracker = CloudKitSyncActivityTracker()
+
+    public static func persistedRetryNotBefore(
+        stateDirectory: URL
+    ) throws -> Date? {
+        try CloudKitAvailabilityCooldownStore(
+            directory: stateDirectory
+        ).notBefore
+    }
 
     public static func make(
         containerIdentifier: String,
         stateDirectory: URL,
         zoneName: String = "meh-md-sync-v1"
     ) async throws -> CloudKitSyncTransport {
+        try await make(
+            containerIdentifier: containerIdentifier,
+            stateDirectory: stateDirectory,
+            zoneName: zoneName,
+            mode: .legacy,
+            automaticallySync: false
+        )
+    }
+
+    public static func makeNotebook(
+        containerIdentifier: String,
+        stateDirectory: URL,
+        automaticallySync: Bool = false
+    ) async throws -> CloudKitSyncTransport {
+        try await make(
+            containerIdentifier: containerIdentifier,
+            stateDirectory: stateDirectory,
+            zoneName: CloudKitTransportMode.notebook.zoneName,
+            mode: .notebook,
+            automaticallySync: automaticallySync
+        )
+    }
+
+    private static func make(
+        containerIdentifier: String,
+        stateDirectory: URL,
+        zoneName: String,
+        mode: CloudKitTransportMode,
+        automaticallySync: Bool
+    ) async throws -> CloudKitSyncTransport {
+        try mode.validate(zoneName: zoneName)
         var availabilityCooldown = try CloudKitAvailabilityCooldownStore(
             directory: stateDirectory
         )
@@ -355,7 +1081,8 @@ public final actor CloudKitSyncTransport: SyncTransport {
         let store = try CloudKitTransportStateStore(
             directory: stateDirectory,
             accountRecordName: userRecordID.recordName,
-            zoneName: zoneName
+            zoneName: zoneName,
+            protocolVersion: mode.protocolVersion
         )
         let transport = CloudKitSyncTransport(
             containerIdentifier: containerIdentifier,
@@ -364,7 +1091,9 @@ public final actor CloudKitSyncTransport: SyncTransport {
             zoneName: zoneName,
             stateDirectory: stateDirectory,
             store: store,
-            availabilityCooldown: availabilityCooldown
+            availabilityCooldown: availabilityCooldown,
+            mode: mode,
+            automaticallySync: automaticallySync
         )
         try await transport.initialize()
         return transport
@@ -377,17 +1106,26 @@ public final actor CloudKitSyncTransport: SyncTransport {
         zoneName: String,
         stateDirectory: URL,
         store: CloudKitTransportStateStore,
-        availabilityCooldown: CloudKitAvailabilityCooldownStore
+        availabilityCooldown: CloudKitAvailabilityCooldownStore,
+        mode: CloudKitTransportMode,
+        automaticallySync: Bool
     ) {
         self.container = container
         database = container.privateCloudDatabase
         expectedUserRecordID = userRecordID
-        zoneID = CKRecordZone.ID(zoneName: zoneName)
+        let zoneID = CKRecordZone.ID(zoneName: zoneName)
+        self.zoneID = zoneID
+        self.mode = mode
+        codec = CloudKitRecordCodec(mode: mode, zoneID: zoneID)
         self.store = store
         eventCommitter = CloudKitEventCommitter(store: store)
+        let activityChannel = CloudKitSyncActivityChannel()
+        self.activityChannel = activityChannel
+        activity = activityChannel.stream
         assetDirectory = stateDirectory.appendingPathComponent("assets")
         assetStaging = CloudKitAssetStaging(directory: assetDirectory)
         self.availabilityCooldown = availabilityCooldown
+        self.automaticallySync = automaticallySync
         scope = "\(containerIdentifier)/private/\(userRecordID.recordName)/\(zoneName)"
     }
 
@@ -420,17 +1158,17 @@ public final actor CloudKitSyncTransport: SyncTransport {
             stateSerialization: serialization,
             delegate: self
         )
-        configuration.automaticallySync = false
+        configuration.automaticallySync = automaticallySync
         engine = CKSyncEngine(configuration)
     }
 
     public func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
         try await assertHealthy()
+        try mode.validate(record, bootstrap: true)
         try await verifyAccount()
-        try record.validate()
         try await ensureZone()
         let recordID = CKRecord.ID(
-            recordName: Self.bootstrapName, zoneID: zoneID
+            recordName: mode.bootstrapName, zoneID: zoneID
         )
         do {
             let existing = try await cloudRequest {
@@ -472,58 +1210,257 @@ public final actor CloudKitSyncTransport: SyncTransport {
     }
 
     public func publish(_ record: SyncRecord) async throws {
+        let result = try await publishBatch([record])
+        if let error = result.error { throw error }
+        guard result.acknowledgedIDs == [record.id] else {
+            throw CloudKitSyncTransportError.uploadNotAcknowledged
+        }
+    }
+
+    public func publishBatch(
+        _ records: [SyncRecord]
+    ) async throws -> SyncBatchResult {
+        guard !records.isEmpty else {
+            return SyncBatchResult(acknowledgedIDs: [], error: nil)
+        }
+        await acquirePublishLease()
+        defer { releasePublishLease() }
         try await assertHealthy()
+        for record in records { try mode.validate(record) }
         try await verifyAccount()
-        try record.validate()
-        let recordID = CKRecord.ID(recordName: record.id, zoneID: zoneID)
-        try await store.update { $0.outbox[record.id] = record }
-        let assetURL = try assetStaging.retain(record)
-        var uploadCompleted = false
-        defer {
-            assetStaging.release(
-                assetURL, uploadCompleted: uploadCompleted
+        let deletedNoteIDs = await store.snapshot().deletedNoteIDs
+        let suppressedIDs = Set(records.compactMap { record in
+            record.kind == .note
+                && deletedNoteIDs.contains(record.snapshot.noteID)
+                ? record.id : nil
+        })
+        let records = records.filter { !suppressedIDs.contains($0.id) }
+        guard !records.isEmpty else {
+            return SyncBatchResult(
+                acknowledgedIDs: suppressedIDs, error: nil
             )
         }
-        engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
-        acknowledgedIDs.remove(record.id)
-        failedUploads[record.id] = nil
+        try await store.update { state in
+            for record in records { state.outbox[record.id] = record }
+        }
+
+        var stagedAssets: [String: URL] = [:]
+        var completedIDs = Set<String>()
+        defer {
+            for (id, assetURL) in stagedAssets {
+                assetStaging.release(
+                    assetURL,
+                    uploadCompleted: completedIDs.contains(id)
+                )
+            }
+        }
+        for record in records {
+            if stagedAssets[record.id] == nil {
+                stagedAssets[record.id] = try assetStaging.retain(record)
+            }
+        }
+
+        let batch = CloudKitUploadBatch(records: records, zoneID: zoneID)
+        let ids = batch.ids
+        let recordIDs = batch.recordIDs
+        acknowledgedIDs.subtract(ids)
+        for id in ids { failedUploads[id] = nil }
+        awaitedUploadIDs.formUnion(ids)
+        defer {
+            awaitedUploadIDs.subtract(ids)
+            acknowledgedIDs.subtract(ids)
+            for id in ids { failedUploads[id] = nil }
+        }
+        engine.state.add(
+            pendingRecordZoneChanges: recordIDs.map { .saveRecord($0) }
+        )
         let sendError: Error?
         do {
             try await cloudRequest {
                 try await engine.sendChanges(
-                    .init(scope: .recordIDs([recordID]))
+                    .init(scope: .recordIDs(recordIDs))
                 )
             }
             sendError = nil
         } catch {
             sendError = error
         }
-        try await assertHealthy()
-        if let failure = failedUploads.removeValue(forKey: record.id) {
-            throw failure
-        }
-        if acknowledgedIDs.remove(record.id) != nil {
-            uploadCompleted = true
-            return
-        }
-        if let sendError { throw sendError }
-        throw CloudKitSyncTransportError.uploadNotAcknowledged
+        let result = CloudKitBatchResultResolver.resolve(
+            records: records,
+            acknowledgedIDs: acknowledgedIDs,
+            failures: failedUploads,
+            delegateFailure: delegateFailure,
+            sendError: sendError
+        )
+        completedIDs = result.acknowledgedIDs
+        return SyncBatchResult(
+            acknowledgedIDs: result.acknowledgedIDs.union(suppressedIDs),
+            error: result.error
+        )
     }
 
     public func fetch(after cursor: String?) async throws -> SyncPage {
         try await assertHealthy()
         try await verifyAccount()
+        let current = await store.snapshot()
+        if current.unresolvedRemoteDeletionRecordIDs.isEmpty {
+            if let buffered = try current.bufferedPage(
+                after: cursor,
+                limit: Self.pageSize
+            ) {
+                return buffered
+            }
+        }
         try await cloudRequest {
             try await engine.fetchChanges(.init(scope: .zoneIDs([zoneID])))
         }
         if let delegateFailure {
             throw delegateFailure
         }
-        let state = await store.snapshot()
-        guard !state.hasUnexpectedDeletion else {
-            throw CloudKitSyncTransportError.unexpectedDeletion
+        let fetched = await store.snapshot()
+        if !fetched.unresolvedRemoteDeletionRecordIDs.isEmpty {
+            try await store.update {
+                try $0.resolveRemoteNoteDeletions()
+            }
         }
+        let state = await store.snapshot()
+        try state.validateRemoteDeletions()
         return try state.page(after: cursor, limit: Self.pageSize)
+    }
+
+    public func purgeDeletedNotes(
+        _ noteIDs: Set<UUID>, notebookID: UUID
+    ) async throws {
+        guard mode == .notebook else {
+            throw SyncError.unavailable(
+                "Permanent body cleanup requires notebook sync."
+            )
+        }
+        await acquirePublishLease()
+        defer { releasePublishLease() }
+        try await assertHealthy()
+        var state = await store.snapshot()
+        guard state.inbox.contains(where: {
+            $0.kind == .catalog && $0.notebookID == notebookID
+        }) else { throw SyncError.identityConflict }
+        if !noteIDs.isSubset(of: state.deletedNoteIDs) {
+            try await store.update { state in
+                _ = try state.purgeDeletedNotes(
+                    noteIDs, notebookID: notebookID
+                )
+            }
+            state = await store.snapshot()
+        }
+        let requiresScan = !noteIDs.isSubset(
+            of: state.scannedDeletedNoteIDs
+        )
+        let requiresFetch = requiresScan
+            || !state.unresolvedRemoteDeletionRecordIDs.isEmpty
+        if state.pendingRemoteDeletionIDs.isEmpty && !requiresFetch {
+            return
+        }
+
+        try await verifyAccount()
+        try await ensureZone()
+        if requiresFetch {
+            try await cloudRequest {
+                try await engine.fetchChanges(
+                    .init(scope: .zoneIDs([zoneID]))
+                )
+            }
+            if let delegateFailure { throw delegateFailure }
+            let fetched = await store.snapshot()
+            if !fetched.unresolvedRemoteDeletionRecordIDs.isEmpty
+                || requiresScan {
+                try await store.update {
+                    if !$0.unresolvedRemoteDeletionRecordIDs.isEmpty {
+                        try $0.resolveRemoteNoteDeletions()
+                    }
+                    if requiresScan {
+                        $0.scannedDeletedNoteIDs.formUnion(noteIDs)
+                    }
+                }
+            }
+            state = await store.snapshot()
+            try state.validateRemoteDeletions()
+        }
+
+        let pendingIDs = state.pendingRemoteDeletionIDs
+        let changes = pendingIDs.map {
+            CKSyncEngine.PendingRecordZoneChange.saveRecord(
+                CKRecord.ID(recordName: $0, zoneID: zoneID)
+            )
+        }
+        engine.state.remove(pendingRecordZoneChanges: changes)
+        try assetStaging.purge(recordIDs: pendingIDs)
+
+        let sortedPendingIDs = pendingIDs.sorted()
+        for start in stride(
+            from: 0, to: sortedPendingIDs.count, by: 200
+        ) {
+            let batch = sortedPendingIDs[
+                start..<min(start + 200, sortedPendingIDs.count)
+            ]
+            let ids = batch.map {
+                CKRecord.ID(recordName: $0, zoneID: zoneID)
+            }
+            let results = try await cloudRequest {
+                try await database.modifyRecords(
+                    saving: [],
+                    deleting: ids,
+                    atomically: false
+                ).deleteResults
+            }
+            var completed = Set<String>()
+            var failure: Error?
+            for id in ids {
+                guard let result = results[id] else {
+                    failure = failure
+                        ?? CloudKitSyncTransportError.uploadNotAcknowledged
+                    continue
+                }
+                switch result {
+                case .success:
+                    completed.insert(id.recordName)
+                case .failure(let error as CKError)
+                    where error.code == .unknownItem:
+                    completed.insert(id.recordName)
+                case .failure(let error):
+                    await observeRetryAfter(error)
+                    failure = failure ?? error
+                }
+            }
+            if !completed.isEmpty {
+                try await store.update {
+                    $0.pendingRemoteDeletionIDs.subtract(completed)
+                }
+            }
+            if let failure { throw failure }
+        }
+    }
+
+    public func retryNotBefore() async -> Date? {
+        [retryThrottle.notBefore, availabilityCooldown.notBefore]
+            .compactMap { $0 }
+            .max()
+    }
+
+    private func acquirePublishLease() async {
+        if !publishInProgress {
+            publishInProgress = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            publishWaiters.append(continuation)
+        }
+    }
+
+    private func releasePublishLease() {
+        guard !publishWaiters.isEmpty else {
+            publishInProgress = false
+            return
+        }
+        publishWaiters.removeFirst().resume()
     }
 
     private func verifyAccount() async throws {
@@ -619,47 +1556,71 @@ public final actor CloudKitSyncTransport: SyncTransport {
     private func makeCloudRecord(
         _ value: SyncRecord, id: CKRecord.ID, assetURL: URL
     ) throws -> CKRecord {
-        let record = CKRecord(recordType: Self.recordType, recordID: id)
-        record["snapshotID"] = value.id
-        record["noteID"] = value.snapshot.noteID.uuidString
-        record["heads"] = try JSONEncoder().encode(value.snapshot.heads)
-        record["document"] = CKAsset(fileURL: assetURL)
-        return record
+        try codec.encode(value, id: id, assetURL: assetURL)
     }
 
     private func decode(_ record: CKRecord) throws -> SyncRecord {
-        guard record.recordType == Self.recordType,
-              let id: String = record["snapshotID"],
-              let noteIDString: String = record["noteID"],
-              let noteID = UUID(uuidString: noteIDString),
-              let headsData: Data = record["heads"],
-              let asset: CKAsset = record["document"],
-              let source = asset.fileURL else {
-            throw CloudKitSyncTransportError.invalidRemoteRecord
+        try codec.decode(record)
+    }
+
+    private func yieldAfterDelegateReturns(
+        _ activities: [CloudKitSyncActivity]
+    ) {
+        guard !activities.isEmpty else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            activityChannel.yield(activities)
         }
-        try CloudKitRemoteRecordValidator.validateSnapshotID(id)
-        guard record.recordID.zoneID == zoneID,
-              record.recordID.recordName == id
-                || record.recordID.recordName == Self.bootstrapName else {
-            throw CloudKitSyncTransportError.invalidRemoteRecord
+    }
+
+    private func prepareEngineBatchRecords(
+        pending: [CKSyncEngine.PendingRecordZoneChange],
+        outbox: [String: SyncRecord]
+    ) throws -> [String: CKRecord] {
+        var records: [String: CKRecord] = [:]
+        do {
+            for change in pending {
+                guard case let .saveRecord(recordID) = change,
+                      recordID.zoneID == zoneID,
+                      let value = outbox[recordID.recordName] else {
+                    continue
+                }
+                let assetURL = try assetStaging.retain(value)
+                do {
+                    records[recordID.recordName] = try codec.encode(
+                        value,
+                        id: recordID,
+                        assetURL: assetURL
+                    )
+                    engineAssetLeases[recordID.recordName, default: []]
+                        .append(assetURL)
+                } catch {
+                    assetStaging.release(assetURL, uploadCompleted: false)
+                    throw error
+                }
+            }
+            return records
+        } catch {
+            for id in records.keys {
+                releaseEngineAssetLease(for: id, uploadCompleted: false)
+            }
+            throw error
         }
-        let attributes = try FileManager.default.attributesOfItem(
-            atPath: source.path
+    }
+
+    private func releaseEngineAssetLease(
+        for id: String,
+        uploadCompleted: Bool
+    ) {
+        guard var leases = engineAssetLeases[id], !leases.isEmpty else {
+            return
+        }
+        let assetURL = leases.removeFirst()
+        engineAssetLeases[id] = leases.isEmpty ? nil : leases
+        assetStaging.release(
+            assetURL,
+            uploadCompleted: uploadCompleted
         )
-        guard let size = attributes[.size] as? NSNumber,
-              size.intValue <= CloudKitRemoteRecordValidator.maximumAssetSize
-        else { throw CloudKitSyncTransportError.invalidRemoteRecord }
-        let snapshot = NoteSnapshot(
-            data: try Data(contentsOf: source),
-            heads: try JSONDecoder().decode(Set<String>.self, from: headsData),
-            noteID: noteID
-        )
-        let value = SyncRecord(snapshot: snapshot)
-        guard value.id == id else {
-            throw CloudKitSyncTransportError.invalidRemoteRecord
-        }
-        try value.validate()
-        return value
     }
 }
 
@@ -668,6 +1629,8 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
     public func handleEvent(
         _ event: CKSyncEngine.Event, syncEngine: CKSyncEngine
     ) async {
+        var activities: [CloudKitSyncActivity] = []
+        defer { yieldAfterDelegateReturns(activities) }
         do {
             switch event {
             case let .stateUpdate(update):
@@ -678,28 +1641,70 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                 let targetDeletions = changes.deletions.filter {
                     $0.recordID.zoneID == zoneID
                 }
-                guard targetDeletions.isEmpty else {
-                    try await store.update { $0.hasUnexpectedDeletion = true }
-                    return
-                }
+                let recordNames = Set(targetDeletions.map {
+                    $0.recordID.recordName
+                })
                 let records = try changes.modifications
                     .map(\.record)
                     .filter { $0.recordID.zoneID == zoneID }
                     .map(decode)
-                try await eventCommitter.commitFetched(records)
+                let committed = try await eventCommitter.commitFetched(
+                    records,
+                    deleting: recordNames,
+                    bootstrapRecordName: mode.bootstrapName
+                )
+                activityTracker.recordFetch(
+                    recordCount: committed.recordCount,
+                    deletionCount: committed.deletionCount
+                )
             case let .sentRecordZoneChanges(changes):
-                for record in changes.savedRecords {
+                let savedIDs = Set(changes.savedRecords.map {
+                    $0.recordID.recordName
+                })
+                let failedIDs = Set(changes.failedRecordSaves.map {
+                    $0.record.recordID.recordName
+                })
+                var durablyCommittedIDs = Set<String>()
+                defer {
+                    for id in savedIDs {
+                        releaseEngineAssetLease(
+                            for: id,
+                            uploadCompleted: durablyCommittedIDs.contains(id)
+                        )
+                    }
+                    for id in failedIDs {
+                        releaseEngineAssetLease(
+                            for: id,
+                            uploadCompleted: durablyCommittedIDs.contains(id)
+                        )
+                    }
+                }
+                let savedRecords = try changes.savedRecords.map { record in
                     let id = record.recordID.recordName
                     let saved = try decode(record)
                     guard saved.id == id else {
                         throw CloudKitSyncTransportError.invalidRemoteRecord
                     }
-                    acknowledgedIDs.insert(id)
-                    try await store.update { state in
-                        if let value = state.outbox.removeValue(forKey: id) {
-                            try state.appendToInbox(value)
-                        }
-                    }
+                    return CloudKitAcknowledgedRecord(
+                        id: id,
+                        record: saved
+                    )
+                }
+                if !savedRecords.isEmpty {
+                    let committedCount = try await eventCommitter.commitSent(
+                        savedRecords
+                    )
+                    durablyCommittedIDs.formUnion(savedRecords.map(\.id))
+                    acknowledgedIDs.formUnion(
+                        Set(savedRecords.map(\.id))
+                            .intersection(awaitedUploadIDs)
+                    )
+                    assetStaging.discardAcknowledgedAssets(
+                        recordIDs: Set(savedRecords.map(\.id))
+                    )
+                    activityTracker.recordAcknowledgements(
+                        committedCount
+                    )
                 }
                 for failure in changes.failedRecordSaves {
                     await observeRetryAfter(failure.error)
@@ -717,25 +1722,47 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                                 throw CloudKitSyncTransportError
                                     .invalidRemoteRecord
                             }
-                            try await store.update { state in
-                                if let pending = state.outbox.removeValue(
+                            let committed = try await store.update { state in
+                                let pending = state.outbox.removeValue(
                                     forKey: id
-                                ) {
-                                    try state.appendToInbox(pending)
-                                }
+                                )
+                                let changed = try state.appendToInboxIfChanged(
+                                    pending ?? value
+                                )
+                                return pending != nil || changed
                             }
+                            durablyCommittedIDs.insert(id)
                             syncEngine.state.remove(
                                 pendingRecordZoneChanges: [
                                     .saveRecord(failure.record.recordID)
                                 ]
                             )
-                            acknowledgedIDs.insert(id)
+                            if awaitedUploadIDs.contains(id) {
+                                acknowledgedIDs.insert(id)
+                            }
+                            assetStaging.discardAcknowledgedAssets(
+                                recordIDs: [id]
+                            )
+                            if committed {
+                                activityTracker.recordAcknowledgements(1)
+                            }
                         } catch {
-                            failedUploads[id] = error
+                            if awaitedUploadIDs.contains(id) {
+                                failedUploads[id] = error
+                            }
+                            activities.append(.failed(
+                                error.localizedDescription
+                            ))
                         }
                     } else {
-                        failedUploads[id] = CloudKitSyncTransportError
+                        let error = CloudKitSyncTransportError
                             .uploadFailed(code: failure.error.code.rawValue)
+                        if awaitedUploadIDs.contains(id) {
+                            failedUploads[id] = error
+                        }
+                        activities.append(.failed(
+                            error.localizedDescription
+                        ))
                     }
                 }
             case let .accountChange(change):
@@ -748,18 +1775,58 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                 @unknown default:
                     delegateFailure = SyncError.scopeChanged
                 }
+                activities.append(.accountChanged)
             case let .fetchedDatabaseChanges(changes):
                 if changes.deletions.contains(where: { $0.zoneID == zoneID }) {
                     try await store.update { $0.hasUnexpectedDeletion = true }
+                    activities.append(.failed(
+                        CloudKitSyncTransportError.unexpectedDeletion
+                            .localizedDescription
+                    ))
+                }
+            case let .didFetchRecordZoneChanges(completion):
+                if completion.zoneID == zoneID, let error = completion.error {
+                    await observeRetryAfter(error)
+                    if let delegateFailure { throw delegateFailure }
+                    activities.append(.failed(error.localizedDescription))
+                }
+            case let .didFetchChanges(completion):
+                do {
+                    try await eventCommitter.finishFetch()
+                    let reason: CloudKitSyncReason =
+                        completion.context.reason == .scheduled
+                        ? .scheduled
+                        : .manual
+                    if let activity = activityTracker.finishFetch(
+                        reason: reason
+                    ) {
+                        activities.append(activity)
+                    }
+                } catch let error as CloudKitSyncTransportError
+                    where error == .unexpectedDeletion
+                {
+                    // A peer's permanent marker may arrive in a later fetch.
+                    // Surface this pass without poisoning future delegate work.
+                    activities.append(.failed(error.localizedDescription))
+                }
+            case let .didSendChanges(completion):
+                if let activity = activityTracker.finishSend(
+                    wasScheduled: completion.context.reason == .scheduled
+                ) {
+                    activities.append(activity)
                 }
             default:
                 break
             }
         } catch {
             delegateFailure = error
+            activities.append(.failed(error.localizedDescription))
             if case let .sentRecordZoneChanges(changes) = event {
                 for record in changes.savedRecords {
-                    failedUploads[record.recordID.recordName] = error
+                    let id = record.recordID.recordName
+                    if awaitedUploadIDs.contains(id) {
+                        failedUploads[id] = error
+                    }
                 }
             }
         }
@@ -773,23 +1840,27 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
             context.options.scope.contains($0)
         }
         let outbox = await store.snapshot().outbox
-        return await CKSyncEngine.RecordZoneChangeBatch(
-            pendingChanges: pending
-        ) { [assetDirectory, zoneID] recordID in
-            guard recordID.zoneID == zoneID,
-                  let value = outbox[recordID.recordName] else { return nil }
-            let assetURL = assetDirectory.appendingPathComponent(value.id)
-            if !FileManager.default.fileExists(atPath: assetURL.path) {
-                guard (try? value.snapshot.data.write(
-                    to: assetURL, options: .atomic
-                )) != nil else { return nil }
-            }
-            let record = CKRecord(recordType: Self.recordType, recordID: recordID)
-            record["snapshotID"] = value.id
-            record["noteID"] = value.snapshot.noteID.uuidString
-            record["heads"] = try? JSONEncoder().encode(value.snapshot.heads)
-            record["document"] = CKAsset(fileURL: assetURL)
-            return record
+        let records: [String: CKRecord]
+        do {
+            records = try prepareEngineBatchRecords(
+                pending: pending,
+                outbox: outbox
+            )
+        } catch {
+            delegateFailure = error
+            yieldAfterDelegateReturns([.failed(error.localizedDescription)])
+            return nil
         }
+        let batch = await CKSyncEngine.RecordZoneChangeBatch(
+            pendingChanges: pending
+        ) { recordID in
+            records[recordID.recordName]
+        }
+        if batch == nil {
+            for id in records.keys {
+                releaseEngineAssetLease(for: id, uploadCompleted: false)
+            }
+        }
+        return batch
     }
 }

@@ -151,6 +151,143 @@ final class SyncTransportTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(transport.scope.contains("#device tests & spaces"))
     }
 
+    func testDefaultBatchStopsAtFailureAndReturnsPartialAcknowledgements()
+        async throws
+    {
+        let records = try (0..<3).map { try record(text: "batch-\($0)") }
+        let transport = FailingBatchTransport(failingID: records[1].id)
+
+        let result = try await transport.publishBatch(records)
+        let publishedIDs = await transport.publishedIDs
+        let retryNotBefore = await transport.retryNotBefore()
+
+        XCTAssertEqual(result.acknowledgedIDs, [records[0].id])
+        XCTAssertNotNil(result.error)
+        XCTAssertEqual(publishedIDs, records.prefix(2).map(\.id))
+        XCTAssertNil(retryNotBefore)
+    }
+
+    func testInMemoryPurgeKeepsCatalogCursorAndSuppressesLateBody()
+        async throws
+    {
+        let notebookID = UUID()
+        let deletedID = UUID()
+        let retainedID = UUID()
+        let store = InMemorySyncStore()
+        let transport = InMemorySyncTransport(
+            scope: "cleanup", store: store, pageSize: 1
+        )
+        let catalog = SyncRecord(
+            catalog: try NotebookCatalogDocument(
+                notebookID: notebookID
+            ).snapshot()
+        )
+        let deleted = SyncRecord(
+            snapshot: try NoteDocument(
+                noteID: deletedID, text: "deleted"
+            ).snapshot(),
+            notebookID: notebookID
+        )
+        let retained = SyncRecord(
+            snapshot: try NoteDocument(
+                noteID: retainedID, text: "retained"
+            ).snapshot(),
+            notebookID: notebookID
+        )
+        let late = SyncRecord(
+            snapshot: try NoteDocument(
+                noteID: deletedID, text: "late"
+            ).snapshot(),
+            notebookID: notebookID
+        )
+        _ = try await transport.bootstrap(proposing: catalog)
+        try await transport.publish(deleted)
+        let catalogPage = try await transport.fetch(after: nil)
+        try await transport.publish(retained)
+
+        try await transport.purgeDeletedNotes(
+            [deletedID], notebookID: notebookID
+        )
+        try await transport.purgeDeletedNotes(
+            [deletedID], notebookID: notebookID
+        )
+        try await transport.publish(late)
+
+        let afterCatalog = try await transport.fetch(
+            after: catalogPage.cursor
+        )
+        let final = try await transport.fetch(after: afterCatalog.cursor)
+        XCTAssertTrue(afterCatalog.records.isEmpty)
+        XCTAssertTrue(afterCatalog.hasMore)
+        XCTAssertEqual(final.records, [retained])
+        XCTAssertFalse(final.hasMore)
+        let replay = try await transport.fetch(after: nil)
+        XCTAssertEqual(replay.records, [catalog])
+    }
+
+    func testLocalAdapterEncodesNotebookPurge() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SyncURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let notebookID = UUID()
+        let noteID = UUID()
+        let transport = LocalSyncTransport(
+            baseURL: URL(string: "http://127.0.0.1:8765/")!,
+            workspace: "cleanup",
+            session: session,
+            protocolVersion: 2
+        )
+
+        SyncURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v2/purge")
+            let body = try JSONSerialization.jsonObject(
+                with: try requestBody(request)
+            ) as? [String: Any]
+            XCTAssertEqual(body?["scope"] as? String, "cleanup")
+            XCTAssertEqual(
+                UUID(uuidString: body?["notebookID"] as? String ?? ""),
+                notebookID
+            )
+            XCTAssertEqual(
+                (body?["noteIDs"] as? [String])?.compactMap(
+                    UUID.init(uuidString:)
+                ),
+                [noteID]
+            )
+            return (
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                Data("{\"stored\":true}".utf8)
+            )
+        }
+
+        try await transport.purgeDeletedNotes(
+            [noteID], notebookID: notebookID
+        )
+    }
+
+    func testDefaultPurgeFailsWhenTransportDoesNotSupportCleanup()
+        async
+    {
+        let transport = FailingBatchTransport(failingID: "unused")
+        do {
+            try await transport.purgeDeletedNotes(
+                [], notebookID: UUID()
+            )
+            XCTFail("Expected cleanup to be unsupported")
+        } catch let error as SyncError {
+            guard case .unavailable = error else {
+                return XCTFail("Expected unavailable, got \(error)")
+            }
+        } catch {
+            XCTFail("Expected SyncError, got \(error)")
+        }
+    }
+
     private func record(text: String) throws -> SyncRecord {
         SyncRecord(snapshot: try NoteDocument(noteID: noteID, text: text).snapshot())
     }
@@ -167,6 +304,43 @@ final class SyncTransportTests: XCTestCase, @unchecked Sendable {
         } catch {
             XCTFail("Expected SyncError, got \(error)")
         }
+    }
+}
+
+private func requestBody(_ request: URLRequest) throws -> Data {
+    if let body = request.httpBody { return body }
+    let stream = try XCTUnwrap(request.httpBodyStream)
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4_096)
+    while stream.hasBytesAvailable {
+        let count = stream.read(&buffer, maxLength: buffer.count)
+        if count < 0 { throw try XCTUnwrap(stream.streamError) }
+        if count == 0 { break }
+        data.append(buffer, count: count)
+    }
+    return data
+}
+
+private actor FailingBatchTransport: SyncTransport {
+    nonisolated let scope = "batch-test"
+    let failingID: String
+    private(set) var publishedIDs: [String] = []
+
+    init(failingID: String) { self.failingID = failingID }
+
+    func bootstrap(proposing record: SyncRecord) -> SyncRecord { record }
+
+    func publish(_ record: SyncRecord) throws {
+        publishedIDs.append(record.id)
+        if record.id == failingID {
+            throw SyncError.unavailable("simulated batch failure")
+        }
+    }
+
+    func fetch(after cursor: String?) -> SyncPage {
+        SyncPage(records: [], cursor: cursor ?? "done", hasMore: false)
     }
 }
 

@@ -4,8 +4,8 @@ Use the shared scheme menu beside Xcode's Run button:
 
 | Scheme | Installed app | Default behavior |
 | --- | --- | --- |
-| `meh.md Local` | `meh.md` | Local editing |
-| `meh.md iCloud Dev` | `meh.md iCloud Dev` | Foreground iCloud sync |
+| `meh.md Local` | `meh.md` | Local notebook |
+| `meh.md iCloud Dev` | `meh.md iCloud Dev` | Notebook with iCloud |
 
 The legacy `meh.md` scheme is an alias for the local build, so existing build
 commands continue to work. All schemes use the same app target.
@@ -15,26 +15,38 @@ commands continue to work. All schemes use the same app target.
 1. Select `meh.md iCloud Dev` and run it on your Mac.
 2. Select the same scheme and run it on your iPhone. Both devices must use the
    same iCloud account.
-3. Type in either editor while both apps are open. Changes are checked every
-   three seconds; Sync Now is also available.
+3. Edit notes or folder metadata while both apps are open. The prototype
+   checks while foregrounded. Open Sync Details from the cloud toolbar button
+   for Sync Now, progress, and errors. The bottom indicator hides when idle.
+   Sync Event Log retains recent local diagnostics; use Copy Log or Share Log
+   after an unexpected upload or retry.
 4. Quit and reopen the installed `meh.md iCloud Dev` app normally. The build
    keeps using iCloud without Xcode or launch environment variables.
 
-The first connected device creates the shared note. A fresh second install
-joins that same note. A fresh install needs iCloud for its initial setup and
-shows a retry action if setup fails. Once joined, the note opens for local
-editing even when iCloud is unavailable.
+The first connected device establishes the version 2 notebook. A fresh second
+installation must be online to join it. Existing notebooks open for local
+editing before cloud account discovery, even when iCloud is unavailable.
+Single-note migration and compatibility sync are no longer active.
 
 The iCloud Dev build has bundle identifier `de.andreas-sk.meh-md.icloud-dev`,
 its own sandbox, and the visible app name `meh.md iCloud Dev`. It coexists with
-`meh.md` and does not import or replace the original app's local note.
+`meh.md`; their existing local notebook stores remain separate.
+
+Set `MEH_NOTEBOOK_PREVIEW=1` only for the separate Debug preview workspace.
+Normal Local and iCloud Dev launches use their activated notebook stores.
 
 `Debug-iCloud` compiles in the iCloud default and uses CloudKit's Development
 environment. This is a development build, including when archived through its
-scheme. Production distribution and background delivery are separate work.
-The regular Local scheme archives its Release configuration.
+scheme. It includes APNs entitlements and iOS background notification mode
+for [automatic sync](notebook-sync-scheduling.md). Production distribution
+remains separate work. The regular Local scheme archives its Release
+configuration.
 
 ## Automated acceptance checks
+
+The checks below record the version 1 single-note acceptance workflow. They
+are historical evidence; single-note compatibility is no longer active.
+They do not establish current multi-note deletion or cloud recovery behavior.
 
 `ICloudDevelopmentUITests` are opt-in because they use the live development
 container. Build for testing on the iCloud Dev scheme, choose a unique

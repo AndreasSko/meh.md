@@ -60,39 +60,116 @@ class WorkspaceStore:
         self.max_response_bytes = max_response_bytes
         self._lock = threading.RLock()
 
-    def bootstrap(self, scope: object, record: object) -> dict[str, Any]:
+    def bootstrap(
+        self,
+        scope: object,
+        record: object,
+        protocol_version: int = 1,
+    ) -> dict[str, Any]:
         checked_scope = self._validate_scope(scope)
-        checked_record = self._validate_record(record)
+        checked_version = self._validate_protocol_version(protocol_version)
+        checked_record = self._validate_record(record, checked_version)
+        if checked_version == 2 and checked_record["kind"] != "catalog":
+            raise StoreError(
+                "invalid_record",
+                "Version 2 bootstrap records must contain a catalog.",
+            )
+        storage_scope = self._storage_scope(checked_scope, checked_version)
         with self._lock:
-            state = self._load(checked_scope)
+            state = self._load(storage_scope, checked_version)
             seed_id = state["seedID"]
             if seed_id is not None:
                 return self._record_by_id(state, seed_id)
 
+            self._bind_notebook(state, checked_record, checked_version)
             self._append(state, checked_record)
             state["seedID"] = checked_record["id"]
-            self._write(checked_scope, state)
+            self._write(storage_scope, state)
             return checked_record
 
-    def publish(self, scope: object, record: object) -> None:
+    def publish(
+        self,
+        scope: object,
+        record: object,
+        protocol_version: int = 1,
+    ) -> None:
         checked_scope = self._validate_scope(scope)
-        checked_record = self._validate_record(record)
+        checked_version = self._validate_protocol_version(protocol_version)
+        checked_record = self._validate_record(record, checked_version)
+        storage_scope = self._storage_scope(checked_scope, checked_version)
         with self._lock:
-            state = self._load(checked_scope)
+            state = self._load(storage_scope, checked_version)
+            if checked_version == 2 and state["seedID"] is None:
+                raise StoreError(
+                    "bootstrap_required",
+                    "Version 2 workspaces require a catalog bootstrap.",
+                    409,
+                )
+            self._bind_notebook(state, checked_record, checked_version)
+            if (
+                checked_version == 2
+                and checked_record["kind"] == "note"
+                and checked_record["snapshot"]["noteID"]
+                in state["deletedNoteIDs"]
+            ):
+                return
             if self._append(state, checked_record):
-                self._write(checked_scope, state)
+                self._write(storage_scope, state)
+
+    def purge_deleted_notes(
+        self,
+        scope: object,
+        notebook_id: object,
+        note_ids: object,
+    ) -> None:
+        checked_scope = self._validate_scope(scope)
+        checked_notebook_id = self._validate_uuid(
+            notebook_id, "The notebook identifier is invalid."
+        )
+        checked_note_ids = self._validate_uuid_list(note_ids)
+        storage_scope = self._storage_scope(checked_scope, 2)
+        with self._lock:
+            state = self._load(storage_scope, 2)
+            if state["seedID"] is None:
+                raise StoreError(
+                    "bootstrap_required",
+                    "Version 2 workspaces require a catalog bootstrap.",
+                    409,
+                )
+            if state["notebookID"] != checked_notebook_id:
+                raise StoreError(
+                    "notebook_conflict",
+                    "The cleanup belongs to a different notebook.",
+                    409,
+                )
+
+            deleted = set(state["deletedNoteIDs"])
+            deleted.update(checked_note_ids)
+            state["deletedNoteIDs"] = sorted(deleted)
+            state["records"] = [
+                None
+                if record is not None
+                and record["kind"] == "note"
+                and record["snapshot"]["noteID"] in deleted
+                else record
+                for record in state["records"]
+            ]
+            self._write(storage_scope, state)
 
     def fetch(
         self,
         scope: object,
         cursor: object = None,
         limit: object = DEFAULT_PAGE_SIZE,
+        protocol_version: int = 1,
     ) -> dict[str, Any]:
         checked_scope = self._validate_scope(scope)
         checked_limit = self._validate_limit(limit)
+        checked_version = self._validate_protocol_version(protocol_version)
+        storage_scope = self._storage_scope(checked_scope, checked_version)
         with self._lock:
-            state = self._load(checked_scope)
-            offset = self._decode_cursor(checked_scope, cursor)
+            state = self._load(storage_scope, checked_version)
+            offset = self._decode_cursor(storage_scope, cursor)
             records = state["records"]
             if offset > len(records):
                 raise StoreError(
@@ -104,7 +181,7 @@ class WorkspaceStore:
             high = maximum_end
             while low < high:
                 candidate = (low + high + 1) // 2
-                page = self._page(checked_scope, records, offset, candidate)
+                page = self._page(storage_scope, records, offset, candidate)
                 if len(encode_json(page)) <= self.max_response_bytes:
                     low = candidate
                 else:
@@ -116,17 +193,19 @@ class WorkspaceStore:
                     "A stored record exceeds the response-size limit.",
                     500,
                 )
-            return self._page(checked_scope, records, offset, low)
+            return self._page(storage_scope, records, offset, low)
 
     def _page(
         self,
         scope: str,
-        records: list[dict[str, Any]],
+        records: list[dict[str, Any] | None],
         offset: int,
         end: int,
     ) -> dict[str, Any]:
         return {
-            "records": records[offset:end],
+            "records": [
+                record for record in records[offset:end] if record is not None
+            ],
             "cursor": self._encode_cursor(scope, end),
             "hasMore": end < len(records),
         }
@@ -135,19 +214,23 @@ class WorkspaceStore:
         name = hashlib.sha256(scope.encode("utf-8")).hexdigest() + ".json"
         return self.root / name
 
-    def _load(self, scope: str) -> dict[str, Any]:
+    def _load(self, scope: str, protocol_version: int) -> dict[str, Any]:
         path = self._path(scope)
         if not path.exists():
-            return {
-                "version": 1,
+            state = {
+                "version": protocol_version,
                 "scope": scope,
                 "seedID": None,
                 "records": [],
             }
+            if protocol_version == 2:
+                state["notebookID"] = None
+                state["deletedNoteIDs"] = []
+            return state
         try:
             state = json.loads(path.read_text(encoding="utf-8"))
             if (
-                state.get("version") != 1
+                state.get("version") != protocol_version
                 or state.get("scope") != scope
                 or not isinstance(state.get("records"), list)
                 or not (
@@ -156,18 +239,54 @@ class WorkspaceStore:
                 )
             ):
                 raise ValueError("invalid workspace envelope")
+            if protocol_version == 1 and any(
+                item is None for item in state["records"]
+            ):
+                raise ValueError("version 1 workspace contains tombstones")
             checked_records = [
-                self._validate_record(item) for item in state["records"]
+                None
+                if item is None
+                else self._validate_record(item, protocol_version)
+                for item in state["records"]
             ]
-            if len({item["id"] for item in checked_records}) != len(
-                checked_records
+            live_records = [
+                item for item in checked_records if item is not None
+            ]
+            if len({item["id"] for item in live_records}) != len(
+                live_records
             ):
                 raise ValueError("duplicate record identifier")
             seed_id = state["seedID"]
             if seed_id is not None and seed_id not in {
-                item["id"] for item in checked_records
+                item["id"] for item in live_records
             }:
                 raise ValueError("missing seed record")
+            if protocol_version == 2:
+                notebook_id = state.get("notebookID")
+                if not isinstance(notebook_id, str):
+                    raise ValueError("missing notebook identifier")
+                parsed_notebook_id = str(uuid.UUID(notebook_id)).upper()
+                if any(
+                    item["notebookID"] != parsed_notebook_id
+                    for item in live_records
+                ):
+                    raise ValueError("mixed notebook identifiers")
+                if seed_id is not None and self._record_by_id(
+                    {"records": live_records}, seed_id
+                )["kind"] != "catalog":
+                    raise ValueError("version 2 seed is not a catalog")
+                deleted_note_ids = self._validate_uuid_list(
+                    state.get("deletedNoteIDs", [])
+                )
+                deleted_note_id_set = set(deleted_note_ids)
+                if any(
+                    item["kind"] == "note"
+                    and item["snapshot"]["noteID"] in deleted_note_id_set
+                    for item in live_records
+                ):
+                    raise ValueError("deleted note body remains stored")
+                state["notebookID"] = parsed_notebook_id
+                state["deletedNoteIDs"] = deleted_note_ids
             state["records"] = checked_records
             return state
         except StoreError as error:
@@ -214,6 +333,8 @@ class WorkspaceStore:
         record: dict[str, Any],
     ) -> bool:
         for existing in state["records"]:
+            if existing is None:
+                continue
             if existing["id"] != record["id"]:
                 continue
             if existing != record:
@@ -232,6 +353,8 @@ class WorkspaceStore:
         record_id: str,
     ) -> dict[str, Any]:
         for record in state["records"]:
+            if record is None:
+                continue
             if record["id"] == record_id:
                 return record
         raise StoreError(
@@ -255,6 +378,45 @@ class WorkspaceStore:
         return value
 
     @staticmethod
+    def _validate_protocol_version(value: object) -> int:
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value not in (1, 2)
+        ):
+            raise StoreError(
+                "invalid_protocol_version",
+                "Protocol version must be 1 or 2.",
+            )
+        return value
+
+    @staticmethod
+    def _storage_scope(scope: str, protocol_version: int) -> str:
+        if protocol_version == 1:
+            return scope
+        # External scopes cannot contain control characters, so this namespace
+        # can never collide with an existing version 1 workspace name.
+        return "\0meh-notebook-v2\0" + scope
+
+    @staticmethod
+    def _bind_notebook(
+        state: dict[str, Any],
+        record: dict[str, Any],
+        protocol_version: int,
+    ) -> None:
+        if protocol_version == 1:
+            return
+        notebook_id = state["notebookID"]
+        if notebook_id is None:
+            state["notebookID"] = record["notebookID"]
+        elif notebook_id != record["notebookID"]:
+            raise StoreError(
+                "notebook_conflict",
+                "The record belongs to a different notebook.",
+                409,
+            )
+
+    @staticmethod
     def _validate_limit(value: object) -> int:
         try:
             limit = int(value)
@@ -268,7 +430,37 @@ class WorkspaceStore:
         return limit
 
     @staticmethod
-    def _validate_record(value: object) -> dict[str, Any]:
+    def _validate_uuid(value: object, message: str) -> str:
+        if not isinstance(value, str):
+            raise StoreError("invalid_record", message)
+        try:
+            return str(uuid.UUID(value)).upper()
+        except ValueError as error:
+            raise StoreError("invalid_record", message) from error
+
+    @classmethod
+    def _validate_uuid_list(cls, value: object) -> list[str]:
+        if not isinstance(value, list) or len(value) > 100_000:
+            raise StoreError(
+                "invalid_record", "Deleted note identifiers are invalid."
+            )
+        checked = [
+            cls._validate_uuid(
+                item, "A deleted note identifier is invalid."
+            )
+            for item in value
+        ]
+        if len(set(checked)) != len(checked):
+            raise StoreError(
+                "invalid_record", "Deleted note identifiers must be unique."
+            )
+        return sorted(checked)
+
+    @staticmethod
+    def _validate_record(
+        value: object,
+        protocol_version: int = 1,
+    ) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise StoreError("invalid_record", "Record must be a JSON object.")
         record_id = value.get("id")
@@ -300,7 +492,60 @@ class WorkspaceStore:
                 "invalid_record",
                 "Snapshot data or note identifier is invalid.",
             ) from error
-        if hashlib.sha256(raw_data).hexdigest() != record_id:
+        if protocol_version == 1:
+            if value.get("protocolVersion", 1) != 1:
+                raise StoreError(
+                    "invalid_record",
+                    "Record protocol version does not match the route.",
+                )
+            if value.get("kind", "note") != "note" or value.get(
+                "notebookID"
+            ) is not None:
+                raise StoreError(
+                    "invalid_record",
+                    "Version 1 records must use the legacy note shape.",
+                )
+            digest_input = raw_data
+        else:
+            kind = value.get("kind")
+            notebook_id = value.get("notebookID")
+            if value.get("protocolVersion") != 2 or kind not in (
+                "note",
+                "catalog",
+            ):
+                raise StoreError(
+                    "invalid_record",
+                    "Version 2 record metadata is invalid.",
+                )
+            if not isinstance(notebook_id, str):
+                raise StoreError(
+                    "invalid_record",
+                    "Version 2 records require a notebook identifier.",
+                )
+            try:
+                parsed_notebook_id = uuid.UUID(notebook_id)
+            except ValueError as error:
+                raise StoreError(
+                    "invalid_record",
+                    "The notebook identifier is invalid.",
+                ) from error
+            if kind == "catalog" and parsed_note_id != parsed_notebook_id:
+                raise StoreError(
+                    "invalid_record",
+                    "A catalog document must identify its notebook.",
+                )
+            prefix = (
+                "meh-notebook-v2\n"
+                + kind
+                + "\n"
+                + str(parsed_notebook_id).upper()
+                + "\n"
+                + str(parsed_note_id).upper()
+                + "\n"
+            ).encode("utf-8")
+            digest_input = prefix + raw_data
+
+        if hashlib.sha256(digest_input).hexdigest() != record_id:
             raise StoreError(
                 "invalid_record",
                 "Record identifier does not match the snapshot data.",
@@ -308,14 +553,25 @@ class WorkspaceStore:
         if any(not head or len(head) > 256 for head in heads):
             raise StoreError("invalid_record", "Snapshot heads are invalid.")
 
-        return {
+        checked = {
             "id": record_id,
             "snapshot": {
                 "data": base64.b64encode(raw_data).decode("ascii"),
                 "heads": sorted(heads),
-                "noteID": str(parsed_note_id),
+                "noteID": str(parsed_note_id).upper()
+                if protocol_version == 2
+                else str(parsed_note_id),
             },
         }
+        if protocol_version == 2:
+            checked.update(
+                {
+                    "protocolVersion": 2,
+                    "kind": kind,
+                    "notebookID": str(parsed_notebook_id).upper(),
+                }
+            )
+        return checked
 
     def _encode_cursor(self, scope: str, offset: int) -> str:
         value = {
@@ -369,11 +625,29 @@ class SyncRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             body = self._read_json_body()
-            if self.path == "/v1/bootstrap":
-                record = self.store.bootstrap(body.get("scope"), body.get("record"))
+            path = self.path
+            if path in ("/v1/bootstrap", "/v2/bootstrap"):
+                version = 1 if path.startswith("/v1/") else 2
+                record = self.store.bootstrap(
+                    body.get("scope"),
+                    body.get("record"),
+                    version,
+                )
                 self._send_json(200, record)
-            elif self.path == "/v1/records":
-                self.store.publish(body.get("scope"), body.get("record"))
+            elif path in ("/v1/records", "/v2/records"):
+                version = 1 if path.startswith("/v1/") else 2
+                self.store.publish(
+                    body.get("scope"),
+                    body.get("record"),
+                    version,
+                )
+                self._send_json(200, {"stored": True})
+            elif path == "/v2/purge":
+                self.store.purge_deleted_notes(
+                    body.get("scope"),
+                    body.get("notebookID"),
+                    body.get("noteIDs"),
+                )
                 self._send_json(200, {"stored": True})
             else:
                 raise StoreError("not_found", "The route does not exist.", 404)
@@ -383,8 +657,9 @@ class SyncRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         try:
             parsed = urlsplit(self.path)
-            if parsed.path != "/v1/records":
+            if parsed.path not in ("/v1/records", "/v2/records"):
                 raise StoreError("not_found", "The route does not exist.", 404)
+            version = 1 if parsed.path.startswith("/v1/") else 2
             query = parse_qs(parsed.query, keep_blank_values=True)
             if any(len(values) != 1 for values in query.values()):
                 raise StoreError("invalid_query", "Query values must be unique.")
@@ -400,6 +675,7 @@ class SyncRequestHandler(BaseHTTPRequestHandler):
                     required=False,
                     default=str(DEFAULT_PAGE_SIZE),
                 ),
+                version,
             )
             self._send_json(200, result)
         except StoreError as error:
