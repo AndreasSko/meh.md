@@ -133,7 +133,7 @@ implementation checkpoints, and sub-agent assignments.
 
 Status: Mac/iPhone physical acceptance and iPad simulator convergence verified.
 Physical iPad checks remain open as follow-up validation.
-PR #6 and stacked PR #7 await review/merge.
+PR #6 and stacked PR #7 are merged as of 2026-09-13.
 
 See the [execution plan](milestone-2-plan.md). Prove the shared coordinator
 against a deterministic service and two simulator apps before iCloud device
@@ -166,7 +166,8 @@ models remote record storage without simulating Apple account services.
 
 ## 3 — A usable notebook
 
-Status: not started; depends on milestone 2.
+Status: core implementation started on 2026-09-13; app wiring follows a
+behavior review checkpoint. See the [execution plan](milestone-3-plan.md).
 
 ### Work
 

@@ -3,7 +3,8 @@ Stupid, minimalist, vibe-coded Note taking app that hopefully has better sync
 than Obsidian 🤞
 
 Personal native Markdown notes for Mac, iPhone, and iPad. Currently in
-early development, with milestone 1 complete and milestone 2 in progress. One
+early development. Local persistence and single-note sync are implemented;
+milestone 3 adds the notebook core before its UI and sync integration. One
 note saves locally as an Automerge document and reopens after quitting. The app
 also maintains a user-visible Markdown copy as a one-way, read-only product
 output. Use the `meh.md Local` or `meh.md iCloud Dev` Xcode scheme to choose
@@ -37,6 +38,10 @@ newly selected destination remains untouched.
   signed-device checks.
 - [Sync verification](docs/sync-verification.md): replica tests, simulator
   handoff evidence, and remaining acceptance work.
+- [Notebook execution plan](docs/milestone-3-plan.md): staged delivery and
+  behavior feedback checkpoints.
+- [Notebook core contract](docs/notebook-core-contract.md): metadata, Trash,
+  collision rules, and migration boundaries.
 - [Architecture notes](docs/architecture.md): proposed technical approach and
   open decisions.
 - [Editor investigation](docs/editor-investigation.md): FSNotes findings and

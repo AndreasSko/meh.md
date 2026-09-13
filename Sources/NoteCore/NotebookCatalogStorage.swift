@@ -1,46 +1,105 @@
 import Darwin
 import Foundation
 
-public enum NoteFileStorageError: Error, Equatable {
+public enum NotebookCatalogStorageError: Error, Equatable {
     case invalidIncomingDocument
     case invalidCurrentDocument
-    case noteIdentityMismatch
+    case notebookIdentityMismatch
     case disconnectedHistory
     case recoverySourceChanged
 }
 
-enum NoteFileWriteStage: CaseIterable {
+public enum NotebookCatalogFileFailure: Equatable, Sendable {
+    case valid
+    case absent
+    case corrupt
+    case unreadable
+    case unsupportedSchemaVersion
+}
+
+public struct NotebookCatalogRecovery: Equatable, Sendable {
+    public let previous: NotebookCatalogSnapshot
+    public let currentFailure: NotebookCatalogFileFailure
+    let currentMarker: NotebookCatalogFileMarker?
+
+    public init(
+        previous: NotebookCatalogSnapshot,
+        currentFailure: NotebookCatalogFileFailure
+    ) {
+        self.previous = previous
+        self.currentFailure = currentFailure
+        currentMarker = nil
+    }
+
+    init(
+        previous: NotebookCatalogSnapshot,
+        currentFailure: NotebookCatalogFileFailure,
+        currentMarker: NotebookCatalogFileMarker
+    ) {
+        self.previous = previous
+        self.currentFailure = currentFailure
+        self.currentMarker = currentMarker
+    }
+}
+
+public struct NotebookCatalogLoadFailure: Equatable, Sendable {
+    public let current: NotebookCatalogFileFailure
+    public let previous: NotebookCatalogFileFailure
+
+    public init(
+        current: NotebookCatalogFileFailure,
+        previous: NotebookCatalogFileFailure
+    ) {
+        self.current = current
+        self.previous = previous
+    }
+}
+
+public enum NotebookCatalogLoadResult: Equatable, Sendable {
+    case firstLaunch
+    case current(NotebookCatalogSnapshot)
+    case recoveryRequired(NotebookCatalogRecovery)
+    case blocked(NotebookCatalogLoadFailure)
+}
+
+enum NotebookCatalogFileMarker: Equatable, Sendable {
+    case absent
+    case bytes(Data)
+    case unreadable(String)
+}
+
+enum NotebookCatalogWriteStage: CaseIterable {
     case temporarySynced
     case previousReplaced
     case currentReplaced
     case directorySynced
 }
 
-enum NoteRecoveryStage: Equatable {
+enum NotebookCatalogRecoveryStage: CaseIterable, Equatable {
     case sourceRetained
     case currentRestored
     case directorySynced
 }
 
-public actor NoteFileStorage: NoteStorage {
+public actor NotebookCatalogStorage {
     public nonisolated let currentURL: URL
     public nonisolated let previousURL: URL
 
     public init(directory: URL) {
-        currentURL = directory.appendingPathComponent("note.automerge")
+        currentURL = directory.appendingPathComponent("catalog.automerge")
         previousURL = directory.appendingPathComponent(
-            "note.previous.automerge"
+            "catalog.previous.automerge"
         )
     }
 
-    public func load() -> NoteLoadResult {
+    public func load() -> NotebookCatalogLoadResult {
         let current = candidate(at: currentURL)
         switch current {
-        case let .valid(snapshot):
+        case .valid(let snapshot):
             return .current(snapshot)
         case .unsupportedSchemaVersion:
             return .blocked(
-                NoteLoadFailure(
+                NotebookCatalogLoadFailure(
                     current: .unsupportedSchemaVersion,
                     previous: failure(at: previousURL)
                 )
@@ -50,9 +109,9 @@ public actor NoteFileStorage: NoteStorage {
         }
 
         let previous = candidate(at: previousURL)
-        if case let .valid(snapshot) = previous {
+        if case .valid(let snapshot) = previous {
             return .recoveryRequired(
-                NoteRecovery(
+                NotebookCatalogRecovery(
                     previous: snapshot,
                     currentFailure: current.failure,
                     currentMarker: current.marker
@@ -63,32 +122,35 @@ public actor NoteFileStorage: NoteStorage {
             return .firstLaunch
         }
         return .blocked(
-            NoteLoadFailure(
+            NotebookCatalogLoadFailure(
                 current: current.failure,
                 previous: previous.failure
             )
         )
     }
 
-    public func save(_ snapshot: NoteSnapshot) throws {
+    public func save(_ snapshot: NotebookCatalogSnapshot) throws {
         try write(snapshot)
     }
 
-    public func recover(_ recovery: NoteRecovery) throws -> NoteSnapshot {
+    public func recover(
+        _ recovery: NotebookCatalogRecovery
+    ) throws -> NotebookCatalogSnapshot {
         try recover(recovery, afterStage: { _ in })
     }
 
     func recover(
-        _ recovery: NoteRecovery,
-        afterStage: (NoteRecoveryStage) throws -> Void
-    ) throws -> NoteSnapshot {
+        _ recovery: NotebookCatalogRecovery,
+        afterStage: (NotebookCatalogRecoveryStage) throws -> Void
+    ) throws -> NotebookCatalogSnapshot {
         let source = candidate(at: previousURL)
-        guard case let .valid(previous) = source,
-              previous == recovery.previous else {
-            throw NoteFileStorageError.recoverySourceChanged
+        guard case .valid(let previous) = source,
+            previous == recovery.previous
+        else {
+            throw NotebookCatalogStorageError.recoverySourceChanged
         }
         guard let expectedMarker = recovery.currentMarker else {
-            throw NoteFileStorageError.recoverySourceChanged
+            throw NotebookCatalogStorageError.recoverySourceChanged
         }
 
         let fileManager = FileManager.default
@@ -105,15 +167,16 @@ public actor NoteFileStorage: NoteStorage {
         let sourceAlreadyRetained: Bool
         if observedCurrent.marker == expectedMarker {
             sourceAlreadyRetained = retainedURL != nil
-        } else if case let .valid(current) = observedCurrent,
-                  current == previous,
-                  retainedURL != nil || expectedMarker == .absent {
+        } else if case .valid(let current) = observedCurrent,
+            current == previous,
+            retainedURL != nil || expectedMarker == .absent
+        {
             try DurableFileIO.syncDirectory(directory)
             return previous
         } else if case .absent = observedCurrent, retainedURL != nil {
             sourceAlreadyRetained = true
         } else {
-            throw NoteFileStorageError.recoverySourceChanged
+            throw NotebookCatalogStorageError.recoverySourceChanged
         }
 
         let temporary = temporaryURL(in: directory, prefix: "recovery")
@@ -122,10 +185,10 @@ public actor NoteFileStorage: NoteStorage {
 
         if expectedMarker != .absent, !sourceAlreadyRetained {
             let quarantineURL = directory.appendingPathComponent(
-                "note.quarantine-\(UUID().uuidString).automerge"
+                "catalog.quarantine-\(UUID().uuidString).automerge"
             )
             switch expectedMarker {
-            case let .bytes(data):
+            case .bytes(let data):
                 try DurableFileIO.writeAndSync(data, to: quarantineURL)
             case .unreadable:
                 try DurableFileIO.renameReplacing(
@@ -146,29 +209,15 @@ public actor NoteFileStorage: NoteStorage {
         return previous
     }
 
-    private func quarantineURL(
-        matching marker: NoteFileMarker,
-        in directory: URL
-    ) -> URL? {
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        ) else { return nil }
-        return urls.first { url in
-            url.lastPathComponent.hasPrefix("note.quarantine-")
-                && candidate(at: url).marker == marker
-        }
-    }
-
     func write(
-        _ snapshot: NoteSnapshot,
-        afterStage: (NoteFileWriteStage) throws -> Void = { _ in }
+        _ snapshot: NotebookCatalogSnapshot,
+        afterStage: (NotebookCatalogWriteStage) throws -> Void = { _ in }
     ) throws {
-        let incoming: NoteDocument
+        let incoming: NotebookCatalogDocument
         do {
-            incoming = try NoteDocument(snapshot: snapshot)
+            incoming = try NotebookCatalogDocument(snapshot: snapshot)
         } catch {
-            throw NoteFileStorageError.invalidIncomingDocument
+            throw NotebookCatalogStorageError.invalidIncomingDocument
         }
 
         let fileManager = FileManager.default
@@ -177,7 +226,6 @@ public actor NoteFileStorage: NoteStorage {
             at: directory,
             withIntermediateDirectories: true
         )
-
         let temporary = temporaryURL(in: directory, prefix: "current")
         let previousTemporary = temporaryURL(
             in: directory,
@@ -194,13 +242,15 @@ public actor NoteFileStorage: NoteStorage {
         switch candidate(at: currentURL) {
         case .absent:
             break
-        case let .valid(currentSnapshot):
-            let current = try NoteDocument(snapshot: currentSnapshot)
-            guard current.noteID == incoming.noteID else {
-                throw NoteFileStorageError.noteIdentityMismatch
+        case .valid(let currentSnapshot):
+            let current = try NotebookCatalogDocument(
+                snapshot: currentSnapshot
+            )
+            guard current.notebookID == incoming.notebookID else {
+                throw NotebookCatalogStorageError.notebookIdentityMismatch
             }
             guard current.heads.isSubset(of: incoming.historyHeads) else {
-                throw NoteFileStorageError.disconnectedHistory
+                throw NotebookCatalogStorageError.disconnectedHistory
             }
             try DurableFileIO.writeAndSync(
                 currentSnapshot.data,
@@ -213,7 +263,7 @@ public actor NoteFileStorage: NoteStorage {
             try DurableFileIO.syncDirectory(directory)
             try afterStage(.previousReplaced)
         case .corrupt, .unreadable, .unsupportedSchemaVersion:
-            throw NoteFileStorageError.invalidCurrentDocument
+            throw NotebookCatalogStorageError.invalidCurrentDocument
         }
 
         try DurableFileIO.renameReplacing(temporary, with: currentURL)
@@ -224,12 +274,12 @@ public actor NoteFileStorage: NoteStorage {
 
     private enum Candidate {
         case absent
-        case valid(NoteSnapshot)
+        case valid(NotebookCatalogSnapshot)
         case corrupt(Data)
         case unreadable(String)
         case unsupportedSchemaVersion(Data)
 
-        var failure: NoteFileFailure {
+        var failure: NotebookCatalogFileFailure {
             switch self {
             case .absent:
                 .absent
@@ -244,16 +294,16 @@ public actor NoteFileStorage: NoteStorage {
             }
         }
 
-        var marker: NoteFileMarker {
+        var marker: NotebookCatalogFileMarker {
             switch self {
             case .absent:
                 .absent
-            case let .valid(snapshot):
+            case .valid(let snapshot):
                 .bytes(snapshot.data)
-            case let .corrupt(data),
-                 let .unsupportedSchemaVersion(data):
+            case .corrupt(let data),
+                .unsupportedSchemaVersion(let data):
                 .bytes(data)
-            case let .unreadable(identity):
+            case .unreadable(let identity):
                 .unreadable(identity)
             }
         }
@@ -272,22 +322,24 @@ public actor NoteFileStorage: NoteStorage {
             return .unreadable(Self.identity(for: information))
         }
         do {
-            let document = try NoteDocument(serializedData: data)
+            let document = try NotebookCatalogDocument(
+                serializedData: data
+            )
             return .valid(
-                NoteSnapshot(
+                NotebookCatalogSnapshot(
                     data: data,
                     heads: document.heads,
-                    noteID: document.noteID
+                    notebookID: document.notebookID
                 )
             )
-        } catch NoteDocumentError.unsupportedSchemaVersion {
+        } catch NotebookCatalogError.unsupportedSchemaVersion {
             return .unsupportedSchemaVersion(data)
         } catch {
             return .corrupt(data)
         }
     }
 
-    private func failure(at url: URL) -> NoteFileFailure {
+    private func failure(at url: URL) -> NotebookCatalogFileFailure {
         let result = candidate(at: url)
         if case .valid = result {
             return .valid
@@ -295,9 +347,25 @@ public actor NoteFileStorage: NoteStorage {
         return result.failure
     }
 
+    private func quarantineURL(
+        matching marker: NotebookCatalogFileMarker,
+        in directory: URL
+    ) -> URL? {
+        guard
+            let urls = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            )
+        else { return nil }
+        return urls.first { url in
+            url.lastPathComponent.hasPrefix("catalog.quarantine-")
+                && candidate(at: url).marker == marker
+        }
+    }
+
     private func temporaryURL(in directory: URL, prefix: String) -> URL {
         directory.appendingPathComponent(
-            ".\(prefix)-\(UUID().uuidString).tmp"
+            ".catalog-\(prefix)-\(UUID().uuidString).tmp"
         )
     }
 
