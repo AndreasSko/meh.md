@@ -18,6 +18,7 @@ struct NotebookSyncState: Codable {
 @Observable
 public final class NotebookSyncCoordinator {
     public private(set) var status: NoteSyncCoordinator.Status = .idle
+    public private(set) var progress: NotebookSyncProgress?
     @ObservationIgnored private let replica: NotebookReplica
     @ObservationIgnored private let transport: any SyncTransport
     @ObservationIgnored private let stateURL: URL
@@ -43,9 +44,16 @@ public final class NotebookSyncCoordinator {
         guard !inFlight else { return }
         inFlight = true
         status = .syncing
+        updateProgress(
+            phase: .checking,
+            receivedRecords: 0,
+            completedNotes: 0,
+            totalNotes: 0
+        )
         defer { inFlight = false }
         do {
             try await exchange(legacyNote: legacyNote)
+            progress = nil
         } catch { status = .failed(error.localizedDescription) }
     }
 
@@ -90,6 +98,7 @@ public final class NotebookSyncCoordinator {
 
         var replayedInvalidCursor = false
         var pages = 0
+        updateProgress(phase: .receiving)
         while true {
             try Task.checkCancellation()
             let page: SyncPage
@@ -101,9 +110,21 @@ public final class NotebookSyncCoordinator {
                 replayedInvalidCursor = true
                 continue
             }
-            for record in page.records { try await replica.apply(record) }
+            for record in page.records {
+                try await replica.apply(record)
+                updateProgress(
+                    phase: .receiving,
+                    receivedRecords: (progress?.receivedRecords ?? 0) + 1
+                )
+            }
             if page.hasMore && page.cursor == state.cursor { throw SyncError.invalidCursor }
             let persisted = try await replica.records(includeUnlisted: true)
+            let persistedByKey = Dictionary(
+                uniqueKeysWithValues: persisted.map { ($0.documentKey, $0) })
+            for record in page.records
+            where persistedByKey[record.documentKey]?.snapshot.heads == record.snapshot.heads {
+                state.acknowledgedHeads[record.documentKey] = record.snapshot.heads
+            }
             state.appliedHeads = Dictionary(
                 uniqueKeysWithValues: persisted.map { ($0.documentKey, $0.snapshot.heads) })
             state.deletedIDs.formUnion(try replica.deletedIDs)
@@ -118,17 +139,44 @@ public final class NotebookSyncCoordinator {
         }
 
         let outgoing = try await replica.records()
-        for record in outgoing
-        where state.acknowledgedHeads[record.documentKey] != record.snapshot.heads {
+        let pendingNotes = outgoing.filter {
+            $0.kind == .note
+                && state.acknowledgedHeads[$0.documentKey] != $0.snapshot.heads
+        }
+        let pendingCatalog = outgoing.first {
+            $0.kind == .catalog
+                && state.acknowledgedHeads[$0.documentKey] != $0.snapshot.heads
+        }
+        updateProgress(
+            phase: .uploadingNotes,
+            completedNotes: 0,
+            totalNotes: pendingNotes.count
+        )
+        for start in stride(from: 0, to: pendingNotes.count, by: 50) {
             try Task.checkCancellation()
-            // A user can delete while another record is in flight. Avoid
-            // sending a body once permanent intent is known on this device.
-            if record.kind == .note, try replica.deletedIDs.contains(record.snapshot.noteID) {
-                continue
+            let end = min(start + 50, pendingNotes.count)
+            let capturedBatch = Array(pendingNotes[start..<end])
+            let deleted = try replica.deletedIDs
+            let batch = capturedBatch.filter { !deleted.contains($0.snapshot.noteID) }
+            let skipped = capturedBatch.count - batch.count
+            if skipped > 0 {
+                state.deletedIDs.formUnion(deleted)
+                try save(state)
+                updateProgress(
+                    phase: .uploadingNotes,
+                    totalNotes: max(0, (progress?.totalNotes ?? 0) - skipped)
+                )
             }
-            try await transport.publish(record)
-            state.acknowledgedHeads[record.documentKey] = record.snapshot.heads
-            try save(state)
+            guard !batch.isEmpty else { continue }
+            try await publish(
+                batch,
+                state: &state,
+                completedNoteCount: batch.count
+            )
+        }
+        if let pendingCatalog {
+            updateProgress(phase: .uploadingCatalog)
+            try await publish([pendingCatalog], state: &state, completedNoteCount: 0)
         }
         state.deletedIDs.formUnion(try replica.deletedIDs)
         try save(state)
@@ -136,6 +184,54 @@ public final class NotebookSyncCoordinator {
         status =
             current.allSatisfy { state.acknowledgedHeads[$0.documentKey] == $0.snapshot.heads }
             ? .exchanged(Date()) : .pending
+    }
+
+    private func publish(
+        _ records: [SyncRecord],
+        state: inout NotebookSyncState,
+        completedNoteCount: Int
+    ) async throws {
+        let expectedIDs = Set(records.map(\.id))
+        guard expectedIDs.count == records.count else { throw SyncError.invalidRecord }
+        let byID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+        let result = try await transport.publishBatch(records)
+        guard result.acknowledgedIDs.isSubset(of: expectedIDs) else {
+            throw SyncError.invalidRecord
+        }
+        for id in result.acknowledgedIDs {
+            guard let record = byID[id] else { throw SyncError.invalidRecord }
+            state.acknowledgedHeads[record.documentKey] = record.snapshot.heads
+        }
+        if !result.acknowledgedIDs.isEmpty {
+            state.deletedIDs.formUnion(try replica.deletedIDs)
+            try save(state)
+            if completedNoteCount > 0 {
+                updateProgress(
+                    phase: .uploadingNotes,
+                    completedNotes: (progress?.completedNotes ?? 0)
+                        + result.acknowledgedIDs.count
+                )
+            }
+        }
+        if let error = result.error { throw error }
+        guard result.acknowledgedIDs == expectedIDs else {
+            throw SyncError.unavailable("The sync service did not acknowledge every record.")
+        }
+    }
+
+    private func updateProgress(
+        phase: NotebookSyncProgress.Phase,
+        receivedRecords: Int? = nil,
+        completedNotes: Int? = nil,
+        totalNotes: Int? = nil
+    ) {
+        progress = NotebookSyncProgress(
+            phase: phase,
+            receivedRecords: receivedRecords ?? progress?.receivedRecords ?? 0,
+            completedNotes: completedNotes ?? progress?.completedNotes ?? 0,
+            totalNotes: totalNotes ?? progress?.totalNotes ?? 0,
+            lastProgressAt: Date()
+        )
     }
 
     private struct Proposal: Codable {
