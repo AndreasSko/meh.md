@@ -86,10 +86,10 @@ final class ICloudDevelopmentUITests: XCTestCase {
         waitForOutage()
         app.terminate()
         app.launch()
-        _ = try openEditor()
+        let relaunchedEditor = try openEditor()
         waitForText(marker)
         waitForOutage()
-        XCTAssertFalse((editor.value as? String ?? "").contains(otherMarker))
+        XCTAssertFalse((relaunchedEditor.value as? String ?? "").contains(otherMarker))
         app.terminate()
     }
 
@@ -124,8 +124,7 @@ final class ICloudDevelopmentUITests: XCTestCase {
     }
 
     private func openEditor() throws -> XCUIElement {
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 60))
+        let editor = try app.openOrCreateNotebookEditor(timeout: 60)
         XCTAssertTrue(app.buttons["sync-now"].waitForExistence(timeout: 15))
         return editor
     }

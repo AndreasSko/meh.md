@@ -2,7 +2,7 @@ import SwiftUI
 import NoteCore
 
 @main struct MyApp: App {
-    @State private var workspace = AppWorkspace()
+    @State private var workspace = NotebookWorkspace(preview: NotebookWorkspace.isPreviewEnabled)
 
     var body: some Scene {
         #if os(macOS)
@@ -10,13 +10,11 @@ import NoteCore
             #if DEBUG
             if let launch = CloudKitSmokeLaunch.current {
                 CloudKitSmokeCheckView(launch: launch)
-            } else if NotebookWorkspace.isPreviewEnabled {
-                NotebookPreviewView()
             } else {
-                WorkspaceView(workspace: workspace)
+                NotebookApplicationView(workspace: workspace)
             }
             #else
-            WorkspaceView(workspace: workspace)
+            NotebookApplicationView(workspace: workspace)
             #endif
         }
         #else
@@ -24,13 +22,11 @@ import NoteCore
             #if DEBUG
             if let launch = CloudKitSmokeLaunch.current {
                 CloudKitSmokeCheckView(launch: launch)
-            } else if NotebookWorkspace.isPreviewEnabled {
-                NotebookPreviewView()
             } else {
-                WorkspaceView(workspace: workspace)
+                NotebookApplicationView(workspace: workspace)
             }
             #else
-            WorkspaceView(workspace: workspace)
+            NotebookApplicationView(workspace: workspace)
             #endif
         }
         #endif

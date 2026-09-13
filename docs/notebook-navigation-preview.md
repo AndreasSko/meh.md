@@ -1,14 +1,16 @@
-# Notebook navigation preview
+# Notebook navigation and preview workspace
 
-Milestone 3 stage 3 has an opt-in UI checkpoint before full app activation.
-Enable `MEH_NOTEBOOK_PREVIEW=1` in the Debug `meh.md Local` scheme to try it.
-An explicit sync configuration or the iCloud Dev build retains the existing
-workspace. Normal launches also retain the existing single-note workspace.
+The notebook navigation from the milestone 3 stage 3 checkpoint is now the
+default interface in `meh.md Local` and `meh.md iCloud Dev`.
 
-The preview copies the legacy note into a separate `NotebookPreview` store
-under Application Support. It preserves the legacy files and existing
-Markdown copies. Preview edits save locally but do not sync or update managed
-Markdown copies. Do not use the preview as the primary notebook yet.
+`MEH_NOTEBOOK_PREVIEW=1` remains available in Debug builds. It opens the
+separate `NotebookPreview` store under Application Support for isolated UI
+work. Preview edits save locally but do not sync or update the activated
+notebook's managed Markdown copies.
+
+Normal launches use the activated notebook store. Its one-way legacy bridge
+imports the retained single note without changing its source files. See the
+[core contract](notebook-core-contract.md) for that boundary.
 
 ## Behavior available for feedback
 
@@ -49,6 +51,8 @@ returns to the tree. Inline creation stays in the tree; accepting a name
 persists its `.md` suffix. iPad interaction, touch drag-and-drop, and physical
 input-device acceptance remain unverified.
 
-Next, finish sync/copy activation,
-recovery presentation, and compact-device interaction checks before replacing
-the existing app workspace.
+Activation adds synchronization and structured Markdown copies around this
+interface. Recovery presentation, compact-device interaction checks, live
+cross-device notebook delivery, and physical iPad acceptance remain open. The
+activated UI has not received a new simulator visual check; the observations
+above apply to the earlier preview.

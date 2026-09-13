@@ -118,7 +118,10 @@ public final class NotebookReplica {
         try await saveCatalog(next)
     }
 
-    public func openNote(_ id: UUID) async throws -> NoteSession {
+    public func openNote(
+        _ id: UUID,
+        allowingRecovery: Bool = false
+    ) async throws -> NoteSession {
         await waitForWrites()
         try ensureAlive(id)
         guard try catalog!.items().contains(where: { $0.id == id && $0.kind == .note }) else {
@@ -127,10 +130,13 @@ public final class NotebookReplica {
         if let session = sessions[id] {
             if let load = sessionLoads[id] { await load.value }
             try ensureAlive(id)
-            guard session.isEditingEnabled else { throw NotebookReplicaError.noteUnavailable(id) }
+            guard session.isEditingEnabled || allowingRecovery && session.canAttemptRecovery else {
+                throw NotebookReplicaError.noteUnavailable(id)
+            }
             return session
         }
-        let session = NoteSession(storage: ExistingNotebookNoteStorage(base: noteStorage(id)))
+        let session = NoteSession(
+            storage: ExistingNotebookNoteStorage(expectedID: id, base: noteStorage(id)))
         // Register before suspension so a received update joins this same
         // session instead of creating an independent writer for the file.
         sessions[id] = session
@@ -142,11 +148,41 @@ public final class NotebookReplica {
             session.markPermanentlyDeleted()
             throw NotebookReplicaError.permanentlyDeleted(id)
         }
-        guard session.isEditingEnabled else {
+        guard session.isEditingEnabled || allowingRecovery && session.canAttemptRecovery else {
             sessions[id] = nil
             throw NotebookReplicaError.noteUnavailable(id)
         }
         return session
+    }
+
+    public func recoverCatalogFromPrevious() async throws {
+        guard !loaded || catalog == nil else { return }
+        guard !writingCatalog else { throw NotebookReplicaError.busy }
+        writingCatalog = true
+        defer {
+            writingCatalog = false
+            let waiters = writeWaiters
+            writeWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+
+        let snapshot: NotebookCatalogSnapshot
+        switch await storage.load() {
+        case .current(let current):
+            snapshot = current
+        case .recoveryRequired(let recovery):
+            snapshot = try await storage.recover(recovery)
+        case .firstLaunch, .blocked:
+            throw NotebookReplicaError.catalogUnavailable
+        }
+        try await persistCatalog(NotebookCatalogDocument(snapshot: snapshot))
+        loaded = true
+    }
+
+    public func persistedNoteSnapshots() async throws -> [NoteSnapshot] {
+        try await records().compactMap { record in
+            record.kind == .note ? record.snapshot : nil
+        }
     }
 
     func acceptSeed(_ record: SyncRecord) async throws {
@@ -338,18 +374,47 @@ public final class NotebookReplica {
     }
 }
 
-private struct ExistingNotebookNoteStorage: NoteStorage {
+struct ExistingNotebookNoteStorage: NoteStorage {
+    let expectedID: UUID
     let base: NoteFileStorage
     func load() async -> NoteLoadResult {
         let loaded = await base.load()
-        if case .firstLaunch = loaded {
+        switch loaded {
+        case .firstLaunch:
             return .blocked(NoteLoadFailure(current: .absent, previous: .absent))
+        case .current(let snapshot) where snapshot.noteID != expectedID:
+            return .blocked(NoteLoadFailure(current: .corrupt, previous: .absent))
+        case .recoveryRequired(let recovery) where recovery.previous.noteID != expectedID:
+            return .blocked(
+                NoteLoadFailure(current: recovery.currentFailure, previous: .corrupt))
+        default:
+            return loaded
         }
-        return loaded
     }
-    func save(_ snapshot: NoteSnapshot) async throws { try await base.save(snapshot) }
+    func save(_ snapshot: NoteSnapshot) async throws {
+        guard snapshot.noteID == expectedID else {
+            throw NoteFileStorageError.noteIdentityMismatch
+        }
+        try await base.save(snapshot)
+    }
     func recover(_ recovery: NoteRecovery) async throws -> NoteSnapshot {
-        try await base.recover(recovery)
+        guard recovery.previous.noteID == expectedID else {
+            throw NoteFileStorageError.noteIdentityMismatch
+        }
+        let snapshot = try await base.recover(recovery)
+        guard snapshot.noteID == expectedID else {
+            throw NoteFileStorageError.noteIdentityMismatch
+        }
+        return snapshot
+    }
+}
+
+private extension NoteSession {
+    var canAttemptRecovery: Bool {
+        switch status {
+        case .recoveryRequired, .blocked: true
+        default: false
+        }
     }
 }
 

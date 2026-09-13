@@ -1,7 +1,7 @@
 # Notebook sync contract
 
-Milestone 3 stage 2 implements replication independently of app activation.
-The running app still uses its single-note coordinator.
+Milestone 3 stage 2 first implemented replication independently. The Local and
+iCloud Dev builds now activate the notebook coordinator by default.
 
 ## Identity and old-build isolation
 
@@ -10,7 +10,13 @@ Fresh clients persist a proposal before bootstrap and join the winning seed.
 An existing unrelated notebook fails explicitly instead of being overwritten.
 A durable proposal retains any legacy body across retries. Adoption merges
 that body idempotently, including after a local file rollback. Legacy writers
-must be flushed and stopped before app integration activates notebook storage.
+must be flushed and stopped before notebook storage activates. The one-way
+bridge then imports newer version 1 source edits without writing notebook
+changes back to `Notes`.
+
+A first iCloud activation must be online to join the canonical version 1 note
+before proposing or joining its version 2 notebook. An already activated
+notebook opens from its local durable state while CloudKit is unavailable.
 
 Version 1 note records retain their original JSON and snapshot hashes.
 Version 2 records explicitly identify protocol, notebook, and document kind.
@@ -74,5 +80,7 @@ MEH_NOTEBOOK_HTTP_URL=http://127.0.0.1:8765 swift test --disable-sandbox
 python3 -m unittest discover -s Tools/LocalSyncServer -p 'test_*.py'
 ```
 
-Physical devices, live notebook CloudKit, navigation, import, cleanup, scale,
-and energy acceptance remain later milestone work.
+Navigation and app activation are integrated. A signed Mac iCloud Dev launch
+joined the existing canonical note and synced a newly created folder. Physical
+cross-device notebook sync, iPad behavior, library import, cleanup, scale, and
+energy acceptance remain later milestone work.

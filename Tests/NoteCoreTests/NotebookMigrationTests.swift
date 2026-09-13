@@ -332,6 +332,68 @@ final class NotebookMigrationTests: XCTestCase {
                 .destinationNoteNeedsRecovery
             )
         }
+
+        let recovered = try await migration.recoverMigratedNoteFromPrevious()
+        XCTAssertEqual(try NoteDocument(snapshot: recovered).text, "Original")
+        _ = try await migration.migrateLegacyNote(from: legacyURL)
+        let quarantines = try FileManager.default.contentsOfDirectory(
+            at: destination.currentURL.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("note.quarantine-") }
+        XCTAssertEqual(quarantines.count, 1)
+        XCTAssertEqual(try Data(contentsOf: quarantines[0]), Data("damaged".utf8))
+    }
+
+    func testLegacySourceRecoveryIsExplicitAndMigrationResumes() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacyURL = root.appending(path: "legacy")
+        let storage = NoteFileStorage(directory: legacyURL)
+        let note = try NoteDocument(text: "Previous")
+        try await storage.save(note.snapshot())
+        try note.replaceAll(with: "Damaged version")
+        try await storage.save(note.snapshot())
+        try Data("damaged".utf8).write(to: storage.currentURL)
+        let migration = NotebookMigration(
+            directory: root.appending(path: "notebook")
+        )
+
+        let recovered = try await migration.recoverLegacyNoteFromPrevious(
+            from: legacyURL
+        )
+        XCTAssertEqual(try NoteDocument(snapshot: recovered).text, "Previous")
+        let catalog = try await migration.migrateLegacyNote(from: legacyURL)
+        XCTAssertEqual(
+            try NotebookCatalogDocument(snapshot: catalog).items().map(\.id),
+            [note.noteID]
+        )
+    }
+
+    func testDestinationRecoveryValidatesPreviousBeforeMutation() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacyURL = root.appending(path: "legacy")
+        let note = try NoteDocument(text: "Original")
+        try await NoteFileStorage(directory: legacyURL).save(note.snapshot())
+        let migration = NotebookMigration(
+            directory: root.appending(path: "notebook")
+        )
+        _ = try await migration.migrateLegacyNote(from: legacyURL)
+        let destination = migration.noteStorage(for: note.noteID)
+        try note.replaceAll(with: "Newer")
+        try await destination.save(note.snapshot())
+        let replacement = try NoteDocument(text: "Wrong identity")
+        try replacement.snapshot().data.write(to: destination.previousURL)
+        let damaged = Data("damaged".utf8)
+        try damaged.write(to: destination.currentURL)
+
+        do {
+            _ = try await migration.recoverMigratedNoteFromPrevious()
+            XCTFail("A replacement previous note must not be restored")
+        } catch {
+            XCTAssertEqual(error as? NotebookMigrationError, .identityConflict)
+        }
+        XCTAssertEqual(try Data(contentsOf: destination.currentURL), damaged)
     }
 
     private func temporaryDirectory() -> URL {

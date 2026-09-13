@@ -119,7 +119,35 @@ Next: review navigation behavior before wiring the notebook into the app.
 
 ## Stage 3 early UI checkpoint: 2026-09-13
 
-The [navigation preview](notebook-navigation-preview.md) is implemented in an
-opt-in Debug workspace. It supports local editing, folders, move, and Trash
-without replacing the current app's sync or Markdown-copy workflow. Review
-the layout before completing app activation and device acceptance.
+At this checkpoint, the
+[navigation preview](notebook-navigation-preview.md) used an opt-in Debug
+workspace. It supported local editing, folders, move, and Trash without
+replacing the app's sync or Markdown-copy workflow. Its layout review preceded
+the activation recorded below.
+
+## Activation checkpoint: 2026-09-13
+
+The notebook UI is now the default for both `meh.md Local` and
+`meh.md iCloud Dev`. `MEH_NOTEBOOK_PREVIEW=1` remains available as a separate
+preview workspace; it is not the activated notebook store.
+
+- The one-way bridge under `Notebook/LegacyBridge` imports the retained
+  version 1 note and later edits from older clients. It never writes notebook
+  changes back to the source `Notes` directory.
+- A fresh iCloud installation must be online to join the canonical version 1
+  note before activating its notebook. Once activation has established the
+  notebook locally, it opens for editing while offline.
+- Active notes are published as structured Markdown copies under
+  `Documents/Notebook Copies/Markdown`. Trashed notes are omitted. Earlier
+  single-note copies remain in place but are no longer maintained.
+- Managed copies remain one-way product output. External file edits are not
+  imported into the notebook.
+- The bounded prototype still polls while foregrounded. CloudKit scheduling,
+  batching, and background change delivery remain stage 5 work.
+- The full suite passes 219 tests: 193 core and 26 native editor tests. A real
+  HTTP test covers version 1 upgrade, folder sync, and later old-client edits.
+- Local and iCloud Dev builds pass for Mac and iOS. A signed Mac iCloud Dev
+  launch joined the existing canonical note and synced a newly created folder.
+  Cross-device physical iCloud and physical iPad acceptance remain unverified.
+- No new visual activation claim is based on the blocked simulator inspection.
+  The earlier preview checks remain the available interaction evidence.

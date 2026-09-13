@@ -1,8 +1,9 @@
 # Notebook core contract
 
-This is the first implementation stage of milestone 3. The running app still
-uses its existing single note. Notebook replication is implemented separately;
-UI integration, import, and managed-copy reconciliation follow later.
+This began as the first implementation stage of milestone 3. The running app
+now activates this notebook core in both Local and iCloud Dev builds.
+Replication, the one-way legacy bridge, navigation, and structured managed
+copies are integrated around the same storage boundary.
 
 ## Authoritative state
 
@@ -96,14 +97,24 @@ identity cannot silently replace the original migration source.
 
 A completed migration stops depending on the legacy directory. Missing or
 damaged destination content requires attention rather than replacement by an
-old source copy. The source's current and previous files remain untouched.
-Before activating migrated storage, the caller must flush and stop its
-legacy session's writes.
+old source copy. Automatic migration leaves the source files untouched.
+Before activating migrated storage, the caller must flush and stop its legacy
+session's writes. Normal activation keeps the source under `Notes` unchanged.
+The bridge state under `Notebook/LegacyBridge` can import later source edits
+from an older client, but no notebook edit is written back to that source.
 This helper does not lock a separate running app build.
 
 ## Next boundary
 
 The [sync contract](notebook-sync-contract.md) defines shared bootstrap,
 old-build isolation, catalog/note routing, durable progress, and partial
-arrival. App integration must flush and stop the legacy session before
-activating the new replica. Notebook records use a separate CloudKit zone.
+arrival. Notebook records use a separate CloudKit zone. The remaining
+boundaries are permanent content cleanup, full-library import, scale, and
+physical-device acceptance.
+
+When activation finds a recoverable catalog, legacy source, migrated note,
+or compatibility copy, the UI offers an explicit restore action. Restoring
+may lose newer changes and retains the damaged current file in quarantine.
+Only an explicit legacy-source restore changes the retained `Notes` source;
+normal migration and synchronization never write notebook edits back to it.
+Recovery and startup are serialized before any filesystem work begins.

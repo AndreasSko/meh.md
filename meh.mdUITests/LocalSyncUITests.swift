@@ -19,8 +19,7 @@ final class LocalSyncUITests: XCTestCase {
 
     func test01PublishFromPhone() throws {
         app.launch()
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 20))
+        let editor = try app.openOrCreateNotebookEditor(timeout: 20)
         XCTAssertEqual(editor.value as? String, "")
         editor.tap()
         editor.typeText(first)
@@ -28,15 +27,14 @@ final class LocalSyncUITests: XCTestCase {
         synchronize()
         app.terminate()
         app.launch()
-        XCTAssertTrue(editor.waitForExistence(timeout: 20))
-        XCTAssertEqual(editor.value as? String, first)
+        let relaunchedEditor = try app.openOrCreateNotebookEditor(timeout: 20)
+        XCTAssertEqual(relaunchedEditor.value as? String, first)
         waitForCopy()
     }
 
     func test02ReceiveAndReplyFromPad() throws {
         app.launch()
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 20))
+        let editor = try app.openOrCreateNotebookEditor(timeout: 20)
         synchronize()
         waitForEditor(first)
         editor.tap()
@@ -50,15 +48,14 @@ final class LocalSyncUITests: XCTestCase {
 
     func test03ReceiveReplyOnPhoneAndRestart() throws {
         app.launch()
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 20))
+        let editor = try app.openOrCreateNotebookEditor(timeout: 20)
         synchronize()
         XCTAssertEqual(editor.value as? String, first + second)
         waitForCopy()
         app.terminate()
         app.launch()
-        XCTAssertTrue(editor.waitForExistence(timeout: 20))
-        XCTAssertEqual(editor.value as? String, first + second)
+        let relaunchedEditor = try app.openOrCreateNotebookEditor(timeout: 20)
+        XCTAssertEqual(relaunchedEditor.value as? String, first + second)
         waitForSaved()
         waitForCopy()
     }
@@ -84,7 +81,7 @@ final class LocalSyncUITests: XCTestCase {
     }
 
     private func waitForCopy() {
-        waitForStatus("markdown-copy-status", containing: "Markdown copy up to date")
+        waitForStatus("markdown-copy-status", containing: "Markdown copies:")
     }
 
     private func waitForStatus(_ identifier: String, containing text: String) {

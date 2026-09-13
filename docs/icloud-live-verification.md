@@ -3,6 +3,19 @@
 This work is stacked on the local sync foundation in PR #6. Live checks use
 CloudKit's Development environment in `iCloud.de.andreas-sk.meh-md`.
 
+Most of this record covers the earlier version 1 single-note app. The default
+app now activates the version 2 notebook. The activation check below records
+the newer signed Mac evidence; cross-device notebook delivery and physical
+iPad behavior remain unverified.
+
+## Notebook activation check
+
+On 2026-09-13 a signed Mac iCloud Dev build joined the existing canonical
+version 1 note, activated the version 2 notebook, and synchronized a newly
+created folder named `iCloud activation check`. The UI displayed its latest
+sync state. This proves one signed Mac activation against live Development
+CloudKit. It does not prove delivery to another physical device.
+
 ## Isolation
 
 The Mac smoke check uses the private `meh-md-smoke-v1` zone. It does not open

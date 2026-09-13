@@ -17,6 +17,7 @@ private struct NotebookSidebarRow: Identifiable {
 
 struct NotebookView: View {
     let replica: NotebookReplica
+    var workspace: NotebookWorkspace? = nil
     @State private var selectedID: UUID?
     @State private var session: NoteSession?
     @State private var expandedIDs: Set<UUID> = []
@@ -91,7 +92,8 @@ struct NotebookView: View {
                     NotebookNoteEditor(
                         session: session, navigation: editorNavigation,
                         isInTrash: selectedPlacement?.isInTrash == true,
-                        hasUnrecordedEdit: $unrecordedEdit
+                        hasUnrecordedEdit: $unrecordedEdit,
+                        onPersist: { workspace?.contentDidSave() }
                     )
                     .id(selectedID)
                     .navigationTitle(selectedPlacement?.displayName ?? "Note")
@@ -113,11 +115,9 @@ struct NotebookView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            Text("Notebook preview · Local only")
-                .font(.caption).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity).padding(6)
-                .background(.bar)
+            if let workspace { NotebookWorkspaceStatusView(workspace: workspace) }
         }
+        .onChange(of: replica.catalogSnapshot) { _, _ in workspace?.contentDidSave() }
         .alert(
             "Couldn’t complete the action",
             isPresented: Binding(
@@ -492,6 +492,9 @@ struct NotebookView: View {
 
     private func flushEditor() async throws {
         try await commitInlineNameIfNeeded()
+        // Unavailable notes have no editable buffer to flush. They must not
+        // trap navigation while the user chooses whether to recover them.
+        guard session?.isEditingEnabled == true else { return }
         guard editorNavigation.prepareToLeave?() != false, !unrecordedEdit else {
             throw NotebookNavigationError.unrecordedEdit
         }
@@ -501,7 +504,7 @@ struct NotebookView: View {
     private func selectNote(_ id: UUID, revealDetail: Bool = true) async throws {
         if id != selectedID {
             try await flushEditor()
-            session = try await replica.openNote(id)
+            session = try await replica.openNote(id, allowingRecovery: true)
             selectedID = id
         } else if editingID != nil {
             try await flushEditor()

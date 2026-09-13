@@ -32,6 +32,68 @@ public actor NotebookMigration {
         NoteFileStorage(directory: directory.appending(path: "notes/\(id.uuidString)"))
     }
 
+    /// Restores the previous legacy note after an explicit recovery choice.
+    /// `NoteFileStorage` retains the damaged current file in quarantine.
+    public func recoverLegacyNoteFromPrevious(
+        from legacyDirectory: URL
+    ) async throws -> NoteSnapshot {
+        guard !migrating else { throw NotebookMigrationError.operationInProgress }
+        migrating = true
+        defer { migrating = false }
+        return try await recover(
+            NoteFileStorage(directory: legacyDirectory),
+            unavailable: .legacyNoteUnavailable
+        )
+    }
+
+    /// Restores the previous destination note selected by the durable migration
+    /// receipt. The legacy source is never used for this recovery.
+    public func recoverMigratedNoteFromPrevious() async throws -> NoteSnapshot {
+        guard !migrating else { throw NotebookMigrationError.operationInProgress }
+        migrating = true
+        defer { migrating = false }
+
+        let catalog: NotebookCatalogDocument
+        switch await catalogStorage.load() {
+        case .current(let snapshot):
+            catalog = try NotebookCatalogDocument(snapshot: snapshot)
+        case .recoveryRequired:
+            throw NotebookMigrationError.catalogNeedsRecovery
+        case .firstLaunch, .blocked:
+            throw NotebookMigrationError.catalogUnavailable
+        }
+        let noteID: UUID
+        let initialHeads: Set<String>
+        switch try catalog.legacyMigration() {
+        case .copying(let id, let heads), .note(let id, let heads):
+            noteID = id
+            initialHeads = heads
+        case .pending, .empty:
+            throw NotebookMigrationError.destinationNoteUnavailable
+        }
+        let storage = noteStorage(for: noteID)
+        switch await storage.load() {
+        case .current(let snapshot):
+            _ = try validatedDocument(
+                snapshot,
+                noteID: noteID,
+                containing: initialHeads
+            )
+            return snapshot
+        case .recoveryRequired(let recovery):
+            // Validate the proposed previous bytes before recovery moves or
+            // replaces any file.
+            _ = try validatedDocument(
+                recovery.previous,
+                noteID: noteID,
+                containing: initialHeads
+            )
+            return try await storage.recover(recovery)
+        case .firstLaunch, .blocked:
+            throw NotebookMigrationError.destinationNoteUnavailable
+        }
+    }
+
     public func migrateLegacyNote(from legacyDirectory: URL) async throws -> NotebookCatalogSnapshot
     {
         try await migrateLegacyNote(from: legacyDirectory, afterStage: { _ in })
@@ -206,5 +268,18 @@ public actor NotebookMigration {
             throw NotebookMigrationError.identityConflict
         }
         return document
+    }
+
+    private func recover(
+        _ storage: NoteFileStorage,
+        unavailable: NotebookMigrationError
+    ) async throws -> NoteSnapshot {
+        switch await storage.load() {
+        case .current(let snapshot): return snapshot
+        case .recoveryRequired(let recovery):
+            return try await storage.recover(recovery)
+        case .firstLaunch, .blocked:
+            throw unavailable
+        }
     }
 }

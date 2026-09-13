@@ -4,6 +4,10 @@ Date: 2026-09-13.
 Status: local synchronization verified; signed Mac/iPhone and owner acceptance
 are recorded in [live iCloud verification](icloud-live-verification.md).
 
+This document records the earlier version 1 single-note acceptance. The
+default Local and iCloud Dev apps now use the version 2 notebook. The earlier
+device results do not establish live notebook CloudKit delivery.
+
 ## Delivered behavior
 
 - A shared coordinator exchanges immutable Automerge snapshots through a
@@ -99,17 +103,19 @@ writes, not interruption at every write instruction or sudden power loss.
 - Physical iPad hardware-keyboard use, real radio disconnection, production
   provisioning, push/background delivery, account transitions, and actual
   Apple quota/throttle timing remain separate checks.
-- The iCloud Dev scheme uses its own bundle ID and sandbox. Fresh cloud
-  installations join the canonical note online before enabling the editor;
-  established notes open offline. Original Local app notes are preserved.
-  Joining existing independent notes is deferred to notebook/import work.
+- The iCloud Dev scheme uses its own bundle ID and sandbox. Fresh notebook
+  installations join the canonical version 1 note online before activating
+  version 2; established activated notebooks open offline. The one-way bridge
+  preserves the source note and never writes notebook changes back to it.
 - Full-history snapshots and their remote history are retained. Long-note
   transfer cost and long-term storage growth need measurement before daily
   adoption. There is no compaction or remote deletion in this milestone.
-- The default Release app remains local-only. The separate iCloud Dev build
+- The default Local app uses the local notebook. The separate iCloud Dev build
   uses the Development environment, including after a normal relaunch.
-- Milestone 3 will replace fixed foreground polling with engine scheduling,
-  change notifications, and batched uploads. See the updated project plan.
+- Notebook activation retains fixed foreground polling. Engine scheduling,
+  change notifications, and batched uploads remain later work. See the updated
+  project plan.
+- Physical iCloud notebook and iPad acceptance have not yet been verified.
 
 Implementation commits: `2bc1779` (shared replication and transports) and
 `36dfdfa` (native editor and app integration).

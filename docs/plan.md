@@ -11,10 +11,10 @@ Updated: 2026-09-13
 - The Automerge spike validates Unicode, history through file replacement,
   local merges, and interrupted saves. Real native adapter tests pass on
   macOS and iOS after a targeted macOS undo callback correction.
-- A production single-note core now saves serialized Automerge files, tracks
-  saved state with heads, and supports explicit previous-file recovery. The
-  app exposes one editing window/scene. The managed Markdown copy is
-  implemented and its signed Mac app checks passed. Sync remains open.
+- The milestone 1 single-note core saves serialized Automerge files, tracks
+  saved state with heads, and supports explicit previous-file recovery. Its
+  managed Markdown copy and signed Mac app checks passed. The activated app
+  now imports that state into the milestone 3 notebook.
 - The editor has been visually checked in iPhone and iPad simulators. The owner
   has exercised editing and undo on a physical iPhone; iPad device interaction
   remains open.
@@ -31,6 +31,10 @@ Updated: 2026-09-13
   revision-aware native editing, and a CloudKit adapter awaiting live setup.
   The iPhone/iPad localhost handoff and exact Markdown-copy checks passed.
   See [sync verification](sync-verification.md) for evidence and open work.
+- Milestone 3 notebook storage, replication, navigation, legacy bridging, and
+  structured Markdown copies are integrated into the default Local and iCloud
+  Dev builds. Signed Mac activation passed; cross-device physical iCloud and
+  physical iPad checks remain open.
 
 ## Working method
 
@@ -166,8 +170,9 @@ models remote record storage without simulating Apple account services.
 
 ## 3 — A usable notebook
 
-Status: core and replication implemented on 2026-09-13; app wiring follows a
-behavior review checkpoint. See the [execution plan](milestone-3-plan.md).
+Status: core, replication, navigation, legacy bridging, structured copies,
+and default app activation implemented on 2026-09-13. See the
+[execution plan](milestone-3-plan.md).
 
 ### Work
 
@@ -177,6 +182,9 @@ behavior review checkpoint. See the [execution plan](milestone-3-plan.md).
   content.
 - Define and test rename collisions, folder moves, and delete-versus-edit
   behavior.
+- Publish active notes to the app-owned structured Markdown hierarchy without
+  ingesting external edits. Preserve earlier single-note copies without
+  maintaining them.
 - Replace fixed foreground polling with CloudKit scheduling and change
   notifications. Batch local uploads, retain activation/manual refresh, and
   measure responsiveness and battery impact as the note count grows.
@@ -191,6 +199,8 @@ behavior review checkpoint. See the [execution plan](milestone-3-plan.md).
   syntax.
 - Folder/note operations synchronize consistently across all three devices.
 - Concurrent deletion and editing leave edited content recoverable.
+- Existing activated notebooks reopen offline. A fresh cloud installation
+  joins the canonical version 1 note online before activating version 2.
 
 ## 4 — Daily-use hardening
 

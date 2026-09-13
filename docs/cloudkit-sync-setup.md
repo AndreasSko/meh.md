@@ -1,9 +1,11 @@
 # CloudKit synchronization setup
 
 The CloudKit adapter targets the private database in
-`iCloud.de.andreas-sk.meh-md`. It uses one custom record zone, immutable
-full-history Automerge snapshots, and `CKAsset` document payloads. It does not
-delete or compact remote history in milestone 2.
+`iCloud.de.andreas-sk.meh-md`. The activated notebook keeps the canonical
+version 1 note zone for legacy joining and uses the isolated version 2 zone
+for its catalog and note snapshots. Records contain immutable full-history
+Automerge snapshots in `CKAsset` payloads. The prototype does not delete or
+compact remote history.
 
 The app target includes CloudKit entitlements for macOS and iOS with this
 container selected. Xcode automatic provisioning successfully signed the Mac
@@ -24,21 +26,27 @@ smoke check and its current evidence.
 Enable Background Modes with Remote notifications when adding push-driven or
 background synchronization. Manual foreground exchanges do not require it.
 
-Create the transport only after selecting an Application Support directory:
+Create separate legacy and notebook transports after selecting their
+Application Support state directories:
 
 ```swift
-let transport = try await CloudKitSyncTransport.make(
+let legacyTransport = try await CloudKitSyncTransport.make(
     containerIdentifier: "iCloud.de.andreas-sk.meh-md",
-    stateDirectory: syncStateDirectory
+    stateDirectory: legacySyncStateDirectory
+)
+let notebookTransport = try await CloudKitSyncTransport.makeNotebook(
+    containerIdentifier: "iCloud.de.andreas-sk.meh-md",
+    stateDirectory: notebookSyncStateDirectory
 )
 ```
 
-The iCloud Dev scheme needs no launch variables. A fresh install must join
-iCloud successfully before creating its local note; setup failure offers a
-retry. An established note opens before account discovery completes and
-remains editable offline. The Local scheme remains local by default; its
-legacy Debug `MEH_SYNC_CLOUDKIT=1` override is retained for targeted tests.
-Use the isolated iCloud Dev scheme for manual cross-device testing.
+The iCloud Dev scheme needs no launch variables. A fresh installation must be
+online to join the canonical version 1 note before activating the version 2
+notebook; setup failure offers a retry. An established activated notebook
+opens before account discovery completes and remains editable offline. The
+Local scheme uses its local notebook by default; its legacy Debug
+`MEH_SYNC_CLOUDKIT=1` override remains available for targeted tests. Use the
+isolated iCloud Dev scheme for manual cross-device testing.
 
 Factory creation binds persisted transport state to the current iCloud user
 record ID. Every bootstrap, fetch, and publish checks that binding again. An
@@ -59,10 +67,12 @@ inbox is rebuilt, the coordinator rejects the old cursor and replays instead
 of skipping records at an offset that now means something different.
 
 Unit tests cover durable inbox replay, duplicate delivery, cursor validation,
-and account binding without contacting iCloud. Signed Mac and iPhone foreground
-round trips passed. Physical-device
-checks remain for push-driven scheduling, offline handoff, account changes,
-server conflicts, and iPad behavior.
+and account binding without contacting iCloud. Earlier signed Mac and iPhone
+round trips passed for the version 1 single-note app. A signed Mac notebook
+launch has now joined the existing canonical note and synced a newly created
+folder. Cross-device physical notebook delivery and physical iPad behavior
+remain unverified. Other open checks include push-driven scheduling, offline
+handoff, account changes, and server conflicts.
 
 ## Throttling
 
