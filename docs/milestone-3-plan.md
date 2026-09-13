@@ -116,3 +116,10 @@ The [sync contract](notebook-sync-contract.md) describes its guarantees.
   background scheduling, batching, scale, and energy measurements follow.
 
 Next: review navigation behavior before wiring the notebook into the app.
+
+## Stage 3 early UI checkpoint: 2026-09-13
+
+The [navigation preview](notebook-navigation-preview.md) is implemented in an
+opt-in Debug workspace. It supports local editing, folders, move, and Trash
+without replacing the current app's sync or Markdown-copy workflow. Review
+the layout before completing app activation and device acceptance.

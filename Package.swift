@@ -35,6 +35,7 @@ let package = Package(
             path: "meh.md",
             exclude: [
                 "ContentView.swift", "MyApp.swift", "AppWorkspace.swift", "Assets.xcassets",
+                "NotebookView.swift", "NotebookNoteEditor.swift", "NotebookWorkspace.swift",
                 "icon.icon", "Info.plist", "macOS.entitlements",
                 "iOS.entitlements", "CloudKitSmokeCheck.swift",
             ],

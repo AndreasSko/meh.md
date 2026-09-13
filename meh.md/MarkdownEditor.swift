@@ -1,5 +1,13 @@
 import SwiftUI
 
+/// Synchronously commits the native buffer and freezes input before an
+/// asynchronous navigation/save operation can replace the editor.
+@MainActor
+final class MarkdownEditorNavigation {
+    var prepareToLeave: (() -> Bool)?
+    var resumeEditing: (() -> Void)?
+}
+
 struct MarkdownEditorCommit {
     let text: String
     let revision: Data
@@ -110,17 +118,20 @@ struct MarkdownEditor: NSViewRepresentable {
     var editRevision: Data?
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
     var onEditError: ((Error) -> Void)?
+    var navigation: MarkdownEditorNavigation?
 
     init(
         text: Binding<String>,
         editRevision: Data? = nil,
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
-        onEditError: ((Error) -> Void)? = nil
+        onEditError: ((Error) -> Void)? = nil,
+        navigation: MarkdownEditorNavigation? = nil
     ) {
         _text = text
         self.editRevision = editRevision
         self.commitEdit = commitEdit
         self.onEditError = onEditError
+        self.navigation = navigation
     }
 
     func makeCoordinator() -> Coordinator {
@@ -151,6 +162,7 @@ struct MarkdownEditor: NSViewRepresentable {
         MarkdownPresentation.configure(textView)
         context.coordinator.observeUndoAndRedo(for: textView)
 
+        context.coordinator.attachNavigation(to: textView)
         return scrollView
     }
 
@@ -195,6 +207,20 @@ struct MarkdownEditor: NSViewRepresentable {
                     name: name,
                     object: nil
                 )
+            }
+        }
+
+        func attachNavigation(to textView: NSTextView) {
+            parent.navigation?.prepareToLeave = { [weak self, weak textView] in
+                guard let self, let textView else { return true }
+                guard !textView.hasMarkedText() else { return false }
+                self.synchronizeBinding(from: textView)
+                guard !self.hasUncommittedText else { return false }
+                textView.isEditable = false
+                return true
+            }
+            parent.navigation?.resumeEditing = { [weak textView] in
+                textView?.isEditable = true
             }
         }
 
@@ -338,17 +364,20 @@ struct MarkdownEditor: UIViewRepresentable {
     var editRevision: Data?
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
     var onEditError: ((Error) -> Void)?
+    var navigation: MarkdownEditorNavigation?
 
     init(
         text: Binding<String>,
         editRevision: Data? = nil,
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
-        onEditError: ((Error) -> Void)? = nil
+        onEditError: ((Error) -> Void)? = nil,
+        navigation: MarkdownEditorNavigation? = nil
     ) {
         _text = text
         self.editRevision = editRevision
         self.commitEdit = commitEdit
         self.onEditError = onEditError
+        self.navigation = navigation
     }
 
     func makeCoordinator() -> Coordinator {
@@ -373,6 +402,7 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.accessibilityIdentifier = "markdown-editor"
         MarkdownPresentation.configure(textView)
 
+        context.coordinator.attachNavigation(to: textView)
         return textView
     }
 
@@ -392,6 +422,20 @@ struct MarkdownEditor: UIViewRepresentable {
             self.parent = parent
             displayedText = parent.text
             displayedRevision = parent.editRevision
+        }
+
+        func attachNavigation(to textView: UITextView) {
+            parent.navigation?.prepareToLeave = { [weak self, weak textView] in
+                guard let self, let textView else { return true }
+                guard textView.markedTextRange == nil else { return false }
+                self.textViewDidChange(textView)
+                guard !self.hasUncommittedText else { return false }
+                textView.isEditable = false
+                return true
+            }
+            parent.navigation?.resumeEditing = { [weak textView] in
+                textView?.isEditable = true
+            }
         }
 
         func update(parent: MarkdownEditor, textView: UITextView) {

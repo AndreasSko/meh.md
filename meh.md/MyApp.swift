@@ -10,6 +10,8 @@ import NoteCore
             #if DEBUG
             if let launch = CloudKitSmokeLaunch.current {
                 CloudKitSmokeCheckView(launch: launch)
+            } else if NotebookWorkspace.isPreviewEnabled {
+                NotebookPreviewView()
             } else {
                 WorkspaceView(workspace: workspace)
             }
@@ -22,6 +24,8 @@ import NoteCore
             #if DEBUG
             if let launch = CloudKitSmokeLaunch.current {
                 CloudKitSmokeCheckView(launch: launch)
+            } else if NotebookWorkspace.isPreviewEnabled {
+                NotebookPreviewView()
             } else {
                 WorkspaceView(workspace: workspace)
             }

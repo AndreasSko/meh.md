@@ -1,13 +1,23 @@
 import Foundation
 
 enum NotebookName {
-    enum Error: Swift.Error, Equatable {
+    enum Error: Swift.Error, Equatable, LocalizedError {
         case empty
         case whitespaceOnly
         case reserved
         case pathSeparator
         case controlCharacter
         case componentTooLong
+
+        var errorDescription: String? {
+            switch self {
+            case .empty, .whitespaceOnly: "Enter a name for this item."
+            case .reserved: "Choose a name other than . or .."
+            case .pathSeparator: "Names cannot contain / or \\."
+            case .controlCharacter: "Names cannot contain control characters."
+            case .componentTooLong: "This name is too long. Choose a shorter name."
+            }
+        }
     }
 
     static func validate(_ name: String) throws {
