@@ -35,6 +35,35 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         XCTAssertNotNil(left.catalogSnapshot)
     }
 
+    func testDurableBindingRequiresAcceptedCanonicalSeed() async throws {
+        let root = directory()
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica,
+            transport: InMemorySyncTransport(scope: "binding")
+        )
+
+        XCTAssertFalse(try coordinator.hasDurableBinding())
+        await coordinator.synchronize()
+        XCTAssertTrue(try coordinator.hasDurableBinding())
+
+        let reopened = NotebookReplica(directory: root)
+        try await reopened.load()
+        XCTAssertTrue(
+            try NotebookSyncCoordinator(
+                replica: reopened,
+                transport: InMemorySyncTransport(scope: "binding")
+            ).hasDurableBinding()
+        )
+        XCTAssertThrowsError(
+            try NotebookSyncCoordinator(
+                replica: reopened,
+                transport: InMemorySyncTransport(scope: "other-binding")
+            ).hasDurableBinding()
+        ) { XCTAssertEqual($0 as? SyncError, .scopeChanged) }
+    }
+
     func testLostBootstrapAcknowledgementReusesDurableProposal() async throws {
         let store = InMemorySyncStore()
         let transport = InMemorySyncTransport(scope: "shared", store: store)

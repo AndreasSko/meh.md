@@ -51,6 +51,61 @@ final class NotebookHTTPIntegrationTests: XCTestCase {
         XCTAssertEqual(reopenedLeft.placements, reopenedRight.placements)
     }
 
+    func testLegacyActivationAndFolderSyncAcrossDevices() async throws {
+        guard let endpoint = ProcessInfo.processInfo.environment["MEH_NOTEBOOK_HTTP_URL"],
+              let url = URL(string: endpoint), url.host == "127.0.0.1" else {
+            throw XCTSkip("Set MEH_NOTEBOOK_HTTP_URL to a disposable loopback service")
+        }
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = "activation-\(UUID().uuidString)"
+        let v1 = LocalSyncTransport(baseURL: url, workspace: workspace)
+        let v2 = LocalSyncTransport(baseURL: url, workspace: workspace, protocolVersion: 2)
+        let oldDirectory = root.appending(path: "old")
+        let old = NoteSession(storage: NoteFileStorage(directory: oldDirectory))
+        await old.load()
+        try old.replaceAll(with: "Existing note")
+        try await old.flush()
+        let oldSync = NoteSyncCoordinator(session: old, transport: v1,
+            stateURL: oldDirectory.appending(path: "sync-state.json"))
+        await oldSync.synchronize()
+        if case .failed(let message) = oldSync.status { XCTFail(message) }
+        let bridge = NotebookLegacyBridge(directory: root.appending(path: "bridge"),
+            legacyDirectory: oldDirectory)
+        let legacy = try await bridge.synchronize(legacyTransport: v1, notebookScope: v2.scope)
+        let left = NotebookReplica(directory: root.appending(path: "left"))
+        let a = NotebookSyncCoordinator(replica: left, transport: v2)
+        await a.synchronize(legacyNote: legacy)
+        try assertSuccess(a)
+        let folder = try await left.createFolder(name: "Work")
+        let id = try await left.createNote(name: "Plan.md", text: "Folder content", parentID: folder)
+        await a.synchronize(legacyNote: legacy)
+        try assertSuccess(a)
+        let secondBridge = NotebookLegacyBridge(directory: root.appending(path: "bridge2"),
+            legacyDirectory: root.appending(path: "empty"))
+        let secondLegacy = try await secondBridge.synchronize(
+            legacyTransport: v1, notebookScope: v2.scope)
+        let right = NotebookReplica(directory: root.appending(path: "right"))
+        let b = NotebookSyncCoordinator(replica: right, transport: v2)
+        await b.synchronize(legacyNote: secondLegacy)
+        try assertSuccess(b)
+        XCTAssertEqual(left.placements, right.placements)
+        let note = try await right.openNote(id)
+        XCTAssertEqual(note.text, "Folder content")
+        let imported = try await right.openNote(legacy.noteID)
+        XCTAssertEqual(imported.text, "Existing note")
+        try old.replaceAll(with: "Late old-client edit")
+        try await old.flush()
+        await oldSync.synchronize()
+        let late = try await bridge.synchronize(legacyTransport: v1, notebookScope: v2.scope)
+        await a.synchronize(legacyNote: late)
+        await b.synchronize(legacyNote: secondLegacy)
+        try assertSuccess(a)
+        try assertSuccess(b)
+        XCTAssertEqual(imported.text, "Late old-client edit")
+        XCTAssertEqual(note.text, "Folder content")
+    }
+
     private func assertSuccess(_ coordinator: NotebookSyncCoordinator) throws {
         if case .failed(let message) = coordinator.status {
             XCTFail(message)

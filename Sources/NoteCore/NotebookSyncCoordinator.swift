@@ -31,6 +31,14 @@ public final class NotebookSyncCoordinator {
         proposalURL = replica.directory.appending(path: "notebook-proposal.json")
     }
 
+    /// A local catalog is remotely joined only after its canonical V2 seed
+    /// identity has been saved with this transport scope.
+    public func hasDurableBinding() throws -> Bool {
+        let state = try loadState()
+        guard let notebookID = state.notebookID else { return false }
+        return replica.catalogSnapshot?.notebookID == notebookID
+    }
+
     public func synchronize(legacyNote: NoteSnapshot? = nil) async {
         guard !inFlight else { return }
         inFlight = true
