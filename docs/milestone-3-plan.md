@@ -289,3 +289,53 @@ Physical-device deletion acceptance remains an owner feedback check.
 Next: owner feedback with disposable notes across Mac/iPhone. Full background
 scheduling, broader offline/device acceptance, and cloud recovery remain
 separate follow-ups.
+
+## Automatic sync and CI checkpoint: 2026-09-13
+
+The owner confirmed permanent deletion works on their devices. Their actual
+library performance review is deferred to everyday use, with Markdown and
+other quality-of-life improvements reserved for later work. Cloud reset
+remains explicitly out of scope.
+
+Cloud builds now enable CKSyncEngine scheduling and change notifications,
+with durable activity delivery into the notebook coordinator. Saved changes
+are coalesced, foreground activation reconciles pending work, and transient
+app failures back off without bypassing server cooldowns. The iCloud Dev
+configuration includes APNs entitlements and iOS background notification
+mode. The cloud foreground polling timer is removed. See the
+[scheduling contract](notebook-sync-scheduling.md).
+
+The [local and CI runner](notebook-sync-validation.md) exercises the complete
+Swift and Python suites without iCloud. Seeded three-replica scenarios cover
+offline edits, restart, reordered/duplicate delivery, lost acknowledgements,
+and permanent deletion. Synthetic imports verify durable reopen, initial
+replication, and incremental edits at 100 notes on PRs and 100/500/1,000 on
+the larger scheduled run. Hosted runs retain diagnostic logs as artifacts.
+
+The remaining owner checkpoint is actual silent-notification delivery with
+iCloud Dev on physical devices, including an offline edit followed by a
+foreground handoff. System-controlled background latency is not guaranteed
+by the deterministic suite. Real-library profiling and cloud reset do not
+block this checkpoint.
+
+GitHub Actions run [34759050114][scheduling-ci] passes all 301 Swift tests:
+270 core, 26 native editor, and 5 app-model tests. All 16 Python service tests
+pass. Mac Local and signed Mac iCloud Dev builds pass, as does iPhone
+app/UI-test compilation. The generated iPhone background mode and signed Mac
+APNs entitlement were inspected. No physical push-delivery result is claimed.
+
+[scheduling-ci]: https://github.com/AndreasSko/meh.md/actions/runs/34759050114
+
+The first owner scheduling check reported automatic receipt on iPad, while
+Mac required Sync Now. The Mac log confirmed successful APNs registration
+and automatic local uploads; incoming changes were delivered during the
+manual fetch. Fetch events now record their scheduled/manual origin so a
+manual result cannot be mistaken for notification-triggered delivery. Mac
+automatic receiving remains an owner checkpoint. No engine-state reset or
+unverified notification workaround is introduced.
+
+The larger local matrix passes all eight disruption seeds and 100/500/1,000
+synthetic notebooks. The 1,000-note debug run took 515.2 seconds for initial
+replication and 15.3 seconds for an incremental exchange. These expose a
+performance follow-up, not a CloudKit latency claim; full measurements and
+boundaries are in the [validation record](notebook-sync-validation.md).

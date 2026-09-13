@@ -278,9 +278,10 @@ class WorkspaceStore:
                 deleted_note_ids = self._validate_uuid_list(
                     state.get("deletedNoteIDs", [])
                 )
+                deleted_note_id_set = set(deleted_note_ids)
                 if any(
                     item["kind"] == "note"
-                    and item["snapshot"]["noteID"] in deleted_note_ids
+                    and item["snapshot"]["noteID"] in deleted_note_id_set
                     for item in live_records
                 ):
                     raise ValueError("deleted note body remains stored")

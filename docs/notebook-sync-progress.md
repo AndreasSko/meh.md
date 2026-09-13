@@ -44,11 +44,12 @@ buffer tip still performs a fresh fetch in the same exchange, so continuous
 local editing cannot indefinitely hide changes from another device.
 
 Foreground activation, saved edits, and manual sync still request exchanges.
-Quiet foreground checks run every 30 seconds instead of every three seconds;
-brief automatic checks do not flash the status area. Slow checks become visible
-after two seconds. Full engine-driven background delivery, battery
-measurements, and broader cloud scale acceptance remain separate milestone
-work.
+Cloud builds now use engine scheduling and change notifications instead of
+periodic foreground checks. The loopback test transport still polls every
+30 seconds. Brief automatic checks do not flash the status area; slow checks
+become visible after two seconds. See the
+[scheduling contract](notebook-sync-scheduling.md). Physical push delivery and
+battery measurements require separate device checks.
 
 ## Verification boundaries
 

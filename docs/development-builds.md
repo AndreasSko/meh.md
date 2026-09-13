@@ -37,8 +37,10 @@ Normal Local and iCloud Dev launches use their activated notebook stores.
 
 `Debug-iCloud` compiles in the iCloud default and uses CloudKit's Development
 environment. This is a development build, including when archived through its
-scheme. Production distribution and background delivery are separate work.
-The regular Local scheme archives its Release configuration.
+scheme. It includes APNs entitlements and iOS background notification mode
+for [automatic sync](notebook-sync-scheduling.md). Production distribution
+remains separate work. The regular Local scheme archives its Release
+configuration.
 
 ## Automated acceptance checks
 

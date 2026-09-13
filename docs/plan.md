@@ -171,8 +171,9 @@ models remote record storage without simulating Apple account services.
 
 ## 3 — A usable notebook
 
-Status: core, replication, navigation, legacy bridging, structured copies,
-and default app activation implemented on 2026-09-13. See the
+Status: core, replication, navigation, structured copies, permanent deletion,
+and automatic scheduling implemented on 2026-09-13. The development
+single-note compatibility bridge has been removed. See the
 [execution plan](milestone-3-plan.md).
 
 ### Work
@@ -190,7 +191,8 @@ and default app activation implemented on 2026-09-13. See the
   notifications. Batch local uploads, retain activation/manual refresh, and
   measure responsiveness and battery impact as the note count grows.
   Milestone 2 already establishes retry-after handling and durable pending
-  work; production background delivery belongs to this scheduling work.
+  work. Deterministic local and CI coverage exercises sync without iCloud;
+  actual APNs delivery remains a physical-device check.
 
 ### Acceptance
 
@@ -201,7 +203,7 @@ and default app activation implemented on 2026-09-13. See the
 - Folder/note operations synchronize consistently across all three devices.
 - Concurrent deletion and editing leave edited content recoverable.
 - Existing activated notebooks reopen offline. A fresh cloud installation
-  joins the canonical version 1 note online before activating version 2.
+  joins the canonical version 2 notebook online.
 
 ## 4 — Daily-use hardening
 
@@ -218,6 +220,16 @@ Status: not started; depends on milestone 3.
   new account automatically.
 - Use a copied library for daily writing; fix observed editor, performance, and
   sync problems before adopting the app as the primary notebook.
+- Profile and improve large-notebook replication. The Milestone 3 synthetic
+  1,000-note debug run took 515.2 seconds for initial replication and 15.3
+  seconds for an incremental exchange. Compare release builds, investigate
+  replica application and Automerge decoding/merging, and retain the existing
+  convergence and durability tests. These are local synthetic measurements,
+  not CloudKit or device latency; see the
+  [validation record][scale-validation].
+
+[scale-validation]:
+  notebook-sync-validation.md#recorded-synthetic-run-2026-09-13
 
 ## 5 — Optional editor refinement
 
