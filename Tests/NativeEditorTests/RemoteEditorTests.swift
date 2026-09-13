@@ -180,6 +180,32 @@ final class RemoteEditorTests: XCTestCase {
         XCTAssertEqual(model.errorCount, 2)
     }
 
+    func testTextSizeChangesAfterFailedSavePreservePendingEdit() throws {
+        enum TestError: Error { case failed }
+        let model = EditorModel(text: "hello", revision: revision(0))
+        model.commitResult = { _, _ in throw TestError.failed }
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+
+        moveInsertionPointToEnd(of: textView)
+        insert("!", in: textView)
+        mounted.flushUpdates()
+        let originalSize = try XCTUnwrap(textView.font).pointSize
+        model.fontSize = 24
+        model.receiveRemote(text: "remote replacement", revision: revision(9))
+        mounted.flushUpdates()
+        mounted.flushUpdates()
+
+        XCTAssertGreaterThan(try XCTUnwrap(textView.font).pointSize, originalSize)
+        XCTAssertEqual(nativeText(in: textView), "hello!")
+        XCTAssertEqual(selectedRange(in: textView), NSRange(location: 6, length: 0))
+        XCTAssertTrue(textView.undoManager?.canUndo == true)
+        insert("?", in: textView)
+        XCTAssertEqual(nativeText(in: textView), "hello!?")
+        XCTAssertEqual(model.requests.map(\.revision), [revision(0), revision(0)])
+    }
+
     private func revision(_ value: UInt8) -> Data {
         Data([value])
     }
@@ -194,6 +220,7 @@ private final class EditorModel: ObservableObject {
 
     @Published var text: String
     @Published var revision: Data
+    @Published var fontSize: Double = 17
     var requests: [Request] = []
     @Published var errorCount = 0
     var commitResult: ((String, Data) throws -> MarkdownEditorCommit)?
@@ -238,7 +265,8 @@ private struct EditorHost: View {
             commitEdit: { replacement, revision in
                 try model.commit(replacement, basedOn: revision)
             },
-            onEditError: { _ in model.errorCount += 1 }
+            onEditError: { _ in model.errorCount += 1 },
+            fontSize: model.fontSize
         )
     }
 }

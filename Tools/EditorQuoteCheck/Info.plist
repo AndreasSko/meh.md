@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>EditorQuoteCheck</string>
+  <key>CFBundleIdentifier</key>
+  <string>de.andreas-sk.meh-md.editor-quote-check</string>
+  <key>CFBundleName</key>
+  <string>Editor Quote Check</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>UIApplicationSceneManifest</key>
+  <dict>
+    <key>UIApplicationSupportsMultipleScenes</key>
+    <false/>
+  </dict>
+  <key>UILaunchScreen</key>
+  <dict/>
+</dict>
+</plist>
