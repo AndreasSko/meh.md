@@ -454,6 +454,40 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
         }
     }
 
+    func testPermanentDeletionRemovesCopiesAndInterruptedGenerations() async throws {
+        for stoppedStage in NotebookMarkdownPublishStage.allCases {
+            let root = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let catalog = try NotebookCatalogDocument()
+            let deleted = try NoteDocument(text: "body to remove")
+            let survivor = try NoteDocument(text: "keep this")
+            try catalog.add(id: deleted.noteID, kind: .note, name: "Delete.md")
+            try catalog.add(id: survivor.noteID, kind: .note, name: "Keep.md")
+            let publisher = NotebookMarkdownPublisher(directory: root)
+            try await publisher.publish(
+                catalog: catalog.snapshot(), placements: catalog.placements(),
+                notes: [deleted.snapshot(), survivor.snapshot()])
+            try catalog.markPermanentlyDeleted([deleted.noteID])
+            do {
+                try await publisher.publish(
+                    catalog: catalog.snapshot(), placements: catalog.placements(),
+                    notes: [survivor.snapshot()]
+                ) { stage in
+                    if stage == stoppedStage { throw Stop.now }
+                }
+                XCTFail("Expected interruption at \(stoppedStage)")
+            } catch Stop.now {}
+            try await NotebookMarkdownPublisher(directory: root).publish(
+                catalog: catalog.snapshot(), placements: catalog.placements(),
+                notes: [survivor.snapshot()])
+            let paths = try FileManager.default.subpathsOfDirectory(atPath: root.path)
+            XCTAssertFalse(paths.contains { $0.hasSuffix("Delete.md") })
+            XCTAssertFalse(paths.contains { $0.hasPrefix(".notebook-stage-") })
+            XCTAssertEqual(try String(contentsOf: root.appending(path: "Markdown/Keep.md"),
+                                      encoding: .utf8), "keep this")
+        }
+    }
+
     private func assertPublisherError(
         _ expected: NotebookMarkdownPublisherError,
         operation: () async throws -> Void

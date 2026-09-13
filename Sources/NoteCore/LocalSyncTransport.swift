@@ -90,6 +90,33 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
         return page
     }
 
+    public func purgeDeletedNotes(
+        _ noteIDs: Set<UUID>, notebookID: UUID
+    ) async throws {
+        guard protocolVersion == 2 else {
+            throw SyncError.unavailable(
+                "Permanent body cleanup requires notebook sync."
+            )
+        }
+        let acknowledgement: EmptyResponse = try await send(
+            path: "/v2/purge",
+            method: "POST",
+            body: PurgeRequest(
+                scope: workspace,
+                notebookID: notebookID,
+                noteIDs: noteIDs.sorted {
+                    $0.uuidString < $1.uuidString
+                }
+            ),
+            response: EmptyResponse.self
+        )
+        guard acknowledgement.stored else {
+            throw SyncError.unavailable(
+                "The sync service did not acknowledge durable cleanup."
+            )
+        }
+    }
+
     private func send<Response: Decodable>(
         path: String,
         method: String,
@@ -240,6 +267,12 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
 private struct MutationRequest: Encodable {
     let scope: String
     let record: SyncRecord
+}
+
+private struct PurgeRequest: Encodable {
+    let scope: String
+    let notebookID: UUID
+    let noteIDs: [UUID]
 }
 
 private struct EmptyResponse: Decodable {

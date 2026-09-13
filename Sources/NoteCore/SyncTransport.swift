@@ -148,8 +148,13 @@ public protocol SyncTransport: Sendable {
     /// Publish records together when the backend supports it. The result keeps
     /// partial acknowledgements if a later record fails.
     func publishBatch(_ records: [SyncRecord]) async throws -> SyncBatchResult
-    /// nil starts a complete replay. No record is deleted in this milestone.
+    /// nil starts a complete replay. Cleanup may leave stable cursor tombstones.
     func fetch(after cursor: String?) async throws -> SyncPage
+    /// Durably suppress and remove version 2 note-body snapshots for confirmed
+    /// deleted identities. Catalog snapshots and deletion markers remain.
+    func purgeDeletedNotes(
+        _ noteIDs: Set<UUID>, notebookID: UUID
+    ) async throws
     /// The earliest useful retry time known by the transport.
     func retryNotBefore() async -> Date?
 }
@@ -177,6 +182,14 @@ extension SyncTransport {
     }
 
     public func retryNotBefore() async -> Date? { nil }
+
+    public func purgeDeletedNotes(
+        _ noteIDs: Set<UUID>, notebookID: UUID
+    ) async throws {
+        throw SyncError.unavailable(
+            "This sync transport does not support permanent body cleanup."
+        )
+    }
 }
 
 public enum SyncError: Error, Equatable, LocalizedError {

@@ -295,6 +295,67 @@ class WorkspaceStoreTests(unittest.TestCase):
         )
         self.assertEqual(len(list(self.root.glob("*.json"))), 2)
 
+    def test_v2_purge_is_durable_idempotent_and_keeps_cursor_offsets(self) -> None:
+        notebook_id = uuid.UUID(int=50)
+        deleted_id = uuid.UUID(int=51)
+        retained_id = uuid.UUID(int=52)
+        catalog = make_v2_record(
+            b"catalog", notebook_id, notebook_id, "catalog"
+        )
+        deleted = make_v2_record(b"deleted", notebook_id, deleted_id)
+        retained = make_v2_record(b"retained", notebook_id, retained_id)
+        late = make_v2_record(b"late", notebook_id, deleted_id)
+        self.store.bootstrap("cleanup", catalog, 2)
+        self.store.publish("cleanup", deleted, 2)
+        cursor = self.store.fetch(
+            "cleanup", limit=1, protocol_version=2
+        )["cursor"]
+        self.store.publish("cleanup", retained, 2)
+
+        self.store.purge_deleted_notes(
+            "cleanup", str(notebook_id), [str(deleted_id)]
+        )
+        restarted = WorkspaceStore(self.root)
+        restarted.purge_deleted_notes(
+            "cleanup", str(notebook_id), [str(deleted_id)]
+        )
+        restarted.publish("cleanup", late, 2)
+
+        replay = restarted.fetch("cleanup", protocol_version=2)
+        after_catalog = restarted.fetch(
+            "cleanup", cursor, limit=10, protocol_version=2
+        )
+        self.assertEqual(replay["records"], [catalog, retained])
+        self.assertEqual(after_catalog["records"], [retained])
+        self.assertFalse(after_catalog["hasMore"])
+        persisted = json.loads(next(self.root.glob("*.json")).read_text())
+        self.assertIn(None, persisted["records"])
+        self.assertNotIn(deleted, persisted["records"])
+        self.assertNotIn(late, persisted["records"])
+        self.assertEqual(
+            persisted["deletedNoteIDs"], [str(deleted_id).upper()]
+        )
+
+    def test_v2_purge_rejects_wrong_notebook_and_unbootstrapped_scope(self) -> None:
+        notebook_id = uuid.UUID(int=60)
+        catalog = make_v2_record(
+            b"catalog", notebook_id, notebook_id, "catalog"
+        )
+        self.store.bootstrap("cleanup", catalog, 2)
+
+        with self.assertRaises(StoreError) as wrong_notebook:
+            self.store.purge_deleted_notes(
+                "cleanup", str(uuid.UUID(int=61)), []
+            )
+        self.assertEqual(wrong_notebook.exception.code, "notebook_conflict")
+        with self.assertRaises(StoreError) as missing_bootstrap:
+            self.store.purge_deleted_notes(
+                "missing", str(notebook_id), []
+            )
+        self.assertEqual(
+            missing_bootstrap.exception.code, "bootstrap_required"
+        )
+
 
 class HTTPServiceTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -369,6 +430,57 @@ class HTTPServiceTests(unittest.TestCase):
             first = json.load(response)
         self.assertEqual(first["records"], [catalog])
         self.assertTrue(first["hasMore"])
+
+    def test_v2_http_purge_removes_body_and_suppresses_late_upload(self) -> None:
+        notebook_id = uuid.UUID(int=70)
+        note_id = uuid.UUID(int=71)
+        catalog = make_v2_record(
+            b"catalog", notebook_id, notebook_id, "catalog"
+        )
+        note = make_v2_record(b"note", notebook_id, note_id)
+        late = make_v2_record(b"late", notebook_id, note_id)
+        for path, record in [
+            ("bootstrap", catalog),
+            ("records", note),
+        ]:
+            request = Request(
+                self.base_url + "/v2/" + path,
+                data=json.dumps(
+                    {"scope": "purge-http", "record": record}
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request):
+                pass
+        purge = Request(
+            self.base_url + "/v2/purge",
+            data=json.dumps(
+                {
+                    "scope": "purge-http",
+                    "notebookID": str(notebook_id),
+                    "noteIDs": [str(note_id)],
+                }
+            ).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(purge) as response:
+            self.assertEqual(json.load(response), {"stored": True})
+        publish_late = Request(
+            self.base_url + "/v2/records",
+            data=json.dumps(
+                {"scope": "purge-http", "record": late}
+            ).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(publish_late):
+            pass
+        with urlopen(
+            self.base_url + "/v2/records?scope=purge-http&limit=10"
+        ) as response:
+            self.assertEqual(json.load(response)["records"], [catalog])
 
 
 if __name__ == "__main__":

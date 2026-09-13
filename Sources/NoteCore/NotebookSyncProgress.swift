@@ -6,6 +6,7 @@ public struct NotebookSyncProgress: Equatable, Sendable {
         case receiving
         case uploadingNotes
         case uploadingCatalog
+        case cleaningUp
     }
 
     public let phase: Phase
