@@ -77,7 +77,7 @@ undo must not be broken by styling or remote updates.
 The internal document state is authoritative for in-app editing and
 synchronization. Ordinary Markdown files are managed, one-way product outputs
 in user-visible local storage. The activated notebook does not ingest external
-changes.
+changes to these managed Markdown copies.
 
 The shared document core owns stable note identity, literal Markdown text,
 metadata, and edit application. Native editor adapters do not persist data.
@@ -190,7 +190,8 @@ making it the permanent editor interface.
 - Durable-save acknowledgment and local fallback recovery are implemented.
   The one-way Markdown-copy ownership policy is accepted. A user-facing
   history retention policy remains separate work.
-- Full-library import, permanent content cleanup, and explicit export.
+- Full-library import is implemented and tested. Permanent content cleanup
+  and explicit export remain separate work.
 - Signed notebook CloudKit delivery, fresh-device download, account
   transitions, background scheduling, and the cost of retained snapshot
   history.

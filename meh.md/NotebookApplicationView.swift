@@ -31,7 +31,8 @@ struct NotebookApplicationView: View {
         }
         .task { await workspace.start() }
         .task(id: scenePhase) {
-            guard scenePhase == .active, workspace.automaticSync else { return }
+            guard scenePhase == .active, workspace.automaticSync,
+                  workspace.usesSync else { return }
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(3)) } catch { return }
                 await workspace.refresh()

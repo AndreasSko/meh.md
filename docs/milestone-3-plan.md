@@ -151,3 +151,50 @@ preview workspace; it is not the activated notebook store.
   Cross-device physical iCloud and physical iPad acceptance remain unverified.
 - No new visual activation claim is based on the blocked simulator inspection.
   The earlier preview checks remain the available interaction evidence.
+
+## Owner activation feedback: 2026-09-13
+
+The owner confirmed the iPhone iCloud Dev test works. This completes the
+basic Mac/iPhone notebook activation checkpoint. It does not replace broader
+offline/concurrent-operation acceptance or physical iPad checks.
+
+The next stage is [Markdown library import](notebook-import-contract.md).
+Permanent content cleanup and efficient CloudKit scheduling remain separate
+follow-ups after the import flow receives feedback.
+
+## Markdown import checkpoint: 2026-09-13
+
+Markdown files and folder trees can now be copied into the notebook from the
+native picker. A review shows counts and skipped paths before confirmation.
+Sources remain unchanged; empty folders, names, Unicode, BOMs, line endings,
+and unsupported Markdown syntax are retained. Matching names stay separate.
+
+The notebook stores a resumable import job before writing note bodies and
+commits the complete tree to the catalog only after those bodies are durable.
+Resume uses the saved copy, preserves later edits and moves, and refuses
+corrupt or conflicting state instead of overwriting it. Set Aside keeps the
+saved job for recovery and permits a fresh import without deleting staged
+bodies or already imported notes.
+
+- All 238 Swift tests pass: 212 core and 26 native editor tests, with no skips.
+  The real HTTP suite verifies import, cross-replica synchronization, exact
+  nested Markdown output, and unchanged source files.
+- Tests cover interruption around journal/body/catalog writes, resume after
+  later edits, UUID/history conflicts, copied journals, missing bodies, and
+  invalid trees. Scanner checks include hidden items, links, packages,
+  overlapping selection, invalid UTF-8, and preserved empty folders.
+- The 200-note/10-folder fixture plus one same-name note took 0.596 seconds
+  for scan, import, and Markdown publication on this Mac. Batch catalog
+  insertion removed repeated per-note placement calculation. This is a local
+  fixture measurement, not a CloudKit latency or battery measurement.
+- Mac Local and signed iCloud Dev builds pass. The iPhone iCloud Dev app and
+  UI-test targets compile.
+- The Mac preview picker, count/skipped-item review, completed folder tree,
+  and opening an imported Unicode note were inspected. The selected source
+  fixture remained unchanged after the UI import.
+- Device Hub inspection timed out, so native iPhone import interaction and
+  document-provider behavior still need owner feedback. Basic iCloud folder
+  synchronization was already confirmed by the owner at the prior checkpoint.
+
+Next: feedback on import, then permanent deletion and content cleanup. Cloud
+scheduling/batching and broader device/scale acceptance follow separately.

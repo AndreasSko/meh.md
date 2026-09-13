@@ -66,8 +66,9 @@ deletion wins over subsequent offline edits and restores of that identity.
 Keep deletion IDs so an old device cannot resurrect the deleted content.
 
 Once the deletion intent is durable, retry removal of note documents, local
-recovery files, managed Markdown copies, and cloud snapshots. Other devices
-clean up when they reconnect. Replayed or late uploads must not undo the
+recovery files, managed Markdown copies, retained import jobs, and cloud
+snapshots. Other devices clean up when they reconnect. Replayed or late uploads
+must not undo the
 marker and must remain eligible for cleanup.
 
 Empty Trash targets the identities included in the confirmation. A previously
@@ -109,8 +110,8 @@ This helper does not lock a separate running app build.
 The [sync contract](notebook-sync-contract.md) defines shared bootstrap,
 old-build isolation, catalog/note routing, durable progress, and partial
 arrival. Notebook records use a separate CloudKit zone. The remaining
-boundaries are permanent content cleanup, full-library import, scale, and
-physical-device acceptance.
+boundaries are permanent content cleanup, CloudKit scheduling, and broader
+scale/device acceptance.
 
 When activation finds a recoverable catalog, legacy source, migrated note,
 or compatibility copy, the UI offers an explicit restore action. Restoring

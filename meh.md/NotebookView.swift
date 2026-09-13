@@ -18,6 +18,7 @@ private struct NotebookSidebarRow: Identifiable {
 struct NotebookView: View {
     let replica: NotebookReplica
     var workspace: NotebookWorkspace? = nil
+    @State private var showingImport = false
     @State private var selectedID: UUID?
     @State private var session: NoteSession?
     @State private var expandedIDs: Set<UUID> = []
@@ -77,6 +78,13 @@ struct NotebookView: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
                 ToolbarItem {
+                    Button { showingImport = true } label: {
+                        Label("Import Markdown", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(busy)
+                    .accessibilityIdentifier("notebook-import")
+                }
+                ToolbarItem {
                     Menu {
                         creationActions(parentID: nil)
                     } label: {
@@ -133,6 +141,10 @@ struct NotebookView: View {
                 get: { movingItem != nil }, set: { if !$0 { movingItem = nil } }
             )
         ) { moveSheet }
+        .sheet(isPresented: $showingImport) {
+            NotebookImportView(replica: replica, onImport: importMarkdown)
+        }
+        .task { if replica.hasPendingImport { showingImport = true } }
     }
 
     private var sidebarRowHeight: CGFloat {
@@ -488,6 +500,24 @@ struct NotebookView: View {
             if let parentID { expandedIDs.insert(parentID) }
             reveal(id)
         }
+    }
+
+    private func importMarkdown(_ plan: NotebookImportPlan?) async throws {
+        guard !busy else { throw NotebookReplicaError.busy }
+        busy = true
+        defer {
+            editorNavigation.resumeEditing?()
+            busy = false
+        }
+        try await flushEditor()
+        if let plan {
+            try await replica.importMarkdown(plan)
+            expandedIDs.formUnion(plan.entries.filter { $0.kind == .folder }.map(\.id))
+        } else {
+            try await replica.resumePendingImport()
+        }
+        workspace?.contentDidSave()
+        preferredCompactColumn = .sidebar
     }
 
     private func flushEditor() async throws {

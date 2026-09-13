@@ -249,7 +249,7 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         ).synchronize()
 
         let cursors = await recording.fetchCursors
-        XCTAssertEqual(cursors.first!, nil)
+        XCTAssertEqual(try XCTUnwrap(cursors.first), nil)
     }
 
     func testCatalogPreviousFileRollbackAlsoForcesReplay() async throws {
@@ -275,7 +275,7 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
             .synchronize()
 
         let cursors = await recording.fetchCursors
-        XCTAssertEqual(cursors.first!, nil)
+        XCTAssertEqual(try XCTUnwrap(cursors.first), nil)
         XCTAssertEqual(
             reopened.placements.first { $0.item.id == folder }?.item.name,
             "After"

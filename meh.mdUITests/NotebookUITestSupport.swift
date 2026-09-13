@@ -12,15 +12,17 @@ extension XCUIApplication {
         )
 
         let canonicalNote = staticTexts["note.md"]
+        let markdownName = staticTexts.matching(
+            NSPredicate(
+                format: "label MATCHES[c] %@",
+                ".*\\.(md|markdown)$"
+            )
+        ).firstMatch
+        // The toolbar can appear before asynchronous placements finish loading.
+        _ = markdownName.waitForExistence(timeout: timeout)
         if canonicalNote.exists {
             activate(canonicalNote)
         } else {
-            let markdownName = staticTexts.matching(
-                NSPredicate(
-                    format: "label MATCHES[c] %@",
-                    ".*\\.(md|markdown)$"
-                )
-            ).firstMatch
             if markdownName.exists {
                 activate(markdownName)
             } else {

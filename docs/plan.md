@@ -33,8 +33,9 @@ Updated: 2026-09-13
   See [sync verification](sync-verification.md) for evidence and open work.
 - Milestone 3 notebook storage, replication, navigation, legacy bridging, and
   structured Markdown copies are integrated into the default Local and iCloud
-  Dev builds. Signed Mac activation passed; cross-device physical iCloud and
-  physical iPad checks remain open.
+  Dev builds. Signed Mac activation passed and the owner confirmed the
+  iPhone iCloud Dev activation test works. Broader cross-device operation
+  checks and physical iPad acceptance remain open.
 
 ## Working method
 

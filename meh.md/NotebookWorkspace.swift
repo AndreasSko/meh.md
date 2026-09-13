@@ -414,9 +414,9 @@ final class NotebookWorkspace {
             let output = documentsDirectory.appending(path: "Notebook Copies")
             let publisher = self.publisher ?? NotebookMarkdownPublisher(directory: output)
             self.publisher = publisher
-            let notes = try await replica.persistedNoteSnapshots()
             guard let catalog = replica.catalogSnapshot else { return }
             let placements = replica.placements
+            let notes = try await replica.persistedNoteSnapshots()
             try await publisher.publish(
                 catalog: catalog,
                 placements: placements,

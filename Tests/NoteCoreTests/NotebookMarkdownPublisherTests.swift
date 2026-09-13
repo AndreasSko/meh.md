@@ -62,6 +62,123 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
         )
     }
 
+    func testFits253Through255ByteASCIIStemsBeforeAddingExtension()
+        async throws
+    {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let catalog = try NotebookCatalogDocument()
+        var notes: [NoteSnapshot] = []
+        var expectedNames: [String] = []
+        for (length, character) in [(253, "a"), (254, "b"), (255, "c")] {
+            let note = try NoteDocument(text: "\(length)")
+            try catalog.add(
+                id: note.noteID,
+                kind: .note,
+                name: String(repeating: character, count: length)
+            )
+            notes.append(note.snapshot())
+            expectedNames.append(
+                String(repeating: character, count: 252) + ".md"
+            )
+        }
+
+        try await NotebookMarkdownPublisher(directory: root).publish(
+            catalog: catalog.snapshot(),
+            placements: catalog.placements(),
+            notes: notes
+        )
+
+        for name in expectedNames {
+            XCTAssertEqual(name.utf8.count, 255)
+            XCTAssertTrue(
+                FileManager.default.fileExists(
+                    atPath: root.appending(path: "Markdown/\(name)").path
+                )
+            )
+        }
+    }
+
+    func testFitsMultibyteStemAtCharacterBoundary() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let catalog = try NotebookCatalogDocument()
+        let note = try NoteDocument(text: "unicode")
+        let grapheme = "e\u{301}"
+        let catalogName = String(repeating: "a", count: 250) + grapheme
+        try catalog.add(
+            id: note.noteID,
+            kind: .note,
+            name: catalogName
+        )
+
+        try await NotebookMarkdownPublisher(directory: root).publish(
+            catalog: catalog.snapshot(),
+            placements: catalog.placements(),
+            notes: [note.snapshot()]
+        )
+
+        let publishedName = String(repeating: "a", count: 250) + ".md"
+        XCTAssertEqual(catalogName.utf8.count, 253)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: root.appending(
+                    path: "Markdown/\(publishedName)"
+                ).path
+            )
+        )
+    }
+
+    func testTruncationCollisionUsesStableIdentifierSuffix() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let catalog = try NotebookCatalogDocument()
+        let firstID = UUID(
+            uuidString: "11111111-1111-1111-1111-111111111111"
+        )!
+        let secondID = UUID(
+            uuidString: "22222222-2222-2222-2222-222222222222"
+        )!
+        let first = try NoteDocument(noteID: firstID, text: "first")
+        let second = try NoteDocument(noteID: secondID, text: "second")
+        let sharedStem = String(repeating: "é", count: 126)
+        try catalog.add(
+            id: firstID, kind: .note, name: sharedStem + "a"
+        )
+        try catalog.add(
+            id: secondID, kind: .note, name: sharedStem + "b"
+        )
+
+        try await NotebookMarkdownPublisher(directory: root).publish(
+            catalog: catalog.snapshot(),
+            placements: catalog.placements(),
+            notes: [first.snapshot(), second.snapshot()]
+        )
+
+        let baseName = sharedStem + ".md"
+        let collisionName = NotebookName.collisionName(
+            baseName, id: secondID
+        )
+        XCTAssertEqual(
+            try String(
+                contentsOf: root.appending(path: "Markdown/\(baseName)"),
+                encoding: .utf8
+            ),
+            "first"
+        )
+        XCTAssertEqual(
+            try String(
+                contentsOf: root.appending(
+                    path: "Markdown/\(collisionName)"
+                ),
+                encoding: .utf8
+            ),
+            "second"
+        )
+        XCTAssertLessThanOrEqual(collisionName.utf8.count, 255)
+        XCTAssertTrue(collisionName.hasSuffix(" (22222222).md"))
+    }
+
     func testUnchangedPublishDoesNotReplaceHierarchy() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

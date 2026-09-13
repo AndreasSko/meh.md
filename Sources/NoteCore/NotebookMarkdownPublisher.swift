@@ -153,9 +153,8 @@ public actor NotebookMarkdownPublisher {
             ]
             for placement in children[parent] ?? [] {
                 var name = placement.displayName
-                if placement.item.kind == .note,
-                   !hasMarkdownExtension(name) {
-                    name += ".md"
+                if placement.item.kind == .note {
+                    name = markdownFileName(name)
                 }
                 name = uniqueName(
                     name,
@@ -203,6 +202,16 @@ public actor NotebookMarkdownPublisher {
         }
         try appendChildren(parent: nil, path: "")
         return plan
+    }
+
+    private func markdownFileName(_ name: String) -> String {
+        guard !hasMarkdownExtension(name) else { return name }
+        let markdownExtension = ".md"
+        var stem = name
+        while stem.utf8.count + markdownExtension.utf8.count > 255 {
+            stem.removeLast()
+        }
+        return stem + markdownExtension
     }
 
     private func hasMarkdownExtension(_ name: String) -> Bool {
