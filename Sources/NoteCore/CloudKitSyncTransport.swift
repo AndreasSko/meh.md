@@ -27,6 +27,7 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
 struct CloudKitTransportState: Codable, Equatable {
     var accountRecordName: String
     var zoneName: String
+    var protocolVersion: Int
     var inboxGeneration: UUID
     var engineState: Data?
     var inbox: [SyncRecord]
@@ -34,9 +35,14 @@ struct CloudKitTransportState: Codable, Equatable {
     var hasUnexpectedDeletion: Bool
     var retryNotBefore: Date?
 
-    init(accountRecordName: String, zoneName: String) {
+    init(
+        accountRecordName: String,
+        zoneName: String,
+        protocolVersion: Int = 1
+    ) {
         self.accountRecordName = accountRecordName
         self.zoneName = zoneName
+        self.protocolVersion = protocolVersion
         inboxGeneration = UUID()
         engineState = nil
         inbox = []
@@ -45,10 +51,56 @@ struct CloudKitTransportState: Codable, Equatable {
         retryNotBefore = nil
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case accountRecordName, zoneName, protocolVersion, inboxGeneration
+        case engineState, inbox, outbox, hasUnexpectedDeletion, retryNotBefore
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        accountRecordName = try values.decode(String.self, forKey: .accountRecordName)
+        zoneName = try values.decode(String.self, forKey: .zoneName)
+        protocolVersion = try values.decodeIfPresent(
+            Int.self, forKey: .protocolVersion
+        ) ?? 1
+        inboxGeneration = try values.decode(UUID.self, forKey: .inboxGeneration)
+        engineState = try values.decodeIfPresent(Data.self, forKey: .engineState)
+        inbox = try values.decode([SyncRecord].self, forKey: .inbox)
+        outbox = try values.decode([String: SyncRecord].self, forKey: .outbox)
+        hasUnexpectedDeletion = try values.decode(
+            Bool.self, forKey: .hasUnexpectedDeletion
+        )
+        retryNotBefore = try values.decodeIfPresent(
+            Date.self, forKey: .retryNotBefore
+        )
+    }
+
     mutating func appendToInbox(_ record: SyncRecord) throws {
         try record.validate()
+        guard record.protocolVersion == protocolVersion else {
+            throw SyncError.invalidRecord
+        }
         guard !inbox.contains(where: { $0.id == record.id }) else { return }
         inbox.append(record)
+    }
+
+    func validate(expectedProtocolVersion: Int) throws {
+        guard protocolVersion == expectedProtocolVersion else {
+            throw SyncError.scopeChanged
+        }
+        for record in inbox {
+            try record.validate()
+            guard record.protocolVersion == protocolVersion else {
+                throw SyncError.invalidRecord
+            }
+        }
+        for (id, record) in outbox {
+            try record.validate()
+            guard id == record.id,
+                  record.protocolVersion == protocolVersion else {
+                throw SyncError.invalidRecord
+            }
+        }
     }
 
     func page(after cursor: String?, limit: Int) throws -> SyncPage {
@@ -75,12 +127,19 @@ struct CloudKitTransportState: Codable, Equatable {
 
 actor CloudKitTransportStateStore {
     private let fileURL: URL
+    private let protocolVersion: Int
     private var state: CloudKitTransportState
 
-    init(directory: URL, accountRecordName: String, zoneName: String) throws {
+    init(
+        directory: URL,
+        accountRecordName: String,
+        zoneName: String,
+        protocolVersion: Int = 1
+    ) throws {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true
         )
+        self.protocolVersion = protocolVersion
         fileURL = directory.appendingPathComponent("cloudkit-sync-state.json")
         if FileManager.default.fileExists(atPath: fileURL.path) {
             do {
@@ -92,9 +151,9 @@ actor CloudKitTransportStateStore {
                 throw CloudKitSyncTransportError.corruptState
             }
             do {
-                for record in state.inbox { try record.validate() }
-                for record in state.outbox.values { try record.validate() }
+                try state.validate(expectedProtocolVersion: protocolVersion)
             } catch {
+                if error as? SyncError == .scopeChanged { throw error }
                 throw CloudKitSyncTransportError.corruptState
             }
             guard state.accountRecordName == accountRecordName,
@@ -104,7 +163,8 @@ actor CloudKitTransportStateStore {
         } else {
             state = CloudKitTransportState(
                 accountRecordName: accountRecordName,
-                zoneName: zoneName
+                zoneName: zoneName,
+                protocolVersion: protocolVersion
             )
             try Self.write(state, to: fileURL)
         }
@@ -115,6 +175,7 @@ actor CloudKitTransportStateStore {
     func update(_ body: (inout CloudKitTransportState) throws -> Void) throws {
         var next = state
         try body(&next)
+        try next.validate(expectedProtocolVersion: protocolVersion)
         try Self.write(next, to: fileURL)
         state = next
     }
@@ -165,6 +226,178 @@ enum CloudKitRemoteRecordValidator {
               }) else {
             throw CloudKitSyncTransportError.invalidRemoteRecord
         }
+    }
+}
+
+enum CloudKitTransportMode: Equatable, Sendable {
+    case legacy
+    case notebook
+
+    var protocolVersion: Int { self == .legacy ? 1 : 2 }
+    var zoneName: String {
+        self == .legacy ? "meh-md-sync-v1" : "meh-md-notebook-v2"
+    }
+    var recordType: String {
+        self == .legacy
+            ? "AutomergeSnapshotV1"
+            : "AutomergeNotebookSnapshotV2"
+    }
+    var bootstrapName: String {
+        self == .legacy ? "canonical-seed-v1" : "canonical-notebook-v2"
+    }
+
+    func validate(zoneName: String) throws {
+        switch self {
+        case .legacy:
+            guard zoneName != CloudKitTransportMode.notebook.zoneName else {
+                throw SyncError.scopeChanged
+            }
+        case .notebook:
+            guard zoneName == self.zoneName else {
+                throw SyncError.scopeChanged
+            }
+        }
+    }
+
+    func validate(_ record: SyncRecord, bootstrap: Bool = false) throws {
+        try record.validate()
+        guard record.protocolVersion == protocolVersion else {
+            throw SyncError.invalidRecord
+        }
+        if self == .notebook, bootstrap, record.kind != .catalog {
+            throw SyncError.invalidRecord
+        }
+    }
+}
+
+struct CloudKitRecordCodec: @unchecked Sendable {
+    let mode: CloudKitTransportMode
+    let zoneID: CKRecordZone.ID
+
+    func encode(
+        _ value: SyncRecord,
+        id: CKRecord.ID,
+        assetURL: URL
+    ) throws -> CKRecord {
+        try mode.validate(
+            value,
+            bootstrap: id.recordName == mode.bootstrapName
+        )
+        guard id.zoneID == zoneID,
+              id.recordName == value.id
+                || id.recordName == mode.bootstrapName else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        let record = CKRecord(recordType: mode.recordType, recordID: id)
+        record["snapshotID"] = value.id
+        if mode == .legacy {
+            record["noteID"] = value.snapshot.noteID.uuidString
+        } else {
+            record["protocolVersion"] = NSNumber(value: value.protocolVersion)
+            record["kind"] = value.kind.rawValue
+            record["notebookID"] = value.notebookID?.uuidString
+            record["documentID"] = value.snapshot.noteID.uuidString
+        }
+        record["heads"] = try JSONEncoder().encode(value.snapshot.heads)
+        record["document"] = CKAsset(fileURL: assetURL)
+        return record
+    }
+
+    func decode(_ record: CKRecord) throws -> SyncRecord {
+        do {
+            return try decodeRemoteRecord(record)
+        } catch {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+    }
+
+    private func decodeRemoteRecord(_ record: CKRecord) throws -> SyncRecord {
+        guard record.recordType == mode.recordType,
+              record.recordID.zoneID == zoneID,
+              let id: String = record["snapshotID"],
+              let headsData: Data = record["heads"],
+              let asset: CKAsset = record["document"],
+              let source = asset.fileURL else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        try CloudKitRemoteRecordValidator.validateSnapshotID(id)
+        guard record.recordID.recordName == id
+                || record.recordID.recordName == mode.bootstrapName else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        let documentID: UUID
+        let version: Int
+        let kind: SyncDocumentKind
+        let notebookID: UUID?
+        switch mode {
+        case .legacy:
+            guard record["protocolVersion"] == nil,
+                  record["kind"] == nil,
+                  record["notebookID"] == nil,
+                  record["documentID"] == nil,
+                  let noteIDString: String = record["noteID"],
+                  let noteID = UUID(uuidString: noteIDString) else {
+                throw CloudKitSyncTransportError.invalidRemoteRecord
+            }
+            documentID = noteID
+            version = 1
+            kind = .note
+            notebookID = nil
+        case .notebook:
+            guard record["noteID"] == nil,
+                  let number: NSNumber = record["protocolVersion"],
+                  number.intValue == 2,
+                  number.doubleValue == 2,
+                  let kindValue: String = record["kind"],
+                  let decodedKind = SyncDocumentKind(rawValue: kindValue),
+                  let notebookIDString: String = record["notebookID"],
+                  let decodedNotebookID = UUID(uuidString: notebookIDString),
+                  let documentIDString: String = record["documentID"],
+                  let decodedDocumentID = UUID(uuidString: documentIDString)
+            else { throw CloudKitSyncTransportError.invalidRemoteRecord }
+            documentID = decodedDocumentID
+            version = number.intValue
+            kind = decodedKind
+            notebookID = decodedNotebookID
+        }
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: source.path
+        )
+        guard let size = attributes[.size] as? NSNumber,
+              size.intValue <= CloudKitRemoteRecordValidator.maximumAssetSize
+        else { throw CloudKitSyncTransportError.invalidRemoteRecord }
+        let snapshot = NoteSnapshot(
+            data: try Data(contentsOf: source),
+            heads: try JSONDecoder().decode(Set<String>.self, from: headsData),
+            noteID: documentID
+        )
+        let value: SyncRecord
+        if version == 1 {
+            value = SyncRecord(snapshot: snapshot)
+        } else if kind == .note, let notebookID {
+            value = SyncRecord(snapshot: snapshot, notebookID: notebookID)
+        } else if kind == .catalog, let notebookID,
+                  snapshot.noteID == notebookID {
+            value = SyncRecord(catalog: NotebookCatalogSnapshot(
+                data: snapshot.data,
+                heads: snapshot.heads,
+                notebookID: notebookID
+            ))
+        } else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        guard value.id == id else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        do {
+            try mode.validate(
+                value,
+                bootstrap: record.recordID.recordName == mode.bootstrapName
+            )
+        } catch {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        return value
     }
 }
 
@@ -306,14 +539,14 @@ struct CloudKitAvailabilityCooldownStore {
 public final actor CloudKitSyncTransport: SyncTransport {
     public nonisolated let scope: String
 
-    private static let recordType = "AutomergeSnapshotV1"
-    private static let bootstrapName = "canonical-seed-v1"
     private static let pageSize = 100
 
     private let container: CKContainer
     private let database: CKDatabase
     private let expectedUserRecordID: CKRecord.ID
     private let zoneID: CKRecordZone.ID
+    private let mode: CloudKitTransportMode
+    private let codec: CloudKitRecordCodec
     private let store: CloudKitTransportStateStore
     private let eventCommitter: CloudKitEventCommitter
     private let assetDirectory: URL
@@ -330,6 +563,33 @@ public final actor CloudKitSyncTransport: SyncTransport {
         stateDirectory: URL,
         zoneName: String = "meh-md-sync-v1"
     ) async throws -> CloudKitSyncTransport {
+        try await make(
+            containerIdentifier: containerIdentifier,
+            stateDirectory: stateDirectory,
+            zoneName: zoneName,
+            mode: .legacy
+        )
+    }
+
+    public static func makeNotebook(
+        containerIdentifier: String,
+        stateDirectory: URL
+    ) async throws -> CloudKitSyncTransport {
+        try await make(
+            containerIdentifier: containerIdentifier,
+            stateDirectory: stateDirectory,
+            zoneName: CloudKitTransportMode.notebook.zoneName,
+            mode: .notebook
+        )
+    }
+
+    private static func make(
+        containerIdentifier: String,
+        stateDirectory: URL,
+        zoneName: String,
+        mode: CloudKitTransportMode
+    ) async throws -> CloudKitSyncTransport {
+        try mode.validate(zoneName: zoneName)
         var availabilityCooldown = try CloudKitAvailabilityCooldownStore(
             directory: stateDirectory
         )
@@ -355,7 +615,8 @@ public final actor CloudKitSyncTransport: SyncTransport {
         let store = try CloudKitTransportStateStore(
             directory: stateDirectory,
             accountRecordName: userRecordID.recordName,
-            zoneName: zoneName
+            zoneName: zoneName,
+            protocolVersion: mode.protocolVersion
         )
         let transport = CloudKitSyncTransport(
             containerIdentifier: containerIdentifier,
@@ -364,7 +625,8 @@ public final actor CloudKitSyncTransport: SyncTransport {
             zoneName: zoneName,
             stateDirectory: stateDirectory,
             store: store,
-            availabilityCooldown: availabilityCooldown
+            availabilityCooldown: availabilityCooldown,
+            mode: mode
         )
         try await transport.initialize()
         return transport
@@ -377,12 +639,16 @@ public final actor CloudKitSyncTransport: SyncTransport {
         zoneName: String,
         stateDirectory: URL,
         store: CloudKitTransportStateStore,
-        availabilityCooldown: CloudKitAvailabilityCooldownStore
+        availabilityCooldown: CloudKitAvailabilityCooldownStore,
+        mode: CloudKitTransportMode
     ) {
         self.container = container
         database = container.privateCloudDatabase
         expectedUserRecordID = userRecordID
-        zoneID = CKRecordZone.ID(zoneName: zoneName)
+        let zoneID = CKRecordZone.ID(zoneName: zoneName)
+        self.zoneID = zoneID
+        self.mode = mode
+        codec = CloudKitRecordCodec(mode: mode, zoneID: zoneID)
         self.store = store
         eventCommitter = CloudKitEventCommitter(store: store)
         assetDirectory = stateDirectory.appendingPathComponent("assets")
@@ -426,11 +692,11 @@ public final actor CloudKitSyncTransport: SyncTransport {
 
     public func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
         try await assertHealthy()
+        try mode.validate(record, bootstrap: true)
         try await verifyAccount()
-        try record.validate()
         try await ensureZone()
         let recordID = CKRecord.ID(
-            recordName: Self.bootstrapName, zoneID: zoneID
+            recordName: mode.bootstrapName, zoneID: zoneID
         )
         do {
             let existing = try await cloudRequest {
@@ -473,8 +739,8 @@ public final actor CloudKitSyncTransport: SyncTransport {
 
     public func publish(_ record: SyncRecord) async throws {
         try await assertHealthy()
+        try mode.validate(record)
         try await verifyAccount()
-        try record.validate()
         let recordID = CKRecord.ID(recordName: record.id, zoneID: zoneID)
         try await store.update { $0.outbox[record.id] = record }
         let assetURL = try assetStaging.retain(record)
@@ -619,47 +885,11 @@ public final actor CloudKitSyncTransport: SyncTransport {
     private func makeCloudRecord(
         _ value: SyncRecord, id: CKRecord.ID, assetURL: URL
     ) throws -> CKRecord {
-        let record = CKRecord(recordType: Self.recordType, recordID: id)
-        record["snapshotID"] = value.id
-        record["noteID"] = value.snapshot.noteID.uuidString
-        record["heads"] = try JSONEncoder().encode(value.snapshot.heads)
-        record["document"] = CKAsset(fileURL: assetURL)
-        return record
+        try codec.encode(value, id: id, assetURL: assetURL)
     }
 
     private func decode(_ record: CKRecord) throws -> SyncRecord {
-        guard record.recordType == Self.recordType,
-              let id: String = record["snapshotID"],
-              let noteIDString: String = record["noteID"],
-              let noteID = UUID(uuidString: noteIDString),
-              let headsData: Data = record["heads"],
-              let asset: CKAsset = record["document"],
-              let source = asset.fileURL else {
-            throw CloudKitSyncTransportError.invalidRemoteRecord
-        }
-        try CloudKitRemoteRecordValidator.validateSnapshotID(id)
-        guard record.recordID.zoneID == zoneID,
-              record.recordID.recordName == id
-                || record.recordID.recordName == Self.bootstrapName else {
-            throw CloudKitSyncTransportError.invalidRemoteRecord
-        }
-        let attributes = try FileManager.default.attributesOfItem(
-            atPath: source.path
-        )
-        guard let size = attributes[.size] as? NSNumber,
-              size.intValue <= CloudKitRemoteRecordValidator.maximumAssetSize
-        else { throw CloudKitSyncTransportError.invalidRemoteRecord }
-        let snapshot = NoteSnapshot(
-            data: try Data(contentsOf: source),
-            heads: try JSONDecoder().decode(Set<String>.self, from: headsData),
-            noteID: noteID
-        )
-        let value = SyncRecord(snapshot: snapshot)
-        guard value.id == id else {
-            throw CloudKitSyncTransportError.invalidRemoteRecord
-        }
-        try value.validate()
-        return value
+        try codec.decode(record)
     }
 }
 
@@ -773,6 +1003,7 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
             context.options.scope.contains($0)
         }
         let outbox = await store.snapshot().outbox
+        let codec = codec
         return await CKSyncEngine.RecordZoneChangeBatch(
             pendingChanges: pending
         ) { [assetDirectory, zoneID] recordID in
@@ -784,12 +1015,7 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                     to: assetURL, options: .atomic
                 )) != nil else { return nil }
             }
-            let record = CKRecord(recordType: Self.recordType, recordID: recordID)
-            record["snapshotID"] = value.id
-            record["noteID"] = value.snapshot.noteID.uuidString
-            record["heads"] = try? JSONEncoder().encode(value.snapshot.heads)
-            record["document"] = CKAsset(fileURL: assetURL)
-            return record
+            return try? codec.encode(value, id: recordID, assetURL: assetURL)
         }
     }
 }
