@@ -13,6 +13,10 @@ The app shows when the current text is saved on this device and offers retry
 after a save failure. Damaged storage requires an explicit recovery choice;
 the app retains a previous saved file and preserves damaged bytes.
 
+Use the Import Markdown toolbar action to copy existing Markdown files or a
+folder tree into the notebook. The review lists skipped items, and interrupted
+imports can resume from a saved copy without changing the source.
+
 Automerge documents are the editing source. The notebook publishes active
 notes as structured, one-way copies under
 `Documents/Notebook Copies/Markdown`. External edits are not imported. Copies
@@ -49,6 +53,8 @@ activating version 2 notebook sync.
   collision rules, and migration boundaries.
 - [Notebook sync contract](docs/notebook-sync-contract.md): bootstrap, record
   isolation, durable replay, and deletion boundaries.
+- [Markdown import](docs/notebook-import-contract.md): copying files and
+  folders, source preservation, skipped items, and interrupted import recovery.
 - [Notebook navigation](docs/notebook-navigation-preview.md): activated UI,
   legacy preview switch, and interaction checks.
 - [Architecture notes](docs/architecture.md): proposed technical approach and
