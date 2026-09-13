@@ -1,6 +1,6 @@
 # Product brief
 
-Updated: 2026-09-12
+Updated: 2026-09-13
 
 ## Idea
 
@@ -8,6 +8,10 @@ meh.md is a small, beautiful, native Markdown note app for personal use on Mac,
 iPhone, and iPad. It should replace the owner's current Obsidian workflow with
 a calmer interface and dependable sync, without accumulating features the owner
 does not need.
+
+This is the owner's vibe-coded Swift app, with a SwiftUI interface and native
+text editing. Its features follow personal needs and preferences. An App Store
+release is a possibility later, after the app works well for daily use.
 
 The existing library contains hundreds of notes in a few subdirectories. It
 does not depend on Obsidian-specific wiki links, frontmatter, or embedded
@@ -63,7 +67,7 @@ edits.
 
 ## Development approach
 
-Prefer a fresh native app, subject to a short editor investigation. Most
-implementation, builds, and automated checks will be agent-driven. The owner
-directs product decisions and tests actual writing and device handoff. Keep
-scope narrow and deliver usable increments.
+The app uses SwiftUI with native AppKit/UIKit text editors, following the
+completed editor investigation. Most implementation, builds, and automated
+checks are agent-driven. The owner directs product decisions and tests actual
+writing and device handoff. Keep scope narrow and deliver usable increments.

@@ -2,8 +2,8 @@
 
 This began as the first implementation stage of milestone 3. The running app
 now activates this notebook core in both Local and iCloud Dev builds.
-Replication, the one-way legacy bridge, navigation, and structured managed
-copies are integrated around the same storage boundary.
+Replication, navigation, and structured managed copies use the same storage
+boundary. Single-note migration and compatibility sync are no longer active.
 
 ## Authoritative state
 
@@ -77,7 +77,7 @@ unseen note created offline inside a permanently deleted folder is retained
 in a recovery location, rather than being deleted without confirmation.
 The actions are exposed together with marker durability and retryable cleanup.
 
-## Files and migration
+## Files and recovery
 
 The catalog uses `catalog.automerge` and `catalog.previous.automerge`.
 Each note uses the existing note-file store under `notes/<UUID>/`. Saves
@@ -90,6 +90,12 @@ explicit recovery choice. Recovery retains damaged bytes and rejects stale
 recovery requests. Unsupported current schemas block rather than rolling back
 automatically. Stage-one tests inject failures at write/recovery boundaries.
 They do not exercise process kills, sudden power loss, or physical devices.
+
+## Historical single-note migration
+
+The following describes the retained migration helpers, not normal app
+activation. The development compatibility bridge was retired during
+[permanent deletion work](notebook-permanent-deletion.md).
 
 Legacy migration records its source identity/history before copying content.
 It saves the note before linking it into the catalog and records completion
@@ -106,17 +112,12 @@ The bridge state under `Notebook/LegacyBridge` can import later source edits
 from an older client, but no notebook edit is written back to that source.
 This helper does not lock a separate running app build.
 
-## Next boundary
+## Related contracts
 
 The [sync contract](notebook-sync-contract.md) defines shared bootstrap,
 old-build isolation, catalog/note routing, durable progress, and partial
-arrival. Notebook records use a separate CloudKit zone. The remaining
-boundaries are permanent content cleanup, CloudKit scheduling, and broader
-scale/device acceptance.
-
-When activation finds a recoverable catalog, legacy source, migrated note,
-or compatibility copy, the UI offers an explicit restore action. Restoring
-may lose newer changes and retains the damaged current file in quarantine.
-Only an explicit legacy-source restore changes the retained `Notes` source;
-normal migration and synchronization never write notebook edits back to it.
-Recovery and startup are serialized before any filesystem work begins.
+arrival. Notebook records use a separate CloudKit zone. See
+[permanent deletion](notebook-permanent-deletion.md) and
+[automatic scheduling](notebook-sync-scheduling.md) for the later implemented
+boundaries. Broader scale and device acceptance remain in the
+[roadmap](plan.md).

@@ -24,7 +24,8 @@ compatibility sync are no longer active. Existing notebooks remain intact.
   this notebook are accepted; dragging external files does not import them.
 - Trash keeps content editable and preserves folder ancestry for restore.
   Children hidden by a trashed parent explain the need to restore that parent
-  or move the child out. No permanent-delete controls are exposed.
+  or move the child out. Confirmed Delete Permanently and Empty Trash are
+  described in the [deletion contract](notebook-permanent-deletion.md).
 - Moving a selected note follows its resulting placement. Navigation flushes
   the current editor before replacing it; failed saves keep it open.
 - Unfinished native composition blocks navigation. The native buffer commits
