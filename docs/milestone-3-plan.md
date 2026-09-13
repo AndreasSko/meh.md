@@ -98,4 +98,21 @@ The owner accepted the Trash behavior and permanent-deletion plan. Implement
 Delete Permanently and Empty Trash only after durable deletion markers and
 actual content cleanup are ready. See the core contract for exact semantics.
 
-Next: implement notebook-wide replication before UI integration.
+## Stage 2 checkpoint: 2026-09-13
+
+Notebook replication is implemented without changing the running app.
+The [sync contract](notebook-sync-contract.md) describes its guarantees.
+
+- Validation: 190 Swift tests passed (168 core and 22 native editor), plus
+  13 Python service tests. Mac and generic iOS Simulator Local builds passed.
+- A real loopback HTTP test joins two fresh replicas, exchanges concurrent
+  Unicode edits, reopens both replicas, and checks exact convergence.
+- Injected tests cover interrupted bootstrap, partial arrival, save failure,
+  rollback replay, scope isolation, pending edits, and permanent markers.
+- CloudKit record codecs and durable mode isolation are tested locally.
+  Live notebook CloudKit delivery and signed-device behavior remain untested.
+- Permanent markers suppress resurrection, but content cleanup and its UI
+  remain deferred. Current exchanges are finite and explicitly invoked;
+  background scheduling, batching, scale, and energy measurements follow.
+
+Next: review navigation behavior before wiring the notebook into the app.

@@ -40,6 +40,7 @@ public struct NotebookItem: Equatable, Sendable {
     public let name: String
     public let parentID: UUID?
     public let isTrashed: Bool
+    public let isPermanentlyDeleted: Bool
 }
 
 public struct NotebookPlacement: Equatable, Sendable {
@@ -285,10 +286,19 @@ final class NotebookCatalogDocument {
         try document.put(obj: object(for: id), key: "visibility", value: .String(value))
     }
 
+    /// Only the explicitly confirmed identities are marked; unknown children
+    /// received later survive in a recovery placement. Cleanup is separate.
+    func markPermanentlyDeleted(_ ids: Set<UUID>) throws {
+        let objects = try ids.map { try object(for: $0) }
+        for object in objects {
+            try document.put(obj: object, key: "permanentlyDeleted", value: .Boolean(true))
+        }
+    }
+
     func items() throws -> [NotebookItem] { try readItems().map(\.item) }
 
     func placements() throws -> [NotebookPlacement] {
-        let entries = try readItems()
+        let entries = try readItems().filter { !$0.item.isPermanentlyDeleted }
         let byID = Dictionary(uniqueKeysWithValues: entries.map { ($0.item.id, $0.item) })
         var parents: [UUID: UUID] = [:]
         var issues = Dictionary(uniqueKeysWithValues: entries.map { ($0.item.id, $0.issues) })
@@ -457,13 +467,18 @@ final class NotebookCatalogDocument {
                 }
                 if parts[0] == "trash" { trashed = true }
             }
+            let deleted = try document.getAll(obj: object, key: "permanentlyDeleted")
+            guard deleted.allSatisfy({ $0 == .Scalar(.Boolean(true)) }) else {
+                throw NotebookCatalogError.invalidDocument
+            }
             var issues = Set<NotebookPlacementIssue>()
             if names.count > 1 { issues.insert(.concurrentRename) }
             if parentValues.count > 1 { issues.insert(.concurrentMove) }
             return (
                 NotebookItem(
                     id: id, kind: kind, name: name,
-                    parentID: try decodeParent(parentValue), isTrashed: trashed), issues
+                    parentID: try decodeParent(parentValue), isTrashed: trashed,
+                    isPermanentlyDeleted: !deleted.isEmpty), issues
             )
         }
     }

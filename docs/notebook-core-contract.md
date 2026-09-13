@@ -1,8 +1,8 @@
 # Notebook core contract
 
 This is the first implementation stage of milestone 3. The running app still
-uses its existing single note. Notebook UI, transport integration, import,
-and managed-copy reconciliation follow in later stages.
+uses its existing single note. Notebook replication is implemented separately;
+UI integration, import, and managed-copy reconciliation follow later.
 
 ## Authoritative state
 
@@ -57,7 +57,8 @@ The eventual UI must explain that distinction.
 ## Agreed permanent deletion: later milestone 3 stages
 
 The owner approved Delete Permanently and Empty Trash, with confirmation.
-These actions are planned; the current core implements recoverable Trash only.
+The replication core now implements durable permanent markers. User-facing
+actions and actual content cleanup remain planned.
 
 Record a permanent marker for every confirmed note/folder identity. Permanent
 deletion wins over subsequent offline edits and restores of that identity.
@@ -102,8 +103,7 @@ This helper does not lock a separate running app build.
 
 ## Next boundary
 
-Cloud bootstrap must establish one shared catalog history before multiple
-clients join. The local migration primitive alone does not coordinate that
-bootstrap. The next stage must define old-build isolation, catalog/note record
-routing, durable multi-document download progress, and partial arrival.
-No notebook records are sent to the existing single-note CloudKit zone yet.
+The [sync contract](notebook-sync-contract.md) defines shared bootstrap,
+old-build isolation, catalog/note routing, durable progress, and partial
+arrival. App integration must flush and stop the legacy session before
+activating the new replica. Notebook records use a separate CloudKit zone.

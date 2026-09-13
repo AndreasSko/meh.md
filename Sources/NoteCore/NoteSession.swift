@@ -14,6 +14,7 @@ public final class NoteSession {
         case loadFailed(message: String)
     }
 
+    public private(set) var isPermanentlyDeleted = false
     public private(set) var text = ""
     public private(set) var status: Status = .loading
     public private(set) var recoveryErrorMessage: String?
@@ -22,7 +23,8 @@ public final class NoteSession {
     public var currentSnapshot: NoteSnapshot? { document?.snapshot() }
 
     public var isEditingEnabled: Bool {
-        switch status {
+        if isPermanentlyDeleted { return false }
+        return switch status {
         case .saved, .saving, .saveFailed:
             true
         case .loading, .recoveryRequired, .blocked, .loadFailed:
@@ -84,6 +86,10 @@ public final class NoteSession {
         case let .blocked(failure):
             status = .blocked(failure)
         }
+    }
+
+    func markPermanentlyDeleted() {
+        isPermanentlyDeleted = true
     }
 
     public func replaceText(

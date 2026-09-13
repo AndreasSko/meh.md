@@ -166,7 +166,7 @@ models remote record storage without simulating Apple account services.
 
 ## 3 — A usable notebook
 
-Status: core implementation started on 2026-09-13; app wiring follows a
+Status: core and replication implemented on 2026-09-13; app wiring follows a
 behavior review checkpoint. See the [execution plan](milestone-3-plan.md).
 
 ### Work
