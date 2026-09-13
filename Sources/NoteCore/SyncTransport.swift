@@ -125,6 +125,16 @@ public struct SyncPage: Codable, Equatable, Sendable {
     }
 }
 
+public struct SyncBatchResult: Sendable {
+    public let acknowledgedIDs: Set<String>
+    public let error: (any Error)?
+
+    public init(acknowledgedIDs: Set<String>, error: (any Error)?) {
+        self.acknowledgedIDs = acknowledgedIDs
+        self.error = error
+    }
+}
+
 /// A remote record store, not a peer-to-peer stream. All methods may be
 /// retried after an uncertain result. Cursors are scoped to one backend.
 public protocol SyncTransport: Sendable {
@@ -135,8 +145,38 @@ public protocol SyncTransport: Sendable {
     func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord
     /// A successful return acknowledges durable remote storage of this ID.
     func publish(_ record: SyncRecord) async throws
+    /// Publish records together when the backend supports it. The result keeps
+    /// partial acknowledgements if a later record fails.
+    func publishBatch(_ records: [SyncRecord]) async throws -> SyncBatchResult
     /// nil starts a complete replay. No record is deleted in this milestone.
     func fetch(after cursor: String?) async throws -> SyncPage
+    /// The earliest useful retry time known by the transport.
+    func retryNotBefore() async -> Date?
+}
+
+extension SyncTransport {
+    public func publishBatch(
+        _ records: [SyncRecord]
+    ) async throws -> SyncBatchResult {
+        var acknowledgedIDs = Set<String>()
+        for record in records {
+            do {
+                try await publish(record)
+                acknowledgedIDs.insert(record.id)
+            } catch {
+                return SyncBatchResult(
+                    acknowledgedIDs: acknowledgedIDs,
+                    error: error
+                )
+            }
+        }
+        return SyncBatchResult(
+            acknowledgedIDs: acknowledgedIDs,
+            error: nil
+        )
+    }
+
+    public func retryNotBefore() async -> Date? { nil }
 }
 
 public enum SyncError: Error, Equatable, LocalizedError {
