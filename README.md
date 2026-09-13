@@ -6,8 +6,9 @@ Personal native Markdown notes for Mac, iPhone, and iPad. Currently in
 early development, with milestone 1 complete and milestone 2 in progress. One
 note saves locally as an Automerge document and reopens after quitting. The app
 also maintains a user-visible Markdown copy as a one-way, read-only product
-output. Debug builds can test synchronization through a local service; the
-CloudKit adapter still requires signing/container setup and device validation.
+output. Use the `meh.md Local` or `meh.md iCloud Dev` Xcode scheme to choose
+local editing or development iCloud sync. The iCloud build installs separately
+and keeps syncing when reopened normally.
 
 The app shows when the current text is saved on this device and offers retry
 after a save failure. Damaged storage requires an explicit recovery choice;
@@ -30,6 +31,8 @@ newly selected destination remains untouched.
   and the local-to-iCloud testing sequence.
 - [Local sync service](docs/local-sync-service.md): account-free development
   transport and simulator configuration.
+- [Development builds](docs/development-builds.md): choosing schemes and
+  testing iCloud in the normal editor.
 - [CloudKit setup](docs/cloudkit-sync-setup.md): capabilities and remaining
   signed-device checks.
 - [Sync verification](docs/sync-verification.md): replica tests, simulator

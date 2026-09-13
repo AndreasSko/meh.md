@@ -131,7 +131,9 @@ implementation checkpoints, and sub-agent assignments.
 
 ## 2 — Prove synchronization early
 
-Status: in progress on `codex/milestone-2-sync`.
+Status: Mac/iPhone physical acceptance and iPad simulator convergence verified.
+Physical iPad checks remain open as follow-up validation.
+PR #6 and stacked PR #7 await review/merge.
 
 See the [execution plan](milestone-2-plan.md). Prove the shared coordinator
 against a deterministic service and two simulator apps before iCloud device
@@ -174,6 +176,11 @@ Status: not started; depends on milestone 2.
   content.
 - Define and test rename collisions, folder moves, and delete-versus-edit
   behavior.
+- Replace fixed foreground polling with CloudKit scheduling and change
+  notifications. Batch local uploads, retain activation/manual refresh, and
+  measure responsiveness and battery impact as the note count grows.
+  Milestone 2 already establishes retry-after handling and durable pending
+  work; production background delivery belongs to this scheduling work.
 
 ### Acceptance
 

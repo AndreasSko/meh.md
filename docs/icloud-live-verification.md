@@ -14,15 +14,15 @@ fresh adapter, and compares its Automerge bytes and decoded text.
 The development test records remain in the smoke zone for inspection. The
 check does not delete records, reset a container, or deploy a production
 schema. The single smoke mode uses two adapters on this Mac. The phase mode
-below
-checks a real Mac/iPhone round trip through the same development zone.
+below checks a real Mac/iPhone round trip through the same development zone.
 
 ## Signing
 
 Xcode automatic provisioning uses the existing team `9YFM7J3EH3`. Debug builds
-select Development; Release builds select Production. Cloud sync remains a
-Debug-only opt-in. The project includes CloudKit entitlements for macOS and
-iOS. Signing for a physical iPhone still needs that device to be available.
+select Development; Release builds select Production. Cloud sync remains
+development-only, selected by the iCloud Dev scheme or the legacy Debug smoke
+environment flags. The project includes CloudKit entitlements for macOS and
+iOS. The available physical iPhone is signed through automatic provisioning.
 
 The first signed Mac build and signature verification succeeded on
 2026-09-13. Its embedded development profile authorizes the expected container.
@@ -126,9 +126,73 @@ the asset cleanup changes. That follow-up used a fresh local state directory
 and uploaded snapshot
 `e7e13b06a883540f78feb4c76b3d8665f18840cdf089ec03452e90634bbb7a46`.
 
+## Owner acceptance
+
+On 2026-09-13 the owner tested the normal editor on Mac and iPhone and
+confirmed that syncing works and the experience is satisfactory. This is
+separate from the automated smoke and UI checks.
+
 ## Remaining checks
 
-- Verify concurrent offline edits and restart recovery on physical devices.
+- Test actual radio loss and Apple network timeout behavior separately from
+  the injected transport outage below.
 - Configure and verify push-driven background scheduling separately; the
-  prototype currently uses manual foreground exchanges.
+  prototype currently uses foreground polling and manual exchanges.
 - Verify account changes and production provisioning before release.
+
+## Normal editor and outage recovery
+
+The shared `meh.md iCloud Dev` scheme installs a separate app whose compiled
+configuration selects CloudKit on every launch. The UI tests use the ordinary
+editor and canonical `meh-md-sync-v1` zone. They append disposable text to the
+development note; the original Local app's note remains separate.
+
+On 2026-09-13 all eight phases passed on the Mac and physical iPhone 12 Pro
+Max. The run `device-d8281798a42b` first proved normal Mac publish, phone
+receive/reply, and Mac receive, including app relaunches. Each device then
+made an independent edit while record-store requests failed with an injected
+outage, and retained its edit after terminating and relaunching with the
+outage still active. Restoring live CloudKit on both devices preserved both
+edits after merge and another relaunch.
+
+The outage is injected at the transport boundary with the verified real
+account/workspace scope. Account discovery still contacts CloudKit; no device
+radios are changed. This verifies persisted application state and merge
+recovery on physical devices, not Apple's airplane-mode timeout behavior.
+The run's result bundles and `verification.json` are under
+`/tmp/meh-cloud-device-20260913-final`. Reproduce with the runner described in
+[development builds](development-builds.md).
+
+Live editor checks exposed an idempotent-upload case absent from the isolated
+smoke run: an unchanged remote snapshot already existed under its content
+hash. A CloudKit conflict now fetches and validates the complete stored
+record, including its asset, before acknowledging the upload and clearing
+its durable outbox and engine pending entry. The normal editor sequence
+passed after this correction.
+
+## Final regression and review
+
+After the development schemes, strict first join, immutable-upload correction,
+and throttle handling, all 104 Swift tests passed: 82 core and 22 native
+editor tests. The signed iCloud Dev Mac and physical iPhone test builds passed,
+as did the Local Mac build. The smaller counts above describe earlier smoke
+checkpoints, not the final suite. Independent review found no remaining
+correctness blockers after the startup cooldown gap was closed.
+
+Cooldown tests use injected time and error metadata, including startup
+account discovery, nested record errors, missing retry delays, and durable
+pending uploads. They do not induce Apple's actual rate limits. CloudKit
+scheduling, batching, and push delivery are recorded for milestone 3.
+
+The final build repeated all eight UI phases with run `device-065d54999b4e`.
+After the final relaunches, the runner compared SHA-256 hashes of the complete
+UTF-8 editor text from both devices. They matched exactly:
+
+```text
+a5a0e2d8a86a449f72bc5e1aecbae0a6e23bb794bc16eec3345e4050b7009e23
+```
+
+Final result bundles, digest attachments, and `verification.json` are under
+`/tmp/meh-cloud-device-20260913-digest`. These hashes verify full-text
+convergence; the isolated smoke phases above separately verify acknowledged
+Automerge snapshot identities.

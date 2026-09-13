@@ -1,7 +1,8 @@
 # Milestone 2 synchronization verification
 
 Date: 2026-09-13.
-Status: local synchronization verified; iCloud/device acceptance remains open.
+Status: local synchronization verified; signed Mac/iPhone and owner acceptance
+are recorded in [live iCloud verification](icloud-live-verification.md).
 
 ## Delivered behavior
 
@@ -27,9 +28,9 @@ Status: local synchronization verified; iCloud/device acceptance remains open.
 
 ## Automated evidence
 
-- `swift test --disable-sandbox`: 73 core and 22 native editor tests passed.
-  These include 15 coordinator tests, 7 CloudKit state tests, 4 local transport
-  tests, and 8 remote-editor tests.
+- `swift test --disable-sandbox`: 82 core and 22 native editor tests passed.
+  These include 16 coordinator tests, 15 CloudKit state tests, 4 local
+  transport tests, and 8 remote-editor tests.
 - Coordinator checks cover three independent persisted replicas, offline
   edits, process-owner reconstruction, reordered/duplicate records, lost
   upload and bootstrap responses, failed download saves, current-file
@@ -92,23 +93,23 @@ writes, not interruption at every write instruction or sudden power loss.
 
 ## Remaining acceptance and limits
 
-- Configure the real CloudKit container, app capabilities, and signing, then
-  test signed Mac/iPhone/iPad sync. No live iCloud exchange has been verified.
-- Physical-device persistence, iPad hardware-keyboard use, background/push
-  delivery, fresh-install/restore behavior, account transitions, quota/errors,
-  and measured handoff latency remain open.
-- A fresh offline device can retain its independently created note. If a
-  different note already exists remotely, sync pauses. Choosing which note
-  to adopt while retaining the other still needs a user-facing resolution
-  flow before those existing independent device notes can be joined.
+- Live CloudKit provisioning and Mac/iPhone handoff are now verified; see the
+  separate live verification record for physical-device and owner evidence.
+  iPad participation is verified in the local simulator sequence above.
+- Physical iPad hardware-keyboard use, real radio disconnection, production
+  provisioning, push/background delivery, account transitions, and actual
+  Apple quota/throttle timing remain separate checks.
+- The iCloud Dev scheme uses its own bundle ID and sandbox. Fresh cloud
+  installations join the canonical note online before enabling the editor;
+  established notes open offline. Original Local app notes are preserved.
+  Joining existing independent notes is deferred to notebook/import work.
 - Full-history snapshots and their remote history are retained. Long-note
   transfer cost and long-term storage growth need measurement before daily
   adoption. There is no compaction or remote deletion in this milestone.
-- Existing local notes open independently while CloudKit account discovery
-  runs. First cloud bootstrap and actual Apple failure timing still require
-  signed-device validation.
-- The default release app remains local-only. Transport selection is an
-  explicit Debug launch configuration, pending the iCloud acceptance work.
+- The default Release app remains local-only. The separate iCloud Dev build
+  uses the Development environment, including after a normal relaunch.
+- Milestone 3 will replace fixed foreground polling with engine scheduling,
+  change notifications, and batched uploads. See the updated project plan.
 
 Implementation commits: `2bc1779` (shared replication and transports) and
 `36dfdfa` (native editor and app integration).
