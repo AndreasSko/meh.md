@@ -345,6 +345,332 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.status, .pending)
     }
 
+    func testUploadsNotesInChunksBeforeCatalog() async throws {
+        let base = InMemorySyncTransport(scope: "batch-order")
+        let transport = BatchRecordingTransport(base: base)
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        await transport.clearBatches()
+        for index in 0..<51 {
+            _ = try await replica.createNote(name: "\(index).md", text: "\(index)")
+        }
+
+        await coordinator.synchronize()
+
+        let batches = await transport.recordedBatches()
+        XCTAssertEqual(batches.map(\.count), [50, 1, 1])
+        guard batches.count == 3 else { return }
+        XCTAssertTrue(batches[0].allSatisfy { $0.kind == .note })
+        XCTAssertTrue(batches[1].allSatisfy { $0.kind == .note })
+        XCTAssertEqual(batches[2].map(\.kind), [.catalog])
+        assertExchanged(coordinator.status)
+    }
+
+    func testPartialAcknowledgementCheckpointsBeforeErrorAndRestart() async throws {
+        let base = InMemorySyncTransport(scope: "partial-batch")
+        let transport = BatchRecordingTransport(base: base)
+        let root = directory()
+        let replica = NotebookReplica(directory: root)
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        var noteIDs: [UUID] = []
+        for index in 0..<3 {
+            noteIDs.append(
+                try await replica.createNote(name: "\(index).md", text: "\(index)")
+            )
+        }
+        await transport.clearBatches()
+        await transport.failNextNoteBatchPartially()
+
+        await coordinator.synchronize()
+
+        guard case .failed = coordinator.status else {
+            return XCTFail("Expected the partial batch error")
+        }
+        XCTAssertEqual(coordinator.progress?.completedNotes, 1)
+        XCTAssertEqual(coordinator.progress?.totalNotes, 3)
+        let recorded = await transport.recordedBatches()
+        let firstBatch = try XCTUnwrap(recorded.first)
+        let acknowledged = try XCTUnwrap(firstBatch.first)
+        let state = try JSONDecoder().decode(
+            NotebookSyncState.self,
+            from: Data(contentsOf: root.appending(path: "notebook-sync-state.json"))
+        )
+        XCTAssertEqual(
+            state.acknowledgedHeads[acknowledged.documentKey],
+            acknowledged.snapshot.heads
+        )
+        XCTAssertEqual(noteIDs.count, 3)
+
+        await transport.clearBatches()
+        await coordinator.synchronize()
+
+        let retriedNotes = await transport.recordedBatches().flatMap { $0 }
+            .filter { $0.kind == .note }
+        XCTAssertEqual(retriedNotes.count, 2)
+        XCTAssertFalse(retriedNotes.contains { $0.id == acknowledged.id })
+        assertExchanged(coordinator.status)
+    }
+
+    func testCatalogFailureRetainsCompletedNoteProgress() async throws {
+        let base = InMemorySyncTransport(scope: "catalog-failure")
+        let transport = BatchRecordingTransport(base: base)
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        _ = try await replica.createNote(name: "one.md", text: "one")
+        _ = try await replica.createNote(name: "two.md", text: "two")
+        await transport.failNextCatalogBatch()
+
+        await coordinator.synchronize()
+
+        guard case .failed = coordinator.status else {
+            return XCTFail("Expected catalog publication to fail")
+        }
+        XCTAssertEqual(coordinator.progress?.phase, .uploadingCatalog)
+        XCTAssertEqual(coordinator.progress?.completedNotes, 2)
+        XCTAssertEqual(coordinator.progress?.totalNotes, 2)
+    }
+
+    func testProgressTracksChunkAcknowledgementsAndClearsOnSuccess() async throws {
+        let base = InMemorySyncTransport(scope: "batch-progress")
+        let transport = PausingBatchTransport(base: base)
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        for index in 0..<51 {
+            _ = try await replica.createNote(name: "\(index).md", text: "\(index)")
+        }
+        await transport.startPausing()
+
+        let synchronization = Task { await coordinator.synchronize() }
+        await transport.waitForBatch(1)
+        let first = try XCTUnwrap(coordinator.progress)
+        XCTAssertEqual(first.phase, .uploadingNotes)
+        XCTAssertEqual(first.completedNotes, 0)
+        XCTAssertEqual(first.totalNotes, 51)
+        await transport.resumeBatch()
+
+        await transport.waitForBatch(2)
+        let second = try XCTUnwrap(coordinator.progress)
+        XCTAssertEqual(second.completedNotes, 50)
+        XCTAssertGreaterThanOrEqual(second.lastProgressAt, first.lastProgressAt)
+        await transport.resumeBatch()
+
+        await transport.waitForBatch(3)
+        let catalog = try XCTUnwrap(coordinator.progress)
+        XCTAssertEqual(catalog.phase, .uploadingCatalog)
+        XCTAssertEqual(catalog.completedNotes, 51)
+        XCTAssertGreaterThanOrEqual(catalog.lastProgressAt, second.lastProgressAt)
+        await transport.resumeBatch()
+        await synchronization.value
+
+        XCTAssertNil(coordinator.progress)
+        assertExchanged(coordinator.status)
+    }
+
+    func testCheckingAndReceivingProgressAreIndeterminate() async throws {
+        let base = InMemorySyncTransport(scope: "phase-progress")
+        let transport = PhasePausingTransport(base: base)
+        let coordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: directory()),
+            transport: transport
+        )
+
+        let synchronization = Task { await coordinator.synchronize() }
+        await transport.waitForBootstrap()
+        let checking = try XCTUnwrap(coordinator.progress)
+        XCTAssertEqual(checking.phase, .checking)
+        XCTAssertEqual(checking.totalNotes, 0)
+        await transport.resumeBootstrap()
+
+        await transport.waitForFetch()
+        let receiving = try XCTUnwrap(coordinator.progress)
+        XCTAssertEqual(receiving.phase, .receiving)
+        XCTAssertEqual(receiving.totalNotes, 0)
+        XCTAssertGreaterThanOrEqual(receiving.lastProgressAt, checking.lastProgressAt)
+        await transport.resumeFetch()
+        await synchronization.value
+
+        XCTAssertNil(coordinator.progress)
+        assertExchanged(coordinator.status)
+    }
+
+    func testRetryResetsFailureCountsBeforeCheckingAndReceiving() async throws {
+        let base = InMemorySyncTransport(scope: "retry-progress")
+        let transport = PhasePausingTransport(
+            base: base,
+            pausesImmediately: false
+        )
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        _ = try await replica.createNote(name: "one.md", text: "one")
+        _ = try await replica.createNote(name: "two.md", text: "two")
+        await transport.failNextNoteBatchPartially()
+        await coordinator.synchronize()
+        XCTAssertEqual(coordinator.progress?.completedNotes, 1)
+        XCTAssertEqual(coordinator.progress?.totalNotes, 2)
+
+        await transport.pauseNextPhases()
+        let retry = Task { await coordinator.synchronize() }
+        await transport.waitForBootstrap()
+        XCTAssertEqual(coordinator.progress?.phase, .checking)
+        XCTAssertEqual(coordinator.progress?.receivedRecords, 0)
+        XCTAssertEqual(coordinator.progress?.completedNotes, 0)
+        XCTAssertEqual(coordinator.progress?.totalNotes, 0)
+        await transport.resumeBootstrap()
+
+        await transport.waitForFetch()
+        XCTAssertEqual(coordinator.progress?.phase, .receiving)
+        XCTAssertEqual(coordinator.progress?.receivedRecords, 0)
+        XCTAssertEqual(coordinator.progress?.completedNotes, 0)
+        XCTAssertEqual(coordinator.progress?.totalNotes, 0)
+        await transport.resumeFetch()
+        await retry.value
+
+        XCTAssertNil(coordinator.progress)
+        assertExchanged(coordinator.status)
+    }
+
+    func testFetchedExactRevisionIsNotPublishedAgain() async throws {
+        let notebookID = UUID()
+        let seed = try NotebookCatalogDocument(notebookID: notebookID)
+        let note = try NoteDocument(text: "remote")
+        let catalog = try seed.fork()
+        try catalog.add(id: note.noteID, kind: .note, name: "remote.md")
+        let transport = RemoteBatchRecordingTransport(
+            seed: SyncRecord(catalog: seed.snapshot()),
+            records: [
+                SyncRecord(snapshot: note.snapshot(), notebookID: notebookID),
+                SyncRecord(catalog: catalog.snapshot()),
+            ]
+        )
+        let coordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: directory()),
+            transport: transport
+        )
+
+        await coordinator.synchronize()
+
+        let publishedRecordCount = await transport.publishedRecordCount()
+        XCTAssertEqual(publishedRecordCount, 0)
+        assertExchanged(coordinator.status)
+    }
+
+    func testFetchedRevisionMergedWithLocalEditIsPublished() async throws {
+        let store = InMemorySyncStore()
+        let base = InMemorySyncTransport(scope: "merged-fetch", store: store)
+        let left = NotebookReplica(directory: directory())
+        let right = NotebookReplica(directory: directory())
+        let leftSync = NotebookSyncCoordinator(replica: left, transport: base)
+        let rightSync = NotebookSyncCoordinator(replica: right, transport: base)
+        await leftSync.synchronize()
+        let noteID = try await left.createNote(name: "note.md", text: "original")
+        await leftSync.synchronize()
+        await rightSync.synchronize()
+
+        let leftEditor = try await left.openNote(noteID)
+        try leftEditor.replaceAll(with: "left")
+        try await leftEditor.flush()
+        let rightEditor = try await right.openNote(noteID)
+        try rightEditor.replaceAll(with: "right")
+        try await rightEditor.flush()
+        await rightSync.synchronize()
+        let rightRecords = try await right.records()
+        let remoteHeads = try XCTUnwrap(
+            rightRecords.first { $0.snapshot.noteID == noteID }?.snapshot.heads
+        )
+
+        let recording = BatchRecordingTransport(base: base)
+        await NotebookSyncCoordinator(replica: left, transport: recording).synchronize()
+
+        let publishedNotes = await recording.recordedBatches().flatMap { $0 }
+            .filter { $0.kind == .note }
+        XCTAssertEqual(publishedNotes.count, 1)
+        let publishedNote = try XCTUnwrap(publishedNotes.first)
+        XCTAssertNotEqual(publishedNote.snapshot.heads, remoteHeads)
+    }
+
+    func testUnexpectedAcknowledgementDoesNotCheckpointBatch() async throws {
+        let base = InMemorySyncTransport(scope: "unexpected-ack")
+        let transport = BatchRecordingTransport(base: base)
+        let root = directory()
+        let replica = NotebookReplica(directory: root)
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        let noteID = try await replica.createNote(name: "note.md", text: "note")
+        await transport.returnUnexpectedAcknowledgement()
+
+        await coordinator.synchronize()
+
+        guard case .failed = coordinator.status else {
+            return XCTFail("Expected an invalid acknowledgement failure")
+        }
+        let state = try JSONDecoder().decode(
+            NotebookSyncState.self,
+            from: Data(contentsOf: root.appending(path: "notebook-sync-state.json"))
+        )
+        XCTAssertNil(state.acknowledgedHeads["note:\(noteID.uuidString)"])
+        XCTAssertEqual(coordinator.progress?.completedNotes, 0)
+    }
+
+    func testUnacknowledgedBatchWithoutErrorFailsAsIncomplete() async throws {
+        let base = InMemorySyncTransport(scope: "missing-ack")
+        let transport = BatchRecordingTransport(base: base)
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        _ = try await replica.createNote(name: "note.md", text: "note")
+        await transport.returnNoAcknowledgements()
+
+        await coordinator.synchronize()
+
+        guard case .failed(let message) = coordinator.status else {
+            return XCTFail("Expected an incomplete acknowledgement failure")
+        }
+        XCTAssertTrue(message.contains("did not acknowledge"))
+        XCTAssertEqual(coordinator.progress?.completedNotes, 0)
+        XCTAssertEqual(coordinator.progress?.totalNotes, 1)
+    }
+
+    func testDeletionWhileFirstChunkUploadsSkipsQueuedBody() async throws {
+        let base = InMemorySyncTransport(scope: "delete-during-batch")
+        let transport = PausingBatchTransport(base: base)
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        for index in 0..<51 {
+            _ = try await replica.createNote(name: "\(index).md", text: "\(index)")
+        }
+        await transport.startPausing()
+
+        let synchronization = Task { await coordinator.synchronize() }
+        await transport.waitForBatch(1)
+        let firstBatch = await transport.currentPausedBatch()
+        let firstIDs = Set(firstBatch.map { $0.snapshot.noteID })
+        let outgoing = try await replica.records()
+        let queued = try XCTUnwrap(outgoing.first {
+            $0.kind == .note && !firstIDs.contains($0.snapshot.noteID)
+        })
+        try await replica.markPermanentlyDeleted([queued.snapshot.noteID])
+        await transport.resumeBatch()
+
+        await transport.waitForBatch(2)
+        let secondBatch = await transport.currentPausedBatch()
+        XCTAssertEqual(secondBatch.map(\.kind), [.catalog])
+        XCTAssertEqual(coordinator.progress?.phase, .uploadingCatalog)
+        XCTAssertEqual(coordinator.progress?.completedNotes, 50)
+        XCTAssertEqual(coordinator.progress?.totalNotes, 50)
+        await transport.resumeBatch()
+        await synchronization.value
+
+        let publishedIDs = await transport.publishedIDs()
+        XCTAssertFalse(publishedIDs.contains(queued.id))
+        XCTAssertEqual(coordinator.status, .pending)
+    }
+
     func testPermanentDeletionBlocksStaleNoteAndRecoversNewChild() async throws {
         let store = InMemorySyncStore()
         let transport = InMemorySyncTransport(scope: "deletions", store: store)
@@ -588,4 +914,265 @@ private actor FailingFetchTransport: SyncTransport {
     func fetch(after cursor: String?) throws -> SyncPage {
         throw SyncError.unavailable("Interrupted before first checkpoint")
     }
+}
+
+private actor BatchRecordingTransport: SyncTransport {
+    nonisolated let scope: String
+    private let base: InMemorySyncTransport
+    private var batches: [[SyncRecord]] = []
+    private var partialNoteFailure = false
+    private var catalogFailure = false
+    private var unexpectedAcknowledgement = false
+    private var missingAcknowledgements = false
+
+    init(base: InMemorySyncTransport) {
+        self.base = base
+        scope = base.scope
+    }
+
+    func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
+        try await base.bootstrap(proposing: record)
+    }
+
+    func publish(_ record: SyncRecord) async throws {
+        try await base.publish(record)
+    }
+
+    func publishBatch(_ records: [SyncRecord]) async throws -> SyncBatchResult {
+        batches.append(records)
+        if partialNoteFailure, records.first?.kind == .note {
+            partialNoteFailure = false
+            guard let first = records.first else {
+                return SyncBatchResult(acknowledgedIDs: [], error: BatchTestError.failed)
+            }
+            try await base.publish(first)
+            return SyncBatchResult(
+                acknowledgedIDs: [first.id],
+                error: BatchTestError.failed
+            )
+        }
+        if catalogFailure, records.first?.kind == .catalog {
+            catalogFailure = false
+            return SyncBatchResult(acknowledgedIDs: [], error: BatchTestError.failed)
+        }
+        if unexpectedAcknowledgement, records.first?.kind == .note {
+            unexpectedAcknowledgement = false
+            return SyncBatchResult(
+                acknowledgedIDs: Set(records.map(\.id)).union(["unexpected"]),
+                error: nil
+            )
+        }
+        if missingAcknowledgements, records.first?.kind == .note {
+            missingAcknowledgements = false
+            return SyncBatchResult(acknowledgedIDs: [], error: nil)
+        }
+        return try await base.publishBatch(records)
+    }
+
+    func fetch(after cursor: String?) async throws -> SyncPage {
+        try await base.fetch(after: cursor)
+    }
+
+    func recordedBatches() -> [[SyncRecord]] { batches }
+    func clearBatches() { batches = [] }
+    func failNextNoteBatchPartially() { partialNoteFailure = true }
+    func failNextCatalogBatch() { catalogFailure = true }
+    func returnUnexpectedAcknowledgement() { unexpectedAcknowledgement = true }
+    func returnNoAcknowledgements() { missingAcknowledgements = true }
+}
+
+private actor PausingBatchTransport: SyncTransport {
+    nonisolated let scope: String
+    private let base: InMemorySyncTransport
+    private var shouldPause = false
+    private var pausedBatchCount = 0
+    private var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+    private var pausedBatch: [SyncRecord] = []
+    private var published: Set<String> = []
+
+    init(base: InMemorySyncTransport) {
+        self.base = base
+        scope = base.scope
+    }
+
+    func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
+        try await base.bootstrap(proposing: record)
+    }
+
+    func publish(_ record: SyncRecord) async throws {
+        try await base.publish(record)
+    }
+
+    func publishBatch(_ records: [SyncRecord]) async throws -> SyncBatchResult {
+        if shouldPause {
+            pausedBatchCount += 1
+            pausedBatch = records
+            let ready = waiters.filter { $0.0 <= pausedBatchCount }
+            waiters.removeAll { $0.0 <= pausedBatchCount }
+            for (_, waiter) in ready { waiter.resume() }
+            await withCheckedContinuation { continuation in
+                resumeContinuation = continuation
+            }
+        }
+        let result = try await base.publishBatch(records)
+        published.formUnion(result.acknowledgedIDs)
+        return result
+    }
+
+    func fetch(after cursor: String?) async throws -> SyncPage {
+        try await base.fetch(after: cursor)
+    }
+
+    func startPausing() {
+        shouldPause = true
+        pausedBatchCount = 0
+    }
+
+    func waitForBatch(_ number: Int) async {
+        if pausedBatchCount >= number { return }
+        await withCheckedContinuation { continuation in
+            waiters.append((number, continuation))
+        }
+    }
+
+    func resumeBatch() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
+    }
+
+    func currentPausedBatch() -> [SyncRecord] { pausedBatch }
+    func publishedIDs() -> Set<String> { published }
+}
+
+private actor RemoteBatchRecordingTransport: SyncTransport {
+    nonisolated let scope = "remote-exact"
+    private let seed: SyncRecord
+    private let records: [SyncRecord]
+    private var published = 0
+
+    init(seed: SyncRecord, records: [SyncRecord]) {
+        self.seed = seed
+        self.records = records
+    }
+
+    func bootstrap(proposing record: SyncRecord) -> SyncRecord { seed }
+    func publish(_ record: SyncRecord) { published += 1 }
+
+    func publishBatch(_ records: [SyncRecord]) -> SyncBatchResult {
+        published += records.count
+        return SyncBatchResult(
+            acknowledgedIDs: Set(records.map(\.id)),
+            error: nil
+        )
+    }
+
+    func fetch(after cursor: String?) -> SyncPage {
+        SyncPage(records: cursor == nil ? records : [], cursor: "done", hasMore: false)
+    }
+
+    func publishedRecordCount() -> Int { published }
+}
+
+private actor PhasePausingTransport: SyncTransport {
+    nonisolated let scope: String
+    private let base: InMemorySyncTransport
+    private var bootstrapStarted = false
+    private var fetchStarted = false
+    private var bootstrapWaiters: [CheckedContinuation<Void, Never>] = []
+    private var fetchWaiters: [CheckedContinuation<Void, Never>] = []
+    private var bootstrapContinuation: CheckedContinuation<Void, Never>?
+    private var fetchContinuation: CheckedContinuation<Void, Never>?
+    private var shouldPauseBootstrap: Bool
+    private var shouldPauseFetch: Bool
+    private var partialNoteFailure = false
+
+    init(base: InMemorySyncTransport, pausesImmediately: Bool = true) {
+        self.base = base
+        scope = base.scope
+        shouldPauseBootstrap = pausesImmediately
+        shouldPauseFetch = pausesImmediately
+    }
+
+    func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
+        if shouldPauseBootstrap {
+            shouldPauseBootstrap = false
+            bootstrapStarted = true
+            for waiter in bootstrapWaiters { waiter.resume() }
+            bootstrapWaiters = []
+            await withCheckedContinuation { continuation in
+                bootstrapContinuation = continuation
+            }
+        }
+        return try await base.bootstrap(proposing: record)
+    }
+
+    func publish(_ record: SyncRecord) async throws {
+        try await base.publish(record)
+    }
+
+    func publishBatch(_ records: [SyncRecord]) async throws -> SyncBatchResult {
+        if partialNoteFailure, records.first?.kind == .note {
+            partialNoteFailure = false
+            guard let first = records.first else {
+                return SyncBatchResult(acknowledgedIDs: [], error: BatchTestError.failed)
+            }
+            try await base.publish(first)
+            return SyncBatchResult(
+                acknowledgedIDs: [first.id],
+                error: BatchTestError.failed
+            )
+        }
+        return try await base.publishBatch(records)
+    }
+
+    func fetch(after cursor: String?) async throws -> SyncPage {
+        if shouldPauseFetch {
+            shouldPauseFetch = false
+            fetchStarted = true
+            for waiter in fetchWaiters { waiter.resume() }
+            fetchWaiters = []
+            await withCheckedContinuation { continuation in
+                fetchContinuation = continuation
+            }
+        }
+        return try await base.fetch(after: cursor)
+    }
+
+    func waitForBootstrap() async {
+        if bootstrapStarted { return }
+        await withCheckedContinuation { continuation in
+            bootstrapWaiters.append(continuation)
+        }
+    }
+
+    func resumeBootstrap() {
+        bootstrapContinuation?.resume()
+        bootstrapContinuation = nil
+    }
+
+    func waitForFetch() async {
+        if fetchStarted { return }
+        await withCheckedContinuation { continuation in
+            fetchWaiters.append(continuation)
+        }
+    }
+
+    func resumeFetch() {
+        fetchContinuation?.resume()
+        fetchContinuation = nil
+    }
+
+    func failNextNoteBatchPartially() { partialNoteFailure = true }
+
+    func pauseNextPhases() {
+        bootstrapStarted = false
+        fetchStarted = false
+        shouldPauseBootstrap = true
+        shouldPauseFetch = true
+    }
+}
+
+private enum BatchTestError: Error {
+    case failed
 }
