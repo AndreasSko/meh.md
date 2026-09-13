@@ -15,18 +15,23 @@ public final class NotebookReplica {
     public let directory: URL
     public private(set) var catalogSnapshot: NotebookCatalogSnapshot?
     public private(set) var placements: [NotebookPlacement] = []
+    public private(set) var hasPendingImport: Bool
     @ObservationIgnored private var catalog: NotebookCatalogDocument?
     @ObservationIgnored private let storage: NotebookCatalogStorage
+    @ObservationIgnored private let importStorage: NotebookImportStorage
     @ObservationIgnored private var sessions: [UUID: NoteSession] = [:]
     @ObservationIgnored private var sessionLoads: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var rememberedDeletions: Set<UUID> = []
     @ObservationIgnored private var loaded = false
     @ObservationIgnored private var writingCatalog = false
     @ObservationIgnored private var writeWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored var importFaultInjector: ((NotebookImportStage) throws -> Void)?
 
     public init(directory: URL) {
         self.directory = directory
         storage = NotebookCatalogStorage(directory: directory)
+        importStorage = NotebookImportStorage(directory: directory)
+        hasPendingImport = importStorage.hasPendingImport
     }
 
     public func load() async throws {
@@ -45,6 +50,7 @@ public final class NotebookReplica {
         case .recoveryRequired: throw NotebookReplicaError.catalogNeedsRecovery
         case .blocked: throw NotebookReplicaError.catalogUnavailable
         }
+        hasPendingImport = importStorage.hasPendingImport
         loaded = true
     }
 
@@ -86,6 +92,75 @@ public final class NotebookReplica {
         let id = try next.add(kind: .folder, name: name, parentID: parentID)
         try await saveCatalog(next)
         return id
+    }
+
+    public func importMarkdown(_ plan: NotebookImportPlan) async throws {
+        guard let catalog else { throw NotebookReplicaError.notJoined }
+        guard !hasPendingImport, !importStorage.hasPendingImport else {
+            hasPendingImport = true
+            throw NotebookImportError.pendingImportExists
+        }
+        try validate(plan, against: catalog)
+        guard !plan.entries.isEmpty else { return }
+        let snapshots: [NoteSnapshot] = try plan.entries.compactMap { entry in
+            guard entry.kind == .note, let text = entry.text else { return nil }
+            return try NoteDocument(noteID: entry.id, text: text).snapshot()
+        }
+        let journal = NotebookImportJournal(
+            notebookID: catalog.notebookID,
+            plan: plan,
+            snapshots: snapshots
+        )
+
+        try await withCatalogWrite {
+            do {
+                for snapshot in snapshots {
+                    switch await self.noteStorage(snapshot.noteID).load() {
+                    case .firstLaunch:
+                        break
+                    case .current, .recoveryRequired, .blocked:
+                        throw NotebookImportError.bodyConflict(snapshot.noteID)
+                    }
+                }
+                try self.importStorage.create(journal)
+                self.hasPendingImport = true
+                try self.importFaultInjector?(.journalSaved)
+                try await self.finishImport(journal)
+            } catch {
+                self.hasPendingImport = self.importStorage.hasPendingImport
+                throw error
+            }
+        }
+    }
+
+    public func resumePendingImport() async throws {
+        guard catalog != nil else { throw NotebookReplicaError.notJoined }
+        try await withCatalogWrite {
+            do {
+                let journal = try self.importStorage.load()
+                self.hasPendingImport = true
+                _ = try self.validateJournal(journal)
+                try await self.finishImport(journal)
+            } catch {
+                self.hasPendingImport = self.importStorage.hasPendingImport
+                throw error
+            }
+        }
+    }
+
+    public func setAsidePendingImport() async throws -> URL {
+        try await withCatalogWrite {
+            do {
+                let destination = try self.importStorage.setAside { url in
+                    try self.importFaultInjector?(.journalSetAside(url))
+                }
+                self.hasPendingImport = false
+                return destination
+            } catch {
+                self.hasPendingImport = self.importStorage.hasPendingImport
+                throw error
+            }
+        }
     }
 
     public func rename(_ id: UUID, to name: String) async throws {
@@ -331,6 +406,187 @@ public final class NotebookReplica {
         if try deletedIDs.contains(id) { throw NotebookReplicaError.permanentlyDeleted(id) }
     }
 
+    private func validate(
+        _ plan: NotebookImportPlan,
+        against catalog: NotebookCatalogDocument
+    ) throws {
+        guard Set(plan.entries.map(\.id)).count == plan.entries.count else {
+            throw NotebookImportError.invalidPlan
+        }
+        let entries = Dictionary(uniqueKeysWithValues: plan.entries.map { ($0.id, $0) })
+        for entry in plan.entries {
+            do { try NotebookName.validate(entry.name) } catch {
+                throw NotebookImportError.invalidPlan
+            }
+            switch entry.kind {
+            case .folder where entry.text != nil:
+                throw NotebookImportError.invalidPlan
+            case .note where entry.text == nil:
+                throw NotebookImportError.invalidPlan
+            default:
+                break
+            }
+            if let parentID = entry.parentID {
+                guard let parent = entries[parentID], parent.kind == .folder else {
+                    throw NotebookImportError.invalidPlan
+                }
+            }
+        }
+        for entry in plan.entries {
+            var seen = Set<UUID>()
+            var parentID = entry.parentID
+            while let id = parentID {
+                guard seen.insert(id).inserted, id != entry.id,
+                    let parent = entries[id]
+                else { throw NotebookImportError.invalidPlan }
+                parentID = parent.parentID
+            }
+        }
+        let existing = Set(try catalog.items().map(\.id))
+        if let conflict = plan.entries.first(where: { existing.contains($0.id) }) {
+            throw NotebookImportError.identityConflict(conflict.id)
+        }
+
+    }
+
+    private func validateJournal(
+        _ journal: NotebookImportJournal
+    ) throws -> [UUID: NoteSnapshot] {
+        do {
+            let placeholder = try NotebookCatalogDocument()
+            try validate(journal.plan, against: placeholder)
+        } catch {
+            throw NotebookImportError.corruptJournal
+        }
+        var snapshots: [UUID: NoteSnapshot] = [:]
+        for snapshot in journal.snapshots {
+            guard snapshots.updateValue(snapshot, forKey: snapshot.noteID) == nil else {
+                throw NotebookImportError.corruptJournal
+            }
+        }
+        let noteEntries = journal.plan.entries.filter { $0.kind == .note }
+        guard snapshots.count == journal.snapshots.count,
+            Set(noteEntries.map(\.id)) == Set(snapshots.keys)
+        else { throw NotebookImportError.corruptJournal }
+        for entry in noteEntries {
+            guard let stored = snapshots[entry.id],
+                let document = try? NoteDocument(snapshot: stored),
+                let text = try? document.text,
+                let expectedText = entry.text,
+                text.utf8.elementsEqual(expectedText.utf8)
+            else { throw NotebookImportError.corruptJournal }
+        }
+        return snapshots
+    }
+
+    private func finishImport(_ journal: NotebookImportJournal) async throws {
+        let snapshots = try validateJournal(journal)
+        let latest = try await latestCatalogForImport()
+        guard latest.notebookID == journal.notebookID else {
+            throw NotebookImportError.notebookIdentityMismatch
+        }
+        let existing = Dictionary(uniqueKeysWithValues: try latest.items().map { ($0.id, $0) })
+        let present = journal.plan.entries.filter { existing[$0.id] != nil }
+        if !present.isEmpty {
+            guard present.count == journal.plan.entries.count else {
+                throw NotebookImportError.catalogConflict
+            }
+            for entry in journal.plan.entries {
+                guard existing[entry.id]?.kind == entry.kind else {
+                    throw NotebookImportError.identityConflict(entry.id)
+                }
+            }
+            for entry in journal.plan.entries where entry.kind == .note {
+                guard let item = existing[entry.id],
+                    let staged = snapshots[entry.id]
+                else { throw NotebookImportError.corruptJournal }
+                if item.isPermanentlyDeleted { continue }
+                if let session = sessions[entry.id] {
+                    if let load = sessionLoads[entry.id] { await load.value }
+                    guard session.isEditingEnabled else {
+                        throw NotebookImportError.bodyConflict(entry.id)
+                    }
+                    try await session.flush()
+                }
+                try await verifyImportedBody(staged, id: entry.id)
+            }
+            try install(latest.snapshot())
+            try importStorage.remove()
+            hasPendingImport = false
+            return
+        }
+
+        for entry in journal.plan.entries where entry.kind == .note {
+            guard let staged = snapshots[entry.id] else {
+                throw NotebookImportError.corruptJournal
+            }
+            let bodyStorage = noteStorage(entry.id)
+            switch await bodyStorage.load() {
+            case .firstLaunch:
+                try importFaultInjector?(.beforeBody(entry.id))
+                try await bodyStorage.save(staged)
+                try importFaultInjector?(.bodySaved(entry.id))
+            case .current(let current):
+                try verifyImportedBody(current, contains: staged, id: entry.id)
+            case .recoveryRequired, .blocked:
+                throw NotebookImportError.bodyConflict(entry.id)
+            }
+        }
+
+        let next = try catalogWithImport(journal.plan, basedOn: latest)
+        try importFaultInjector?(.beforeCatalog)
+        do {
+            try await persistCatalog(next)
+        } catch is NotebookCatalogStorageError {
+            throw NotebookImportError.catalogConflict
+        }
+        try importFaultInjector?(.catalogSaved)
+        try importStorage.remove()
+        hasPendingImport = false
+    }
+
+    private func verifyImportedBody(
+        _ staged: NoteSnapshot,
+        id: UUID
+    ) async throws {
+        switch await noteStorage(id).load() {
+        case .current(let current):
+            try verifyImportedBody(current, contains: staged, id: id)
+        case .firstLaunch, .recoveryRequired, .blocked:
+            throw NotebookImportError.bodyConflict(id)
+        }
+    }
+
+    private func verifyImportedBody(
+        _ current: NoteSnapshot,
+        contains staged: NoteSnapshot,
+        id: UUID
+    ) throws {
+        guard current.noteID == id,
+            let document = try? NoteDocument(snapshot: current),
+            staged.heads.isSubset(of: document.historyHeads)
+        else { throw NotebookImportError.bodyConflict(id) }
+    }
+
+    private func latestCatalogForImport() async throws -> NotebookCatalogDocument {
+        guard let current = catalog else { throw NotebookReplicaError.notJoined }
+        guard case .current(let snapshot) = await storage.load() else {
+            throw NotebookImportError.catalogConflict
+        }
+        let latest = try NotebookCatalogDocument(snapshot: snapshot)
+        guard current.notebookID == latest.notebookID,
+            current.heads.isSubset(of: latest.historyHeads)
+        else { throw NotebookImportError.catalogConflict }
+        return latest
+    }
+
+    private func catalogWithImport(
+        _ plan: NotebookImportPlan,
+        basedOn catalog: NotebookCatalogDocument
+    ) throws -> NotebookCatalogDocument {
+        try catalog.forkAddingImportEntries(plan.entries)
+    }
+
     private func waitForWrites() async {
         while writingCatalog {
             await withCheckedContinuation { writeWaiters.append($0) }
@@ -341,7 +597,9 @@ public final class NotebookReplica {
         try await withCatalogWrite { try await self.persistCatalog(next) }
     }
 
-    private func withCatalogWrite(_ operation: () async throws -> Void) async throws {
+    private func withCatalogWrite<T>(
+        _ operation: () async throws -> T
+    ) async throws -> T {
         guard !writingCatalog else { throw NotebookReplicaError.busy }
         writingCatalog = true
         defer {
@@ -350,7 +608,7 @@ public final class NotebookReplica {
             writeWaiters.removeAll()
             for waiter in waiters { waiter.resume() }
         }
-        try await operation()
+        return try await operation()
     }
 
     private func persistCatalog(_ next: NotebookCatalogDocument) async throws {

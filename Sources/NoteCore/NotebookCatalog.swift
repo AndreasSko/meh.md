@@ -267,6 +267,80 @@ final class NotebookCatalogDocument {
         return id
     }
 
+    /// Builds an import on an isolated fork after validating the complete
+    /// tree. This avoids recomputing placements after every inserted item.
+    func forkAddingImportEntries(
+        _ entries: [NotebookImportEntry]
+    ) throws -> NotebookCatalogDocument {
+        guard Set(entries.map(\.id)).count == entries.count else {
+            throw NotebookImportError.invalidPlan
+        }
+        let byID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+        let existing = Set(try items().map(\.id))
+        for entry in entries {
+            guard !existing.contains(entry.id) else {
+                throw NotebookImportError.identityConflict(entry.id)
+            }
+            do { try NotebookName.validate(entry.name) } catch {
+                throw NotebookImportError.invalidPlan
+            }
+            switch entry.kind {
+            case .folder where entry.text != nil:
+                throw NotebookImportError.invalidPlan
+            case .note where entry.text == nil:
+                throw NotebookImportError.invalidPlan
+            default:
+                break
+            }
+            if let parentID = entry.parentID {
+                guard let parent = byID[parentID], parent.kind == .folder else {
+                    throw NotebookImportError.invalidPlan
+                }
+            }
+            var seen: Set<UUID> = [entry.id]
+            var parentID = entry.parentID
+            while let id = parentID {
+                guard seen.insert(id).inserted, let parent = byID[id] else {
+                    throw NotebookImportError.invalidPlan
+                }
+                parentID = parent.parentID
+            }
+        }
+
+        let candidate = try fork()
+        for entry in entries {
+            let item = try candidate.document.putObject(
+                obj: candidate.itemsObject,
+                key: entry.id.uuidString,
+                ty: .Map
+            )
+            try candidate.document.put(
+                obj: item,
+                key: "kind",
+                value: .String(entry.kind.rawValue)
+            )
+            try candidate.document.put(
+                obj: item,
+                key: "name",
+                value: .String(entry.name)
+            )
+            try candidate.document.put(
+                obj: item,
+                key: "parent",
+                value: entry.parentID.map {
+                    .String($0.uuidString)
+                } ?? .Null
+            )
+            try candidate.document.put(
+                obj: item,
+                key: "visibility",
+                value: .String("active:\(UUID().uuidString)")
+            )
+        }
+        _ = try NotebookCatalogDocument(snapshot: candidate.snapshot())
+        return candidate
+    }
+
     func rename(_ id: UUID, to name: String) throws {
         try NotebookName.validate(name)
         try document.put(obj: object(for: id), key: "name", value: .String(name))
