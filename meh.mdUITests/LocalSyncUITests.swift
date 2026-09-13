@@ -29,7 +29,6 @@ final class LocalSyncUITests: XCTestCase {
         app.launch()
         let relaunchedEditor = try app.openOrCreateNotebookEditor(timeout: 20)
         XCTAssertEqual(relaunchedEditor.value as? String, first)
-        waitForCopy()
     }
 
     func test02ReceiveAndReplyFromPad() throws {
@@ -43,7 +42,6 @@ final class LocalSyncUITests: XCTestCase {
         waitForSaved()
         synchronize()
         waitForEditor(first + second)
-        waitForCopy()
     }
 
     func test03ReceiveReplyOnPhoneAndRestart() throws {
@@ -51,22 +49,22 @@ final class LocalSyncUITests: XCTestCase {
         let editor = try app.openOrCreateNotebookEditor(timeout: 20)
         synchronize()
         XCTAssertEqual(editor.value as? String, first + second)
-        waitForCopy()
         app.terminate()
         app.launch()
         let relaunchedEditor = try app.openOrCreateNotebookEditor(timeout: 20)
         XCTAssertEqual(relaunchedEditor.value as? String, first + second)
         waitForSaved()
-        waitForCopy()
     }
 
     private func synchronize() {
+        app.openSyncDetails()
         app.buttons["sync-now"].tap()
         let predicate = NSPredicate(format: "label BEGINSWITH %@", "Last sync:")
         let status = app.descendants(matching: .any)
             .matching(identifier: "note-sync-status")
             .matching(predicate).firstMatch
         XCTAssertTrue(status.waitForExistence(timeout: 20))
+        app.closeSyncDetails()
     }
 
     private func waitForSaved() {
@@ -78,10 +76,6 @@ final class LocalSyncUITests: XCTestCase {
         let predicate = NSPredicate(format: "value == %@", expected)
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: editor)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 20), .completed)
-    }
-
-    private func waitForCopy() {
-        waitForStatus("markdown-copy-status", containing: "Markdown copies:")
     }
 
     private func waitForStatus(_ identifier: String, containing text: String) {

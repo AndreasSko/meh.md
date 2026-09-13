@@ -46,6 +46,13 @@ final class NotebookWorkspace {
     private(set) var copiesURL: URL?
     private(set) var isLoading = false
     private(set) var isRefreshing = false
+    private(set) var isSyncing = false
+    private(set) var showSyncCheck = false
+    private(set) var syncRetryNotBefore: Date?
+    private(set) var lastSuccessfulSync: Date?
+    private(set) var checkingLegacySync = false
+    private var syncMonitor: Task<Void, Never>?
+    private var slowSyncIndicator: Task<Void, Never>?
     private(set) var recoveryAction: RecoveryAction?
     let automaticSync: Bool
     let mode: Mode
@@ -209,10 +216,14 @@ final class NotebookWorkspace {
         }
     }
 
-    func refresh(whileLoading: Bool = false) async {
+    func refresh(whileLoading: Bool = false, manual: Bool = false) async {
         guard whileLoading || !isLoading else { return }
         guard let replica else { return }
-        guard !isRefreshing else { needsAnotherRefresh = true; return }
+        guard !isRefreshing else {
+            if manual { showSyncCheck = true }
+            needsAnotherRefresh = true
+            return
+        }
         isRefreshing = true
         defer {
             isRefreshing = false
@@ -222,6 +233,7 @@ final class NotebookWorkspace {
             }
         }
         if usesSync {
+            beginSyncPresentation(manual: manual)
             var hasBinding = false
             do {
                 try await prepareNotebookTransport()
@@ -237,6 +249,7 @@ final class NotebookWorkspace {
                 sync = coordinator
                 hasBinding = try coordinator.hasDurableBinding()
                 var legacy: NoteSnapshot?
+                checkingLegacySync = true
                 do {
                     try await prepareLegacyTransport()
                     guard let legacyTransport else {
@@ -265,8 +278,12 @@ final class NotebookWorkspace {
                     // Once joined, a bridge outage does not stop notebook sync.
                     if !hasBinding { throw error }
                 }
+                checkingLegacySync = false
                 syncSetupError = nil
                 await coordinator.synchronize(legacyNote: legacy)
+                if case .exchanged(let date) = coordinator.status {
+                    lastSuccessfulSync = date
+                }
                 hasBinding = (try? coordinator.hasDurableBinding()) == true
                 if case .failed(let message) = coordinator.status {
                     if !hasBinding { errorMessage = message }
@@ -276,8 +293,52 @@ final class NotebookWorkspace {
                 setRecoveryAction(for: error)
                 if !hasBinding { errorMessage = error.localizedDescription }
             }
+            await updateRetryDeadline()
+            endSyncPresentation()
         }
         await publishCopies()
+    }
+
+    private func beginSyncPresentation(manual: Bool) {
+        isSyncing = true
+        checkingLegacySync = true
+        showSyncCheck = manual
+        slowSyncIndicator?.cancel()
+        slowSyncIndicator = Task { @MainActor in
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            if isSyncing { showSyncCheck = true }
+        }
+        syncMonitor?.cancel()
+        syncMonitor = Task { @MainActor in
+            while !Task.isCancelled, isSyncing {
+                await updateRetryDeadline()
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+        }
+    }
+
+    private func endSyncPresentation() {
+        slowSyncIndicator?.cancel()
+        syncMonitor?.cancel()
+        isSyncing = false
+        checkingLegacySync = false
+        showSyncCheck = false
+    }
+
+    private func updateRetryDeadline() async {
+        var notebook = await notebookTransport?.retryNotBefore()
+        var legacy = checkingLegacySync ? await legacyTransport?.retryNotBefore() : nil
+        if case .cloud = mode {
+            if notebookTransport == nil {
+                notebook = try? CloudKitSyncTransport.persistedRetryNotBefore(
+                    stateDirectory: directory.appending(path: "CloudKit"))
+            }
+            if checkingLegacySync, legacyTransport == nil {
+                legacy = try? CloudKitSyncTransport.persistedRetryNotBefore(
+                    stateDirectory: legacyDirectory.appending(path: "CloudKit"))
+            }
+        }
+        syncRetryNotBefore = [notebook, legacy].compactMap { $0 }.filter { $0 > Date() }.max()
     }
 
     private func prepareNotebookTransport() async throws {

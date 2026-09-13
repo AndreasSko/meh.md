@@ -112,8 +112,8 @@ writes, not interruption at every write instruction or sudden power loss.
   adoption. There is no compaction or remote deletion in this milestone.
 - The default Local app uses the local notebook. The separate iCloud Dev build
   uses the Development environment, including after a normal relaunch.
-- Notebook activation retains fixed foreground polling. Engine scheduling,
-  change notifications, and batched uploads remain later work. See the updated
+- Notebook sync now batches uploads and reports progress. Engine scheduling
+  and change notifications remain later work. See the updated
   project plan.
 - Physical iCloud notebook and iPad acceptance have not yet been verified.
 

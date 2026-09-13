@@ -51,6 +51,8 @@ activating version 2 notebook sync.
   behavior feedback checkpoints.
 - [Notebook core contract](docs/notebook-core-contract.md): metadata, Trash,
   collision rules, and migration boundaries.
+- [Sync progress](docs/notebook-sync-progress.md): active-only status, durable
+  upload counts, retry delays, and batched library transfers.
 - [Notebook sync contract](docs/notebook-sync-contract.md): bootstrap, record
   isolation, durable replay, and deletion boundaries.
 - [Markdown import](docs/notebook-import-contract.md): copying files and

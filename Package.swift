@@ -37,7 +37,7 @@ let package = Package(
                 "ContentView.swift", "MyApp.swift", "AppWorkspace.swift", "Assets.xcassets",
                 "NotebookView.swift", "NotebookNoteEditor.swift", "NotebookWorkspace.swift",
                 "NotebookApplicationView.swift", "UnavailableDevelopmentTransport.swift",
-                "NotebookImportView.swift",
+                "NotebookImportView.swift", "NotebookSyncStatusView.swift",
                 "icon.icon", "Info.plist", "macOS.entitlements",
                 "iOS.entitlements", "CloudKitSmokeCheck.swift",
             ],

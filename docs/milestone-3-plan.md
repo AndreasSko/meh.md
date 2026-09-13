@@ -198,3 +198,35 @@ bodies or already imported notes.
 
 Next: feedback on import, then permanent deletion and content cleanup. Cloud
 scheduling/batching and broader device/scale acceptance follow separately.
+
+
+## Sync visibility checkpoint: 2026-09-13
+
+The owner confirmed that importing the full note library worked, then reported
+that sync appeared to continue indefinitely. This checkpoint brings forward
+upload batching and visible progress before permanent deletion work.
+
+The former Markdown-copy location footer is replaced by active sync status.
+It disappears at idle; the toolbar retains Sync Details and Sync Now. Note
+counts reflect acknowledged saved revisions, with separate receiving and
+folder metadata phases. Partial failures retain completed work and expose
+errors or known retry deadlines. See the
+[progress contract](notebook-sync-progress.md) for counting and retry
+semantics.
+
+CloudKit uploads notes in batches of up to 50 and drains buffered download
+pages before a fresh fetch at the tip. Foreground activation and saved edits
+request sync immediately; quiet checks now run every 30 seconds. This does
+not yet implement full background change delivery.
+
+The Mac UI was checked with 120 synthetic notes through a delayed loopback
+service: upload progress appeared, switched to folder metadata, and vanished
+when complete. This does not establish timing for the owner's iCloud library.
+
+All 257 Swift tests pass: 231 core and 26 native editor tests, with no skips.
+The suite includes real loopback HTTP replica checks. The signed Mac iCloud
+Dev build and iPhone iCloud Dev app/UI-test compilation also pass.
+
+Next: owner feedback on sync visibility with the imported library, then
+permanent deletion and content cleanup. Full background scheduling and broader
+device/scale acceptance remain outstanding.
