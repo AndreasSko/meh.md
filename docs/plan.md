@@ -25,17 +25,19 @@ Updated: 2026-09-13
 - The document boundary is recorded: shared document state is authoritative,
   while Markdown files are derived copies maintained by a separate writer.
 - Editor styling is implemented, with 14 macOS native editor tests passing.
-- The iPhone 17 simulator save/reopen and Files checks passed. Physical-device
-  acceptance remains separate. Milestone 1 is complete; sync is next.
-- Milestone 2 now has shared durable replication, local test transports,
-  revision-aware native editing, and a CloudKit adapter awaiting live setup.
-  The iPhone/iPad localhost handoff and exact Markdown-copy checks passed.
-  See [sync verification](sync-verification.md) for evidence and open work.
-- Milestone 3 notebook storage, replication, navigation, legacy bridging, and
-  structured Markdown copies are integrated into the default Local and iCloud
-  Dev builds. Signed Mac activation passed and the owner confirmed the
-  iPhone iCloud Dev activation test works. Broader cross-device operation
-  checks and physical iPad acceptance remain open.
+- The iPhone 17 simulator save/reopen and Files checks passed. Milestones 1
+  and 2 are complete; historical validation limits remain in their records.
+- Milestone 3 is complete as an implementation milestone. PRs #14, #16, and
+  #18 were reviewed and merged on 2026-09-13. The notebook supports folders,
+  import, structured Markdown copies, permanent deletion, sync diagnostics,
+  and automatic scheduling. The development legacy bridge is removed.
+- Final validation passed 317 Swift tests and 16 Python tests, a signed Mac
+  iCloud Dev build, and iOS Simulator app/UI-test compilation. Automated
+  evidence does not establish physical-device notification delivery.
+- Milestone 4 starts with [sync recovery][issue-22]. The owner's updated
+  iPhone remains paused by persisted unexpected-deletion state. Automatic
+  receiving on Mac still needs [device verification][issue-24]. These are
+  explicit follow-ups, not claims of complete device-level sync acceptance.
 
 ## Working method
 
@@ -171,10 +173,9 @@ models remote record storage without simulating Apple account services.
 
 ## 3 — A usable notebook
 
-Status: core, replication, navigation, structured copies, permanent deletion,
-and automatic scheduling implemented on 2026-09-13. The development
-single-note compatibility bridge has been removed. See the
-[execution plan](milestone-3-plan.md).
+Status: implementation complete; reviewed PRs #14, #16, and #18 merged on
+2026-09-13. See the [execution and closeout record](milestone-3-plan.md).
+Outstanding recovery and device validation are tracked in GitHub issues.
 
 ### Work
 
@@ -207,7 +208,13 @@ single-note compatibility bridge has been removed. See the
 
 ## 4 — Daily-use hardening
 
-Status: not started; depends on milestone 3.
+Status: ready to start after milestone 3; implementation not started.
+GitHub issues are authoritative for follow-up scope and progress.
+
+Start with [persisted sync-pause recovery][issue-22], then complete
+[Mac automatic-receiving verification][issue-24]. Track
+[offline export and restore][issue-20], [replication performance][issue-21],
+and [Markdown fidelity fuzzing][issue-23] in their existing issues.
 
 ### Work and acceptance
 
@@ -288,3 +295,9 @@ synchronization.
 - **Next:** Start milestone 2 with a bounded CloudKit/CKSyncEngine transport
   spike. Prove durable delivery, offline convergence, and remote editor updates
   for one note before expanding the data model. Carry device checks forward.
+
+[issue-20]: https://github.com/AndreasSko/meh.md/issues/20
+[issue-21]: https://github.com/AndreasSko/meh.md/issues/21
+[issue-22]: https://github.com/AndreasSko/meh.md/issues/22
+[issue-23]: https://github.com/AndreasSko/meh.md/issues/23
+[issue-24]: https://github.com/AndreasSko/meh.md/issues/24

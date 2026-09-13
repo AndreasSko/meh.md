@@ -2,6 +2,42 @@
 
 Started: 2026-09-13. First branch: `codex/milestone-3-notebook-core`.
 
+## Closeout: 2026-09-13
+
+Implementation is complete. The consolidated stack was reviewed by
+CodeRabbit, all actionable findings were confirmed fixed, and all three PRs
+were merged into main:
+
+- [#14: notebook foundation][pr-14]
+- [#16: sync progress and diagnostics][pr-16]
+- [#18: permanent deletion and automatic sync][pr-18]
+
+Final local validation passed 317 Swift tests (286 core, 26 native editor,
+and 5 app-model tests) and 16 Python tests. Signed Mac iCloud Dev build and
+iOS Simulator build-for-testing passed. The [final CI run][final-ci] passed.
+The earlier stage counts below are historical evidence.
+
+Device-level sync acceptance remains incomplete. The updated iPhone can
+remain paused by saved unexpected-deletion state; [recovery][recovery-issue]
+is the first Milestone 4 priority. [Automatic receiving on Mac][mac-issue]
+also remains unverified. Preserve local notes and unsynced edits; no cloud
+reset is authorized or required by this closeout.
+
+GitHub issues track [export and restore][export-issue],
+[replication performance][performance-issue], and
+[Markdown fidelity fuzzing][fuzz-issue]. Daily-use findings will be tracked
+there rather than extending this historical execution record.
+
+[pr-14]: https://github.com/AndreasSko/meh.md/pull/14
+[pr-16]: https://github.com/AndreasSko/meh.md/pull/16
+[pr-18]: https://github.com/AndreasSko/meh.md/pull/18
+[final-ci]: https://github.com/AndreasSko/meh.md/actions/runs/34768214371
+[recovery-issue]: https://github.com/AndreasSko/meh.md/issues/22
+[mac-issue]: https://github.com/AndreasSko/meh.md/issues/24
+[export-issue]: https://github.com/AndreasSko/meh.md/issues/20
+[performance-issue]: https://github.com/AndreasSko/meh.md/issues/21
+[fuzz-issue]: https://github.com/AndreasSko/meh.md/issues/23
+
 ## Outcome
 
 Deliver multiple notes, nested folders, safe Markdown import, recoverable
