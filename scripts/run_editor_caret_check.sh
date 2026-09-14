@@ -21,6 +21,8 @@ xcrun swiftc -parse-as-library -swift-version 6 \
   "$repo_root/meh.md/MarkdownSyntax.swift" \
   "$repo_root/meh.md/MarkdownPresentation.swift" \
   "$repo_root/meh.md/MarkdownEditor.swift" \
+  "$repo_root/meh.md/MarkdownEditingCommands.swift" \
+  "$repo_root/meh.md/MarkdownLivePreview.swift" \
   "$repo_root/Tools/EditorCaretCheck/EditorCaretCheck.swift" \
   -o "$check_app/Contents/MacOS/EditorCaretCheck"
 

@@ -39,6 +39,8 @@ let package = Package(
                 "AppWorkspace.swift", "Assets.xcassets", "CloudKitSmokeCheck.swift",
                 "ContentView.swift", "Info-iCloud.plist", "Info.plist",
                 "MarkdownEditor.swift", "EditorTextSizeControl.swift",
+                "MarkdownEditingCommands.swift", "MarkdownLivePreview.swift",
+                "EditorWritingControls.swift",
                 "MarkdownPresentation.swift", "MarkdownSyntax.swift", "MyApp.swift",
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
                 "NotebookImportView.swift", "NotebookNoteEditor.swift",
@@ -72,6 +74,9 @@ let package = Package(
             sources: [
                 "MarkdownEditor.swift",
                 "EditorTextSizeControl.swift",
+                "MarkdownEditingCommands.swift",
+                "MarkdownLivePreview.swift",
+                "EditorWritingControls.swift",
                 "MarkdownPresentation.swift",
                 "MarkdownSyntax.swift",
             ],

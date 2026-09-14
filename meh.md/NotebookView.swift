@@ -22,6 +22,10 @@ struct NotebookView: View {
     @State private var showingSyncDetails = false
     @State private var showingTextSize = false
     @AppStorage("editor.fontSize") private var editorFontSize = 17.0
+    @AppStorage("editor.fontFamily") private var editorFontFamilyRaw =
+        EditorFontFamily.system.rawValue
+    @AppStorage("editor.mode") private var editorModeRaw =
+        MarkdownEditorMode.livePreview.rawValue
     @State private var deletionSelection: NotebookDeletionSelection?
     @State private var selectedID: UUID?
     @State private var session: NoteSession?
@@ -123,18 +127,38 @@ struct NotebookView: View {
                         isInTrash: selectedPlacement?.isInTrash == true,
                         hasUnrecordedEdit: $unrecordedEdit,
                         onPersist: { workspace?.contentDidSave(trigger: "note persisted") },
-                        fontSize: editorFontSize
+                        fontSize: editorFontSize,
+                        fontFamily: editorFontFamily,
+                        mode: editorMode
                     )
                     .id(selectedID)
                     .navigationTitle(selectedPlacement?.displayName ?? "Note")
                     .toolbar {
                         if let placement = selectedPlacement {
+                            #if os(macOS)
+                            ToolbarItem {
+                                EditorWritingControls(
+                                    navigation: editorNavigation,
+                                    isEnabled: session.isEditingEnabled
+                                        && !busy
+                                )
+                            }
+                            #endif
                             ToolbarItem {
                                 Menu {
+                                    EditorModeControl(
+                                        mode: editorModeBinding,
+                                        isEnabled: session.isEditingEnabled
+                                            && !busy
+                                    )
+                                    Divider()
                                     Button {
                                         showingTextSize = true
                                     } label: {
-                                        Label("Text Size…", systemImage: "textformat.size")
+                                        Label(
+                                            "Font & Text Size…",
+                                            systemImage: "textformat.size"
+                                        )
                                     }
                                     Divider()
                                     actions(for: placement)
@@ -143,7 +167,10 @@ struct NotebookView: View {
                                 }
                                 .accessibilityIdentifier("notebook-note-actions")
                                 .popover(isPresented: $showingTextSize) {
-                                    EditorTextSizeControl(fontSize: $editorFontSize)
+                                    EditorTextSizeControl(
+                                        fontSize: $editorFontSize,
+                                        fontFamily: editorFontFamilyBinding
+                                    )
                                         .presentationCompactAdaptation(.popover)
                                 }
                             }
@@ -195,6 +222,28 @@ struct NotebookView: View {
             Text(deletionMessage(selection))
         }
         .task { if replica.hasPendingImport { showingImport = true } }
+    }
+
+    private var editorMode: MarkdownEditorMode {
+        MarkdownEditorMode(rawValue: editorModeRaw) ?? .livePreview
+    }
+
+    private var editorFontFamily: EditorFontFamily {
+        EditorFontFamily(rawValue: editorFontFamilyRaw) ?? .system
+    }
+
+    private var editorFontFamilyBinding: Binding<EditorFontFamily> {
+        Binding(
+            get: { editorFontFamily },
+            set: { editorFontFamilyRaw = $0.rawValue }
+        )
+    }
+
+    private var editorModeBinding: Binding<MarkdownEditorMode> {
+        Binding(
+            get: { editorMode },
+            set: { editorModeRaw = $0.rawValue }
+        )
     }
 
     private var sidebarRowHeight: CGFloat {

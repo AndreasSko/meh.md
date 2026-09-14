@@ -8,6 +8,8 @@ struct NotebookNoteEditor: View {
     @Binding var hasUnrecordedEdit: Bool
     var onPersist: () -> Void = {}
     var fontSize: Double = 17
+    var fontFamily: EditorFontFamily = .system
+    var mode: MarkdownEditorMode = .source
     @State private var editError: String?
     @State private var unrecordedText: String?
     @Environment(\.scenePhase) private var scenePhase
@@ -48,7 +50,8 @@ struct NotebookNoteEditor: View {
                     onEditError: { error in
                         editError = error.localizedDescription
                         hasUnrecordedEdit = true
-                    }, navigation: navigation, fontSize: fontSize
+                    }, navigation: navigation, fontSize: fontSize,
+                    fontFamily: fontFamily, mode: mode
                 )
             } else {
                 unavailableContent.frame(maxWidth: .infinity, maxHeight: .infinity)
