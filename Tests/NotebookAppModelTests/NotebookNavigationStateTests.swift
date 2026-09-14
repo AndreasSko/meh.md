@@ -6,6 +6,27 @@ import XCTest
 
 @MainActor
 final class NotebookNavigationStateTests: XCTestCase {
+    func testSortingPreservesLocalRecentsPositionAndEditor() async throws {
+        let fixture = try await Fixture()
+        let alpha = try await fixture.replica.createNote(name: "Alpha.md")
+        let beta = try await fixture.replica.createNote(name: "Beta.md")
+        let state = fixture.makeState()
+        let session = try await fixture.replica.openNote(alpha)
+        state.installSelection(alpha, session: session, recordActivity: true)
+        state.recordEdited(alpha)
+        state.recordEdited(beta)
+        state.setPosition(Data([4, 5, 6]), for: alpha)
+
+        try await fixture.replica.sortChildren(parentID: nil, by: .nameDescending)
+        try await fixture.replica.reorder([alpha], parentID: nil, before: beta)
+        state.refreshAvailability()
+
+        XCTAssertEqual(state.recentNoteIDs, [beta, alpha])
+        XCTAssertEqual(state.position(for: alpha), Data([4, 5, 6]))
+        XCTAssertEqual(state.selectedID, alpha)
+        XCTAssertIdentical(state.selectedSession, session)
+    }
+
     func testLocalRenamePromotesWithoutReplacingLastEditor() async throws {
         let fixture = try await Fixture()
         let selected = try await fixture.replica.createNote(name: "Open.md")

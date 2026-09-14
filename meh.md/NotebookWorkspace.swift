@@ -127,8 +127,30 @@ final class NotebookWorkspace {
             directory = root.appending(path: "Notebook")
             documentsDirectory = URL.documentsDirectory.appending(path: "SyncWorkspaces/\(name)")
         } else {
-            directory = support.appending(path: preview ? "NotebookPreview" : "Notebook")
-            documentsDirectory = URL.documentsDirectory
+            #if DEBUG
+            let previewRun = preview ? environment["MEH_NOTEBOOK_PREVIEW_RUN"] : nil
+            let validPreviewRun = previewRun.flatMap { value in
+                value.range(
+                    of: "^[A-Za-z0-9_-]{1,64}$",
+                    options: .regularExpression
+                ) == nil ? nil : value
+            }
+            #else
+            let validPreviewRun: String? = nil
+            #endif
+            if let validPreviewRun {
+                directory = support.appending(
+                    path: "NotebookPreviewTests/\(validPreviewRun)"
+                )
+                documentsDirectory = URL.documentsDirectory.appending(
+                    path: "NotebookPreviewTests/\(validPreviewRun)"
+                )
+            } else {
+                directory = support.appending(
+                    path: preview ? "NotebookPreview" : "Notebook"
+                )
+                documentsDirectory = URL.documentsDirectory
+            }
         }
     }
 

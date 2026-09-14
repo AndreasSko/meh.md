@@ -210,6 +210,111 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: generationURL), generation)
     }
 
+    func testPublishesDatesAndSecondPublishIsStable() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let createdAt = Date(timeIntervalSince1970: 1_600_000_000.123)
+        let modifiedAt = Date(timeIntervalSince1970: 1_700_000_000.456)
+        let note = try NoteDocument(
+            text: "dated",
+            metadata: NoteMetadata(
+                createdAt: createdAt,
+                modifiedAt: modifiedAt
+            )
+        )
+        let catalog = try NotebookCatalogDocument()
+        try catalog.add(id: note.noteID, kind: .note, name: "Dated.md")
+        let publisher = NotebookMarkdownPublisher(directory: root)
+        let snapshot = catalog.snapshot()
+        let placements = try catalog.placements()
+        try await publisher.publish(
+            catalog: snapshot,
+            placements: placements,
+            notes: [note.snapshot()]
+        )
+        let file = root.appending(path: "Markdown/Dated.md")
+        let values = try file.resourceValues(
+            forKeys: [.creationDateKey, .contentModificationDateKey]
+        )
+        var stages: [NotebookMarkdownPublishStage] = []
+
+        try await publisher.publish(
+            catalog: snapshot,
+            placements: placements,
+            notes: [note.snapshot()]
+        ) { stages.append($0) }
+
+        XCTAssertEqual(
+            try XCTUnwrap(values.contentModificationDate)
+                .timeIntervalSince1970,
+            try XCTUnwrap(modifiedAt.noteTimestamp).timeIntervalSince1970,
+            accuracy: 0.002
+        )
+        if let publishedCreation = values.creationDate,
+           publishedCreation <= modifiedAt {
+            XCTAssertEqual(
+                publishedCreation.timeIntervalSince1970,
+                try XCTUnwrap(createdAt.noteTimestamp).timeIntervalSince1970,
+                accuracy: 0.002
+            )
+        }
+        XCTAssertTrue(stages.isEmpty)
+    }
+
+    func testDateOnlyChangePublishesNewGenerationWithoutChangingBytes()
+        async throws
+    {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let noteID = UUID()
+        let original = try NoteDocument(
+            noteID: noteID,
+            text: "same bytes",
+            metadata: .now(Date(timeIntervalSince1970: 100))
+        )
+        let catalog = try NotebookCatalogDocument()
+        try catalog.add(id: noteID, kind: .note, name: "Dated.md")
+        let publisher = NotebookMarkdownPublisher(directory: root)
+        try await publisher.publish(
+            catalog: catalog.snapshot(),
+            placements: catalog.placements(),
+            notes: [original.snapshot()]
+        )
+        let generationURL = root.appending(
+            path: "Markdown/.notebook-generation"
+        )
+        let originalGeneration = try Data(contentsOf: generationURL)
+        let updated = try NoteDocument(
+            noteID: noteID,
+            text: "same bytes",
+            metadata: NoteMetadata(
+                createdAt: Date(timeIntervalSince1970: 100),
+                modifiedAt: Date(timeIntervalSince1970: 200)
+            )
+        )
+
+        try await publisher.publish(
+            catalog: catalog.snapshot(),
+            placements: catalog.placements(),
+            notes: [updated.snapshot()]
+        )
+
+        XCTAssertEqual(
+            try Data(contentsOf: root.appending(path: "Markdown/Dated.md")),
+            Data("same bytes".utf8)
+        )
+        XCTAssertNotEqual(
+            try Data(contentsOf: generationURL),
+            originalGeneration
+        )
+        XCTAssertEqual(
+            try root.appending(path: "Markdown/Dated.md")
+                .resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate?.noteTimestamp,
+            Date(timeIntervalSince1970: 200)
+        )
+    }
+
     func testChangedManagedFileIsRepairedInsteadOfTreatedAsNoOp()
         async throws
     {

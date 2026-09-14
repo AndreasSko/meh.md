@@ -11,6 +11,12 @@ Each note retains its existing Automerge document, including its identity,
 text, and history. A separate Automerge catalog stores note/folder identities,
 names, parents, and trash intent. A catalog is never decoded as a note body.
 
+Optional parent-scoped position keys preserve manual sibling order. Legacy
+items without keys retain the previous folders-first alphabetical order until
+an ordering action materializes positions. New and moved-in items append.
+One-time sorting writes positions; it does not install an automatic sort rule.
+Recents are separate device-local navigation state.
+
 Names are individual path components. Reject empty or whitespace-only names,
 `.` and `..`, path separators, Unicode control characters, and components over
 255 UTF-8 bytes. Preserve other spelling, punctuation, emoji, and script
@@ -22,6 +28,12 @@ Rename and move are independent properties. Conflicting edits to the same
 property use Automerge's deterministic winner and expose a conflict flag.
 The other value remains in document history. An observed rename or move
 resolves that property's outstanding conflict.
+
+Ordering is scoped to the stored parent. A move changes the parent and assigns
+a position in its destination; a concurrent reorder in the old parent cannot
+change that destination position. Concurrent positions for the same item use
+Automerge's deterministic winner. Separate item keys allow independent edits
+to merge without duplicating identities. Merge does not rebalance positions.
 
 Identical sibling names never overwrite or merge entries. Compare names using
 canonical Unicode normalization and case folding, retaining diacritics. The
@@ -35,6 +47,10 @@ cycle. For display, detach the lowest UUID in each cycle to the root and flag
 it for attention. Missing or invalid parents similarly produce a flagged root
 placement. Keep the stored relationship and do not create repair operations
 merely by reading/merging the catalog.
+
+Recovered display roots are excluded from ordinary folder sorting and cannot
+be reordered until an explicit move repairs their stored parent. Their old
+parent's rank never supplies position bounds for genuine root children.
 
 ## Trash
 

@@ -6,19 +6,27 @@ public struct NotebookImportEntry: Codable, Equatable, Sendable {
     public let name: String
     public let parentID: UUID?
     public let text: String?
+    public let createdAt: Date?
+    public let modifiedAt: Date?
 
     public init(
         id: UUID,
         kind: NotebookItemKind,
         name: String,
         parentID: UUID?,
-        text: String?
+        text: String?,
+        createdAt: Date? = nil,
+        modifiedAt: Date? = nil
     ) {
         self.id = id
         self.kind = kind
         self.name = name
         self.parentID = parentID
         self.text = text
+        // Keep invalid supplied values visible to plan validation instead of
+        // silently turning malformed metadata into an unknown date.
+        self.createdAt = createdAt.map { $0.noteTimestamp ?? $0 }
+        self.modifiedAt = modifiedAt.map { $0.noteTimestamp ?? $0 }
     }
 }
 
@@ -76,7 +84,9 @@ public actor NotebookImportScanner {
                         kind: .folder,
                         name: name,
                         parentID: nil,
-                        text: nil
+                        text: nil,
+                        createdAt: selection.values.creationDate,
+                        modifiedAt: selection.values.contentModificationDate
                     )
                 )
                 try scanDirectory(
@@ -118,6 +128,8 @@ public actor NotebookImportScanner {
         .isSymbolicLinkKey,
         .isPackageKey,
         .isHiddenKey,
+        .creationDateKey,
+        .contentModificationDateKey,
     ]
 
     private func selectedSources(from urls: [URL]) throws -> [SelectedSource] {
@@ -188,7 +200,9 @@ public actor NotebookImportScanner {
                         kind: .folder,
                         name: name,
                         parentID: parentID,
-                        text: nil
+                        text: nil,
+                        createdAt: values.creationDate,
+                        modifiedAt: values.contentModificationDate
                     )
                 )
                 try scanDirectory(
@@ -226,13 +240,18 @@ public actor NotebookImportScanner {
         guard Data(text.utf8) == data else {
             throw NotebookImportScannerError.invalidUTF8(path: relativePath)
         }
+        let values = try url.resourceValues(
+            forKeys: [.creationDateKey, .contentModificationDateKey]
+        )
         entries.append(
             NotebookImportEntry(
                 id: UUID(),
                 kind: .note,
                 name: name,
                 parentID: parentID,
-                text: text
+                text: text,
+                createdAt: values.creationDate,
+                modifiedAt: values.contentModificationDate
             )
         )
     }

@@ -187,6 +187,68 @@ final class NotebookImportPlanTests: XCTestCase {
         XCTAssertTrue(plan.entries.allSatisfy { $0.parentID == nil })
     }
 
+    func testCapturesSourceFileAndFolderDates() async throws {
+        let folder = temporaryDirectory.appendingPathComponent(
+            "Dated",
+            isDirectory: true
+        )
+        try createDirectory(folder)
+        let note = folder.appendingPathComponent("note.md")
+        try Data("exact".utf8).write(to: note)
+        let requestedFolderDate = Date(timeIntervalSince1970: 1_600_000_000)
+        let requestedNoteDate = Date(timeIntervalSince1970: 1_700_000_000.123)
+        try FileManager.default.setAttributes(
+            [.modificationDate: requestedNoteDate],
+            ofItemAtPath: note.path
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: requestedFolderDate],
+            ofItemAtPath: folder.path
+        )
+        let actualNote = try note.resourceValues(
+            forKeys: [.creationDateKey, .contentModificationDateKey]
+        )
+        let actualFolder = try folder.resourceValues(
+            forKeys: [.creationDateKey, .contentModificationDateKey]
+        )
+
+        let plan = try await NotebookImportScanner().scan(urls: [folder])
+
+        let folderEntry = try entry(named: "Dated", in: plan)
+        let noteEntry = try entry(named: "note.md", in: plan)
+        XCTAssertEqual(
+            folderEntry.createdAt,
+            actualFolder.creationDate?.noteTimestamp
+        )
+        XCTAssertEqual(
+            folderEntry.modifiedAt,
+            actualFolder.contentModificationDate?.noteTimestamp
+        )
+        XCTAssertEqual(
+            noteEntry.createdAt,
+            actualNote.creationDate?.noteTimestamp
+        )
+        XCTAssertEqual(
+            noteEntry.modifiedAt,
+            actualNote.contentModificationDate?.noteTimestamp
+        )
+    }
+
+    func testOlderPlanWithoutDateFieldsDecodesAsUnknown() throws {
+        let id = UUID()
+        let json = Data(
+            """
+            {"id":"\(UUID().uuidString)","entries":[{"id":"\(id.uuidString)",
+            "kind":"note","name":"old.md","text":"body"}],"skippedPaths":[]}
+            """.utf8
+        )
+
+        let plan = try JSONDecoder().decode(NotebookImportPlan.self, from: json)
+
+        XCTAssertNil(plan.entries[0].createdAt)
+        XCTAssertNil(plan.entries[0].modifiedAt)
+    }
+
     private func createDirectory(_ url: URL) throws {
         try FileManager.default.createDirectory(
             at: url,

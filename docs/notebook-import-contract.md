@@ -25,6 +25,17 @@ newlines are retained. Existing note/folder identities are never reused based
 on a filename. Matching names remain separate using the notebook's existing
 collision display rules.
 
+Available filesystem creation and content-modification dates are captured
+during preparation and retained in the staged job and Automerge note. Missing
+dates remain unknown, including in older pending jobs. Import and resume do
+not substitute the current time for the original file dates.
+
+Content edits update the modification date. Rename, move, ordering, Trash,
+and receiving synchronization leave it unchanged. Managed Markdown copies
+receive known file dates where the destination filesystem supports them;
+metadata is never inserted into Markdown bodies. Filesystem attributes remain
+less portable than the authoritative dates stored in Automerge.
+
 ## Durability and retry
 
 Confirming import first records a durable local job with stable identities

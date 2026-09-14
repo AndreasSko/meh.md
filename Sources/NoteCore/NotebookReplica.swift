@@ -169,7 +169,11 @@ public final class NotebookReplica {
         guard !plan.entries.isEmpty else { return }
         let snapshots: [NoteSnapshot] = try plan.entries.compactMap { entry in
             guard entry.kind == .note, let text = entry.text else { return nil }
-            return try NoteDocument(noteID: entry.id, text: text).snapshot()
+            return try NoteDocument(
+                noteID: entry.id, text: text,
+                metadata: NoteMetadata(
+                    createdAt: entry.createdAt, modifiedAt: entry.modifiedAt)
+            ).snapshot()
         }
         let journal = NotebookImportJournal(
             notebookID: catalog.notebookID,
@@ -242,11 +246,159 @@ public final class NotebookReplica {
         try await saveCatalog(next)
     }
 
+    /// Read the durable sibling order without opening editor sessions.
+    public func orderedChildren(
+        parentID: UUID?, inTrash: Bool = false
+    ) -> [NotebookPlacement] {
+        NotebookOrdering.orderedChildren(
+            placements, parentID: parentID, inTrash: inTrash)
+    }
+
+    public func reorder(
+        _ ids: [UUID], parentID: UUID?, before: UUID?
+    ) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                throw NotebookReplicaError.notJoined
+            }
+            let next = try catalog.fork()
+            try next.reorder(ids, parentID: parentID, before: before)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    /// Sorting materializes a new manual order; it never installs a live rule.
+    public func sortChildren(
+        parentID: UUID?, by order: NotebookSortOrder
+    ) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                throw NotebookReplicaError.notJoined
+            }
+            // A recovered display root is not a stored child of this folder.
+            // Keep it visible for repair, but do not assign an unused rank.
+            let children = self.orderedChildren(parentID: parentID)
+                .filter { $0.item.parentID == parentID }
+            var dates: [UUID: NoteMetadata] = [:]
+            if order != .nameAscending && order != .nameDescending {
+                for child in children where child.item.kind == .note {
+                    let id = child.item.id
+                    if let session = self.sessions[id] {
+                        if let load = self.sessionLoads[id] { await load.value }
+                        try await session.flush()
+                        // A separate storage read can lag behind live edits
+                        // received after flush returns to the main actor.
+                        guard let snapshot = session.currentSnapshot,
+                              snapshot.noteID == id else {
+                            throw NotebookReplicaError.noteUnavailable(id)
+                        }
+                        dates[id] = try NoteDocument(snapshot: snapshot).metadata
+                        continue
+                    }
+                    switch await self.noteStorage(id).load() {
+                    case .current(let snapshot):
+                        guard snapshot.noteID == id else {
+                            throw NotebookReplicaError.noteUnavailable(id)
+                        }
+                        dates[id] = try NoteDocument(snapshot: snapshot).metadata
+                    case .firstLaunch:
+                        // Catalogs may arrive before bodies. Unknown dates
+                        // sort last without creating or recovering a note.
+                        dates[id] = NoteMetadata(createdAt: nil, modifiedAt: nil)
+                    case .recoveryRequired, .blocked:
+                        throw NotebookReplicaError.noteUnavailable(id)
+                    }
+                }
+            }
+            let sorted = children.sorted { left, right in
+                if left.item.kind != right.item.kind {
+                    return left.item.kind == .folder
+                }
+                if left.item.kind == .note {
+                    let leftDate: Date?
+                    let rightDate: Date?
+                    switch order {
+                    case .createdNewest, .createdOldest:
+                        leftDate = dates[left.item.id]?.createdAt
+                        rightDate = dates[right.item.id]?.createdAt
+                    case .modifiedNewest, .modifiedOldest:
+                        leftDate = dates[left.item.id]?.modifiedAt
+                        rightDate = dates[right.item.id]?.modifiedAt
+                    case .nameAscending, .nameDescending:
+                        leftDate = nil
+                        rightDate = nil
+                    }
+                    if leftDate != rightDate {
+                        guard let leftDate else { return false }
+                        guard let rightDate else { return true }
+                        return order == .createdNewest || order == .modifiedNewest
+                            ? leftDate > rightDate : leftDate < rightDate
+                    }
+                }
+                let comparison = left.displayName.localizedStandardCompare(right.displayName)
+                if comparison == .orderedSame {
+                    return left.item.id.uuidString < right.item.id.uuidString
+                }
+                return order == .nameDescending
+                    ? comparison == .orderedDescending : comparison == .orderedAscending
+            }
+            let next = try catalog.fork()
+            try next.reorder(sorted.map(\.item.id), parentID: parentID, before: nil)
+            try await self.persistCatalog(next)
+        }
+    }
+
     public func setTrashed(_ id: UUID, _ trashed: Bool) async throws {
         try ensureAlive(id)
         let next = try catalog!.fork()
         try next.setTrashed(id, trashed)
         try await saveCatalog(next)
+    }
+
+    /// Move a prevalidated selection with a single durable catalog write.
+    /// Descendants of selected folders keep their existing ancestry.
+    public func moveItems(
+        _ ids: [UUID], to parentID: UUID?
+    ) async throws -> NotebookBrowserUndo? {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                throw NotebookReplicaError.notJoined
+            }
+            let next = try catalog.fork()
+            let undo = try next.moveItems(ids, to: parentID)
+            if next.heads != catalog.heads {
+                try await self.persistCatalog(next)
+            }
+            return undo
+        }
+    }
+
+    public func trashItems(_ ids: [UUID]) async throws -> NotebookBrowserUndo {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                throw NotebookReplicaError.notJoined
+            }
+            let next = try catalog.fork()
+            let undo = try next.trashItems(ids)
+            try await self.persistCatalog(next)
+            return undo
+        }
+    }
+
+    /// A guarded compensating change. Unrelated remote edits remain intact.
+    /// The returned receipt can redo the operation, subject to the same guards.
+    public func undoBrowserChange(
+        _ receipt: NotebookBrowserUndo
+    ) async throws -> NotebookBrowserUndo {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                throw NotebookReplicaError.notJoined
+            }
+            let next = try catalog.fork()
+            let redo = try next.undoBrowserChange(receipt)
+            try await self.persistCatalog(next)
+            return redo
+        }
     }
 
     /// Capture all items currently shown in Trash, or one Trash subtree. The
@@ -622,6 +774,9 @@ public final class NotebookReplica {
             }
         }
         for entry in plan.entries {
+            guard entry.createdAt.map({ $0.noteTimestamp != nil }) ?? true,
+                entry.modifiedAt.map({ $0.noteTimestamp != nil }) ?? true
+            else { throw NotebookImportError.invalidPlan }
             var seen = Set<UUID>()
             var parentID = entry.parentID
             while let id = parentID {
@@ -661,8 +816,11 @@ public final class NotebookReplica {
             guard let stored = snapshots[entry.id],
                 let document = try? NoteDocument(snapshot: stored),
                 let text = try? document.text,
+                let metadata = try? document.metadata,
                 let expectedText = entry.text,
-                text.utf8.elementsEqual(expectedText.utf8)
+                text.utf8.elementsEqual(expectedText.utf8),
+                metadata.createdAt == entry.createdAt?.noteTimestamp,
+                metadata.modifiedAt == entry.modifiedAt?.noteTimestamp
             else { throw NotebookImportError.corruptJournal }
         }
         return snapshots

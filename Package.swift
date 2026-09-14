@@ -51,6 +51,8 @@ let package = Package(
             sources: [
                 "NotebookWorkspace.swift",
                 "NotebookNoteName.swift",
+                "NotebookBrowserOrdering.swift",
+                "NotebookBrowserSelection.swift",
                 "NotebookNavigationState.swift",
                 "UnavailableDevelopmentTransport.swift",
             ],
@@ -70,6 +72,8 @@ let package = Package(
                 "NotebookApplicationView.swift", "UnavailableDevelopmentTransport.swift",
                 "NotebookImportView.swift", "NotebookSyncStatusView.swift",
                 "NotebookNoteName.swift",
+                "NotebookBrowserOrdering.swift",
+                "NotebookBrowserSelection.swift",
                 "NotebookNavigationState.swift",
                 "icon.icon", "Info-iCloud.plist", "Info.plist", "macOS.entitlements",
                 "iOS.entitlements", "CloudKitSmokeCheck.swift",

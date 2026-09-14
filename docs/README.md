@@ -36,6 +36,8 @@ and the evidence collected along the way.
 - [Sync progress](notebook-sync-progress.md): batching, status, and
   diagnostics.
 - [Permanent deletion](notebook-permanent-deletion.md): confirmed cleanup.
+- [Notebook organization](notebook-browser-operations.md): manual order,
+  batch actions, browser undo, and portable dates.
 
 ## Execution and verification records
 
@@ -54,6 +56,7 @@ acceptance of later implementations.
   [sync verification](sync-verification.md), and
   [live iCloud verification](icloud-live-verification.md): single-note sync.
 - [Milestone 3](milestone-3-plan.md): notebook stages and closeout evidence.
+- [Wave 2](wave-2-plan.md): ordering, dates, and batch browser operations.
 
 ## Proposals
 

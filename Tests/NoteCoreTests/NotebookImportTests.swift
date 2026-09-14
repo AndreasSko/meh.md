@@ -7,6 +7,54 @@ import XCTest
 final class NotebookImportTests: XCTestCase {
     private enum InjectedFailure: Error { case stop }
 
+    func testResumePreservesStagedDatesAfterSourceIsRemoved() async throws {
+        let root = temporaryDirectory()
+        let sourceRoot = temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: sourceRoot)
+        }
+        try FileManager.default.createDirectory(
+            at: sourceRoot,
+            withIntermediateDirectories: true
+        )
+        let source = sourceRoot.appending(path: "dated.md")
+        try Data("exact source bytes".utf8).write(to: source)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_700_000_000.123)],
+            ofItemAtPath: source.path
+        )
+        let plan = try await NotebookImportScanner().scan(urls: [source])
+        let entry = try XCTUnwrap(plan.entries.first)
+        let expected = NoteMetadata(
+            createdAt: entry.createdAt,
+            modifiedAt: entry.modifiedAt
+        )
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        replica.importFaultInjector = { stage in
+            if stage == .journalSaved { throw InjectedFailure.stop }
+        }
+        do {
+            try await replica.importMarkdown(plan)
+            XCTFail("Expected interruption after staging the import")
+        } catch is InjectedFailure {}
+        try FileManager.default.removeItem(at: sourceRoot)
+
+        let restarted = NotebookReplica(directory: root)
+        try await restarted.load()
+        try await restarted.resumePendingImport()
+
+        guard case let .current(snapshot) =
+            await restarted.noteStorage(entry.id).load()
+        else { return XCTFail("Expected imported note") }
+        XCTAssertEqual(try snapshot.metadata, expected)
+        XCTAssertEqual(
+            try NoteDocument(snapshot: snapshot).text,
+            "exact source bytes"
+        )
+    }
+
     func testResumeAtEveryWriteBoundaryUsesOneImport() async throws {
         let stages: [NotebookImportStage] = [
             .journalSaved,
@@ -148,6 +196,42 @@ final class NotebookImportTests: XCTestCase {
         }
         XCTAssertFalse(replica.hasPendingImport)
         XCTAssertEqual(replica.placements.map(\.item.id), [existing])
+    }
+
+    func testInvalidSuppliedDateWritesNoJournalBodyOrCatalog() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let noteID = UUID()
+        let before = replica.catalogSnapshot
+        let invalid = NotebookImportPlan(
+            id: UUID(),
+            entries: [
+                NotebookImportEntry(
+                    id: noteID,
+                    kind: .note,
+                    name: "Invalid.md",
+                    parentID: nil,
+                    text: "body",
+                    createdAt: Date(timeIntervalSince1970: .infinity)
+                ),
+            ],
+            skippedPaths: []
+        )
+
+        do {
+            try await replica.importMarkdown(invalid)
+            XCTFail("Expected invalid timestamp rejection")
+        } catch {
+            XCTAssertEqual(error as? NotebookImportError, .invalidPlan)
+        }
+
+        XCTAssertEqual(replica.catalogSnapshot, before)
+        XCTAssertFalse(replica.hasPendingImport)
+        XCTAssertFalse(NotebookImportStorage(directory: root).hasPendingImport)
+        let body = await replica.noteStorage(noteID).load()
+        XCTAssertEqual(body, .firstLaunch)
     }
 
     func testCorruptJournalAndBodyAreSafelyRefused() async throws {

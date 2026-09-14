@@ -107,6 +107,32 @@ final class NoteSessionTests: XCTestCase {
         await waitUntil { session.status == .saved }
     }
 
+    func testEditorCommitOfIdenticalBytesDoesNotSaveOrChangeDate()
+        async throws
+    {
+        let initial = try NoteDocument(
+            text: "unchanged",
+            metadata: .now(Date(timeIntervalSince1970: 100))
+        ).snapshot()
+        let storage = ControlledStorage(loadResult: .current(initial))
+        let session = NoteSession(storage: storage)
+        await session.load()
+
+        let result = try session.commitEditorText(
+            "unchanged",
+            basedOn: initial.data
+        )
+        let saveCount = await storage.saveCount
+
+        XCTAssertEqual(result, initial)
+        XCTAssertEqual(session.status, .saved)
+        XCTAssertEqual(saveCount, 0)
+        XCTAssertEqual(
+            try XCTUnwrap(session.currentSnapshot).metadata.modifiedAt,
+            Date(timeIntervalSince1970: 100)
+        )
+    }
+
     func testRecoveryFailureKeepsEditingBlockedAndCanRetry() async throws {
         let previous = try NoteDocument(text: "known good").snapshot()
         let recovery = NoteRecovery(
