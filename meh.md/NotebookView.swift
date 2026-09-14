@@ -2,8 +2,6 @@ import Foundation
 import NoteCore
 import SwiftUI
 
-import UniformTypeIdentifiers
-
 #if os(macOS)
     import AppKit
 #else
@@ -16,9 +14,13 @@ private struct EditorAttachmentID: Hashable {
 }
 
 private struct NotebookSidebarRow: Identifiable {
-    let placement: NotebookPlacement
+    let id: UUID
     let depth: Int
-    var id: UUID { placement.item.id }
+
+    init(placement: NotebookPlacement, depth: Int) {
+        id = placement.item.id
+        self.depth = depth
+    }
 }
 
 struct NotebookView: View {
@@ -76,60 +78,52 @@ struct NotebookView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
                     recentsSection
-                    Section {
+                    HStack(spacing: 6) {
                         Button {
                             navigationState.isTreeExpanded.toggle()
                         } label: {
-                            HStack(spacing: 6) {
-                                disclosureIcon(expanded: navigationState.isTreeExpanded)
-                                Text("Notebook")
-                            }
+                            disclosureIcon(expanded: navigationState.isTreeExpanded)
+                            Text("Notebook")
                         }
                         .buttonStyle(.plain)
+                        .contextMenu { creationActions(parentID: nil) }
                         .accessibilityIdentifier("notebook-tree-toggle")
-                        .accessibilityValue(navigationState.isTreeExpanded ? "Expanded" : "Collapsed")
-                        if navigationState.isTreeExpanded {
-                            ForEach(activeRows) { row in sidebarRow(row) }
-                        }
-                        Color.clear
-                            .frame(height: 24)
-                            .contentShape(Rectangle())
-                            .onDrop(
-                                of: [NotebookDragType.identifier],
-                                delegate: NotebookDropDelegate {
-                                    acceptDrop($0, to: nil)
-                                }
-                            )
-                            .accessibilityHidden(true)
+                        .accessibilityValue(
+                            navigationState.isTreeExpanded
+                                ? "Expanded" : "Collapsed"
+                        )
+                        Spacer(minLength: 0)
+                        sortMenu(parentID: nil, label: "Sort Notebook")
+                            .accessibilityIdentifier("notebook-sort-root")
                     }
-                    Section {
-                        Button {
-                            perform {
-                                try await flushEditor()
-                                trashExpanded.toggle()
-                            }
-                        } label: {
-                            HStack(spacing: 6) {
-                                disclosureIcon(expanded: trashExpanded)
-                                Label("Trash", systemImage: "trash")
-                            }
+                    if navigationState.isTreeExpanded {
+                        activeTree
+                    }
+                    Button {
+                        perform {
+                            try await flushEditor()
+                            trashExpanded.toggle()
                         }
-                        .buttonStyle(.plain)
-                        .contextMenu { emptyTrashAction }
+                    } label: {
+                        HStack(spacing: 6) {
+                            disclosureIcon(expanded: trashExpanded)
+                            Label("Trash", systemImage: "trash")
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu { emptyTrashAction }
 
-                        if trashExpanded {
-                            ForEach(trashRows) { row in sidebarRow(row) }
-                            if replica.placements.contains(where: \.isInTrash) {
-                                emptyTrashAction
-                                    .font(.caption)
-                                    .padding(.leading, 24)
-                            }
+                    if trashExpanded {
+                        ForEach(trashRows) { row in sidebarRow(row) }
+                        if replica.placements.contains(where: \.isInTrash) {
+                            emptyTrashAction
+                                .font(.caption)
+                                .padding(.leading, 24)
                         }
                     }
                 }
                 .padding(10)
             }
-            .contextMenu { creationActions(parentID: nil) }
             .navigationTitle("meh.md")
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
@@ -496,9 +490,16 @@ struct NotebookView: View {
         return preview.isEmpty ? "Empty note" : preview
     }
 
-    private var activeRows: [NotebookSidebarRow] {
+    private var visibleActiveRows: [NotebookSidebarRow] {
         flattenedRows(inTrash: false)
     }
+
+    private var activeTree: some View {
+        ForEach(visibleActiveRows) { row in
+            sidebarRow(row)
+        }
+    }
+
 
     private var trashRows: [NotebookSidebarRow] {
         flattenedRows(inTrash: true, initialDepth: 1)
@@ -510,12 +511,14 @@ struct NotebookView: View {
         initialDepth: Int = 0
     ) -> [NotebookSidebarRow] {
         var result: [NotebookSidebarRow] = []
-        for placement in sorted(
-            replica.placements.filter {
-                $0.isInTrash == inTrash && $0.parentID == parentID
-            })
-        {
-            result.append(NotebookSidebarRow(placement: placement, depth: initialDepth))
+        for placement in replica.orderedChildren(
+            parentID: parentID,
+            inTrash: inTrash
+        ) {
+            result.append(NotebookSidebarRow(
+                placement: placement,
+                depth: initialDepth
+            ))
             if placement.item.kind == .folder, expandedIDs.contains(placement.item.id) {
                 result.append(
                     contentsOf: flattenedRows(
@@ -530,80 +533,96 @@ struct NotebookView: View {
 
     private func sorted(_ items: [NotebookPlacement]) -> [NotebookPlacement] {
         items.sorted {
-            if $0.item.kind != $1.item.kind { return $0.item.kind == .folder }
-            let order = $0.displayName.localizedStandardCompare($1.displayName)
+            let order = folderPath($0).localizedStandardCompare(folderPath($1))
             return order == .orderedSame
-                ? $0.item.id.uuidString < $1.item.id.uuidString : order == .orderedAscending
+                ? $0.item.id.uuidString < $1.item.id.uuidString
+                : order == .orderedAscending
         }
     }
 
     @ViewBuilder
     private func sidebarRow(_ row: NotebookSidebarRow) -> some View {
-        let placement = row.placement
-        HStack(spacing: 6) {
-            if placement.item.kind == .folder {
-                Button {
-                    perform {
-                        try await flushEditor()
-                        toggleFolder(placement.item.id)
-                    }
-                } label: {
-                    disclosureIcon(expanded: expandedIDs.contains(placement.item.id))
-                }
-                .buttonStyle(.plain)
-            } else {
-                Color.clear.frame(width: 10, height: 1)
-            }
-
-            Image(systemName: placement.item.kind == .folder ? "folder" : "note.text")
-            if editingID == placement.item.id {
-                TextField("Name", text: $proposedName)
-                    .textFieldStyle(.plain)
-                    .focused($focusedNameID, equals: placement.item.id)
-                    .disabled(busy)
-                    .onSubmit { submitInlineName() }
-                    .notebookEscapeAction { cancelInlineName() }
-                    .notebookSelectNameOnFocus()
-            } else {
-                Text(placement.displayName).lineLimit(1)
-                if !placement.issues.isEmpty {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                        .accessibilityLabel("Recovered placement or metadata conflict")
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.leading, CGFloat(row.depth) * 16)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .frame(minHeight: sidebarRowHeight)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard editingID != placement.item.id else { return }
-            perform {
+        if let placement = replica.placements.first(where: {
+            $0.item.id == row.id
+        }) {
+            HStack(spacing: 6) {
                 if placement.item.kind == .folder {
-                    try await flushEditor()
-                    toggleFolder(placement.item.id)
+                    Button {
+                        perform {
+                            try await flushEditor()
+                            toggleFolder(placement.item.id)
+                        }
+                    } label: {
+                        disclosureIcon(
+                            expanded: expandedIDs.contains(placement.item.id)
+                        )
+                    }
+                    .buttonStyle(.plain)
                 } else {
-                    try await selectNote(placement.item.id)
+                    Color.clear.frame(width: 10, height: 1)
+                }
+                if editingID == placement.item.id {
+                    Image(systemName: placement.item.kind == .folder ? "folder" : "note.text")
+                    TextField("Name", text: $proposedName)
+                        .textFieldStyle(.plain)
+                        .focused($focusedNameID, equals: placement.item.id)
+                        .disabled(busy)
+                        .onSubmit { submitInlineName() }
+                        .notebookEscapeAction { cancelInlineName() }
+                        .notebookSelectNameOnFocus()
+                } else {
+                    Button {
+                        activateSidebarRow(placement)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: placement.item.kind == .folder
+                                ? "folder" : "note.text")
+                            Text(placement.displayName)
+                                .lineLimit(1)
+                                .accessibilityIdentifier(
+                                    "notebook-sidebar-title-"
+                                        + placement.item.id.uuidString
+                                )
+                            if !placement.issues.isEmpty {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundStyle(.orange)
+                                    .accessibilityLabel(
+                                        "Recovered placement or metadata conflict"
+                                    )
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    // Keep row actions off the inline name editor.
+                    .contextMenu { actions(for: placement) }
                 }
             }
+            .padding(.leading, CGFloat(row.depth) * 16)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(minHeight: sidebarRowHeight)
+            .contentShape(Rectangle())
+            .background(
+                selectedID == placement.item.id || editingID == placement.item.id
+                    ? Color.accentColor.opacity(0.14) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+
         }
-        .background(
-            selectedID == placement.item.id || editingID == placement.item.id
-                ? Color.accentColor.opacity(0.14) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 6)
-        )
-        .contextMenu { actions(for: placement) }
-        .onDrag { dragProvider(for: placement.item.id) }
-        .onDrop(
-            of: [NotebookDragType.identifier],
-            delegate: NotebookDropDelegate {
-                guard placement.item.kind == .folder else { return false }
-                return acceptDrop($0, to: placement.item.id)
+    }
+
+    private func activateSidebarRow(_ placement: NotebookPlacement) {
+        guard !busy, editingID != placement.item.id else { return }
+        perform {
+            if placement.item.kind == .folder {
+                try await flushEditor()
+                toggleFolder(placement.item.id)
+            } else {
+                try await selectNote(placement.item.id)
             }
-        )
+        }
     }
 
     private func disclosureIcon(expanded: Bool) -> some View {
@@ -619,6 +638,33 @@ struct NotebookView: View {
         } else {
             expandedIDs.insert(id)
         }
+    }
+
+    private func sortMenu(
+        parentID: UUID?,
+        label: LocalizedStringResource
+    ) -> some View {
+        Menu {
+            Button("Name, A–Z") { sort(parentID, by: .nameAscending) }
+            Button("Name, Z–A") { sort(parentID, by: .nameDescending) }
+            Divider()
+            Button("Created, Newest First") {
+                sort(parentID, by: .createdNewest)
+            }
+            Button("Created, Oldest First") {
+                sort(parentID, by: .createdOldest)
+            }
+            Button("Modified, Newest First") {
+                sort(parentID, by: .modifiedNewest)
+            }
+            Button("Modified, Oldest First") {
+                sort(parentID, by: .modifiedOldest)
+            }
+        } label: {
+            Label(label, systemImage: "arrow.up.arrow.down")
+                .labelStyle(.iconOnly)
+        }
+        .disabled(busy)
     }
 
     @ViewBuilder
@@ -639,6 +685,12 @@ struct NotebookView: View {
             Divider()
         }
         if allowsRename { Button("Rename…") { beginRenaming(placement) } }
+        if !placement.isInTrash {
+            Button("Move Up") { moveOneStep(placement, direction: -1) }
+                .disabled(!canMoveOneStep(placement, direction: -1))
+            Button("Move Down") { moveOneStep(placement, direction: 1) }
+                .disabled(!canMoveOneStep(placement, direction: 1))
+        }
         Button("Move…") {
             destination = placement.item.parentID
             movingItem = placement
@@ -657,6 +709,13 @@ struct NotebookView: View {
         } else {
             Button("Move to Trash", role: .destructive) {
                 changeTrash(placement, trashed: true)
+            }
+            if placement.item.kind == .folder {
+                Divider()
+                sortMenu(
+                    parentID: placement.item.id,
+                    label: "Sort Folder Once"
+                )
             }
         }
     }
@@ -891,54 +950,6 @@ struct NotebookView: View {
         }
     }
 
-    private func dragPayload(for id: UUID) -> String {
-        "meh-notebook-item:\(replica.catalogSnapshot?.notebookID.uuidString ?? ""):\(id.uuidString)"
-    }
-
-    private func draggedID(from value: String) -> UUID? {
-        let parts = value.split(separator: ":", omittingEmptySubsequences: false)
-        guard let notebookID = replica.catalogSnapshot?.notebookID.uuidString else {
-            return nil
-        }
-        guard parts.count == 3,
-            parts[0] == "meh-notebook-item",
-            String(parts[1]) == notebookID,
-            let id = UUID(uuidString: String(parts[2])),
-            replica.placements.contains(where: { $0.item.id == id })
-        else {
-            return nil
-        }
-        return id
-    }
-
-    private func dragProvider(for id: UUID) -> NSItemProvider {
-        let value = dragPayload(for: id)
-        let provider = NSItemProvider(object: value as NSString)
-        provider.suggestedName = value
-        return provider
-    }
-
-    private func acceptDrop(_ providers: [NSItemProvider], to parentID: UUID?) -> Bool {
-        guard !busy, providers.count == 1,
-            let provider = providers.first,
-            provider.hasItemConformingToTypeIdentifier(NotebookDragType.identifier)
-        else {
-            return false
-        }
-        if let value = provider.suggestedName, let id = draggedID(from: value) {
-            move(id, to: parentID)
-            return true
-        }
-        provider.loadObject(ofClass: NSString.self) { object, _ in
-            guard let value = object as? String else { return }
-            Task { @MainActor in
-                guard let id = draggedID(from: value) else { return }
-                move(id, to: parentID)
-            }
-        }
-        return true
-    }
-
     private func move(_ id: UUID, to parentID: UUID?) {
         perform {
             try await flushEditor()
@@ -946,6 +957,91 @@ struct NotebookView: View {
             if let parentID { expandedIDs.insert(parentID) }
             reveal(id)
         }
+    }
+
+    private func reorder(_ request: NotebookBrowserReorderRequest) {
+        guard canApplyReorder(request) else { return }
+        perform {
+            try await flushEditor()
+            try await replica.reorder(
+                request.sources,
+                parentID: request.parentID,
+                before: request.before
+            )
+        }
+    }
+
+    private func canApplyReorder(
+        _ request: NotebookBrowserReorderRequest
+    ) -> Bool {
+        let sources = Set(request.sources)
+        guard !sources.isEmpty else { return false }
+        for sourceID in sources {
+            guard let source = replica.placements.first(where: {
+                $0.item.id == sourceID
+            }), !source.isInTrash,
+                  source.parentID == request.parentID,
+                  source.parentID == source.item.parentID
+            else { return false }
+        }
+        guard let before = request.before else { return true }
+        guard let anchor = replica.placements.first(where: {
+            $0.item.id == before
+        }), !anchor.isInTrash,
+              anchor.parentID == request.parentID,
+              anchor.parentID == anchor.item.parentID
+        else { return false }
+        return true
+    }
+
+    private func sort(_ parentID: UUID?, by order: NotebookSortOrder) {
+        perform {
+            try await flushEditor()
+            try await replica.sortChildren(parentID: parentID, by: order)
+        }
+    }
+
+    private func canMoveOneStep(
+        _ placement: NotebookPlacement,
+        direction: Int
+    ) -> Bool {
+        stepRequest(for: placement, direction: direction) != nil
+    }
+
+    private func moveOneStep(
+        _ placement: NotebookPlacement,
+        direction: Int
+    ) {
+        if let request = stepRequest(for: placement, direction: direction) {
+            reorder(request)
+        }
+    }
+
+    private func stepRequest(
+        for placement: NotebookPlacement,
+        direction: Int
+    ) -> NotebookBrowserReorderRequest? {
+        guard placement.parentID == placement.item.parentID else { return nil }
+        let siblingIDs = replica.orderedChildren(
+            parentID: placement.parentID,
+            inTrash: false
+        ).map(\.item.id)
+        let request: NotebookBrowserReorderRequest?
+        if direction < 0 {
+            request = NotebookBrowserOrdering.moveUpRequest(
+                id: placement.item.id,
+                parentID: placement.parentID,
+                siblingIDs: siblingIDs
+            )
+        } else {
+            request = NotebookBrowserOrdering.moveDownRequest(
+                id: placement.item.id,
+                parentID: placement.parentID,
+                siblingIDs: siblingIDs
+            )
+        }
+        guard let request, canApplyReorder(request) else { return nil }
+        return request
     }
 
     private func importMarkdown(_ plan: NotebookImportPlan?) async throws {
@@ -1020,26 +1116,6 @@ struct NotebookView: View {
                 }
             }
         }
-    }
-}
-
-private enum NotebookDragType {
-    static let identifier = UTType.utf8PlainText.identifier
-}
-
-private struct NotebookDropDelegate: DropDelegate {
-    let accept: ([NSItemProvider]) -> Bool
-
-    func validateDrop(info: DropInfo) -> Bool {
-        return info.hasItemsConforming(to: [NotebookDragType.identifier])
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        return DropProposal(operation: .move)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        return accept(info.itemProviders(for: [NotebookDragType.identifier]))
     }
 }
 
