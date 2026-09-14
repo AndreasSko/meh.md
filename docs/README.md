@@ -36,6 +36,8 @@ and the evidence collected along the way.
 - [Sync progress](notebook-sync-progress.md): batching, status, and
   diagnostics.
 - [Permanent deletion](notebook-permanent-deletion.md): confirmed cleanup.
+- [Notebook organization](notebook-browser-operations.md): manual order,
+  batch actions, browser undo, and portable dates.
 
 ## Execution and verification records
 

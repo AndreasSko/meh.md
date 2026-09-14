@@ -49,7 +49,12 @@ struct NotebookView: View {
     @State private var detailOriginalName = ""
     @State private var detailProposedTitle = ""
     @FocusState private var focusedTitleID: UUID?
-    @State private var movingItem: NotebookPlacement?
+    @State private var movingIDs: [UUID] = []
+    @State private var movingFromTrash = false
+    @State private var browserSelection = NotebookBrowserSelection()
+    @State private var selectingItems = false
+    @State private var browserUndo: NotebookBrowserUndo?
+    @State private var browserRedo: NotebookBrowserUndo?
     @State private var destination: UUID?
     @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
     #if os(iOS)
@@ -96,6 +101,7 @@ struct NotebookView: View {
                         sortMenu(parentID: nil, label: "Sort Notebook")
                             .accessibilityIdentifier("notebook-sort-root")
                     }
+                    browserActions
                     if navigationState.isTreeExpanded {
                         activeTree
                     }
@@ -112,6 +118,7 @@ struct NotebookView: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu { emptyTrashAction }
+                    .accessibilityIdentifier("notebook-trash-toggle")
 
                     if trashExpanded {
                         ForEach(trashRows) { row in sidebarRow(row) }
@@ -124,6 +131,7 @@ struct NotebookView: View {
                 }
                 .padding(10)
             }
+            .swipeActionsContainer()
             .navigationTitle("meh.md")
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
@@ -272,9 +280,18 @@ struct NotebookView: View {
         .safeAreaInset(edge: .bottom) {
             if let workspace { NotebookWorkspaceStatusView(workspace: workspace) }
         }
-        .onChange(of: replica.catalogSnapshot) { _, _ in
+        .onChange(of: replica.catalogSnapshot) { previous, current in
             workspace?.contentDidSave(trigger: "catalog snapshot changed")
             navigationState.refreshAvailability()
+            if previous?.notebookID != current?.notebookID {
+                browserSelection.clear()
+                selectingItems = false
+                movingIDs = []
+                browserUndo = nil
+                browserRedo = nil
+            } else {
+                browserSelection.prune(to: activeBrowserIDs)
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { rememberEditorPosition() }
@@ -295,7 +312,7 @@ struct NotebookView: View {
         }
         .sheet(
             isPresented: Binding(
-                get: { movingItem != nil }, set: { if !$0 { movingItem = nil } }
+                get: { !movingIDs.isEmpty }, set: { if !$0 { movingIDs = [] } }
             )
         ) { moveSheet }
         .sheet(isPresented: $showingImport) {
@@ -501,6 +518,78 @@ struct NotebookView: View {
     }
 
 
+    private var activeBrowserIDs: Set<UUID> {
+        Set(replica.placements.filter { !$0.isInTrash }.map(\.item.id))
+    }
+
+    private var activeBrowserOrder: [UUID] {
+        func descendants(_ parentID: UUID?) -> [UUID] {
+            replica.orderedChildren(parentID: parentID).flatMap { placement in
+                [placement.item.id] + (placement.item.kind == .folder
+                    ? descendants(placement.item.id) : [])
+            }
+        }
+        return descendants(nil)
+    }
+
+    private var browserActions: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Button(selectingItems ? "Done" : "Select") {
+                    selectingItems.toggle()
+                    browserSelection.clear()
+                }
+                .accessibilityIdentifier("notebook-select-items")
+                .disabled(busy)
+                if selectingItems {
+                    Text("\(browserSelection.count) selected")
+                        .font(.caption)
+                    Spacer(minLength: 0)
+                    Menu {
+                        Button("Select All") {
+                            browserSelection.selectAll(activeBrowserOrder)
+                        }
+                        Button("Clear Selection") { browserSelection.clear() }
+                        Divider()
+                        Button("Move Selected…") {
+                            movingIDs = browserSelection.orderedIDs(in: activeBrowserOrder)
+                            movingFromTrash = false
+                            destination = nil
+                        }
+                        .disabled(browserSelection.isEmpty)
+                        Button("Trash Selected", role: .destructive) {
+                            trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+                        }
+                        .disabled(browserSelection.isEmpty)
+                    } label: {
+                        Label("Selection Actions", systemImage: "ellipsis.circle")
+                    }
+                    .accessibilityIdentifier("notebook-selection-actions")
+                    .disabled(busy)
+                }
+            }
+            if browserUndo != nil || browserRedo != nil {
+                HStack {
+                    if let browserUndo {
+                        Button(browserUndo.action == .move ? "Undo Move" : "Undo Trash") {
+                            undoBrowserChange(redo: false)
+                        }
+                        .accessibilityIdentifier("notebook-browser-undo")
+                    }
+                    if let browserRedo {
+                        Button(browserRedo.action == .move ? "Redo Move" : "Redo Trash") {
+                            undoBrowserChange(redo: true)
+                        }
+                        .accessibilityIdentifier("notebook-browser-redo")
+                    }
+                }
+                .disabled(busy)
+            }
+        }
+        .font(.callout)
+        .buttonStyle(.borderless)
+    }
+
     private var trashRows: [NotebookSidebarRow] {
         flattenedRows(inTrash: true, initialDepth: 1)
     }
@@ -575,6 +664,11 @@ struct NotebookView: View {
                         activateSidebarRow(placement)
                     } label: {
                         HStack(spacing: 6) {
+                            if selectingItems, !placement.isInTrash {
+                                Image(systemName: browserSelection.contains(placement.item.id)
+                                    ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(Color.accentColor)
+                            }
                             Image(systemName: placement.item.kind == .folder
                                 ? "folder" : "note.text")
                             Text(placement.displayName)
@@ -596,7 +690,20 @@ struct NotebookView: View {
                     }
                     .buttonStyle(.plain)
                     // Keep row actions off the inline name editor.
-                    .contextMenu { actions(for: placement) }
+                    .contextMenu {
+                        if selectingItems, browserSelection.contains(placement.item.id) {
+                            Button("Move Selected…") {
+                                movingIDs = browserSelection.orderedIDs(in: activeBrowserOrder)
+                                movingFromTrash = false
+                                destination = nil
+                            }
+                            Button("Trash Selected", role: .destructive) {
+                                trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+                            }
+                        } else {
+                            actions(for: placement)
+                        }
+                    }
                 }
             }
             .padding(.leading, CGFloat(row.depth) * 16)
@@ -605,16 +712,49 @@ struct NotebookView: View {
             .frame(minHeight: sidebarRowHeight)
             .contentShape(Rectangle())
             .background(
-                selectedID == placement.item.id || editingID == placement.item.id
+                (selectingItems && !placement.isInTrash
+                    ? browserSelection.contains(placement.item.id)
+                    : selectedID == placement.item.id || editingID == placement.item.id)
                     ? Color.accentColor.opacity(0.14) : Color.clear,
                 in: RoundedRectangle(cornerRadius: 6)
             )
+            .accessibilityValue(
+                selectingItems && !placement.isInTrash
+                    ? (browserSelection.contains(placement.item.id)
+                        ? "Selected" : "Not selected") : ""
+            )
+
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                if !placement.isInTrash, !selectingItems {
+                    Button(role: .destructive) {
+                        trashItems([placement.item.id])
+                    } label: {
+                        Label("Trash", systemImage: "trash")
+                    }
+                    // perform gates busy work; disabling this native action
+                    // can suppress its tap after it has been presented.
+                    .accessibilityIdentifier("notebook-swipe-trash")
+                }
+            }
 
         }
     }
 
     private func activateSidebarRow(_ placement: NotebookPlacement) {
         guard !busy, editingID != placement.item.id else { return }
+        if !placement.isInTrash {
+            #if os(macOS)
+            if NSEvent.modifierFlags.contains(.command) {
+                selectingItems = true
+                browserSelection.toggle(placement.item.id)
+                return
+            }
+            #endif
+            if selectingItems {
+                browserSelection.toggle(placement.item.id)
+                return
+            }
+        }
         perform {
             if placement.item.kind == .folder {
                 try await flushEditor()
@@ -693,7 +833,8 @@ struct NotebookView: View {
         }
         Button("Move…") {
             destination = placement.item.parentID
-            movingItem = placement
+            movingIDs = [placement.item.id]
+            movingFromTrash = placement.isInTrash
         }
         if placement.isInTrash {
             if placement.item.isTrashed {
@@ -733,25 +874,29 @@ struct NotebookView: View {
                         sorted(
                             replica.placements.filter {
                                 $0.item.kind == .folder && !$0.isInTrash
-                                    && $0.item.id != movingItem?.item.id
+                                    && canMoveSelection(into: $0.item.id)
                             }), id: \.item.id
                     ) { placement in
                         Text(folderPath(placement)).tag(placement.item.id as UUID?)
                     }
                 }
+                .accessibilityIdentifier("notebook-move-destination")
             }
-            .navigationTitle("Move \(movingItem?.displayName ?? "Item")")
+            .navigationTitle(movingIDs.count == 1 ? "Move Item" : "Move Items")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { movingItem = nil }
+                    Button("Cancel") { movingIDs = [] }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Move") {
-                        guard let item = movingItem else { return }
+                        let ids = movingIDs
                         let target = destination
-                        movingItem = nil
-                        move(item.item.id, to: target)
+                        let fromTrash = movingFromTrash
+                        movingIDs = []
+                        moveItems(ids, to: target, fromTrash: fromTrash)
                     }
+                    .disabled(busy || !canMoveSelection(into: destination))
+                    .accessibilityIdentifier("notebook-confirm-move")
                 }
             }
         }
@@ -891,6 +1036,10 @@ struct NotebookView: View {
     }
 
     private func changeTrash(_ placement: NotebookPlacement, trashed: Bool) {
+        if trashed {
+            trashItems([placement.item.id])
+            return
+        }
         perform {
             try await flushEditor()
             try await replica.setTrashed(placement.item.id, trashed)
@@ -931,6 +1080,14 @@ struct NotebookView: View {
         perform {
             try await flushEditor()
             try await replica.permanentlyDelete(selection)
+            if let receipt = browserUndo,
+               !selection.ids.isDisjoint(with: receipt.itemIDs) {
+                browserUndo = nil
+            }
+            if let receipt = browserRedo,
+               !selection.ids.isDisjoint(with: receipt.itemIDs) {
+                browserRedo = nil
+            }
             if let selectedID, selection.ids.contains(selectedID) {
                 navigationState.clearSelection()
                 unrecordedEdit = false
@@ -950,13 +1107,81 @@ struct NotebookView: View {
         }
     }
 
-    private func move(_ id: UUID, to parentID: UUID?) {
+    private func moveItems(
+        _ ids: [UUID], to parentID: UUID?, fromTrash: Bool = false
+    ) {
         perform {
             try await flushEditor()
-            try await replica.move(id, to: parentID)
+            if fromTrash {
+                guard ids.count == 1, let id = ids.first,
+                      replica.placements.first(where: { $0.item.id == id })?.isInTrash == true
+                else { throw NotebookBrowserChangeError.invalidSelection }
+                try await replica.move(id, to: parentID)
+                browserUndo = nil
+                browserRedo = nil
+            } else {
+                let previousHeads = replica.catalogSnapshot?.heads
+                let receipt = try await replica.moveItems(ids, to: parentID)
+                if replica.catalogSnapshot?.heads != previousHeads {
+                    browserUndo = receipt
+                    browserRedo = nil
+                }
+            }
             if let parentID { expandedIDs.insert(parentID) }
-            reveal(id)
+            for id in ids { reveal(id) }
+            browserSelection.clear()
+            selectingItems = false
         }
+    }
+
+    private func trashItems(_ ids: [UUID]) {
+        perform {
+            try await flushEditor()
+            browserUndo = try await replica.trashItems(ids)
+            browserRedo = nil
+            browserSelection.clear()
+            selectingItems = false
+            trashExpanded = true
+        }
+    }
+
+    private func undoBrowserChange(redo: Bool) {
+        guard let receipt = redo ? browserRedo : browserUndo else { return }
+        perform {
+            try await flushEditor()
+            let inverse: NotebookBrowserUndo
+            do {
+                inverse = try await replica.undoBrowserChange(receipt)
+            } catch let error as NotebookBrowserChangeError {
+                if error == .staleUndo || error == .notebookIdentityMismatch {
+                    if redo { browserRedo = nil } else { browserUndo = nil }
+                }
+                throw error
+            }
+            if redo {
+                browserRedo = nil
+                browserUndo = inverse
+            } else {
+                browserUndo = nil
+                browserRedo = inverse
+            }
+            for id in receipt.itemIDs { reveal(id) }
+        }
+    }
+
+    private func canMoveSelection(into parentID: UUID?) -> Bool {
+        guard !movingIDs.isEmpty else { return false }
+        let sources = Set(movingIDs)
+        var ancestor = parentID
+        var visited = Set<UUID>()
+        while let id = ancestor {
+            guard !sources.contains(id), visited.insert(id).inserted,
+                  let placement = replica.placements.first(where: { $0.item.id == id }),
+                  !placement.isInTrash, placement.item.kind == .folder
+            else { return false }
+            ancestor = placement.parentID
+        }
+        return true
     }
 
     private func reorder(_ request: NotebookBrowserReorderRequest) {

@@ -60,3 +60,39 @@ one order gap, legacy data, source-free import resume, and stable publication.
 Mac and iOS Simulator builds passed with the dependent ordering UI present.
 Coordinator and independent cross-review found and resolved legacy ordering
 initialization and timestamp precision issues before this checkpoint.
+
+### Browser checkpoint, 2026-09-14
+
+The integrated loopback validation passed 472 Swift tests with one expected
+platform-only skip, plus 16 Python tests. Focused coverage includes atomic
+batch refusal, ancestor normalization, 100-item moves, reload, stale undo,
+legacy positions, invalid ancestry, and exact no-op persistence. Independent
+core and UI reviews found no remaining batch-operation findings.
+
+Mac and iOS Simulator builds passed. Simulator interactions verified batch
+Move, batch Trash with undo/redo and exact source preservation, and native
+swipe to Trash with browser undo. Native drag ordering remains under
+investigation and is not yet accepted. Mac UI automation could not run
+because the host required LocalAuthentication; builds and model tests do not
+replace that interaction check. No physical-device acceptance is claimed.
+
+UI runs now use unique preview paths in both Application Support and
+Documents. Final integrated browser interaction results will be recorded
+before the UI work is marked ready for review.
+
+### Drag deferred, 2026-09-14
+
+Native reordering and folder-drop interactions are deferred in
+[issue #49](https://github.com/AndreasSko/meh.md/issues/49). The release work
+retains persistent order, Move Up/Down, destination-picker moves, one-time
+sorting, dates, selection, batch operations, and native swipe to Trash.
+The incomplete drag hooks and their drag-specific checks are preserved on
+`codex/wip-notebook-drag` for a later design discussion. The reduced passing
+diagnostic is evidence for that discussion, not acceptance of a full UI.
+
+After separation, the Mac build and three retained ordering-helper tests
+passed. All four iOS simulator browser tests passed together: manual Move Up
+with repeatable sorting and relaunch, batch Move with undo, batch Trash with
+undo/redo and source preservation, and swipe to Trash with undo. This run
+contains no native drag acceptance test. Core behavior was unchanged by the
+separation; the earlier complete regression evidence remains historical.

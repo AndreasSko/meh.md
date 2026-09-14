@@ -275,7 +275,8 @@ public final class NotebookReplica {
             guard let catalog = self.catalog else {
                 throw NotebookReplicaError.notJoined
             }
-            // Recovered display roots need an explicit move to repair their parent.
+            // A recovered display root is not a stored child of this folder.
+            // Keep it visible for repair, but do not assign an unused rank.
             let children = self.orderedChildren(parentID: parentID)
                 .filter { $0.item.parentID == parentID }
             var dates: [UUID: NoteMetadata] = [:]
@@ -352,6 +353,52 @@ public final class NotebookReplica {
         let next = try catalog!.fork()
         try next.setTrashed(id, trashed)
         try await saveCatalog(next)
+    }
+
+    /// Move a prevalidated selection with a single durable catalog write.
+    /// Descendants of selected folders keep their existing ancestry.
+    public func moveItems(
+        _ ids: [UUID], to parentID: UUID?
+    ) async throws -> NotebookBrowserUndo? {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                throw NotebookReplicaError.notJoined
+            }
+            let next = try catalog.fork()
+            let undo = try next.moveItems(ids, to: parentID)
+            if next.heads != catalog.heads {
+                try await self.persistCatalog(next)
+            }
+            return undo
+        }
+    }
+
+    public func trashItems(_ ids: [UUID]) async throws -> NotebookBrowserUndo {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                throw NotebookReplicaError.notJoined
+            }
+            let next = try catalog.fork()
+            let undo = try next.trashItems(ids)
+            try await self.persistCatalog(next)
+            return undo
+        }
+    }
+
+    /// A guarded compensating change. Unrelated remote edits remain intact.
+    /// The returned receipt can redo the operation, subject to the same guards.
+    public func undoBrowserChange(
+        _ receipt: NotebookBrowserUndo
+    ) async throws -> NotebookBrowserUndo {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                throw NotebookReplicaError.notJoined
+            }
+            let next = try catalog.fork()
+            let redo = try next.undoBrowserChange(receipt)
+            try await self.persistCatalog(next)
+            return redo
+        }
     }
 
     /// Capture all items currently shown in Trash, or one Trash subtree. The
