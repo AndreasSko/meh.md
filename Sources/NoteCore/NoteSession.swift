@@ -125,7 +125,9 @@ public final class NoteSession {
         with replacement: String
     ) throws {
         guard isEditingEnabled, let document else { return }
+        let heads = document.heads
         try document.replaceUTF16(range: range, with: replacement)
+        guard document.heads != heads else { return }
         text = try document.text
         queueCurrentSnapshot()
     }
@@ -154,9 +156,11 @@ public final class NoteSession {
         guard isEditingEnabled, let document else {
             throw SyncError.localSaveRequired
         }
+        let heads = document.heads
         let branch = try NoteDocument(serializedData: serializedRevision)
         try branch.replaceAll(with: replacement)
         try document.merge(branch)
+        guard document.heads != heads else { return document.snapshot() }
         text = try document.text
         queueCurrentSnapshot()
         return document.snapshot()

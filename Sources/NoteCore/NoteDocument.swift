@@ -9,6 +9,8 @@ enum NoteDocumentError: Error, Equatable {
     case unsupportedSchemaVersion
     case missingText
     case invalidText
+    case invalidCreatedAt
+    case invalidModifiedAt
     case unexpectedTextEncoding
     case noteIdentityMismatch
 }
@@ -19,6 +21,8 @@ final class NoteDocument {
     private static let noteIDKey = "noteID"
     private static let schemaVersionKey = "schemaVersion"
     private static let textKey = "text"
+    private static let createdAtKey = "createdAt"
+    private static let modifiedAtKey = "modifiedAt"
 
     private let document: Document
     private let textObject: ObjId
@@ -28,6 +32,23 @@ final class NoteDocument {
     var text: String {
         get throws {
             try document.text(obj: textObject)
+        }
+    }
+
+    var metadata: NoteMetadata {
+        get throws {
+            NoteMetadata(
+                createdAt: try date(
+                    forKey: Self.createdAtKey,
+                    invalid: .invalidCreatedAt,
+                    reduce: min
+                ),
+                modifiedAt: try date(
+                    forKey: Self.modifiedAtKey,
+                    invalid: .invalidModifiedAt,
+                    reduce: max
+                )
+            )
         }
     }
 
@@ -43,7 +64,11 @@ final class NoteDocument {
         document.getHistory().count
     }
 
-    init(noteID: UUID = UUID(), text: String = "") throws {
+    init(
+        noteID: UUID = UUID(),
+        text: String = "",
+        metadata: NoteMetadata = .now()
+    ) throws {
         let document = Document(textEncoding: .unicodeScalar)
         try document.put(
             obj: .ROOT,
@@ -66,6 +91,26 @@ final class NoteDocument {
                 start: 0,
                 delete: 0,
                 value: text
+            )
+        }
+        if let createdAt = metadata.createdAt {
+            guard let createdAt = createdAt.noteTimestamp else {
+                throw NoteDocumentError.invalidCreatedAt
+            }
+            try document.put(
+                obj: .ROOT,
+                key: Self.createdAtKey,
+                value: .Timestamp(createdAt)
+            )
+        }
+        if let modifiedAt = metadata.modifiedAt {
+            guard let modifiedAt = modifiedAt.noteTimestamp else {
+                throw NoteDocumentError.invalidModifiedAt
+            }
+            try document.put(
+                obj: .ROOT,
+                key: Self.modifiedAtKey,
+                value: .Timestamp(modifiedAt)
             )
         }
 
@@ -125,26 +170,60 @@ final class NoteDocument {
             throw NoteDocumentError.invalidText
         }
 
+        _ = try Self.date(
+            in: document,
+            forKey: Self.createdAtKey,
+            invalid: .invalidCreatedAt,
+            reduce: min
+        )
+        _ = try Self.date(
+            in: document,
+            forKey: Self.modifiedAtKey,
+            invalid: .invalidModifiedAt,
+            reduce: max
+        )
+
         self.document = document
         self.textObject = textObject
         self.noteID = noteID
     }
 
-    func replaceUTF16(range: NSRange, with replacement: String) throws {
+    func replaceUTF16(
+        range: NSRange,
+        with replacement: String,
+        at modificationDate: Date = Date()
+    ) throws {
+        let current = try text
         let scalarRange = try AutomergeTextIndex.unicodeScalarRange(
             forUTF16Range: range,
-            in: text
+            in: current
         )
+        let scalars = current.unicodeScalars
+        let start = scalars.index(
+            scalars.startIndex,
+            offsetBy: Int(scalarRange.start)
+        )
+        let end = scalars.index(start, offsetBy: Int(scalarRange.length))
+        let replaced = String(scalars[start ..< end])
+        guard !replacement.utf8.elementsEqual(replaced.utf8) else { return }
+        let modifiedAt = try nextModifiedAt(modificationDate)
         try document.spliceText(
             obj: textObject,
             start: scalarRange.start,
             delete: Int64(scalarRange.length),
             value: replacement
         )
+        try setModifiedAt(modifiedAt)
     }
 
-    func replaceAll(with text: String) throws {
+    func replaceAll(
+        with text: String,
+        at modificationDate: Date = Date()
+    ) throws {
+        guard !text.utf8.elementsEqual((try self.text).utf8) else { return }
+        let modifiedAt = try nextModifiedAt(modificationDate)
         try document.updateText(obj: textObject, value: text)
+        try setModifiedAt(modifiedAt)
     }
 
     func snapshot() -> NoteSnapshot {
@@ -170,5 +249,55 @@ final class NoteDocument {
             throw SyncError.disconnectedHistory
         }
         try document.merge(other: other.document)
+    }
+
+    private func nextModifiedAt(_ proposed: Date) throws -> Date {
+        guard let proposed = proposed.noteTimestamp else {
+            throw NoteDocumentError.invalidModifiedAt
+        }
+        if let current = try metadata.modifiedAt {
+            return max(current, proposed)
+        }
+        return proposed
+    }
+
+    private func setModifiedAt(_ date: Date) throws {
+        try document.put(
+            obj: .ROOT,
+            key: Self.modifiedAtKey,
+            value: .Timestamp(date)
+        )
+    }
+
+    private func date(
+        forKey key: String,
+        invalid error: NoteDocumentError,
+        reduce: (Date, Date) -> Date
+    ) throws -> Date? {
+        try Self.date(
+            in: document,
+            forKey: key,
+            invalid: error,
+            reduce: reduce
+        )
+    }
+
+    private static func date(
+        in document: Document,
+        forKey key: String,
+        invalid error: NoteDocumentError,
+        reduce: (Date, Date) -> Date
+    ) throws -> Date? {
+        let values = try document.getAll(obj: .ROOT, key: key)
+        guard !values.isEmpty else { return nil }
+        var dates: [Date] = []
+        for value in values {
+            guard case let .Scalar(.Timestamp(date)) = value,
+                  let normalized = date.noteTimestamp else {
+                throw error
+            }
+            dates.append(normalized)
+        }
+        return dates.dropFirst().reduce(dates[0], reduce)
     }
 }

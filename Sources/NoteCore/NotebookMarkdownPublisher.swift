@@ -171,7 +171,12 @@ public actor NotebookMarkdownPublisher {
                 case .folder:
                     plan.append(
                         PlannedFile(
-                            entry: Entry(path: relative, kind: .directory),
+                            entry: Entry(
+                                path: relative,
+                                kind: .directory,
+                                createdAt: nil,
+                                modifiedAt: nil
+                            ),
                             data: nil
                         )
                     )
@@ -193,7 +198,12 @@ public actor NotebookMarkdownPublisher {
                     }
                     plan.append(
                         PlannedFile(
-                            entry: Entry(path: relative, kind: .file),
+                            entry: Entry(
+                                path: relative,
+                                kind: .file,
+                                createdAt: try note.metadata.createdAt,
+                                modifiedAt: try note.metadata.modifiedAt
+                            ),
                             data: Data((try note.text).utf8)
                         )
                     )
@@ -231,8 +241,7 @@ public actor NotebookMarkdownPublisher {
         }
         let content = directory.appending(path: Self.contentName)
         for (expected, published) in zip(plan, generation.entries) {
-            guard expected.entry.path == published.path,
-                  expected.entry.kind == published.kind else {
+            guard expected.entry == published else {
                 return false
             }
             let url = content.appending(path: expected.entry.path)
@@ -292,6 +301,7 @@ public actor NotebookMarkdownPublisher {
                 withIntermediateDirectories: true
             )
             try DurableFileIO.writeAndSync(item.data!, to: url)
+            try applyDates(item.entry, to: url)
         }
         let directories = Set(plan.flatMap { item -> [URL] in
             let url = stageURL.appending(path: item.entry.path)
@@ -300,6 +310,62 @@ public actor NotebookMarkdownPublisher {
         }).sorted { $0.path.count > $1.path.count }
         for directory in directories { try DurableFileIO.syncDirectory(directory) }
         try DurableFileIO.syncDirectory(stageURL)
+    }
+
+    private func applyDates(_ entry: Entry, to url: URL) throws {
+        if let createdAt = entry.createdAt {
+            try setAttributeIfSupported(
+                .creationDate,
+                date: createdAt,
+                at: url
+            )
+        }
+        if let modifiedAt = entry.modifiedAt {
+            try setAttributeIfSupported(
+                .modificationDate,
+                date: modifiedAt,
+                at: url
+            )
+        }
+        try syncFile(url)
+    }
+
+    private func setAttributeIfSupported(
+        _ key: FileAttributeKey,
+        date: Date,
+        at url: URL
+    ) throws {
+        do {
+            try fileManager.setAttributes([key: date], ofItemAtPath: url.path)
+        } catch where Self.isUnsupportedAttributeError(error) {
+            // Metadata support varies by file system and file-provider domain.
+            // The staged Markdown bytes remain a complete durable copy.
+        }
+    }
+
+    private static func isUnsupportedAttributeError(_ error: Error) -> Bool {
+        let cocoa = error as NSError
+        if cocoa.domain == NSPOSIXErrorDomain,
+           cocoa.code == Int(ENOTSUP) || cocoa.code == Int(EOPNOTSUPP) {
+            return true
+        }
+        if cocoa.domain == NSCocoaErrorDomain,
+           cocoa.code == CocoaError.Code.featureUnsupported.rawValue {
+            return true
+        }
+        if let underlying = cocoa.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isUnsupportedAttributeError(underlying)
+        }
+        return false
+    }
+
+    private func syncFile(_ url: URL) throws {
+        let descriptor = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else { throw DurableFileIO.posixError() }
+        defer { close(descriptor) }
+        guard fsync(descriptor) == 0 else {
+            throw DurableFileIO.posixError()
+        }
     }
 
     private func beginStage(generation: UUID, at stageURL: URL) throws {
@@ -504,8 +570,18 @@ private struct Cleanup: Codable {
     let generationID: UUID
 }
 
-private struct Entry: Codable {
+private struct Entry: Codable, Equatable {
     enum Kind: String, Codable, Equatable { case file, directory }
     let path: String
     let kind: Kind
+    let createdAt: Date?
+    let modifiedAt: Date?
+
+    static func == (left: Entry, right: Entry) -> Bool {
+        left.path == right.path
+            && left.kind == right.kind
+            && left.createdAt?.noteTimestamp == right.createdAt?.noteTimestamp
+            && left.modifiedAt?.noteTimestamp
+                == right.modifiedAt?.noteTimestamp
+    }
 }

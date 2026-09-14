@@ -54,6 +54,7 @@ acceptance of later implementations.
   [sync verification](sync-verification.md), and
   [live iCloud verification](icloud-live-verification.md): single-note sync.
 - [Milestone 3](milestone-3-plan.md): notebook stages and closeout evidence.
+- [Wave 2](wave-2-plan.md): ordering, dates, and batch browser operations.
 
 ## Proposals
 

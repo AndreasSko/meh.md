@@ -251,7 +251,9 @@ struct NotebookImportStorage {
                 parentID: entry.parentID.flatMap {
                     deletedIDs.contains($0) ? nil : $0
                 },
-                text: entry.text
+                text: entry.text,
+                createdAt: entry.createdAt,
+                modifiedAt: entry.modifiedAt
             )
         }
         let retainedSnapshots = journal.snapshots.filter {

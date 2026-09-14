@@ -26,11 +26,13 @@ public enum NotebookCatalogError: Error, Equatable {
     case itemNotFound
     case invalidParent
     case folderCycle
+    case invalidOrder
+    case orderSpaceExhausted
 }
 
 public enum NotebookPlacementIssue: String, Sendable {
     case missingParent, cycleRecovered, nameCollision
-    case concurrentRename, concurrentMove
+    case concurrentRename, concurrentMove, concurrentReorder
 }
 
 public struct NotebookItem: Equatable, Sendable {
@@ -39,6 +41,7 @@ public struct NotebookItem: Equatable, Sendable {
     /// The winning stored name, preserved independently from collision display.
     public let name: String
     public let parentID: UUID?
+    public let orderKey: NotebookOrderKey?
     public let isTrashed: Bool
     public let isPermanentlyDeleted: Bool
 }
@@ -257,6 +260,13 @@ final class NotebookCatalogDocument {
             throw NotebookCatalogError.duplicateIdentity
         }
         try validateParent(parentID, for: nil)
+        try ensureOrder(parentID: parentID)
+        let lower = try orderedChildren(parentID: parentID, inTrash: false)
+            .filter { $0.item.parentID == parentID }
+            .last?.item.orderKey
+        let order = try NotebookOrderKeyFactory.between(
+            lower, nil, itemID: id
+        )
         let item = try document.putObject(obj: itemsObject, key: id.uuidString, ty: .Map)
         try document.put(obj: item, key: "kind", value: .String(kind.rawValue))
         try document.put(obj: item, key: "name", value: .String(name))
@@ -264,6 +274,7 @@ final class NotebookCatalogDocument {
             obj: item, key: "parent", value: parentID.map { .String($0.uuidString) } ?? .Null)
         try document.put(
             obj: item, key: "visibility", value: .String("active:\(UUID().uuidString)"))
+        try writeOrder(order, parentID: parentID, object: item)
         return id
     }
 
@@ -308,6 +319,10 @@ final class NotebookCatalogDocument {
         }
 
         let candidate = try fork()
+        try candidate.ensureOrder(parentID: nil)
+        let rootLower = try candidate.orderedChildren(
+            parentID: nil, inTrash: false
+        ).filter { $0.item.parentID == nil }.last?.item.orderKey
         for entry in entries {
             let item = try candidate.document.putObject(
                 obj: candidate.itemsObject,
@@ -337,6 +352,22 @@ final class NotebookCatalogDocument {
                 value: .String("active:\(UUID().uuidString)")
             )
         }
+        let importedByParent = Dictionary(grouping: entries, by: \.parentID)
+        for (parentID, siblings) in importedByParent {
+            let importedIDs = siblings.map(\.id)
+            let ranks = try NotebookOrderKeyFactory.distribute(
+                itemIDs: importedIDs,
+                lower: parentID == nil ? rootLower : nil,
+                upper: nil
+            )
+            for id in importedIDs {
+                try candidate.writeOrder(
+                    ranks[id]!,
+                    parentID: parentID,
+                    object: candidate.object(for: id)
+                )
+            }
+        }
         _ = try NotebookCatalogDocument(snapshot: candidate.snapshot())
         return candidate
     }
@@ -349,8 +380,75 @@ final class NotebookCatalogDocument {
     func move(_ id: UUID, to parentID: UUID?) throws {
         let object = try object(for: id)
         try validateParent(parentID, for: id)
+        try ensureOrder(parentID: parentID, excluding: id)
+        let lower = try orderedChildren(parentID: parentID, inTrash: false)
+            .filter { $0.item.parentID == parentID }
+            .last { $0.item.id != id }?.item.orderKey
+        let order = try NotebookOrderKeyFactory.between(
+            lower, nil, itemID: id
+        )
         try document.put(
             obj: object, key: "parent", value: parentID.map { .String($0.uuidString) } ?? .Null)
+        try writeOrder(order, parentID: parentID, object: object)
+    }
+
+    /// Repositions active siblings in the supplied order. Passing every child
+    /// with `before == nil` establishes a complete one-time sorted order.
+    func reorder(
+        _ ids: [UUID],
+        parentID: UUID?,
+        before beforeID: UUID?
+    ) throws {
+        guard !ids.isEmpty else { return }
+        guard Set(ids).count == ids.count else {
+            throw NotebookCatalogError.invalidOrder
+        }
+        let initial = try orderedChildren(parentID: parentID, inTrash: false)
+            .filter { $0.item.parentID == parentID }
+        let initialIDs = initial.map(\.item.id)
+        let initialSet = Set(initialIDs)
+        let moving = Set(ids)
+        guard moving.isSubset(of: initialSet),
+              beforeID.map({ initialSet.contains($0) && !moving.contains($0) }) ?? true else {
+            throw NotebookCatalogError.invalidOrder
+        }
+
+        try ensureOrder(parentID: parentID)
+        let ordered = try orderedChildren(parentID: parentID, inTrash: false)
+            .filter { $0.item.parentID == parentID }
+        let remaining = ordered.filter { !moving.contains($0.item.id) }
+        let insertionIndex: Int
+        if let beforeID {
+            guard let index = remaining.firstIndex(where: { $0.item.id == beforeID }) else {
+                throw NotebookCatalogError.invalidOrder
+            }
+            insertionIndex = index
+        } else {
+            insertionIndex = remaining.endIndex
+        }
+        let lower = insertionIndex > remaining.startIndex
+            ? remaining[remaining.index(before: insertionIndex)].item.orderKey
+            : nil
+        let upper = insertionIndex < remaining.endIndex
+            ? remaining[insertionIndex].item.orderKey
+            : nil
+        let ranks = try NotebookOrderKeyFactory.distribute(
+            itemIDs: ids, lower: lower, upper: upper
+        )
+        for id in ids {
+            try writeOrder(
+                ranks[id]!, parentID: parentID, object: object(for: id)
+            )
+        }
+    }
+
+    func orderedChildren(
+        parentID: UUID?,
+        inTrash: Bool
+    ) throws -> [NotebookPlacement] {
+        NotebookOrdering.orderedChildren(
+            try placements(), parentID: parentID, inTrash: inTrash
+        )
     }
 
     func setTrashed(_ id: UUID, _ trashed: Bool) throws {
@@ -526,6 +624,8 @@ final class NotebookCatalogDocument {
             guard let parentValue = try document.get(obj: object, key: "parent") else {
                 throw NotebookCatalogError.invalidDocument
             }
+            let parentID = try decodeParent(parentValue)
+            let order = try readOrder(object: object, parentID: parentID)
             let visibility = try document.getAll(obj: object, key: "visibility")
             guard !visibility.isEmpty else { throw NotebookCatalogError.invalidDocument }
             var trashed = false
@@ -548,10 +648,13 @@ final class NotebookCatalogDocument {
             var issues = Set<NotebookPlacementIssue>()
             if names.count > 1 { issues.insert(.concurrentRename) }
             if parentValues.count > 1 { issues.insert(.concurrentMove) }
+            if order.hasExplicitConflict {
+                issues.insert(.concurrentReorder)
+            }
             return (
                 NotebookItem(
                     id: id, kind: kind, name: name,
-                    parentID: try decodeParent(parentValue), isTrashed: trashed,
+                    parentID: parentID, orderKey: order.key, isTrashed: trashed,
                     isPermanentlyDeleted: !deleted.isEmpty), issues
             )
         }
@@ -561,5 +664,105 @@ final class NotebookCatalogDocument {
         if case .Scalar(.Null) = value { return nil }
         if case .Scalar(.String(let text)) = value, let id = UUID(uuidString: text) { return id }
         throw NotebookCatalogError.invalidDocument
+    }
+
+    private func ensureOrder(
+        parentID: UUID?,
+        excluding excludedID: UUID? = nil
+    ) throws {
+        let children = try orderedChildren(parentID: parentID, inTrash: false)
+            .filter { $0.item.id != excludedID && $0.item.parentID == parentID }
+        let ids = children.filter { $0.item.orderKey == nil }.map(\.item.id)
+        guard !ids.isEmpty else { return }
+        let lower = children.last { $0.item.orderKey != nil }?.item.orderKey
+        let ranks = try NotebookOrderKeyFactory.distribute(
+            itemIDs: ids, lower: lower, upper: nil
+        )
+        for id in ids {
+            try writeOrderSeed(
+                ranks[id]!, parentID: parentID, object: object(for: id)
+            )
+        }
+    }
+
+    private func readOrder(
+        object: ObjId,
+        parentID: UUID?
+    ) throws -> (key: NotebookOrderKey?, hasExplicitConflict: Bool) {
+        for key in document.keys(obj: object)
+        where key.hasPrefix("order:") || key.hasPrefix("orderSeed:") {
+            guard Self.decodeOrderParent(key) != nil else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            for value in try document.getAll(obj: object, key: key) {
+                guard case .Scalar(.String(let rawValue)) = value,
+                      NotebookOrderKey(rawValue: rawValue) != nil else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+            }
+        }
+        let explicitKey = Self.orderStorageKey(parentID)
+        let explicit = try document.getAll(obj: object, key: explicitKey)
+        if !explicit.isEmpty {
+            guard case .Scalar(.String(let rawValue)) = try document.get(
+                obj: object, key: explicitKey
+            ), let order = NotebookOrderKey(rawValue: rawValue) else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            return (order, explicit.count > 1)
+        }
+        let seedKey = Self.orderSeedStorageKey(parentID)
+        let seeds = try document.getAll(obj: object, key: seedKey)
+        guard !seeds.isEmpty else { return (nil, false) }
+        guard case .Scalar(.String(let rawValue)) = try document.get(
+            obj: object, key: seedKey
+        ), let order = NotebookOrderKey(rawValue: rawValue) else {
+            throw NotebookCatalogError.invalidDocument
+        }
+        return (order, false)
+    }
+
+    private func writeOrder(
+        _ order: NotebookOrderKey,
+        parentID: UUID?,
+        object: ObjId
+    ) throws {
+        try document.put(
+            obj: object,
+            key: Self.orderStorageKey(parentID),
+            value: .String(order.rawValue)
+        )
+    }
+
+    private func writeOrderSeed(
+        _ order: NotebookOrderKey,
+        parentID: UUID?,
+        object: ObjId
+    ) throws {
+        try document.put(
+            obj: object,
+            key: Self.orderSeedStorageKey(parentID),
+            value: .String(order.rawValue)
+        )
+    }
+
+    private static func orderStorageKey(_ parentID: UUID?) -> String {
+        "order:" + (parentID?.uuidString ?? "root")
+    }
+
+    private static func orderSeedStorageKey(_ parentID: UUID?) -> String {
+        "orderSeed:" + (parentID?.uuidString ?? "root")
+    }
+
+    /// A non-nil return means the storage-key suffix is valid. The outer
+    /// optional distinguishes an invalid suffix from the valid root scope.
+    private static func decodeOrderParent(_ key: String) -> UUID?? {
+        let prefix = key.hasPrefix("orderSeed:") ? "orderSeed:" : "order:"
+        let suffix = String(key.dropFirst(prefix.count))
+        if suffix == "root" { return .some(nil) }
+        guard let id = UUID(uuidString: suffix), suffix == id.uuidString else {
+            return nil
+        }
+        return .some(id)
     }
 }
