@@ -7,6 +7,8 @@ struct NotebookNoteEditor: View {
     let isInTrash: Bool
     @Binding var hasUnrecordedEdit: Bool
     var onPersist: () -> Void = {}
+    var onLocalEdit: () -> Void = {}
+    var onBeginEditing: () -> Void = {}
     var fontSize: Double = 17
     var fontFamily: EditorFontFamily = .system
     var mode: MarkdownEditorMode = .source
@@ -29,7 +31,9 @@ struct NotebookNoteEditor: View {
                         get: { unrecordedText ?? session.text },
                         set: { text in
                             do {
+                                let changed = text != session.text
                                 try session.replaceAll(with: text)
+                                if changed { onLocalEdit() }
                                 unrecordedText = nil
                                 editError = nil
                                 hasUnrecordedEdit = false
@@ -41,7 +45,9 @@ struct NotebookNoteEditor: View {
                         }),
                     editRevision: session.currentSnapshot?.data,
                     commitEdit: { text, revision in
+                        let changed = text != session.text
                         let snapshot = try session.commitEditorText(text, basedOn: revision)
+                        if changed { onLocalEdit() }
                         unrecordedText = nil
                         editError = nil
                         hasUnrecordedEdit = false
@@ -50,7 +56,8 @@ struct NotebookNoteEditor: View {
                     onEditError: { error in
                         editError = error.localizedDescription
                         hasUnrecordedEdit = true
-                    }, navigation: navigation, fontSize: fontSize,
+                    }, navigation: navigation, onBeginEditing: onBeginEditing,
+                    fontSize: fontSize,
                     fontFamily: fontFamily, mode: mode
                 )
             } else {

@@ -1,7 +1,7 @@
 import XCTest
 
 final class WritingFlowUITests: XCTestCase {
-    func testImmediateWritingAndInlineTitleKeepContent() throws {
+    func testNewNoteTitleCommitsIntoBodyWithoutTitleActions() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
@@ -12,45 +12,53 @@ final class WritingFlowUITests: XCTestCase {
         let newNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         activate(newNote)
+        let titleField = app.textFields["title-field"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 10))
+        let titleFocused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
+            object: titleField
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [titleFocused], timeout: 5), .completed)
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        XCTAssertFalse(app.textFields["Name"].exists)
-        let title = app.buttons["notebook-note-title"]
-        XCTAssertTrue(title.waitForExistence(timeout: 5))
-        let initialTitle = title.label
-        XCTAssertFalse(initialTitle.lowercased().hasSuffix(".md"))
-        #if os(iOS)
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let proposedTitle = "Fictional observatory field notes about distant moons "
+            + "and bright stars across the northern winter sky "
+            + UUID().uuidString.prefix(8)
+        replaceTitle(in: titleField, app: app, with: proposedTitle)
+        #if os(macOS)
+        titleField.typeKey(.return, modifierFlags: [])
+        #else
+        titleField.typeText("\n")
         #endif
-        // No editor tap: creation must already have focused the native buffer.
+        let title = app.buttons["note-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, proposedTitle)
+        XCTAssertFalse(title.label.lowercased().hasSuffix(".md"))
+        let bodyFocused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
+            object: editor
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [bodyFocused], timeout: 5), .completed)
         let source = "Fictional observatory notes: café 👋🏽 and stars."
         editor.typeText(source)
         XCTAssertEqual(editor.value as? String, source)
+        XCTAssertFalse(app.buttons["Done"].exists)
+        XCTAssertFalse(app.buttons["Cancel"].exists)
+        XCTAssertFalse(app.buttons["notebook-note-title-done"].exists)
+        XCTAssertFalse(app.buttons["notebook-note-title-cancel"].exists)
+
         activate(title)
-        let titleField = app.descendants(matching: .any)
-            .matching(identifier: "notebook-note-title-field").firstMatch
         XCTAssertTrue(titleField.waitForExistence(timeout: 5))
-        let proposedTitle = "Fictional observatory field notes about distant moons "
-            + "and bright stars across the northern winter sky"
+        let revisedTitle = proposedTitle + " revised"
+        replaceTitle(in: titleField, app: app, with: revisedTitle)
         #if os(macOS)
-        titleField.typeKey("a", modifierFlags: .command)
-        titleField.typeText(proposedTitle)
+        editor.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            .withOffset(CGVector(dx: 40, dy: 20)).click()
         #else
-        titleField.tap()
-        titleField.press(forDuration: 1.2)
-        if app.menuItems["Select All"].waitForExistence(timeout: 2) {
-            app.menuItems["Select All"].tap()
-            titleField.typeText(proposedTitle)
-        } else {
-            titleField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue,
-                                       count: initialTitle.count) + proposedTitle)
-        }
+        editor.tap()
         #endif
-        let done = app.buttons["notebook-note-title-done"]
-        XCTAssertTrue(done.waitForExistence(timeout: 5))
-        activate(done)
         XCTAssertTrue(title.waitForExistence(timeout: 5))
-        XCTAssertEqual(title.label, proposedTitle)
+        XCTAssertEqual(title.label, revisedTitle)
         XCTAssertEqual(editor.value as? String, source)
         #if os(iOS)
         XCTAssertGreaterThan(title.frame.height, 45)
@@ -60,13 +68,20 @@ final class WritingFlowUITests: XCTestCase {
         let nextNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(nextNote.waitForExistence(timeout: 5))
         activate(nextNote)
+        let nextTitleField = app.textFields["title-field"]
+        XCTAssertTrue(nextTitleField.waitForExistence(timeout: 5))
+        #if os(macOS)
+        nextTitleField.typeKey(.return, modifierFlags: [])
+        #else
+        nextTitleField.typeText("\n")
+        #endif
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         let emptyEditor = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == %@", ""), object: editor
         )
         XCTAssertEqual(XCTWaiter.wait(for: [emptyEditor], timeout: 5), .completed)
-        XCTAssertNotEqual(title.label, proposedTitle)
-        capture(app, name: "New note ready for immediate writing")
+        XCTAssertNotEqual(title.label, revisedTitle)
+        capture(app, name: "New note ready for body writing")
     }
 
     func testSyncStatusLivesInCloudDetailsWhileWriting() throws {
@@ -82,6 +97,13 @@ final class WritingFlowUITests: XCTestCase {
         let newNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(newNote.waitForExistence(timeout: 20))
         activate(newNote)
+        let titleField = app.textFields["title-field"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 10))
+        #if os(macOS)
+        titleField.typeKey(.return, modifierFlags: [])
+        #else
+        titleField.typeText("\n")
+        #endif
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.typeText("A fictional cloud observatory entry")
@@ -89,7 +111,8 @@ final class WritingFlowUITests: XCTestCase {
         app.openSyncDetails()
         activate(app.buttons["sync-now"])
         let synced = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Last sync:")
+            NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@",
+                        "Last sync:", "Last sync:")
         ).firstMatch
         XCTAssertTrue(synced.waitForExistence(timeout: 20))
         capture(app, name: "Cloud details during fictional-note writing")
@@ -105,7 +128,8 @@ final class WritingFlowUITests: XCTestCase {
         app.openSyncDetails()
         activate(app.buttons["sync-now"])
         let paused = app.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "Sync paused")
+            NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@",
+                        "Sync paused", "Sync paused")
         ).firstMatch
         XCTAssertTrue(paused.waitForExistence(timeout: 20))
         app.closeSyncDetails()
@@ -115,6 +139,10 @@ final class WritingFlowUITests: XCTestCase {
     }
 
     private func activate(_ element: XCUIElement) {
+        let enabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"), object: element
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 15), .completed)
         #if os(macOS)
         element.click()
         #else
@@ -131,5 +159,27 @@ final class WritingFlowUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func replaceTitle(
+        in field: XCUIElement, app: XCUIApplication, with title: String
+    ) {
+        #if os(macOS)
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(title)
+        #else
+        let existing = field.value as? String ?? ""
+        field.tap()
+        field.press(forDuration: 1.2)
+        if app.menuItems["Select All"].waitForExistence(timeout: 2) {
+            app.menuItems["Select All"].tap()
+            field.typeText(title)
+        } else {
+            field.typeText(
+                String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count)
+                    + title
+            )
+        }
+        #endif
     }
 }

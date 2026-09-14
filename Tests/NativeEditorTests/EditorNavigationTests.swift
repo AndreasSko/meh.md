@@ -8,6 +8,29 @@ import AppKit
 
 @MainActor
 final class EditorNavigationTests: XCTestCase {
+    func testActivationWaitsForAttachmentAndIgnoresReplacedEditor() async {
+        let outgoing = MarkdownEditorNavigation()
+        let incoming = MarkdownEditorNavigation()
+        var activated: [String] = []
+        outgoing.didAttach()
+        outgoing.whenAttached { activated.append("outgoing") }
+        incoming.whenAttached { activated.append("incoming") }
+        outgoing.invalidate()
+
+        await drainMainQueue()
+        XCTAssertTrue(activated.isEmpty)
+
+        incoming.didAttach()
+        await drainMainQueue()
+        XCTAssertEqual(activated, ["incoming"])
+    }
+
+    private func drainMainQueue() async {
+        let drained = expectation(description: "Attachment callbacks drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        await fulfillment(of: [drained], timeout: 1)
+    }
+
     func testPrepareCommitsNativeBufferBeforeFreezingEditor() throws {
         let model = NavigationEditorModel()
         let fixture = makeFixture(model)
@@ -82,7 +105,7 @@ final class EditorNavigationTests: XCTestCase {
             navigation: navigation
         )
         let coordinator = editor.makeCoordinator()
-        let textView = NSTextView(usingTextLayoutManager: true)
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
         textView.string = model.text
         coordinator.attachNavigation(to: textView)
         return NavigationFixture(

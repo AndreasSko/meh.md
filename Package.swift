@@ -51,6 +51,7 @@ let package = Package(
             sources: [
                 "NotebookWorkspace.swift",
                 "NotebookNoteName.swift",
+                "NotebookNavigationState.swift",
                 "UnavailableDevelopmentTransport.swift",
             ],
             swiftSettings: [.defaultIsolation(MainActor.self)]
@@ -69,6 +70,7 @@ let package = Package(
                 "NotebookApplicationView.swift", "UnavailableDevelopmentTransport.swift",
                 "NotebookImportView.swift", "NotebookSyncStatusView.swift",
                 "NotebookNoteName.swift",
+                "NotebookNavigationState.swift",
                 "icon.icon", "Info-iCloud.plist", "Info.plist", "macOS.entitlements",
                 "iOS.entitlements", "CloudKitSmokeCheck.swift",
                 "NotebookAppDelegate.swift", "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",

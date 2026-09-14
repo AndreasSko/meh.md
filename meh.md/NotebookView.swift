@@ -1,6 +1,7 @@
 import Foundation
 import NoteCore
 import SwiftUI
+
 import UniformTypeIdentifiers
 
 #if os(macOS)
@@ -8,6 +9,11 @@ import UniformTypeIdentifiers
 #else
     import UIKit
 #endif
+
+private struct EditorAttachmentID: Hashable {
+    let noteID: UUID
+    let isEditingEnabled: Bool
+}
 
 private struct NotebookSidebarRow: Identifiable {
     let placement: NotebookPlacement
@@ -26,10 +32,9 @@ struct NotebookView: View {
     @AppStorage("editor.mode") private var editorModeRaw =
         MarkdownEditorMode.livePreview.rawValue
     @State private var deletionSelection: NotebookDeletionSelection?
-    @State private var selectedID: UUID?
-    @State private var session: NoteSession?
-    @State private var expandedIDs: Set<UUID> = []
-    @State private var trashExpanded = false
+    @State private var navigationState: NotebookNavigationState
+    @State private var restoredNavigation = false
+    @Environment(\.scenePhase) private var scenePhase
     @State private var busy = false
     @State private var editorNavigation = MarkdownEditorNavigation()
     @State private var errorMessage: String?
@@ -42,7 +47,6 @@ struct NotebookView: View {
     @State private var detailOriginalName = ""
     @State private var detailProposedTitle = ""
     @FocusState private var focusedTitleID: UUID?
-    @State private var pendingEditorFocusID: UUID?
     @State private var movingItem: NotebookPlacement?
     @State private var destination: UUID?
     @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
@@ -50,12 +54,43 @@ struct NotebookView: View {
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
 
+    init(replica: NotebookReplica, workspace: NotebookWorkspace? = nil) {
+        self.replica = replica
+        self.workspace = workspace
+        _navigationState = State(initialValue: NotebookNavigationState(replica: replica))
+    }
+
+    private var selectedID: UUID? { navigationState.selectedID }
+    private var session: NoteSession? { navigationState.selectedSession }
+    private var expandedIDs: Set<UUID> {
+        get { navigationState.expandedFolderIDs }
+        nonmutating set { navigationState.expandedFolderIDs = newValue }
+    }
+    private var trashExpanded: Bool {
+        get { navigationState.isTrashExpanded }
+        nonmutating set { navigationState.isTrashExpanded = newValue }
+    }
+
     var body: some View {
         NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 4) {
-                    Section("Notebook") {
-                        ForEach(activeRows) { row in sidebarRow(row) }
+                    recentsSection
+                    Section {
+                        Button {
+                            navigationState.isTreeExpanded.toggle()
+                        } label: {
+                            HStack(spacing: 6) {
+                                disclosureIcon(expanded: navigationState.isTreeExpanded)
+                                Text("Notebook")
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("notebook-tree-toggle")
+                        .accessibilityValue(navigationState.isTreeExpanded ? "Expanded" : "Collapsed")
+                        if navigationState.isTreeExpanded {
+                            ForEach(activeRows) { row in sidebarRow(row) }
+                        }
                         Color.clear
                             .frame(height: 24)
                             .contentShape(Rectangle())
@@ -135,6 +170,12 @@ struct NotebookView: View {
                             onPersist: {
                                 workspace?.contentDidSave(trigger: "note persisted")
                             },
+                            onLocalEdit: { navigationState.recordEdited(selectedID) },
+                            onBeginEditing: {
+                                if detailEditingID == selectedID {
+                                    submitDetailTitle(focusBody: false)
+                                }
+                            },
                             fontSize: editorFontSize,
                             fontFamily: editorFontFamily,
                             mode: editorMode
@@ -142,11 +183,22 @@ struct NotebookView: View {
                     }
                     .id(selectedID)
                     .navigationTitle("")
-                    .task(id: selectedID) {
-                        guard pendingEditorFocusID == selectedID else { return }
-                        await Task.yield()
-                        editorNavigation.focusEditor?()
-                        pendingEditorFocusID = nil
+                    .task(id: EditorAttachmentID(
+                        noteID: selectedID, isEditingEnabled: session.isEditingEnabled
+                    )) {
+                        guard session.isEditingEnabled else { return }
+                        let incomingNavigation = editorNavigation
+                        let state = navigationState
+                        let position = state.position(for: selectedID).flatMap {
+                            try? JSONDecoder().decode(MarkdownEditorPosition.self, from: $0)
+                        }
+                        incomingNavigation.whenAttached { [weak incomingNavigation, weak state] in
+                            guard let incomingNavigation,
+                                  state?.selectedID == selectedID else { return }
+                            if let position {
+                                incomingNavigation.restorePosition?(position)
+                            }
+                        }
                     }
                     .toolbar {
                         if let placement = selectedPlacement {
@@ -194,7 +246,10 @@ struct NotebookView: View {
                                         )
                                     }
                                     Divider()
-                                    actions(for: placement, allowsCreation: false)
+                                    actions(
+                                        for: placement, allowsCreation: false,
+                                        allowsRename: false
+                                    )
                                 } label: {
                                     Label("Note Actions", systemImage: "ellipsis.circle")
                                 }
@@ -210,7 +265,13 @@ struct NotebookView: View {
                         }
                     }
                 } else {
-                    ContentUnavailableView("Select a note", systemImage: "note.text")
+                    ContentUnavailableView {
+                        Label("Select a note", systemImage: "note.text")
+                    } description: {
+                        if let message = navigationState.restorationMessage {
+                            Text(message)
+                        }
+                    }
                 }
             }
         }
@@ -219,6 +280,14 @@ struct NotebookView: View {
         }
         .onChange(of: replica.catalogSnapshot) { _, _ in
             workspace?.contentDidSave(trigger: "catalog snapshot changed")
+            navigationState.refreshAvailability()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { rememberEditorPosition() }
+        }
+        .onDisappear { rememberEditorPosition() }
+        .onReceive(NotificationCenter.default.publisher(for: applicationWillTerminate)) { _ in
+            rememberEditorPosition()
         }
         .alert(
             "Couldn’t complete the action",
@@ -254,7 +323,27 @@ struct NotebookView: View {
         } message: { selection in
             Text(deletionMessage(selection))
         }
-        .task { if replica.hasPendingImport { showingImport = true } }
+        .task {
+            guard !restoredNavigation else { return }
+            restoredNavigation = true
+            if replica.hasPendingImport { showingImport = true }
+            guard !busy else { return }
+            busy = true
+            await navigationState.restoreLastSelection()
+            if selectedID != nil { preferredCompactColumn = .detail }
+            busy = false
+        }
+        .task(id: navigationState.recentNoteIDs) {
+            await navigationState.loadRecentSessions()
+        }
+    }
+
+    private var applicationWillTerminate: Notification.Name {
+        #if os(macOS)
+        NSApplication.willTerminateNotification
+        #else
+        UIApplication.willTerminateNotification
+        #endif
     }
 
     private var editorMode: MarkdownEditorMode {
@@ -297,7 +386,17 @@ struct NotebookView: View {
             if detailEditingID == placement.item.id {
                 TextField(
                     "Note title",
-                    text: $detailProposedTitle,
+                    text: Binding(
+                        get: { detailProposedTitle },
+                        set: { value in
+                            if value.contains(where: { $0.isNewline }) {
+                                detailProposedTitle = value.filter { !$0.isNewline }
+                                submitDetailTitle()
+                            } else {
+                                detailProposedTitle = value
+                            }
+                        }
+                    ),
                     axis: .vertical
                 )
                 .textFieldStyle(.plain)
@@ -305,25 +404,13 @@ struct NotebookView: View {
                 .lineLimit(1...4)
                 .focused($focusedTitleID, equals: placement.item.id)
                 .disabled(busy)
+                .submitLabel(.done)
                 .onSubmit { submitDetailTitle() }
+                .onChange(of: busy, initial: true) { _, isBusy in
+                    if !isBusy { focusedTitleID = placement.item.id }
+                }
                 .notebookEscapeAction { cancelDetailTitle() }
-                .accessibilityIdentifier("notebook-note-title-field")
-                Button {
-                    cancelDetailTitle()
-                } label: {
-                    Label("Cancel Rename", systemImage: "xmark")
-                }
-                .labelStyle(.iconOnly)
-                .disabled(busy)
-                .accessibilityIdentifier("notebook-note-title-cancel")
-                Button {
-                    submitDetailTitle()
-                } label: {
-                    Label("Save Name", systemImage: "checkmark")
-                }
-                .labelStyle(.iconOnly)
-                .disabled(busy)
-                .accessibilityIdentifier("notebook-note-title-done")
+                .accessibilityIdentifier("title-field")
             } else {
                 Button {
                     beginDetailRenaming(placement)
@@ -337,12 +424,76 @@ struct NotebookView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(busy)
-                .accessibilityIdentifier("notebook-note-title")
+                .accessibilityIdentifier("note-title")
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 12)
+    }
+
+    private var recentsSection: some View {
+        Section {
+            Button {
+                navigationState.isRecentsExpanded.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    disclosureIcon(expanded: navigationState.isRecentsExpanded)
+                    Text("Recents")
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("notebook-recents-toggle")
+            .accessibilityValue(navigationState.isRecentsExpanded ? "Expanded" : "Collapsed")
+            if navigationState.isRecentsExpanded {
+                ForEach(navigationState.recentNoteIDs, id: \.self) { id in
+                    if let placement = replica.placements.first(where: { $0.item.id == id }) {
+                        Button {
+                            perform {
+                                try await selectNote(id)
+                                reveal(id)
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(NotebookNoteName.title(from: placement.displayName))
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Text(recentPreview(for: id))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .background(
+                            selectedID == id ? Color.accentColor.opacity(0.14) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6)
+                        )
+                        .accessibilityIdentifier("notebook-recent-" + id.uuidString)
+                        .contextMenu { actions(for: placement, allowsCreation: false) }
+                    }
+                }
+                if navigationState.recentNoteIDs.isEmpty {
+                    Text("Notes you edit or rename appear here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                }
+            }
+        }
+    }
+
+    private func recentPreview(for id: UUID) -> String {
+        guard let recent = navigationState.recentSessions[id] else { return "Preview unavailable" }
+        guard recent.isEditingEnabled else { return "Note unavailable" }
+        let preview = recent.text.prefix(160)
+            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return preview.isEmpty ? "Empty note" : preview
     }
 
     private var activeRows: [NotebookSidebarRow] {
@@ -480,13 +631,14 @@ struct NotebookView: View {
 
     @ViewBuilder
     private func actions(
-        for placement: NotebookPlacement, allowsCreation: Bool = true
+        for placement: NotebookPlacement, allowsCreation: Bool = true,
+        allowsRename: Bool = true
     ) -> some View {
         if allowsCreation, !placement.isInTrash {
             creationActions(parentID: creationParent(for: placement))
             Divider()
         }
-        Button("Rename…") { beginRenaming(placement) }
+        if allowsRename { Button("Rename…") { beginRenaming(placement) } }
         Button("Move…") {
             destination = placement.item.parentID
             movingItem = placement
@@ -568,8 +720,10 @@ struct NotebookView: View {
                     existingNames: siblingNames
                 )
                 let id = try await replica.createNote(name: name, parentID: parentID)
-                pendingEditorFocusID = id
                 try await selectNote(id)
+                detailEditingID = id
+                detailOriginalName = name
+                detailProposedTitle = NotebookNoteName.title(from: name)
             case .folder:
                 let id = try await replica.createFolder(
                     name: "Untitled Folder", parentID: parentID)
@@ -610,8 +764,15 @@ struct NotebookView: View {
         }
     }
 
-    private func submitDetailTitle() {
-        perform { try await commitDetailTitleIfNeeded() }
+    private func submitDetailTitle(focusBody: Bool = true) {
+        guard detailEditingID != nil else { return }
+        perform {
+            try await commitDetailTitleIfNeeded()
+            if focusBody {
+                editorNavigation.resumeEditing?()
+                editorNavigation.focusEditor?()
+            }
+        }
     }
 
     private func commitDetailTitleIfNeeded() async throws {
@@ -620,7 +781,9 @@ struct NotebookView: View {
             for: detailProposedTitle,
             preservingExtensionFrom: detailOriginalName
         )
+        let changed = replica.placements.first { $0.item.id == id }?.item.name != filename
         try await replica.rename(id, to: filename)
+        if changed { navigationState.recordRenamed(id) }
         detailEditingID = nil
         focusedTitleID = nil
         detailOriginalName = ""
@@ -649,6 +812,9 @@ struct NotebookView: View {
                 preservingExtensionFrom: originalName
             ) : proposedName
         try await replica.rename(id, to: name)
+        if placement?.item.kind == .note, placement?.item.name != name {
+            navigationState.recordRenamed(id)
+        }
         editingID = nil
         focusedNameID = nil
         originalName = ""
@@ -707,8 +873,7 @@ struct NotebookView: View {
             try await flushEditor()
             try await replica.permanentlyDelete(selection)
             if let selectedID, selection.ids.contains(selectedID) {
-                session = nil
-                self.selectedID = nil
+                navigationState.clearSelection()
                 unrecordedEdit = false
                 preferredCompactColumn = .sidebar
             }
@@ -811,15 +976,27 @@ struct NotebookView: View {
             throw NotebookNavigationError.unrecordedEdit
         }
         try await session?.flush()
+        rememberEditorPosition()
+    }
+
+    private func rememberEditorPosition() {
+        guard let selectedID,
+              let position = editorNavigation.capturePosition?(),
+              let data = try? JSONEncoder().encode(position) else { return }
+        navigationState.setPosition(data, for: selectedID)
     }
 
     private func selectNote(_ id: UUID, revealDetail: Bool = true) async throws {
         if id != selectedID {
             try await flushEditor()
-            session = try await replica.openNote(id, allowingRecovery: true)
-            selectedID = id
-        } else if editingID != nil {
-            try await flushEditor()
+            let openedSession = try await replica.openNote(id, allowingRecovery: true)
+            if navigationState.installSelection(id, session: openedSession, recordActivity: true) {
+                editorNavigation.invalidate()
+                editorNavigation = MarkdownEditorNavigation()
+            }
+        } else {
+            if editingID != nil || detailEditingID != nil { try await flushEditor() }
+            navigationState.recordOpened(id)
         }
         if revealDetail { preferredCompactColumn = .detail }
     }
