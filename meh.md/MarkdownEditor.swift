@@ -6,6 +6,7 @@ import SwiftUI
 final class MarkdownEditorNavigation {
     var prepareToLeave: (() -> Bool)?
     var resumeEditing: (() -> Void)?
+    var focusEditor: (() -> Void)?
     var performCommand: ((MarkdownEditingCommand) -> Void)?
 }
 
@@ -316,6 +317,15 @@ struct MarkdownEditor: NSViewRepresentable {
             }
             parent.navigation?.resumeEditing = { [weak textView] in
                 textView?.isEditable = true
+            }
+            parent.navigation?.focusEditor = { [weak textView] in
+                guard let textView, textView.isEditable else { return }
+                if let window = textView.window,
+                   window.makeFirstResponder(textView) { return }
+                DispatchQueue.main.async { [weak textView] in
+                    guard let textView, textView.isEditable else { return }
+                    textView.window?.makeFirstResponder(textView)
+                }
             }
         }
 
@@ -856,6 +866,15 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             parent.navigation?.resumeEditing = { [weak textView] in
                 textView?.isEditable = true
+            }
+            parent.navigation?.focusEditor = { [weak textView] in
+                guard let textView, textView.isEditable else { return }
+                if !textView.becomeFirstResponder() {
+                    DispatchQueue.main.async { [weak textView] in
+                        guard let textView, textView.isEditable else { return }
+                        _ = textView.becomeFirstResponder()
+                    }
+                }
             }
         }
 

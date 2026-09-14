@@ -19,7 +19,6 @@ struct NotebookView: View {
     let replica: NotebookReplica
     var workspace: NotebookWorkspace? = nil
     @State private var showingImport = false
-    @State private var showingSyncDetails = false
     @State private var showingTextSize = false
     @AppStorage("editor.fontSize") private var editorFontSize = 17.0
     @AppStorage("editor.fontFamily") private var editorFontFamilyRaw =
@@ -39,9 +38,17 @@ struct NotebookView: View {
     @State private var originalName = ""
     @State private var proposedName = ""
     @FocusState private var focusedNameID: UUID?
+    @State private var detailEditingID: UUID?
+    @State private var detailOriginalName = ""
+    @State private var detailProposedTitle = ""
+    @FocusState private var focusedTitleID: UUID?
+    @State private var pendingEditorFocusID: UUID?
     @State private var movingItem: NotebookPlacement?
     @State private var destination: UUID?
     @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
+    #if os(iOS)
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     var body: some View {
         NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
@@ -93,13 +100,7 @@ struct NotebookView: View {
             .toolbar {
                 if let workspace, workspace.usesSync {
                     ToolbarItem {
-                        Button { showingSyncDetails = true } label: {
-                            Label("Sync Details", systemImage: "icloud")
-                        }
-                        .accessibilityIdentifier("notebook-sync-details")
-                        .popover(isPresented: $showingSyncDetails) {
-                            NotebookSyncDetailsView(workspace: workspace)
-                        }
+                        NotebookSyncToolbarButton(workspace: workspace)
                     }
                 }
                 ToolbarItem {
@@ -110,10 +111,10 @@ struct NotebookView: View {
                     .accessibilityIdentifier("notebook-import")
                 }
                 ToolbarItem {
-                    Menu {
-                        creationActions(parentID: nil)
+                    Button {
+                        createItem(kind: .note, parentID: nil)
                     } label: {
-                        Label("New", systemImage: "plus")
+                        Label("New Note", systemImage: "plus")
                     }
                     .disabled(busy)
                     .accessibilityIdentifier("notebook-new-item")
@@ -122,19 +123,51 @@ struct NotebookView: View {
         } detail: {
             Group {
                 if let session, let selectedID {
-                    NotebookNoteEditor(
-                        session: session, navigation: editorNavigation,
-                        isInTrash: selectedPlacement?.isInTrash == true,
-                        hasUnrecordedEdit: $unrecordedEdit,
-                        onPersist: { workspace?.contentDidSave(trigger: "note persisted") },
-                        fontSize: editorFontSize,
-                        fontFamily: editorFontFamily,
-                        mode: editorMode
-                    )
+                    VStack(spacing: 0) {
+                        if let placement = selectedPlacement {
+                            detailTitle(for: placement)
+                            Divider()
+                        }
+                        NotebookNoteEditor(
+                            session: session, navigation: editorNavigation,
+                            isInTrash: selectedPlacement?.isInTrash == true,
+                            hasUnrecordedEdit: $unrecordedEdit,
+                            onPersist: {
+                                workspace?.contentDidSave(trigger: "note persisted")
+                            },
+                            fontSize: editorFontSize,
+                            fontFamily: editorFontFamily,
+                            mode: editorMode
+                        )
+                    }
                     .id(selectedID)
-                    .navigationTitle(selectedPlacement?.displayName ?? "Note")
+                    .navigationTitle("")
+                    .task(id: selectedID) {
+                        guard pendingEditorFocusID == selectedID else { return }
+                        await Task.yield()
+                        editorNavigation.focusEditor?()
+                        pendingEditorFocusID = nil
+                    }
                     .toolbar {
                         if let placement = selectedPlacement {
+                            #if os(iOS)
+                            if horizontalSizeClass == .compact {
+                                if let workspace, workspace.usesSync {
+                                    ToolbarItem {
+                                        NotebookSyncToolbarButton(workspace: workspace)
+                                    }
+                                }
+                                ToolbarItem {
+                                    Button {
+                                        createItem(kind: .note, parentID: nil)
+                                    } label: {
+                                        Label("New Note", systemImage: "plus")
+                                    }
+                                    .disabled(busy)
+                                    .accessibilityIdentifier("notebook-new-item")
+                                }
+                            }
+                            #endif
                             #if os(macOS)
                             ToolbarItem {
                                 EditorWritingControls(
@@ -161,7 +194,7 @@ struct NotebookView: View {
                                         )
                                     }
                                     Divider()
-                                    actions(for: placement)
+                                    actions(for: placement, allowsCreation: false)
                                 } label: {
                                     Label("Note Actions", systemImage: "ellipsis.circle")
                                 }
@@ -256,6 +289,60 @@ struct NotebookView: View {
 
     private var selectedPlacement: NotebookPlacement? {
         replica.placements.first { $0.item.id == selectedID }
+    }
+
+    @ViewBuilder
+    private func detailTitle(for placement: NotebookPlacement) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if detailEditingID == placement.item.id {
+                TextField(
+                    "Note title",
+                    text: $detailProposedTitle,
+                    axis: .vertical
+                )
+                .textFieldStyle(.plain)
+                .font(.title2.weight(.semibold))
+                .lineLimit(1...4)
+                .focused($focusedTitleID, equals: placement.item.id)
+                .disabled(busy)
+                .onSubmit { submitDetailTitle() }
+                .notebookEscapeAction { cancelDetailTitle() }
+                .accessibilityIdentifier("notebook-note-title-field")
+                Button {
+                    cancelDetailTitle()
+                } label: {
+                    Label("Cancel Rename", systemImage: "xmark")
+                }
+                .labelStyle(.iconOnly)
+                .disabled(busy)
+                .accessibilityIdentifier("notebook-note-title-cancel")
+                Button {
+                    submitDetailTitle()
+                } label: {
+                    Label("Save Name", systemImage: "checkmark")
+                }
+                .labelStyle(.iconOnly)
+                .disabled(busy)
+                .accessibilityIdentifier("notebook-note-title-done")
+            } else {
+                Button {
+                    beginDetailRenaming(placement)
+                } label: {
+                    Text(NotebookNoteName.title(from: placement.displayName))
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .disabled(busy)
+                .accessibilityIdentifier("notebook-note-title")
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 12)
     }
 
     private var activeRows: [NotebookSidebarRow] {
@@ -392,8 +479,10 @@ struct NotebookView: View {
     }
 
     @ViewBuilder
-    private func actions(for placement: NotebookPlacement) -> some View {
-        if !placement.isInTrash {
+    private func actions(
+        for placement: NotebookPlacement, allowsCreation: Bool = true
+    ) -> some View {
+        if allowsCreation, !placement.isInTrash {
             creationActions(parentID: creationParent(for: placement))
             Divider()
         }
@@ -471,9 +560,16 @@ struct NotebookView: View {
             if let parentID { expandedIDs.insert(parentID) }
             switch kind {
             case .note:
-                let id = try await replica.createNote(name: "Untitled.md", parentID: parentID)
-                try await selectNote(id, revealDetail: false)
-                beginRenaming(id: id, name: "Untitled.md")
+                let siblingNames = replica.placements.compactMap { placement in
+                    placement.parentID == parentID && !placement.isInTrash
+                        ? placement.item.name : nil
+                }
+                let name = NotebookNoteName.defaultFilename(
+                    existingNames: siblingNames
+                )
+                let id = try await replica.createNote(name: name, parentID: parentID)
+                pendingEditorFocusID = id
+                try await selectNote(id)
             case .folder:
                 let id = try await replica.createFolder(
                     name: "Untitled Folder", parentID: parentID)
@@ -504,6 +600,41 @@ struct NotebookView: View {
         }
     }
 
+    private func beginDetailRenaming(_ placement: NotebookPlacement) {
+        perform {
+            try await flushEditor()
+            detailEditingID = placement.item.id
+            detailOriginalName = placement.item.name
+            detailProposedTitle = NotebookNoteName.title(from: placement.item.name)
+            focusedTitleID = placement.item.id
+        }
+    }
+
+    private func submitDetailTitle() {
+        perform { try await commitDetailTitleIfNeeded() }
+    }
+
+    private func commitDetailTitleIfNeeded() async throws {
+        guard let id = detailEditingID else { return }
+        let filename = NotebookNoteName.filename(
+            for: detailProposedTitle,
+            preservingExtensionFrom: detailOriginalName
+        )
+        try await replica.rename(id, to: filename)
+        detailEditingID = nil
+        focusedTitleID = nil
+        detailOriginalName = ""
+        detailProposedTitle = ""
+    }
+
+    private func cancelDetailTitle() {
+        detailEditingID = nil
+        focusedTitleID = nil
+        detailOriginalName = ""
+        detailProposedTitle = ""
+        editorNavigation.resumeEditing?()
+    }
+
     private func submitInlineName() {
         perform { try await commitInlineNameIfNeeded() }
     }
@@ -513,7 +644,10 @@ struct NotebookView: View {
         let placement = replica.placements.first { $0.item.id == id }
         let name =
             placement?.item.kind == .note
-            ? NotebookDisplayName.noteName(proposedName) : proposedName
+            ? NotebookNoteName.filename(
+                for: NotebookNoteName.title(from: proposedName),
+                preservingExtensionFrom: originalName
+            ) : proposedName
         try await replica.rename(id, to: name)
         editingID = nil
         focusedNameID = nil
@@ -669,6 +803,7 @@ struct NotebookView: View {
 
     private func flushEditor() async throws {
         try await commitInlineNameIfNeeded()
+        try await commitDetailTitleIfNeeded()
         // Unavailable notes have no editable buffer to flush. They must not
         // trap navigation while the user chooses whether to recover them.
         guard session?.isEditingEnabled == true else { return }
@@ -703,24 +838,11 @@ struct NotebookView: View {
                 errorMessage = error.localizedDescription
                 if let editingID {
                     Task { @MainActor in focusedNameID = editingID }
+                } else if let detailEditingID {
+                    Task { @MainActor in focusedTitleID = detailEditingID }
                 }
             }
         }
-    }
-}
-
-enum NotebookDisplayName {
-    static func noteName(_ proposedName: String) -> String {
-        if proposedName == "." || proposedName == ".."
-            || proposedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
-            return proposedName
-        }
-        let lowercased = proposedName.lowercased()
-        if lowercased.hasSuffix(".md") || lowercased.hasSuffix(".markdown") {
-            return proposedName
-        }
-        return proposedName + ".md"
     }
 }
 

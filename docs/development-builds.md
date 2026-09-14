@@ -17,7 +17,7 @@ commands continue to work. All schemes use the same app target.
    same iCloud account.
 3. Edit notes or folder metadata while both apps are open. CloudKit schedules
    sync automatically. Open Sync Details from the cloud toolbar button
-   for Sync Now, progress, and errors. The bottom indicator hides when idle.
+   for Sync Now, progress, and errors. Activity appears in the cloud button.
    Sync Event Log retains recent local diagnostics; use Copy Log or Share Log
    after an unexpected upload or retry.
 4. Quit and reopen the installed `meh.md iCloud Dev` app normally. The build
