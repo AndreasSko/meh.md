@@ -1,4 +1,5 @@
 import Foundation
+import ObjectiveC
 
 #if os(macOS)
 import AppKit
@@ -13,6 +14,8 @@ typealias PlatformFont = UIFont
 typealias PlatformFontDescriptor = UIFontDescriptor
 typealias PlatformColor = UIColor
 #endif
+
+nonisolated(unsafe) private var markdownPresentationSyntaxCacheKey: UInt8 = 0
 
 enum EditorFontFamily: String, CaseIterable, Identifiable {
     case system
@@ -95,22 +98,18 @@ enum MarkdownPresentation {
             isEditing: textView.window?.firstResponder === textView
         )
         let syntaxCache = syntaxCache(for: textView)
+        if let textStorage = textView.textStorage {
+            syntaxCache.observeCharacterEdits(in: textStorage)
+        }
         layoutManager.renderingAttributesValidator = {
-            [weak textView] manager, fragment in
-            guard let textView else { return }
-            let text = textView.string
-            let result = syntaxCache.result(for: text)
-            let previewRanges = MarkdownLivePreview.ranges(
-                in: text,
-                result: result,
-                snapshot: MarkdownLivePreview.snapshot(for: textView)
-            )
+            manager, fragment in
+            guard let presentation = syntaxCache.currentPresentation else {
+                return
+            }
             _ = applyRenderingAttributes(
                 to: manager,
                 fragment: fragment,
-                result: result,
-                hiddenRanges: previewRanges.collapsed
-                    + previewRanges.transparent
+                presentation: presentation
             )
         }
         let font = bodyFont(
@@ -146,16 +145,17 @@ enum MarkdownPresentation {
 
         let syntaxCache = suppliedSyntaxCache ?? Self.syntaxCache(for: textView)
         let text = textView.string
-        let result = syntaxCache.result(for: text)
+        let snapshot = MarkdownLivePreview.snapshot(for: textView)
+        let presentation = syntaxCache.presentation(
+            for: text,
+            snapshot: snapshot
+        )
+        let result = presentation.result
         let bodyFont = bodyFont(
             for: fontFamily,
             pointSize: normalizedFontSize(fontSize)
         )
-        let previewRanges = MarkdownLivePreview.ranges(
-            in: text,
-            result: result,
-            snapshot: MarkdownLivePreview.snapshot(for: textView)
-        )
+        let previewRanges = presentation.previewRanges
         applyLayoutAttributes(
             to: textStorage,
             text: text,
@@ -173,16 +173,31 @@ enum MarkdownPresentation {
             in: textView.textLayoutManager,
             text: text,
             syntaxCache: syntaxCache,
-            hiddenRanges: previewRanges.collapsed + previewRanges.transparent
+            presentation: presentation
         )
         textView.needsDisplay = true
     }
 
-    private static func syntaxCache(
+    static func syntaxCache(
         for textView: NSTextView
     ) -> MarkdownSyntaxCache {
-        (textView as? MarkdownTextView)?.markdownSyntaxCache
-            ?? MarkdownSyntaxCache()
+        if let markdownTextView = textView as? MarkdownTextView {
+            return markdownTextView.markdownSyntaxCache
+        }
+        if let cache = objc_getAssociatedObject(
+            textView,
+            &markdownPresentationSyntaxCacheKey
+        ) as? MarkdownSyntaxCache {
+            return cache
+        }
+        let cache = MarkdownSyntaxCache()
+        objc_setAssociatedObject(
+            textView,
+            &markdownPresentationSyntaxCacheKey,
+            cache,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+        return cache
     }
 
     private static func applyBaseTypingAttributes(
@@ -208,9 +223,13 @@ enum MarkdownPresentation {
         guard let visibleRange = visibleRange(in: layoutManager) else { return }
         let text = textView.string
         let syntaxCache = syntaxCache(for: textView)
+        guard let presentation = syntaxCache.currentPresentation else {
+            return
+        }
         drawBlockBackgrounds(
             text: text,
             syntaxCache: syntaxCache,
+            result: presentation.result,
             layoutManager: layoutManager,
             containerWidth: textContainer.size.width,
             lineFragmentPadding: textContainer.lineFragmentPadding,
@@ -219,14 +238,16 @@ enum MarkdownPresentation {
             dirtyRect: dirtyRect,
             context: context
         )
-        let result = syntaxCache.result(for: text)
         drawListBullets(
             listBulletDecorations(
                 text: text,
-                result: result,
+                result: presentation.result,
                 layoutManager: layoutManager,
                 snapshot: MarkdownLivePreview.snapshot(for: textView),
-                visibleRange: visibleRange
+                visibleRange: visibleRange,
+                spanIndices: presentation.spanCandidateIndices(
+                    intersecting: visibleRange
+                )
             ),
             offset: textView.textContainerOrigin,
             dirtyRect: dirtyRect,
@@ -259,22 +280,16 @@ enum MarkdownPresentation {
             isEditing: textView.isFirstResponder
         )
         let syntaxCache = syntaxCache(for: textView)
+        syntaxCache.observeCharacterEdits(in: textView.textStorage)
         layoutManager.renderingAttributesValidator = {
-            [weak textView] manager, fragment in
-            guard let textView else { return }
-            let text = textView.text ?? ""
-            let result = syntaxCache.result(for: text)
-            let previewRanges = MarkdownLivePreview.ranges(
-                in: text,
-                result: result,
-                snapshot: MarkdownLivePreview.snapshot(for: textView)
-            )
+            manager, fragment in
+            guard let presentation = syntaxCache.currentPresentation else {
+                return
+            }
             _ = applyRenderingAttributes(
                 to: manager,
                 fragment: fragment,
-                result: result,
-                hiddenRanges: previewRanges.collapsed
-                    + previewRanges.transparent
+                presentation: presentation
             )
         }
         let font = bodyFont(
@@ -309,16 +324,17 @@ enum MarkdownPresentation {
 
         let syntaxCache = suppliedSyntaxCache ?? Self.syntaxCache(for: textView)
         let text = textView.text ?? ""
-        let result = syntaxCache.result(for: text)
+        let snapshot = MarkdownLivePreview.snapshot(for: textView)
+        let presentation = syntaxCache.presentation(
+            for: text,
+            snapshot: snapshot
+        )
+        let result = presentation.result
         let bodyFont = bodyFont(
             for: fontFamily,
             pointSize: normalizedFontSize(fontSize)
         )
-        let previewRanges = MarkdownLivePreview.ranges(
-            in: text,
-            result: result,
-            snapshot: MarkdownLivePreview.snapshot(for: textView)
-        )
+        let previewRanges = presentation.previewRanges
         applyLayoutAttributes(
             to: textView.textStorage,
             text: text,
@@ -336,16 +352,31 @@ enum MarkdownPresentation {
             in: textView.textLayoutManager,
             text: text,
             syntaxCache: syntaxCache,
-            hiddenRanges: previewRanges.collapsed + previewRanges.transparent
+            presentation: presentation
         )
         textView.setNeedsDisplay()
     }
 
-    private static func syntaxCache(
+    static func syntaxCache(
         for textView: UITextView
     ) -> MarkdownSyntaxCache {
-        (textView as? MarkdownTextView)?.markdownSyntaxCache
-            ?? MarkdownSyntaxCache()
+        if let markdownTextView = textView as? MarkdownTextView {
+            return markdownTextView.markdownSyntaxCache
+        }
+        if let cache = objc_getAssociatedObject(
+            textView,
+            &markdownPresentationSyntaxCacheKey
+        ) as? MarkdownSyntaxCache {
+            return cache
+        }
+        let cache = MarkdownSyntaxCache()
+        objc_setAssociatedObject(
+            textView,
+            &markdownPresentationSyntaxCacheKey,
+            cache,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+        return cache
     }
 
     private static func applyBaseTypingAttributes(
@@ -377,12 +408,15 @@ enum MarkdownPresentation {
         )
         let text = textView.text ?? ""
         let syntaxCache = syntaxCache(for: textView)
-        let result = syntaxCache.result(for: text)
+        guard let presentation = syntaxCache.currentPresentation else {
+            return
+        }
+        let result = presentation.result
         let decorations = fragmentBlockDecorations(
             fragmentRange: fragmentRange,
             fragmentFrame: fragment.layoutFragmentFrame,
             text: textView.text ?? "",
-            plan: syntaxCache.decorationPlan(for: text),
+            plan: syntaxCache.decorationPlan(for: text, result: result),
             syntaxCache: syntaxCache,
             layoutManager: layoutManager,
             containerWidth: textView.textContainer.size.width,
@@ -414,7 +448,10 @@ enum MarkdownPresentation {
                 result: result,
                 layoutManager: layoutManager,
                 snapshot: MarkdownLivePreview.snapshot(for: textView),
-                visibleRange: fragmentRange
+                visibleRange: fragmentRange,
+                spanIndices: presentation.spanCandidateIndices(
+                    intersecting: fragmentRange
+                )
             ),
             offset: drawingOffset,
             dirtyRect: surfaceBounds,
@@ -531,6 +568,7 @@ enum MarkdownPresentation {
     static func drawBlockBackgrounds(
         text: String,
         syntaxCache: MarkdownSyntaxCache,
+        result suppliedResult: MarkdownSyntaxResult? = nil,
         layoutManager: NSTextLayoutManager,
         containerWidth: CGFloat,
         lineFragmentPadding: CGFloat,
@@ -541,7 +579,7 @@ enum MarkdownPresentation {
     ) {
         let decorations = blockDecorations(
             text: text,
-            result: syntaxCache.result(for: text),
+            result: suppliedResult ?? syntaxCache.result(for: text),
             layoutManager: layoutManager,
             containerWidth: containerWidth,
             lineFragmentPadding: lineFragmentPadding,
@@ -589,7 +627,8 @@ enum MarkdownPresentation {
         result: MarkdownSyntaxResult,
         layoutManager: NSTextLayoutManager,
         snapshot: MarkdownLivePreviewSnapshot,
-        visibleRange: NSRange? = nil
+        visibleRange: NSRange? = nil,
+        spanIndices: Range<Int>? = nil
     ) -> [ListBulletDecoration] {
         guard let contentManager = layoutManager.textContentManager else {
             return []
@@ -600,7 +639,8 @@ enum MarkdownPresentation {
             return []
         }
         var decorations: [ListBulletDecoration] = []
-        for span in result.spans {
+        let indices = spanIndices ?? result.spans.indices
+        for span in result.spans[indices] {
             if let visibleRange,
                NSMaxRange(span.range) <= visibleRange.location {
                 continue
@@ -736,7 +776,6 @@ enum MarkdownPresentation {
                 range: range
             )
         }
-
         var changes: [AttributeChange] = []
         for key in [
             NSAttributedString.Key.font,
@@ -754,7 +793,6 @@ enum MarkdownPresentation {
                 range: fullRange
             ))
         }
-
         guard !changes.isEmpty else { return }
         textStorage.beginEditing()
         for change in changes {
@@ -838,8 +876,7 @@ enum MarkdownPresentation {
     private static func applyRenderingAttributes(
         to layoutManager: NSTextLayoutManager,
         fragment: NSTextLayoutFragment,
-        result: MarkdownSyntaxResult,
-        hiddenRanges: [NSRange] = []
+        presentation: MarkdownRenderingPresentation
     ) -> Int {
         guard let contentManager = layoutManager.textContentManager else {
             return 0
@@ -852,28 +889,30 @@ enum MarkdownPresentation {
         )
 
         var appliedCount = 0
-        for span in result.spans {
-            let attributes = renderingAttributes(for: span, in: result)
-            guard !attributes.isEmpty else { continue }
-
+        presentation.forEachSpan(intersecting: fragmentRange) { span in
             let intersection = NSIntersectionRange(span.range, fragmentRange)
-            guard intersection.length > 0,
+            guard intersection.length > 0 else { return }
+            let attributes = renderingAttributes(
+                for: span,
+                in: presentation.result
+            )
+            guard !attributes.isEmpty,
                   let textRange = textRange(
                     for: intersection,
                     documentStart: documentStart,
-                    contentManager: contentManager
-                  ) else { continue }
+                      contentManager: contentManager
+                  ) else { return }
             layoutManager.setRenderingAttributes(attributes, for: textRange)
             appliedCount += 1
         }
-        for range in hiddenRanges {
+        presentation.forEachHiddenRange(intersecting: fragmentRange) { range in
             let intersection = NSIntersectionRange(range, fragmentRange)
             guard intersection.length > 0,
                   let textRange = textRange(
                       for: intersection,
                       documentStart: documentStart,
                       contentManager: contentManager
-                  ) else { continue }
+                  ) else { return }
             layoutManager.setRenderingAttributes(
                 [.foregroundColor: PlatformColor.clear],
                 for: textRange
@@ -888,6 +927,7 @@ enum MarkdownPresentation {
         in layoutManager: NSTextLayoutManager?,
         text: String,
         syntaxCache: MarkdownSyntaxCache? = nil,
+        presentation suppliedPresentation: MarkdownRenderingPresentation? = nil,
         hiddenRanges: [NSRange] = []
     ) -> Int {
         guard let layoutManager,
@@ -903,8 +943,14 @@ enum MarkdownPresentation {
             return 0
         }
 
-        let result = syntaxCache?.result(for: text)
+        let result = suppliedPresentation?.result
+            ?? syntaxCache?.result(for: text)
             ?? MarkdownSyntax.parse(text)
+        let presentation = suppliedPresentation
+            ?? MarkdownRenderingPresentation(
+                result: result,
+                hiddenRanges: hiddenRanges
+            )
         let documentStart = contentManager.documentRange.location
         let viewport = nsRange(
             for: viewportRange,
@@ -928,8 +974,7 @@ enum MarkdownPresentation {
                 appliedCount += applyRenderingAttributes(
                     to: layoutManager,
                     fragment: fragment,
-                    result: result,
-                    hiddenRanges: hiddenRanges
+                    presentation: presentation
                 )
             }
             return true
@@ -1580,7 +1625,131 @@ struct MarkdownDecorationPlan {
     }
 }
 
-final class MarkdownSyntaxCache {
+struct MarkdownRenderingPresentation {
+    let result: MarkdownSyntaxResult
+    let previewRanges: MarkdownLivePreviewRanges
+    let hiddenRanges: [NSRange]
+    private let spanRanges: [NSRange]
+    private let spanPrefixMaximumEnds: [Int]
+    private let hiddenPrefixMaximumEnds: [Int]
+
+    init(
+        result: MarkdownSyntaxResult,
+        previewRanges: MarkdownLivePreviewRanges
+    ) {
+        self.result = result
+        self.previewRanges = previewRanges
+        hiddenRanges = (
+            previewRanges.collapsed + previewRanges.transparent
+        ).sorted { left, right in
+            if left.location == right.location {
+                return left.length > right.length
+            }
+            return left.location < right.location
+        }
+        spanRanges = result.spans.map(\.range)
+        spanPrefixMaximumEnds = Self.prefixMaximumEnds(spanRanges)
+        hiddenPrefixMaximumEnds = Self.prefixMaximumEnds(hiddenRanges)
+    }
+
+    init(result: MarkdownSyntaxResult, hiddenRanges: [NSRange]) {
+        self.result = result
+        previewRanges = MarkdownLivePreviewRanges(
+            collapsed: hiddenRanges,
+            transparent: []
+        )
+        self.hiddenRanges = hiddenRanges.sorted { left, right in
+            if left.location == right.location {
+                return left.length > right.length
+            }
+            return left.location < right.location
+        }
+        spanRanges = result.spans.map(\.range)
+        spanPrefixMaximumEnds = Self.prefixMaximumEnds(spanRanges)
+        hiddenPrefixMaximumEnds = Self.prefixMaximumEnds(self.hiddenRanges)
+    }
+
+    func forEachSpan(
+        intersecting target: NSRange,
+        _ body: (MarkdownStyleSpan) -> Void
+    ) {
+        for index in candidateIndices(
+            ranges: spanRanges,
+            prefixMaximumEnds: spanPrefixMaximumEnds,
+            target: target
+        ) {
+            let span = result.spans[index]
+            if NSIntersectionRange(span.range, target).length > 0 {
+                body(span)
+            }
+        }
+    }
+
+    func spanCandidateIndices(intersecting target: NSRange) -> Range<Int> {
+        candidateIndices(
+            ranges: spanRanges,
+            prefixMaximumEnds: spanPrefixMaximumEnds,
+            target: target
+        )
+    }
+
+    func forEachHiddenRange(
+        intersecting target: NSRange,
+        _ body: (NSRange) -> Void
+    ) {
+        for index in candidateIndices(
+            ranges: hiddenRanges,
+            prefixMaximumEnds: hiddenPrefixMaximumEnds,
+            target: target
+        ) {
+            let range = hiddenRanges[index]
+            if NSIntersectionRange(range, target).length > 0 {
+                body(range)
+            }
+        }
+    }
+
+    private func candidateIndices(
+        ranges: [NSRange],
+        prefixMaximumEnds: [Int],
+        target: NSRange
+    ) -> Range<Int> {
+        guard !ranges.isEmpty, target.length > 0 else { return 0..<0 }
+        let targetEnd = NSMaxRange(target)
+        var low = 0
+        var high = ranges.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if ranges[middle].location < targetEnd {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        let upperBound = low
+        low = 0
+        high = upperBound
+        while low < high {
+            let middle = low + (high - low) / 2
+            if prefixMaximumEnds[middle] <= target.location {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        return low..<upperBound
+    }
+
+    private static func prefixMaximumEnds(_ ranges: [NSRange]) -> [Int] {
+        var maximumEnd = 0
+        return ranges.map { range in
+            maximumEnd = max(maximumEnd, NSMaxRange(range))
+            return maximumEnd
+        }
+    }
+}
+
+final class MarkdownSyntaxCache: NSObject {
     private struct GroupGeometryKey: Hashable {
         let location: Int
         let length: Int
@@ -1590,6 +1759,11 @@ final class MarkdownSyntaxCache {
 
     private var cachedText: String?
     private var cachedResult: MarkdownSyntaxResult?
+    private var cachedPreviewSnapshot: MarkdownLivePreviewSnapshot?
+    private var cachedPreviewRanges: MarkdownLivePreviewRanges?
+    private var cachedRenderingPresentation: MarkdownRenderingPresentation?
+    private weak var observedTextStorage: NSTextStorage?
+    private var presentationIsCurrent = false
     private var cachedDecorationPlan: MarkdownDecorationPlan?
     private var cachedGroupLefts: [GroupGeometryKey: CGFloat] = [:]
     private(set) var parseCount = 0
@@ -1603,13 +1777,90 @@ final class MarkdownSyntaxCache {
         parseCount += 1
         cachedText = text
         cachedResult = result
+        cachedPreviewSnapshot = nil
+        cachedPreviewRanges = nil
+        cachedRenderingPresentation = nil
+        presentationIsCurrent = false
         cachedDecorationPlan = nil
         cachedGroupLefts.removeAll(keepingCapacity: true)
         return result
     }
 
-    func decorationPlan(for text: String) -> MarkdownDecorationPlan {
+    var currentPresentation: MarkdownRenderingPresentation? {
+        guard presentationIsCurrent else { return nil }
+        return cachedRenderingPresentation
+    }
+
+    func presentation(
+        for text: String,
+        snapshot: MarkdownLivePreviewSnapshot
+    ) -> MarkdownRenderingPresentation {
         let result = result(for: text)
+        if presentationIsCurrent,
+           cachedPreviewSnapshot == snapshot,
+           let cachedRenderingPresentation {
+            return cachedRenderingPresentation
+        }
+        let previewRanges: MarkdownLivePreviewRanges
+        if cachedPreviewSnapshot == snapshot,
+           let cachedPreviewRanges {
+            previewRanges = cachedPreviewRanges
+        } else {
+            previewRanges = MarkdownLivePreview.ranges(
+                in: text,
+                result: result,
+                snapshot: snapshot
+            )
+            cachedPreviewSnapshot = snapshot
+            cachedPreviewRanges = previewRanges
+        }
+        presentationIsCurrent = true
+        let presentation = MarkdownRenderingPresentation(
+            result: result,
+            previewRanges: previewRanges
+        )
+        cachedRenderingPresentation = presentation
+        return presentation
+    }
+
+    func observeCharacterEdits(in textStorage: NSTextStorage) {
+        guard observedTextStorage !== textStorage else { return }
+        if let observedTextStorage {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSTextStorage.didProcessEditingNotification,
+                object: observedTextStorage
+            )
+        }
+        observedTextStorage = textStorage
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(cachedTextStorageDidProcessEditing(_:)),
+            name: NSTextStorage.didProcessEditingNotification,
+            object: textStorage
+        )
+    }
+
+    @objc private func cachedTextStorageDidProcessEditing(
+        _ notification: Notification
+    ) {
+        guard let textStorage = notification.object as? NSTextStorage,
+              textStorage.editedMask.contains(.editedCharacters) else {
+            return
+        }
+        presentationIsCurrent = false
+        cachedRenderingPresentation = nil
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    func decorationPlan(
+        for text: String,
+        result suppliedResult: MarkdownSyntaxResult? = nil
+    ) -> MarkdownDecorationPlan {
+        let result = suppliedResult ?? result(for: text)
         if let cachedDecorationPlan { return cachedDecorationPlan }
         let source = text as NSString
         let markers = result.spans.filter {

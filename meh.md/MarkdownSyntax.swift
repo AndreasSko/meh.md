@@ -69,9 +69,11 @@ enum MarkdownSyntax {
         }
 
         let lines = lineRanges(in: source)
-        var paragraphRuns = fenced.flatMap {
-            codeBlockParagraphs(in: $0, lines: lines, source: source)
-        }
+        var paragraphRuns = codeBlockParagraphs(
+            in: fenced,
+            lines: lines,
+            source: source
+        )
         appendLineSpans(
             in: source,
             excluding: codeRanges,
@@ -581,13 +583,18 @@ enum MarkdownSyntax {
         ).sorted()
 
         var runs: [MarkdownFontRun] = []
+        var active: [MarkdownStyleSpan] = []
+        var nextSpan = fontSpans.startIndex
         for (start, end) in zip(boundaries, boundaries.dropFirst()) {
             guard start < end else { continue }
-            let range = NSRange(location: start, length: end - start)
-            let covering = fontSpans.filter {
-                $0.range.location <= start && NSMaxRange($0.range) >= end
+            active.removeAll { NSMaxRange($0.range) <= start }
+            while nextSpan < fontSpans.endIndex,
+                  fontSpans[nextSpan].range.location <= start {
+                active.append(fontSpans[nextSpan])
+                nextSpan += 1
             }
-            let style = fontStyle(for: covering)
+            let range = NSRange(location: start, length: end - start)
+            let style = fontStyle(for: active)
             guard !style.traits.isEmpty || style.headingLevel != nil else {
                 continue
             }
@@ -652,16 +659,22 @@ enum MarkdownSyntax {
     }
 
     private static func codeBlockParagraphs(
-        in fencedRange: NSRange,
+        in fencedRanges: [NSRange],
         lines: [NSRange],
         source: NSString
     ) -> [MarkdownParagraphRun] {
-        lines.compactMap { line in
-            guard line.location >= fencedRange.location,
-                  line.location < NSMaxRange(fencedRange) else {
-                return nil
+        var paragraphs: [MarkdownParagraphRun] = []
+        var fenceIndex = fencedRanges.startIndex
+        for line in lines {
+            while fenceIndex < fencedRanges.endIndex,
+                  NSMaxRange(fencedRanges[fenceIndex]) <= line.location {
+                fenceIndex += 1
             }
-            return MarkdownParagraphRun(
+            guard fenceIndex < fencedRanges.endIndex else { break }
+            let fence = fencedRanges[fenceIndex]
+            guard line.location >= fence.location,
+                  line.location < NSMaxRange(fence) else { continue }
+            paragraphs.append(MarkdownParagraphRun(
                 range: paragraphRange(for: line, in: source),
                 kind: .codeBlock,
                 contentColumn: 0,
@@ -669,8 +682,9 @@ enum MarkdownSyntax {
                     location: line.location,
                     length: 0
                 )
-            )
+            ))
         }
+        return paragraphs
     }
 
     private static func lineRanges(in source: NSString) -> [NSRange] {
@@ -834,7 +848,20 @@ enum MarkdownSyntax {
         _ location: Int,
         in ranges: [NSRange]
     ) -> NSRange? {
-        ranges.first { NSLocationInRange(location, $0) }
+        var low = ranges.startIndex
+        var high = ranges.endIndex
+        while low < high {
+            let middle = low + (high - low) / 2
+            let range = ranges[middle]
+            if location < range.location {
+                high = middle
+            } else if location >= NSMaxRange(range) {
+                low = middle + 1
+            } else {
+                return range
+            }
+        }
+        return nil
     }
 
     private static func isContained(
