@@ -15,10 +15,12 @@ compatibility sync are no longer active. Existing notebooks remain intact.
 
 - One hierarchical sidebar contains folders and notes alongside the editor.
   Hiding it leaves the editor; compact devices open notes from the tree.
-- Create notes/folders from the toolbar or a folder's context menu. Creation
-  immediately saves an untitled item and starts inline naming. Cancel keeps
-  the initial name, so an item is never silently deleted.
-- New note names receive `.md` unless `.md` or `.markdown` is already present.
+- New Note immediately opens an editable note with a date-based filename.
+  Repeated creation uses a numeric suffix to avoid existing sibling names.
+- Create folders from the sidebar context menu or a folder's context menu.
+  Folder creation starts inline naming; cancel retains the initial folder.
+- Click the title above the editor to rename a note. The Markdown extension
+  is hidden and preserved; long titles wrap within the writing screen.
 - Rename inline; move, trash, and restore from action menus.
 - Drag a note or folder onto another folder to move it. Only IDs belonging to
   this notebook are accepted; dragging external files does not import them.
@@ -56,3 +58,19 @@ interface. Recovery presentation, compact-device interaction checks, live
 cross-device notebook delivery, and physical iPad acceptance remain open. The
 activated UI has not received a new simulator visual check; the observations
 above apply to the earlier preview.
+
+## Wave 1 writing verification
+
+The date-named creation and inline-title flow has a shared Mac/iPhone UI
+regression using fictional observatory notes. It types without first tapping
+the editor, renames through the title, checks source preservation and title
+wrapping, and creates another note directly from the writing screen.
+
+The cloud-status UI check uses a disposable localhost notebook. It verifies
+manual sync in the details popover, then relaunches with an injected transport
+failure and checks the paused cloud indicator without a writing-screen sync
+bar. This is simulator evidence, not a physical iCloud handoff test.
+
+The Local UI-test target now supports native macOS as well as iOS. Select the
+macOS SDK explicitly when running its Mac UI tests. Physical iPhone/iPad
+writing and iCloud notification delivery remain owner acceptance checks.

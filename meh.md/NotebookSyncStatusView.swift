@@ -6,64 +6,66 @@ import AppKit
 import UIKit
 #endif
 
-struct NotebookWorkspaceStatusView: View {
+struct NotebookSyncToolbarButton: View {
     let workspace: NotebookWorkspace
     @State private var showingDetails = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
-            if presentation.summary != nil || workspace.copyError != nil
-                || workspace.recoveryAction != nil
-                || workspace.replica?.deletionCleanupErrorMessage != nil {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let summary = presentation.summary {
-                        Button { showingDetails = true } label: {
-                            VStack(alignment: .leading, spacing: 5) {
-                                HStack {
-                                    Label(summary, systemImage: presentation.symbol)
-                                        .accessibilityIdentifier("note-sync-status")
-                                    Spacer(minLength: 8)
-                                    Image(systemName: "info.circle")
-                                }
-                                if let fraction = presentation.fraction {
-                                    ProgressView(value: fraction)
-                                } else if workspace.isSyncing,
-                                          presentation.retryDeadline == nil {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("Show sync details")
-                    }
-                    if let error = workspace.copyError {
-                        Text("Markdown copies paused: \(error)")
-                            .accessibilityIdentifier("markdown-copy-status")
-                    }
-                    if let error = workspace.replica?.deletionCleanupErrorMessage {
-                        Text("Deleted note cleanup paused: \(error)")
-                            .accessibilityIdentifier("notebook-deletion-cleanup-status")
-                        Button("Retry Cleanup") {
-                            Task { await workspace.refresh(manual: true) }
-                        }
-                        .disabled(workspace.isRefreshing)
-                    }
-                    if let action = workspace.recoveryAction {
-                        Text(action.details + " Restoring may lose newer changes.")
-                        Button(action.title) { Task { await workspace.recoverPendingIssue() } }
-                            .disabled(workspace.isLoading || workspace.isRefreshing)
+            Button { showingDetails = true } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: presentation.symbol)
+                    if presentation.showsActivity {
+                        ProgressView()
+                            .controlSize(.mini)
                     }
                 }
-                .font(.caption).foregroundStyle(.secondary)
-                .padding(8).frame(maxWidth: .infinity)
-                .background(.bar)
+            }
+            .accessibilityIdentifier("notebook-sync-details")
+            .accessibilityLabel(presentation.accessibilityLabel)
+            .accessibilityValue(presentation.accessibilityValue)
+            .accessibilityHint("Show sync details")
+            .popover(isPresented: $showingDetails) {
+                NotebookSyncDetailsView(workspace: workspace)
+                    .presentationCompactAdaptation(.popover)
             }
         }
-        .popover(isPresented: $showingDetails) {
-            NotebookSyncDetailsView(workspace: workspace)
+    }
+}
+
+struct NotebookWorkspaceStatusView: View {
+    let workspace: NotebookWorkspace
+
+    var body: some View {
+        if workspace.copyError != nil || workspace.recoveryAction != nil
+            || workspace.replica?.deletionCleanupErrorMessage != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                if let error = workspace.copyError {
+                    Text("Markdown copies paused: \(error)")
+                        .accessibilityIdentifier("markdown-copy-status")
+                }
+                if let error = workspace.replica?.deletionCleanupErrorMessage {
+                    Text("Deleted note cleanup paused: \(error)")
+                        .accessibilityIdentifier("notebook-deletion-cleanup-status")
+                    Button("Retry Cleanup") {
+                        Task { await workspace.refresh(manual: true) }
+                    }
+                    .disabled(workspace.isRefreshing)
+                }
+                if let action = workspace.recoveryAction {
+                    Text(action.details + " Restoring may lose newer changes.")
+                    Button(action.title) {
+                        Task { await workspace.recoverPendingIssue() }
+                    }
+                    .disabled(workspace.isLoading || workspace.isRefreshing)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(8)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
         }
     }
 }
@@ -86,6 +88,17 @@ struct NotebookSyncDetailsView: View {
                 Text(presentation.summary ?? lastSyncText)
                     .accessibilityIdentifier("note-sync-status")
                 if presentation.summary != nil { Text(lastSyncText).font(.caption) }
+                if let fraction = presentation.fraction {
+                    ProgressView(value: fraction)
+                        .accessibilityLabel("Sync progress")
+                        .accessibilityValue(
+                            "\(Int((fraction * 100).rounded())) percent"
+                        )
+                } else if presentation.showsActivity {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Sync in progress")
+                }
                 if let progress = workspace.sync?.progress {
                     if progress.totalNotes > 0 {
                         Text("Notes uploaded this pass: \(progress.completedNotes) of \(progress.totalNotes)")
@@ -159,6 +172,9 @@ private struct NotebookSyncPresentation {
         }
         if workspace.syncSetupError != nil { return "Sync paused · open for details" }
         if case .failed = workspace.sync?.status { return "Sync paused · open for details" }
+        if workspace.notificationRegistrationError != nil {
+            return "Sync notifications unavailable · open for details"
+        }
         if case .pending = workspace.sync?.status { return "Changes waiting to sync" }
         return nil
     }
@@ -173,7 +189,37 @@ private struct NotebookSyncPresentation {
     var symbol: String {
         if retryDeadline != nil { return "pause.circle" }
         if !workspace.isSyncing, summary != nil { return "exclamationmark.icloud" }
-        return "arrow.triangle.2.circlepath"
+        return workspace.isSyncing ? "icloud.and.arrow.up" : "icloud"
+    }
+
+    var showsActivity: Bool {
+        workspace.isSyncing && retryDeadline == nil
+    }
+
+    var accessibilityLabel: String {
+        if let summary { return "Sync: \(summary)" }
+        return "Sync"
+    }
+
+    var accessibilityValue: String {
+        if let fraction {
+            return "\(Int((fraction * 100).rounded())) percent complete"
+        }
+        if showsActivity { return "In progress" }
+        if retryDeadline != nil || workspace.syncSetupError != nil {
+            return "Paused"
+        }
+        if case .failed = workspace.sync?.status { return "Error" }
+        if workspace.notificationRegistrationError != nil {
+            return "Automatic sync notifications unavailable"
+        }
+        if case .pending = workspace.sync?.status { return "Waiting to sync" }
+        return lastSyncAccessibilityValue
+    }
+
+    private var lastSyncAccessibilityValue: String {
+        if workspace.lastSuccessfulSync != nil { return "Up to date" }
+        return "No completed sync in this session"
     }
 }
 

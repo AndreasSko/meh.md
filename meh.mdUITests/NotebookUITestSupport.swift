@@ -47,8 +47,8 @@ extension XCUIApplication {
         let canonicalNote = staticTexts["note.md"]
         let markdownName = staticTexts.matching(
             NSPredicate(
-                format: "label MATCHES[c] %@",
-                ".*\\.(md|markdown)$"
+                format: "label MATCHES[c] %@ AND label != %@",
+                ".*\\.(md|markdown)$", "meh.md"
             )
         ).firstMatch
         // The toolbar can appear before asynchronous placements finish loading.
@@ -60,19 +60,7 @@ extension XCUIApplication {
                 activate(markdownName)
             } else {
                 activate(sidebar)
-                let newNote = menuItems["New Note"].exists
-                    ? menuItems["New Note"] : buttons["New Note"]
-                XCTAssertTrue(
-                    newNote.waitForExistence(timeout: 5),
-                    "Expected the New Note menu action"
-                )
-                activate(newNote)
-                let name = textFields["Name"]
-                XCTAssertTrue(
-                    name.waitForExistence(timeout: 5),
-                    "Expected the new note's inline name field"
-                )
-                name.typeText("\n")
+
             }
         }
 

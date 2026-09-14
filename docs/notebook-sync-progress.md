@@ -1,10 +1,10 @@
 # Notebook sync progress and batching
 
-The bottom status area appears during transfers, slow/manual checks, waiting,
-or errors. It disappears when synchronization is idle. The previous Markdown
-copy path label is removed; copy failures remain visible. The toolbar's Sync
-Details action remains available for manual sync and the latest exchange
-result even when the bottom area is hidden.
+The cloud toolbar button shows sync activity, waiting changes, and paused or
+failed synchronization. Open it for transfer progress, the latest exchange
+result, and manual sync. Routine sync progress no longer takes space below
+the writing screen. Markdown-copy failures, deletion-cleanup errors, and
+recovery actions remain visible in the bottom status area.
 
 ## What progress means
 
@@ -46,8 +46,8 @@ local editing cannot indefinitely hide changes from another device.
 Foreground activation, saved edits, and manual sync still request exchanges.
 Cloud builds now use engine scheduling and change notifications instead of
 periodic foreground checks. The loopback test transport still polls every
-30 seconds. Brief automatic checks do not flash the status area; slow checks
-become visible after two seconds. See the
+30 seconds. The cloud button indicates active checks; details describe slow
+checks after two seconds. See the
 [scheduling contract](notebook-sync-scheduling.md). Physical push delivery and
 battery measurements require separate device checks.
 

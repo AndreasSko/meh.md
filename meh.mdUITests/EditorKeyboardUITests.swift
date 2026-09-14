@@ -11,10 +11,6 @@ final class EditorKeyboardUITests: XCTestCase {
         let newItem = app.buttons["notebook-new-item"]
         XCTAssertTrue(newItem.waitForExistence(timeout: 15))
         newItem.tap()
-        app.buttons["New Note"].tap()
-        let name = app.textFields["Name"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5))
-        name.typeText("Keyboard regression\n")
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
@@ -47,10 +43,6 @@ final class EditorKeyboardUITests: XCTestCase {
         let newItem = app.buttons["notebook-new-item"]
         XCTAssertTrue(newItem.waitForExistence(timeout: 15))
         newItem.tap()
-        app.buttons["New Note"].tap()
-        let name = app.textFields["Name"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5))
-        name.typeText("Writing regression\n")
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
@@ -190,10 +182,6 @@ final class EditorKeyboardUITests: XCTestCase {
         let newItem = app.buttons["notebook-new-item"]
         XCTAssertTrue(newItem.waitForExistence(timeout: 15))
         newItem.tap()
-        app.buttons["New Note"].tap()
-        let name = app.textFields["Name"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5))
-        name.typeText("Toolbar regression\n")
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
