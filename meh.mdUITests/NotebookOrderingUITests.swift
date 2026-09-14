@@ -25,15 +25,9 @@ final class NotebookOrderingUITests: XCTestCase {
         try assertOrder([alpha, bravo, charlie], in: app)
         capture(app, name: "Notebook sorted by name ascending")
 
-        #if os(macOS)
-        charlie.rightClick()
-        activate(app.menuItems["Move Up"])
-        #else
-        charlie.press(forDuration: 1.0)
-        activate(app.buttons["Move Up"])
-        #endif
+        drag(charlie, before: bravo)
         try assertOrder([alpha, charlie, bravo], in: app)
-        capture(app, name: "Notebook manually reordered with Move Up")
+        capture(app, name: "Notebook manually reordered by drag")
 
         chooseSort("Name, Z–A", in: app)
         try assertOrder([charlie, bravo, alpha], in: app)
@@ -242,6 +236,21 @@ final class NotebookOrderingUITests: XCTestCase {
             object: app
         )
         XCTAssertEqual(XCTWaiter.wait(for: [ordered], timeout: 10), .completed)
+    }
+
+    private func drag(_ source: XCUIElement, before destination: XCUIElement) {
+        XCTAssertTrue(source.isHittable)
+        XCTAssertTrue(destination.isHittable)
+        let start = source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = destination.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)
+        )
+        start.press(
+            forDuration: 0.8,
+            thenDragTo: end,
+            withVelocity: .slow,
+            thenHoldForDuration: 1.0
+        )
     }
 
     private func replaceTitle(
