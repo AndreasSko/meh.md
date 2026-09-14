@@ -58,3 +58,6 @@ For signing, iCloud setup, and the separate development app identities, see
 - [Architecture](docs/architecture.md): how the app fits together.
 - [Documentation index](docs/README.md): development guides, contracts,
   decisions, and historical verification records.
+
+- [Writing experience plan](docs/milestone-4-plan.md): milestone-four scope,
+  issues, privacy boundary, and editor validation.

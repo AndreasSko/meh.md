@@ -20,6 +20,8 @@ struct NotebookView: View {
     var workspace: NotebookWorkspace? = nil
     @State private var showingImport = false
     @State private var showingSyncDetails = false
+    @State private var showingTextSize = false
+    @AppStorage("editor.fontSize") private var editorFontSize = 17.0
     @State private var deletionSelection: NotebookDeletionSelection?
     @State private var selectedID: UUID?
     @State private var session: NoteSession?
@@ -120,7 +122,8 @@ struct NotebookView: View {
                         session: session, navigation: editorNavigation,
                         isInTrash: selectedPlacement?.isInTrash == true,
                         hasUnrecordedEdit: $unrecordedEdit,
-                        onPersist: { workspace?.contentDidSave(trigger: "note persisted") }
+                        onPersist: { workspace?.contentDidSave(trigger: "note persisted") },
+                        fontSize: editorFontSize
                     )
                     .id(selectedID)
                     .navigationTitle(selectedPlacement?.displayName ?? "Note")
@@ -128,11 +131,21 @@ struct NotebookView: View {
                         if let placement = selectedPlacement {
                             ToolbarItem {
                                 Menu {
+                                    Button {
+                                        showingTextSize = true
+                                    } label: {
+                                        Label("Text Size…", systemImage: "textformat.size")
+                                    }
+                                    Divider()
                                     actions(for: placement)
                                 } label: {
                                     Label("Note Actions", systemImage: "ellipsis.circle")
                                 }
                                 .accessibilityIdentifier("notebook-note-actions")
+                                .popover(isPresented: $showingTextSize) {
+                                    EditorTextSizeControl(fontSize: $editorFontSize)
+                                        .presentationCompactAdaptation(.popover)
+                                }
                             }
                         }
                     }

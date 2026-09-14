@@ -4,9 +4,13 @@ enum MarkdownStyleRole: Equatable {
     case heading(level: Int)
     case strong
     case emphasis
+    case highlight
+    case strikethrough
     case code
     case link
     case listMarker
+    case blockquote
+    case blockquoteMarker
 }
 
 struct MarkdownStyleSpan: Equatable {
@@ -28,9 +32,25 @@ struct MarkdownFontRun: Equatable {
     let headingLevel: Int?
 }
 
+enum MarkdownParagraphKind: Equatable {
+    case heading(level: Int)
+    case list
+    case indented
+    case blockquote
+    case codeBlock
+}
+
+struct MarkdownParagraphRun: Equatable {
+    let range: NSRange
+    let kind: MarkdownParagraphKind
+    let contentColumn: Int
+    let contentPrefixRange: NSRange
+}
+
 struct MarkdownSyntaxResult: Equatable {
     let spans: [MarkdownStyleSpan]
     let fontRuns: [MarkdownFontRun]
+    let paragraphRuns: [MarkdownParagraphRun]
 }
 
 enum MarkdownSyntax {
@@ -48,10 +68,33 @@ enum MarkdownSyntax {
             MarkdownStyleSpan(range: $0, role: .code)
         }
 
-        appendLineSpans(in: source, excluding: codeRanges, spans: &spans)
+        let lines = lineRanges(in: source)
+        var paragraphRuns = fenced.flatMap {
+            codeBlockParagraphs(in: $0, lines: lines, source: source)
+        }
+        appendLineSpans(
+            in: source,
+            excluding: codeRanges,
+            spans: &spans,
+            paragraphRuns: &paragraphRuns
+        )
         appendLinkSpans(in: source, excluding: codeRanges, spans: &spans)
         appendEmphasisSpans(
             in: source,
+            excluding: codeRanges,
+            spans: &spans
+        )
+        appendPairedSpans(
+            in: source,
+            marker: ASCII.equals,
+            role: .highlight,
+            excluding: codeRanges,
+            spans: &spans
+        )
+        appendPairedSpans(
+            in: source,
+            marker: ASCII.tilde,
+            role: .strikethrough,
             excluding: codeRanges,
             spans: &spans
         )
@@ -63,7 +106,8 @@ enum MarkdownSyntax {
         }
         return MarkdownSyntaxResult(
             spans: spans,
-            fontRuns: fontRuns(for: spans)
+            fontRuns: fontRuns(for: spans),
+            paragraphRuns: paragraphRuns
         )
     }
 
@@ -164,21 +208,122 @@ enum MarkdownSyntax {
     private static func appendLineSpans(
         in source: NSString,
         excluding codeRanges: [NSRange],
-        spans: inout [MarkdownStyleSpan]
+        spans: inout [MarkdownStyleSpan],
+        paragraphRuns: inout [MarkdownParagraphRun]
     ) {
         for line in lineRanges(in: source) {
             let contentEnd = contentEnd(for: line, in: source)
-            var location = line.location
-            while location < contentEnd,
-                  source.character(at: location) == ASCII.space,
-                  location - line.location < 4 {
-                location += 1
+            guard !isContained(line.location, in: codeRanges) else {
+                continue
             }
-            guard location - line.location <= 3,
-                  !isContained(location, in: codeRanges),
-                  location < contentEnd else { continue }
+            var location = skipHorizontalWhitespace(
+                from: line.location,
+                before: contentEnd,
+                in: source
+            )
+            guard location < contentEnd else { continue }
+            let initialContentLocation = location
+            let directIndentColumn = visualColumn(
+                from: line.location,
+                to: location,
+                in: source
+            )
 
-            if source.character(at: location) == ASCII.hash {
+            var listContentStart: Int?
+            var quoteMarkers: [NSRange] = []
+            var previousContainerWasList = false
+            while location < contentEnd {
+                if !previousContainerWasList,
+                   let marker = listMarker(
+                       at: location,
+                       lineEnd: contentEnd,
+                       in: source
+                   ) {
+                    spans.append(
+                        MarkdownStyleSpan(range: marker, role: .listMarker)
+                    )
+                    location = skipHorizontalWhitespace(
+                        from: NSMaxRange(marker),
+                        before: contentEnd,
+                        in: source
+                    )
+                    listContentStart = location
+                    previousContainerWasList = true
+                    continue
+                }
+                guard source.character(at: location) == ASCII.greaterThan,
+                      !isEscaped(location, in: source) else { break }
+                quoteMarkers.append(
+                    NSRange(location: location, length: 1)
+                )
+                location = skipHorizontalWhitespace(
+                    from: location + 1,
+                    before: contentEnd,
+                    in: source
+                )
+                previousContainerWasList = false
+            }
+
+            let paragraphRange = paragraphRange(for: line, in: source)
+            var hasParagraphRole = false
+            if !quoteMarkers.isEmpty {
+                spans.append(
+                    MarkdownStyleSpan(
+                        range: NSRange(
+                            location: line.location,
+                            length: contentEnd - line.location
+                        ),
+                        role: .blockquote
+                    )
+                )
+                for marker in quoteMarkers {
+                    spans.append(
+                        MarkdownStyleSpan(
+                            range: marker,
+                            role: .blockquoteMarker
+                        )
+                    )
+                }
+                paragraphRuns.append(
+                    MarkdownParagraphRun(
+                        range: paragraphRange,
+                        kind: .blockquote,
+                        contentColumn: visualColumn(
+                            from: line.location,
+                            to: location,
+                            in: source
+                        ),
+                        contentPrefixRange: NSRange(
+                            location: line.location,
+                            length: location - line.location
+                        )
+                    )
+                )
+                hasParagraphRole = true
+            } else if let listContentStart {
+                paragraphRuns.append(
+                    MarkdownParagraphRun(
+                        range: paragraphRange,
+                        kind: .list,
+                        contentColumn: visualColumn(
+                            from: line.location,
+                            to: listContentStart,
+                            in: source
+                        ),
+                        contentPrefixRange: NSRange(
+                            location: line.location,
+                            length: listContentStart - line.location
+                        )
+                    )
+                )
+                hasParagraphRole = true
+            }
+
+            let hasContainerPrefix = !quoteMarkers.isEmpty
+                || listContentStart != nil
+            if location < contentEnd,
+               (hasContainerPrefix || directIndentColumn <= 3),
+               source.character(at: location) == ASCII.hash {
                 let markerLength = repeatedLength(
                     of: ASCII.hash,
                     at: location,
@@ -191,24 +336,94 @@ enum MarkdownSyntax {
                     spans.append(
                         MarkdownStyleSpan(
                             range: NSRange(
-                                location: line.location,
-                                length: contentEnd - line.location
+                                location: location,
+                                length: contentEnd - location
                             ),
                             role: .heading(level: markerLength)
                         )
                     )
+                    if !hasContainerPrefix {
+                        paragraphRuns.append(
+                            MarkdownParagraphRun(
+                                range: paragraphRange,
+                                kind: .heading(level: markerLength),
+                                contentColumn: 0,
+                                contentPrefixRange: NSRange(
+                                    location: line.location,
+                                    length: 0
+                                )
+                            )
+                        )
+                        hasParagraphRole = true
+                    }
                 }
             }
 
-            if let marker = listMarker(
-                at: location,
-                lineEnd: contentEnd,
-                in: source
-            ) {
-                spans.append(
-                    MarkdownStyleSpan(range: marker, role: .listMarker)
+            if !hasParagraphRole, directIndentColumn > 0 {
+                paragraphRuns.append(
+                    MarkdownParagraphRun(
+                        range: paragraphRange,
+                        kind: .indented,
+                        contentColumn: directIndentColumn,
+                        contentPrefixRange: NSRange(
+                            location: line.location,
+                            length: initialContentLocation - line.location
+                        )
+                    )
                 )
             }
+        }
+    }
+
+    private static func appendPairedSpans(
+        in source: NSString,
+        marker: unichar,
+        role: MarkdownStyleRole,
+        excluding codeRanges: [NSRange],
+        spans: inout [MarkdownStyleSpan]
+    ) {
+        var location = 0
+        while location + 1 < source.length {
+            if let range = containingRange(location, in: codeRanges) {
+                location = NSMaxRange(range)
+                continue
+            }
+            guard isExactPair(of: marker, at: location, in: source),
+                  !isEscaped(location, in: source),
+                  location + 2 < source.length,
+                  !isWhitespace(source.character(at: location + 2)) else {
+                location += 1
+                continue
+            }
+
+            let lineEnd = contentEndOfLine(containing: location, in: source)
+            var closing = location + 2
+            var match: Int?
+            while closing + 1 < lineEnd {
+                if let range = containingRange(closing, in: codeRanges) {
+                    closing = NSMaxRange(range)
+                    continue
+                }
+                if isExactPair(of: marker, at: closing, in: source),
+                   !isEscaped(closing, in: source),
+                   !isWhitespace(source.character(at: closing - 1)) {
+                    match = closing
+                    break
+                }
+                closing += 1
+            }
+            guard let match else {
+                location += 2
+                continue
+            }
+            let end = match + 2
+            spans.append(
+                MarkdownStyleSpan(
+                    range: NSRange(location: location, length: end - location),
+                    role: role
+                )
+            )
+            location = end
         }
     }
 
@@ -354,7 +569,8 @@ enum MarkdownSyntax {
             switch span.role {
             case .heading, .strong, .emphasis, .code:
                 return true
-            case .link, .listMarker:
+            case .highlight, .strikethrough, .link, .listMarker,
+                    .blockquote, .blockquoteMarker:
                 return false
             }
         }
@@ -427,11 +643,34 @@ enum MarkdownSyntax {
                 traits.insert(.italic)
             case .code:
                 traits.insert(.monospaced)
-            case .link, .listMarker:
+            case .highlight, .strikethrough, .link, .listMarker,
+                    .blockquote, .blockquoteMarker:
                 break
             }
         }
         return (traits, headingLevel)
+    }
+
+    private static func codeBlockParagraphs(
+        in fencedRange: NSRange,
+        lines: [NSRange],
+        source: NSString
+    ) -> [MarkdownParagraphRun] {
+        lines.compactMap { line in
+            guard line.location >= fencedRange.location,
+                  line.location < NSMaxRange(fencedRange) else {
+                return nil
+            }
+            return MarkdownParagraphRun(
+                range: paragraphRange(for: line, in: source),
+                kind: .codeBlock,
+                contentColumn: 0,
+                contentPrefixRange: NSRange(
+                    location: line.location,
+                    length: 0
+                )
+            )
+        }
     }
 
     private static func lineRanges(in source: NSString) -> [NSRange] {
@@ -580,6 +819,17 @@ enum MarkdownSyntax {
         return end - location
     }
 
+    private static func isExactPair(
+        of marker: unichar,
+        at location: Int,
+        in source: NSString
+    ) -> Bool {
+        guard repeatedLength(of: marker, at: location, in: source) == 2 else {
+            return false
+        }
+        return location == 0 || source.character(at: location - 1) != marker
+    }
+
     private static func containingRange(
         _ location: Int,
         in ranges: [NSRange]
@@ -623,6 +873,51 @@ enum MarkdownSyntax {
         }
     }
 
+    private static func skipHorizontalWhitespace(
+        from start: Int,
+        before end: Int,
+        in source: NSString
+    ) -> Int {
+        var location = start
+        while location < end {
+            let character = source.character(at: location)
+            guard character == ASCII.space || character == ASCII.tab else {
+                break
+            }
+            location += 1
+        }
+        return location
+    }
+
+    private static func paragraphRange(
+        for line: NSRange,
+        in source: NSString
+    ) -> NSRange {
+        let end = NSMaxRange(line)
+        let includesLineFeed = end < source.length
+            && source.character(at: end) == ASCII.lineFeed
+        return NSRange(
+            location: line.location,
+            length: line.length + (includesLineFeed ? 1 : 0)
+        )
+    }
+
+    private static func visualColumn(
+        from start: Int,
+        to end: Int,
+        in source: NSString
+    ) -> Int {
+        var column = 0
+        for location in start..<end {
+            if source.character(at: location) == ASCII.tab {
+                column += 4 - column % 4
+            } else {
+                column += 1
+            }
+        }
+        return column
+    }
+
     private static func contentEnd(for line: NSRange, in source: NSString) -> Int {
         var end = NSMaxRange(line)
         if end > line.location,
@@ -651,6 +946,7 @@ enum MarkdownSyntax {
 }
 
 private enum ASCII {
+    static let tab: unichar = 9
     static let lineFeed: unichar = 10
     static let carriageReturn: unichar = 13
     static let space: unichar = 32
@@ -661,6 +957,8 @@ private enum ASCII {
     static let plus: unichar = 43
     static let hyphen: unichar = 45
     static let period: unichar = 46
+    static let greaterThan: unichar = 62
+    static let equals: unichar = 61
     static let zero: unichar = 48
     static let nine: unichar = 57
     static let openBracket: unichar = 91

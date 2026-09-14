@@ -113,25 +113,37 @@ private enum MarkdownEditorSelection {
 #if os(macOS)
 import AppKit
 
+final class MarkdownTextView: NSTextView {
+    let markdownSyntaxCache = MarkdownSyntaxCache()
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        MarkdownPresentation.drawBlockBackgrounds(in: self, dirtyRect: rect)
+    }
+}
+
 struct MarkdownEditor: NSViewRepresentable {
     @Binding var text: String
     var editRevision: Data?
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
     var onEditError: ((Error) -> Void)?
     var navigation: MarkdownEditorNavigation?
+    var fontSize: Double
 
     init(
         text: Binding<String>,
         editRevision: Data? = nil,
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
         onEditError: ((Error) -> Void)? = nil,
-        navigation: MarkdownEditorNavigation? = nil
+        navigation: MarkdownEditorNavigation? = nil,
+        fontSize: Double = 17
     ) {
         _text = text
         self.editRevision = editRevision
         self.commitEdit = commitEdit
         self.onEditError = onEditError
         self.navigation = navigation
+        self.fontSize = fontSize
     }
 
     func makeCoordinator() -> Coordinator {
@@ -140,7 +152,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
-        let textView = NSTextView(usingTextLayoutManager: true)
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
 
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
@@ -151,15 +163,18 @@ struct MarkdownEditor: NSViewRepresentable {
         textView.isRichText = false
         textView.allowsUndo = true
         textView.drawsBackground = false
-        textView.font = .preferredFont(forTextStyle: .body)
+        textView.font = .systemFont(
+            ofSize: MarkdownPresentation.normalizedFontSize(fontSize)
+        )
         textView.textColor = .textColor
-        textView.textContainerInset = NSSize(width: 16, height: 12)
+        textView.textContainerInset = NSSize(width: 22, height: 20)
+        textView.textContainer?.lineFragmentPadding = 4
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.setAccessibilityIdentifier("markdown-editor")
-        MarkdownPresentation.configure(textView)
+        MarkdownPresentation.configure(textView, fontSize: fontSize)
         context.coordinator.observeUndoAndRedo(for: textView)
 
         context.coordinator.attachNavigation(to: textView)
@@ -181,11 +196,16 @@ struct MarkdownEditor: NSViewRepresentable {
         private var hasUncommittedText = false
         private var isUpdating = false
         private weak var observedTextView: NSTextView?
+        private var displayedFontSize: CGFloat
+        private var presentationRefreshScheduled = false
 
         init(parent: MarkdownEditor) {
             self.parent = parent
             displayedText = parent.text
             displayedRevision = parent.editRevision
+            displayedFontSize = MarkdownPresentation.normalizedFontSize(
+                parent.fontSize
+            )
         }
 
         deinit {
@@ -227,6 +247,14 @@ struct MarkdownEditor: NSViewRepresentable {
         func update(parent: MarkdownEditor, textView: NSTextView) {
             self.parent = parent
             guard !textView.hasMarkedText() else { return }
+
+            let fontSize = MarkdownPresentation.normalizedFontSize(
+                parent.fontSize
+            )
+            if displayedFontSize != fontSize {
+                displayedFontSize = fontSize
+                schedulePresentationRefresh(for: textView)
+            }
             guard !hasUncommittedText else { return }
 
             if textView.string.utf8.elementsEqual(parent.text.utf8) {
@@ -275,7 +303,7 @@ struct MarkdownEditor: NSViewRepresentable {
                   let baseRevision = displayedRevision else {
                 displayedText = nativeText
                 parent.text = nativeText
-                MarkdownPresentation.refresh(textView)
+                schedulePresentationRefresh(for: textView)
                 return
             }
 
@@ -287,7 +315,7 @@ struct MarkdownEditor: NSViewRepresentable {
                     displayedText = nativeText
                     displayedRevision = commit.revision
                     parent.text = commit.text
-                    MarkdownPresentation.refresh(textView)
+                    schedulePresentationRefresh(for: textView)
                 } else {
                     replaceDisplayedText(
                         with: commit.text,
@@ -306,6 +334,24 @@ struct MarkdownEditor: NSViewRepresentable {
             guard revision != staleParentRevision else { return }
             staleParentRevision = nil
             displayedRevision = revision
+        }
+
+        private func schedulePresentationRefresh(for textView: NSTextView) {
+            guard !presentationRefreshScheduled else { return }
+            presentationRefreshScheduled = true
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.presentationRefreshScheduled = false
+                guard let textView, !textView.hasMarkedText() else { return }
+                MarkdownPresentation.refresh(
+                    textView,
+                    fontSize: self.parent.fontSize
+                )
+                // Deferred TextKit styling can leave the native indicator
+                // hidden after successive empty lines. Restore its normal
+                // focus and blink lifecycle after presentation settles.
+                textView.updateInsertionPointStateAndRestartTimer(true)
+            }
         }
 
         private func replaceDisplayedText(
@@ -344,20 +390,187 @@ struct MarkdownEditor: NSViewRepresentable {
             // Native undo ranges refer to the replaced buffer. Clear them only
             // for external replacements; later local edits start a fresh chain.
             undoManager?.removeAllActions()
-            MarkdownPresentation.refresh(textView)
+            MarkdownPresentation.refresh(
+                textView,
+                fontSize: parent.fontSize
+            )
         }
 
         func textDidEndEditing(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else {
                 return
             }
-            MarkdownPresentation.refresh(textView)
+            MarkdownPresentation.refresh(
+                textView,
+                fontSize: parent.fontSize
+            )
         }
     }
 }
 
 #else
 import UIKit
+import ObjectiveC
+
+nonisolated(unsafe) private var markdownTextViewStateKey: UInt8 = 0
+
+// UIKit's TextKit factory can bypass Swift subclass property initializers.
+// Keep editor state in a normally initialized object attached to the view.
+final class MarkdownTextView: UITextView {
+    private var markdownState: MarkdownTextViewState {
+        if let state = objc_getAssociatedObject(
+            self,
+            &markdownTextViewStateKey
+        ) as? MarkdownTextViewState {
+            return state
+        }
+        let state = MarkdownTextViewState()
+        objc_setAssociatedObject(
+            self,
+            &markdownTextViewStateKey,
+            state,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+        return state
+    }
+
+    var markdownSyntaxCache: MarkdownSyntaxCache {
+        markdownState.syntaxCache
+    }
+
+    func installMarkdownLayoutManagerDelegate(
+        on layoutManager: NSTextLayoutManager
+    ) {
+        if layoutManager.delegate === markdownState.layoutDelegate { return }
+        let fragmentSelector = NSSelectorFromString(
+            "textLayoutManager:textLayoutFragmentForLocation:inTextElement:"
+        )
+        if layoutManager.delegate?.responds(to: fragmentSelector) == true {
+            assertionFailure(
+                "Cannot replace an existing TextKit 2 fragment factory"
+            )
+            return
+        }
+        let delegate = MarkdownLayoutManagerDelegate(
+            textView: self,
+            forwardingTo: layoutManager.delegate
+        )
+        markdownState.layoutDelegate = delegate
+        layoutManager.delegate = delegate
+    }
+}
+
+private final class MarkdownTextViewState: NSObject {
+    let syntaxCache = MarkdownSyntaxCache()
+    var layoutDelegate: MarkdownLayoutManagerDelegate?
+}
+
+private final class MarkdownLayoutManagerDelegate:
+    NSObject, NSTextLayoutManagerDelegate {
+    private weak var textView: MarkdownTextView?
+    nonisolated(unsafe) private weak var forwardedDelegate:
+        (any NSTextLayoutManagerDelegate)?
+
+    init(
+        textView: MarkdownTextView,
+        forwardingTo delegate: (any NSTextLayoutManagerDelegate)?
+    ) {
+        self.textView = textView
+        forwardedDelegate = delegate
+    }
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        super.responds(to: selector)
+            || forwardedDelegate?.responds(to: selector) == true
+    }
+
+    nonisolated override func forwardingTarget(
+        for selector: Selector!
+    ) -> Any? {
+        if forwardedDelegate?.responds(to: selector) == true {
+            return forwardedDelegate
+        }
+        return super.forwardingTarget(for: selector)
+    }
+
+    func textLayoutManager(
+        _ textLayoutManager: NSTextLayoutManager,
+        textLayoutFragmentFor location: any NSTextLocation,
+        in textElement: NSTextElement
+    ) -> NSTextLayoutFragment {
+        guard let textView else {
+            return NSTextLayoutFragment(
+                textElement: textElement,
+                range: nil
+            )
+        }
+        return MarkdownTextLayoutFragment(
+            textElement: textElement,
+            range: nil,
+            textView: textView
+        )
+    }
+}
+
+nonisolated private final class MarkdownTextLayoutFragment:
+    NSTextLayoutFragment {
+    private struct UnsafeTransfer<Value>: @unchecked Sendable {
+        let value: Value
+    }
+
+    nonisolated(unsafe) private weak var textView: MarkdownTextView?
+
+    nonisolated init(
+        textElement: NSTextElement,
+        range: NSTextRange?,
+        textView: MarkdownTextView
+    ) {
+        self.textView = textView
+        super.init(textElement: textElement, range: range)
+    }
+
+    nonisolated required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    nonisolated override var renderingSurfaceBounds: CGRect {
+        let defaultBounds = super.renderingSurfaceBounds
+        let fragment = UnsafeTransfer(value: self)
+        return MainActor.assumeIsolated {
+            guard let textView = fragment.value.textView else {
+                return defaultBounds
+            }
+            let fragmentFrame = fragment.value.layoutFragmentFrame
+            let verticalPadding = max(
+                textView.font?.lineHeight ?? 0,
+                MarkdownPresentation.editorBodyFont.lineHeight
+            ) * 0.3
+            let panelBounds = CGRect(
+                x: -fragmentFrame.minX - 3,
+                y: -verticalPadding,
+                width: textView.textContainer.size.width + 3,
+                height: fragmentFrame.height + 2 * verticalPadding
+            )
+            return defaultBounds.union(panelBounds)
+        }
+    }
+
+    nonisolated override func draw(at point: CGPoint, in context: CGContext) {
+        let fragment = UnsafeTransfer(value: self)
+        let drawingContext = UnsafeTransfer(value: context)
+        MainActor.assumeIsolated {
+            if let textView = fragment.value.textView {
+                MarkdownPresentation.drawBlockBackgrounds(
+                    in: fragment.value,
+                    textView: textView,
+                    at: point,
+                    context: drawingContext.value
+                )
+            }
+        }
+        super.draw(at: point, in: context)
+    }
+}
 
 struct MarkdownEditor: UIViewRepresentable {
     @Binding var text: String
@@ -365,19 +578,22 @@ struct MarkdownEditor: UIViewRepresentable {
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
     var onEditError: ((Error) -> Void)?
     var navigation: MarkdownEditorNavigation?
+    var fontSize: Double
 
     init(
         text: Binding<String>,
         editRevision: Data? = nil,
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
         onEditError: ((Error) -> Void)? = nil,
-        navigation: MarkdownEditorNavigation? = nil
+        navigation: MarkdownEditorNavigation? = nil,
+        fontSize: Double = 17
     ) {
         _text = text
         self.editRevision = editRevision
         self.commitEdit = commitEdit
         self.onEditError = onEditError
         self.navigation = navigation
+        self.fontSize = fontSize
     }
 
     func makeCoordinator() -> Coordinator {
@@ -385,22 +601,30 @@ struct MarkdownEditor: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView(usingTextLayoutManager: true)
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        if let layoutManager = textView.textLayoutManager {
+            textView.installMarkdownLayoutManagerDelegate(on: layoutManager)
+        }
 
         textView.delegate = context.coordinator
+        textView.keyboardDismissMode = .onDrag
+        textView.alwaysBounceVertical = true
         textView.text = text
         textView.allowsEditingTextAttributes = false
-        textView.font = .preferredFont(forTextStyle: .body)
+        textView.font = .systemFont(
+            ofSize: MarkdownPresentation.normalizedFontSize(fontSize)
+        )
         textView.textColor = .label
         textView.backgroundColor = .clear
         textView.textContainerInset = UIEdgeInsets(
-            top: 12,
-            left: 12,
-            bottom: 12,
-            right: 12
+            top: 18,
+            left: 16,
+            bottom: 18,
+            right: 16
         )
+        textView.textContainer.lineFragmentPadding = 4
         textView.accessibilityIdentifier = "markdown-editor"
-        MarkdownPresentation.configure(textView)
+        MarkdownPresentation.configure(textView, fontSize: fontSize)
 
         context.coordinator.attachNavigation(to: textView)
         return textView
@@ -417,11 +641,20 @@ struct MarkdownEditor: UIViewRepresentable {
         private var staleParentRevision: Data?
         private var hasUncommittedText = false
         private var isUpdating = false
+        private var displayedFontSize: CGFloat
+        private var presentationRefreshScheduled = false
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            scrollView.endEditing(false)
+        }
 
         init(parent: MarkdownEditor) {
             self.parent = parent
             displayedText = parent.text
             displayedRevision = parent.editRevision
+            displayedFontSize = MarkdownPresentation.normalizedFontSize(
+                parent.fontSize
+            )
         }
 
         func attachNavigation(to textView: UITextView) {
@@ -441,6 +674,14 @@ struct MarkdownEditor: UIViewRepresentable {
         func update(parent: MarkdownEditor, textView: UITextView) {
             self.parent = parent
             guard textView.markedTextRange == nil else { return }
+
+            let fontSize = MarkdownPresentation.normalizedFontSize(
+                parent.fontSize
+            )
+            if displayedFontSize != fontSize {
+                displayedFontSize = fontSize
+                schedulePresentationRefresh(for: textView)
+            }
             guard !hasUncommittedText else { return }
 
             if textView.text.utf8.elementsEqual(parent.text.utf8) {
@@ -473,7 +714,7 @@ struct MarkdownEditor: UIViewRepresentable {
                   let baseRevision = displayedRevision else {
                 displayedText = nativeText
                 parent.text = nativeText
-                MarkdownPresentation.refresh(textView)
+                schedulePresentationRefresh(for: textView)
                 return
             }
 
@@ -485,7 +726,7 @@ struct MarkdownEditor: UIViewRepresentable {
                     displayedText = nativeText
                     displayedRevision = commit.revision
                     parent.text = commit.text
-                    MarkdownPresentation.refresh(textView)
+                    schedulePresentationRefresh(for: textView)
                 } else {
                     replaceDisplayedText(
                         with: commit.text,
@@ -504,6 +745,22 @@ struct MarkdownEditor: UIViewRepresentable {
             guard revision != staleParentRevision else { return }
             staleParentRevision = nil
             displayedRevision = revision
+        }
+
+        private func schedulePresentationRefresh(for textView: UITextView) {
+            guard !presentationRefreshScheduled else { return }
+            presentationRefreshScheduled = true
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.presentationRefreshScheduled = false
+                guard let textView, textView.markedTextRange == nil else {
+                    return
+                }
+                MarkdownPresentation.refresh(
+                    textView,
+                    fontSize: self.parent.fontSize
+                )
+            }
         }
 
         private func replaceDisplayedText(
@@ -535,11 +792,17 @@ struct MarkdownEditor: UIViewRepresentable {
             // UIKit can replace its private undo manager while text storage is
             // changed, so do not balance registration calls across this edit.
             textView.undoManager?.removeAllActions()
-            MarkdownPresentation.refresh(textView)
+            MarkdownPresentation.refresh(
+                textView,
+                fontSize: parent.fontSize
+            )
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            MarkdownPresentation.refresh(textView)
+            MarkdownPresentation.refresh(
+                textView,
+                fontSize: parent.fontSize
+            )
         }
     }
 }

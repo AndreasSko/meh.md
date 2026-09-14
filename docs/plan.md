@@ -10,7 +10,8 @@ Trash, permanent deletion, and automatic sync scheduling. Milestone 3 closed
 on 2026-09-13; its [closeout record](milestone-3-plan.md) preserves review and
 validation evidence.
 
-Daily-use hardening is next. [Sync-pause recovery][issue-22] and
+Milestone 4 prioritizes pleasant everyday writing; see its
+[execution plan](milestone-4-plan.md). [Sync-pause recovery][issue-22] and
 [Mac automatic receiving][issue-24] are explicit follow-ups. GitHub issues
 track ongoing work; completed implementation milestones do not imply complete
 physical-device acceptance. Earlier single-note checks remain historical
@@ -186,49 +187,34 @@ Outstanding recovery and device validation are tracked in GitHub issues.
 - Existing activated notebooks reopen offline. A fresh cloud installation
   joins the canonical version 2 notebook online.
 
-## 4 — Daily-use hardening
+## 4 — Pleasant everyday writing
 
-Status: ready to start after milestone 3; implementation not started.
-GitHub issues are authoritative for follow-up scope and progress.
+Status: in progress. The owner reprioritized this milestone on 2026-09-13.
+See the [execution plan](milestone-4-plan.md) for scope and checkpoints.
 
-Start with [persisted sync-pause recovery][issue-22], then complete
-[Mac automatic-receiving verification][issue-24]. Track
-[offline export and restore][issue-20], [replication performance][issue-21],
-and [Markdown fidelity fuzzing][issue-23] in their existing issues.
+- Improve Markdown typography and presentation, including nested list quotes.
+- Add automatic list editing and native formatting commands.
+- Introduce a source/live-preview toggle through a tested editor prototype.
+- Add offline search, quick open, and in-note Find.
+- Add remembered position, heading outline, focus mode, and pinned notes.
+- Start visual feedback on Mac; validate behavior on iPhone and iPad too.
+- Use fictional fixtures only in repository and public review artifacts.
 
-### Work and acceptance
+## Later — Reliability and recovery
 
-- Exercise recovery versions and trash restore, including restart after a
-  failed Markdown write.
-- Test prolonged offline use, a fresh-device download, unavailable iCloud,
-  quota failures, and account transitions with appropriate test fixtures or
-  device checks.
-- Ensure an account switch cannot upload the previous account's notes into the
-  new account automatically.
-- Use a copied library for daily writing; fix observed editor, performance, and
-  sync problems before adopting the app as the primary notebook.
-- Profile and improve large-notebook replication. The Milestone 3 synthetic
-  1,000-note debug run took 515.2 seconds for initial replication and 15.3
-  seconds for an incremental exchange. Compare release builds, investigate
-  replica application and Automerge decoding/merging, and retain the existing
-  convergence and durability tests. These are local synthetic measurements,
-  not CloudKit or device latency; see the
-  [validation record][scale-validation].
+The earlier milestone-four hardening scope remains tracked in existing issues:
+[persisted sync-pause recovery][issue-22], [offline export][issue-20],
+[replication performance][issue-21], and [Markdown fidelity fuzzing][issue-23].
+[Mac automatic receiving][issue-24] remains an open device follow-up.
+Prioritize reproducible data-loss or blocking daily-use defects as encountered.
 
-[scale-validation]:
-  notebook-sync-validation.md#recorded-synthetic-run-2026-09-13
+Recovery/trash restore, interrupted Markdown publication, prolonged offline
+use, fresh-device download, iCloud failures, and account isolation remain
+required reliability work. Historical scale measurements are recorded in
+[notebook sync validation](notebook-sync-validation.md).
 
-## 5 — Optional editor refinement
-
-Status: deferred; requires an explicit product decision after daily use.
-
-- Reveal/hide syntax around the cursor.
-- Refine cursor and selection preservation during remote updates.
-- Improve undo behavior across synchronization beyond the documented initial
-  behavior.
-
-Do not pull these into earlier milestones unless needed to fix basic
-correctness.
+Clickable task checkboxes are a later editor follow-up. Advanced selection
+and undo refinement across sync remain follow-ups beyond basic correctness.
 
 ## Completion record
 
