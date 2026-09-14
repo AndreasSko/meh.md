@@ -261,7 +261,211 @@ final class MarkdownPresentationTests: XCTestCase {
         XCTAssertEqual(result.spans.count { $0.role == .link }, 100)
     }
 
+    func testManyCodeRangesKeepLaterSyntaxAndFontCompositionExact() {
+        let sections = (0..<256).map { index in
+            "`**raw \(index)**` and **visible \(index)**"
+        }
+        let source = sections.joined(separator: "\n")
+        let result = MarkdownSyntax.parse(source)
+        let codeRanges = result.spans.compactMap { span -> NSRange? in
+            span.role == .code ? span.range : nil
+        }
+
+        XCTAssertEqual(codeRanges.count, 256)
+        for (left, right) in zip(codeRanges, codeRanges.dropFirst()) {
+            XCTAssertLessThanOrEqual(NSMaxRange(left), right.location)
+        }
+        XCTAssertEqual(result.spans.count { $0.role == .strong }, 256)
+        for index in [0, 127, 255] {
+            XCTAssertEqual(
+                fontTraits(
+                    at: "raw \(index)",
+                    in: source,
+                    result: result
+                ),
+                [.monospaced]
+            )
+            XCTAssertEqual(
+                fontTraits(
+                    at: "visible \(index)",
+                    in: source,
+                    result: result
+                ),
+                [.bold]
+            )
+        }
+    }
+
+    func testCrossingFontSpansAndCodeCompositionRemainExact() {
+        let crossing = "**bold _both** italic_"
+        let crossingResult = MarkdownSyntax.parse(crossing)
+
+        XCTAssertEqual(
+            fontTraits(at: "bold", in: crossing, result: crossingResult),
+            [.bold]
+        )
+        XCTAssertEqual(
+            fontTraits(at: "both", in: crossing, result: crossingResult),
+            [.bold, .italic]
+        )
+        XCTAssertEqual(
+            fontTraits(at: "italic", in: crossing, result: crossingResult),
+            [.italic]
+        )
+
+        let withCode = "**before `code` after**"
+        let codeResult = MarkdownSyntax.parse(withCode)
+        XCTAssertEqual(
+            fontTraits(at: "before", in: withCode, result: codeResult),
+            [.bold]
+        )
+        XCTAssertEqual(
+            fontTraits(at: "code", in: withCode, result: codeResult),
+            [.bold, .monospaced]
+        )
+        XCTAssertEqual(
+            fontTraits(at: "after", in: withCode, result: codeResult),
+            [.bold]
+        )
+    }
+
+    func testManyFencedBlocksKeepEveryFenceParagraphAndExcludeContents() {
+        let sections = (0..<128).map { index in
+            "```swift\n**raw \(index)**\n```\n**visible \(index)**"
+        }
+        let source = sections.joined(separator: "\n")
+        let result = MarkdownSyntax.parse(source)
+
+        XCTAssertEqual(result.spans.count { $0.role == .code }, 128)
+        XCTAssertEqual(result.spans.count { $0.role == .strong }, 128)
+        XCTAssertEqual(
+            result.paragraphRuns.count { $0.kind == .codeBlock },
+            384
+        )
+        XCTAssertEqual(
+            fontTraits(at: "raw 127", in: source, result: result),
+            [.monospaced]
+        )
+        XCTAssertEqual(
+            fontTraits(at: "visible 127", in: source, result: result),
+            [.bold]
+        )
+    }
+
 #if os(macOS)
+    func testPlainTextViewKeepsFallbackSyntaxCacheAcrossRefreshes() {
+        let textView = NSTextView(usingTextLayoutManager: true)
+        textView.string = "# First\n**Second**"
+        let initialCache = MarkdownPresentation.syntaxCache(for: textView)
+
+        MarkdownPresentation.configure(textView, mode: .livePreview)
+
+        XCTAssertTrue(
+            initialCache === MarkdownPresentation.syntaxCache(for: textView)
+        )
+        XCTAssertNotNil(initialCache.currentPresentation)
+        XCTAssertEqual(initialCache.parseCount, 1)
+
+        textView.textStorage?.replaceCharacters(
+            in: NSRange(location: 0, length: 1),
+            with: "X"
+        )
+        XCTAssertNil(initialCache.currentPresentation)
+
+        MarkdownPresentation.refresh(textView, mode: .livePreview)
+
+        XCTAssertTrue(
+            initialCache === MarkdownPresentation.syntaxCache(for: textView)
+        )
+        XCTAssertNotNil(initialCache.currentPresentation)
+        XCTAssertEqual(initialCache.parseCount, 2)
+    }
+
+    func testRenderingCacheInvalidatesOnlyForCharacterEdits() throws {
+        let source = "**First**\n**Second**"
+        let textStorage = NSTextStorage(string: source)
+        let cache = MarkdownSyntaxCache()
+        let snapshot = MarkdownLivePreviewSnapshot(
+            mode: .livePreview,
+            selection: NSRange(location: 0, length: 0)
+        )
+        cache.observeCharacterEdits(in: textStorage)
+
+        let initial = cache.presentation(for: source, snapshot: snapshot)
+        XCTAssertNotNil(cache.currentPresentation)
+        XCTAssertEqual(cache.parseCount, 1)
+
+        textStorage.addAttribute(
+            .kern,
+            value: 0,
+            range: NSRange(location: 0, length: 1)
+        )
+        XCTAssertNotNil(cache.currentPresentation)
+
+        textStorage.replaceCharacters(
+            in: NSRange(location: 0, length: 1),
+            with: "X"
+        )
+        XCTAssertNil(cache.currentPresentation)
+
+        let updatedText = textStorage.string
+        let updated = cache.presentation(
+            for: updatedText,
+            snapshot: snapshot
+        )
+        XCTAssertNotEqual(initial.result, updated.result)
+        XCTAssertNotNil(cache.currentPresentation)
+        XCTAssertEqual(cache.parseCount, 2)
+    }
+
+    func testRenderingIndexMatchesFullIntersectionScan() {
+        let source = """
+        **bold _both** italic_ and [label](https://fictional.test/long/path)
+        > ==marked== and ~~removed~~ with `code`
+        """
+        let result = MarkdownSyntax.parse(source)
+        let presentation = MarkdownRenderingPresentation(
+            result: result,
+            previewRanges: MarkdownLivePreview.ranges(
+                in: source,
+                result: result,
+                snapshot: MarkdownLivePreviewSnapshot(
+                    mode: .livePreview,
+                    selection: NSRange(location: 0, length: 0),
+                    isEditing: false
+                )
+            )
+        )
+        let targets = [
+            NSRange(location: 0, length: 7),
+            (source as NSString).range(of: "label"),
+            (source as NSString).range(of: "removed"),
+            NSRange(location: (source as NSString).length - 3, length: 3),
+        ]
+
+        for target in targets {
+            let expectedSpans = result.spans.filter {
+                NSIntersectionRange($0.range, target).length > 0
+            }
+            let candidateIndices = presentation.spanCandidateIndices(
+                intersecting: target
+            )
+            let actualSpans = result.spans[candidateIndices].filter {
+                NSIntersectionRange($0.range, target).length > 0
+            }
+            XCTAssertEqual(Array(actualSpans), expectedSpans)
+
+            var actualHidden: [NSRange] = []
+            presentation.forEachHiddenRange(intersecting: target) {
+                actualHidden.append($0)
+            }
+            let expectedHidden = presentation.hiddenRanges.filter {
+                NSIntersectionRange($0, target).length > 0
+            }
+            XCTAssertEqual(actualHidden, expectedHidden)
+        }
+    }
+
     func testEditorSyntaxCachesReuseExactBytesWithoutCrossEditorThrash() {
         let firstView = MarkdownTextView(usingTextLayoutManager: true)
         let secondView = MarkdownTextView(usingTextLayoutManager: true)

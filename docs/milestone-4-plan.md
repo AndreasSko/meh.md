@@ -222,9 +222,11 @@ app simulator interaction, and physical-device acceptance. Source fidelity,
 composition, selection, undo/redo, and remote replacement remain requirements.
 
 The initial Live Preview collapses headings, bold/italic, highlight,
-strikethrough, inline-code delimiters, and link destinations. Unordered list markers render as native bullets, and quote markers are
+strikethrough, inline-code delimiters, and link destinations. Unordered list
+markers render as native bullets, and quote markers are
 hidden outside the active paragraph while retaining their layout width.
-Ordered list numbers and fenced-code boundaries remain visible. The active paragraph exposes all syntax while editing;
+Ordered list numbers and fenced-code boundaries remain visible. The active
+paragraph exposes all syntax while editing;
 with no editor focus, all supported inline syntax is collapsed.
 
 Shared and native validation: 376 Swift tests ran with zero failures and one
@@ -275,3 +277,18 @@ selection, preview bullets/quote rails with Source switching, and manual
 strikethrough typing. The captured font popover and text-anchored markers
 were visually inspected. Mac and generic iOS builds pass; the earlier full
 iPad toolbar automation limitation is distinct from these focused checks.
+
+## Performance increment
+
+Issue #37 follows the writing-tools PR in a separate stacked performance PR.
+Sorted parser lookups and sweeps avoid repeated code-range, font-span, and
+fenced-line scans. Prepared presentation snapshots and interval indexes keep
+native rendering focused on visible fragments; character edits invalidate
+cached presentation before the next refresh. Source syntax and keyboard
+composition behavior are unchanged.
+
+The reproducible benchmark uses the existing quote-check app with fictional
+notes, optimized builds, and matched Source/Live Preview workloads. See
+[editor performance](editor-performance.md) for measurements, reproduction,
+validation, and remaining whole-document styling cost. Physical-device
+scrolling acceptance remains separate from simulator results.
