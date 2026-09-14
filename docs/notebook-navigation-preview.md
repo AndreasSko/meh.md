@@ -17,10 +17,12 @@ compatibility sync are no longer active. Existing notebooks remain intact.
   Hiding it leaves the editor; compact devices open notes from the tree.
 - New Note immediately opens an editable note with a date-based filename.
   Repeated creation uses a numeric suffix to avoid existing sibling names.
+  The title receives keyboard focus. Return or clicking the body saves it.
 - Create folders from the sidebar context menu or a folder's context menu.
   Folder creation starts inline naming; cancel retains the initial folder.
 - Click the title above the editor to rename a note. The Markdown extension
   is hidden and preserved; long titles wrap within the writing screen.
+  There are no title action buttons or Rename entry in the detail menu.
 - Rename inline; move, trash, and restore from action menus.
 - Drag a note or folder onto another folder to move it. Only IDs belonging to
   this notebook are accepted; dragging external files does not import them.
@@ -62,9 +64,9 @@ above apply to the earlier preview.
 ## Wave 1 writing verification
 
 The date-named creation and inline-title flow has a shared Mac/iPhone UI
-regression using fictional observatory notes. It types without first tapping
-the editor, renames through the title, checks source preservation and title
-wrapping, and creates another note directly from the writing screen.
+regression using fictional observatory notes. It checks initial title focus,
+Return and body-click submission, source preservation, no title action buttons,
+and title wrapping, then creates another note from the writing screen.
 
 The cloud-status UI check uses a disposable localhost notebook. It verifies
 manual sync in the details popover, then relaunches with an injected transport

@@ -8,6 +8,56 @@ final class MarkdownEditorNavigation {
     var resumeEditing: (() -> Void)?
     var focusEditor: (() -> Void)?
     var performCommand: ((MarkdownEditingCommand) -> Void)?
+    var capturePosition: (() -> MarkdownEditorPosition?)?
+    var restorePosition: ((MarkdownEditorPosition) -> Void)?
+
+    private var isAttached = false
+    private var isValid = true
+    private var pendingAttachmentAction: (@MainActor @Sendable () -> Void)?
+
+    func whenAttached(_ action: @escaping @MainActor @Sendable () -> Void) {
+        guard isValid else { return }
+        pendingAttachmentAction = action
+        if isAttached { dispatchAttachmentAction() }
+    }
+
+    func didAttach() {
+        guard isValid else { return }
+        isAttached = true
+        dispatchAttachmentAction()
+    }
+
+    func invalidate() {
+        isValid = false
+        pendingAttachmentAction = nil
+    }
+
+    private func dispatchAttachmentAction() {
+        guard let action = pendingAttachmentAction else { return }
+        pendingAttachmentAction = nil
+        // Run after representable construction has completed.
+        DispatchQueue.main.async { [weak self] in
+            guard self?.isValid == true else { return }
+            action()
+        }
+    }
+}
+
+/// A device-local editing selection and reading position in UTF-16 offsets.
+struct MarkdownEditorPosition: Codable, Equatable, Sendable {
+    let selection: NSRange
+    let scrollAnchor: Int
+    let scrollAnchorOffset: Double
+
+    init(
+        selection: NSRange,
+        scrollAnchor: Int,
+        scrollAnchorOffset: Double
+    ) {
+        self.selection = selection
+        self.scrollAnchor = scrollAnchor
+        self.scrollAnchorOffset = scrollAnchorOffset
+    }
 }
 
 struct MarkdownEditorCommit {
@@ -117,6 +167,31 @@ import AppKit
 
 final class MarkdownTextView: NSTextView {
     let markdownSyntaxCache = MarkdownSyntaxCache()
+    var markdownDidBeginEditing: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { markdownDidBeginEditing?() }
+        return accepted
+    }
+
+    private var reportedWindowAttachment = false
+
+    var markdownDidAttachToWindow: (() -> Void)? {
+        didSet { reportWindowAttachmentIfNeeded() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        reportWindowAttachmentIfNeeded()
+    }
+
+    private func reportWindowAttachmentIfNeeded() {
+        guard window != nil, !reportedWindowAttachment,
+              let markdownDidAttachToWindow else { return }
+        reportedWindowAttachment = true
+        markdownDidAttachToWindow()
+    }
 
     @discardableResult
     func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
@@ -185,6 +260,7 @@ struct MarkdownEditor: NSViewRepresentable {
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
     var onEditError: ((Error) -> Void)?
     var navigation: MarkdownEditorNavigation?
+    var onBeginEditing: () -> Void
     var fontSize: Double
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
@@ -195,6 +271,7 @@ struct MarkdownEditor: NSViewRepresentable {
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
         onEditError: ((Error) -> Void)? = nil,
         navigation: MarkdownEditorNavigation? = nil,
+        onBeginEditing: @escaping () -> Void = {},
         fontSize: Double = 17,
         fontFamily: EditorFontFamily = .system,
         mode: MarkdownEditorMode = .source
@@ -204,6 +281,7 @@ struct MarkdownEditor: NSViewRepresentable {
         self.commitEdit = commitEdit
         self.onEditError = onEditError
         self.navigation = navigation
+        self.onBeginEditing = onBeginEditing
         self.fontSize = fontSize
         self.fontFamily = fontFamily
         self.mode = mode
@@ -269,6 +347,9 @@ struct MarkdownEditor: NSViewRepresentable {
         private var displayedFontFamily: EditorFontFamily
         private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
+        private var pendingPosition: MarkdownEditorPosition?
+        private var positionRestoreScheduled = false
+        private var positionRestoreGeneration = 0
 
         init(parent: MarkdownEditor) {
             self.parent = parent
@@ -303,7 +384,13 @@ struct MarkdownEditor: NSViewRepresentable {
             }
         }
 
-        func attachNavigation(to textView: NSTextView) {
+        func attachNavigation(to textView: MarkdownTextView) {
+            textView.markdownDidBeginEditing = { [weak self] in
+                self?.positionRestoreGeneration &+= 1
+                self?.pendingPosition = nil
+                self?.parent.onBeginEditing()
+            }
+            let navigation = parent.navigation
             parent.navigation?.prepareToLeave = { [weak self, weak textView] in
                 guard let self, let textView else { return true }
                 guard !textView.hasMarkedText() else { return false }
@@ -313,7 +400,8 @@ struct MarkdownEditor: NSViewRepresentable {
                 return true
             }
             parent.navigation?.performCommand = { [weak textView] command in
-                _ = (textView as? MarkdownTextView)?.performMarkdownCommand(command)
+                _ = (textView as? MarkdownTextView)?
+                    .performMarkdownCommand(command)
             }
             parent.navigation?.resumeEditing = { [weak textView] in
                 textView?.isEditable = true
@@ -326,6 +414,18 @@ struct MarkdownEditor: NSViewRepresentable {
                     guard let textView, textView.isEditable else { return }
                     textView.window?.makeFirstResponder(textView)
                 }
+            }
+            parent.navigation?.capturePosition = { [weak self, weak textView] in
+                guard let self, let textView else { return nil }
+                return self.capturePosition(in: textView)
+            }
+            parent.navigation?.restorePosition = {
+                [weak self, weak textView] position in
+                guard let self, let textView else { return }
+                self.schedulePositionRestore(position, in: textView)
+            }
+            textView.markdownDidAttachToWindow = { [weak navigation] in
+                navigation?.didAttach()
             }
         }
 
@@ -349,6 +449,7 @@ struct MarkdownEditor: NSViewRepresentable {
             if textView.string.utf8.elementsEqual(parent.text.utf8) {
                 displayedText = textView.string
                 acceptParentRevision(parent.editRevision)
+                schedulePendingPositionRestore(in: textView)
                 return
             }
 
@@ -363,6 +464,7 @@ struct MarkdownEditor: NSViewRepresentable {
                 revision: parent.editRevision,
                 in: textView
             )
+            schedulePendingPositionRestore(in: textView)
         }
 
         @objc private func undoManagerDidChange(_ notification: Notification) {
@@ -375,9 +477,14 @@ struct MarkdownEditor: NSViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard !isUpdating, parent.mode == .livePreview,
-                  let textView = notification.object as? NSTextView else { return }
-            schedulePresentationRefresh(for: textView)
+            guard !isUpdating,
+                  let textView = notification.object as? NSTextView else {
+                return
+            }
+            if parent.mode == .livePreview {
+                schedulePresentationRefresh(for: textView)
+            }
+            schedulePendingPositionRestore(in: textView)
         }
 
         func textDidChange(_ notification: Notification) {
@@ -385,6 +492,159 @@ struct MarkdownEditor: NSViewRepresentable {
                 return
             }
             synchronizeBinding(from: textView)
+            schedulePendingPositionRestore(in: textView)
+        }
+
+        private func capturePosition(
+            in textView: NSTextView
+        ) -> MarkdownEditorPosition? {
+            guard !textView.hasMarkedText() else { return nil }
+            layoutViewport(in: textView)
+            let source = textView.string
+            let selection = source.clampedSelection(textView.selectedRange())
+            let visibleRect = textView.visibleRect
+            let point = NSPoint(
+                x: visibleRect.minX + textView.textContainerInset.width + 1,
+                y: visibleRect.minY + 1
+            )
+            let rawAnchor = textView.characterIndexForInsertion(at: point)
+            let anchor = source.clampedSelection(
+                NSRange(location: rawAnchor, length: 0)
+            ).location
+            let offset = localCaretRect(at: anchor, in: textView)
+                .map { Double($0.minY - visibleRect.minY) } ?? 0
+            return MarkdownEditorPosition(
+                selection: selection,
+                scrollAnchor: anchor,
+                scrollAnchorOffset: offset.isFinite ? offset : 0
+            )
+        }
+
+        private func schedulePositionRestore(
+            _ position: MarkdownEditorPosition,
+            in textView: NSTextView
+        ) {
+            positionRestoreGeneration &+= 1
+            pendingPosition = position
+            schedulePendingPositionRestore(in: textView)
+        }
+
+        private func schedulePendingPositionRestore(in textView: NSTextView) {
+            guard pendingPosition != nil, !positionRestoreScheduled else {
+                return
+            }
+            positionRestoreScheduled = true
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.positionRestoreScheduled = false
+                guard let textView, !textView.hasMarkedText(),
+                      let position = self.pendingPosition else { return }
+                self.pendingPosition = nil
+                self.restore(position, in: textView)
+            }
+        }
+
+        private func restore(
+            _ position: MarkdownEditorPosition,
+            in textView: NSTextView
+        ) {
+            let source = textView.string
+            let selection = source.clampedSelection(position.selection)
+            let anchor = source.clampedSelection(
+                NSRange(location: position.scrollAnchor, length: 0)
+            ).location
+
+            textView.layoutSubtreeIfNeeded()
+            textView.setSelectedRange(selection)
+            textView.scrollRangeToVisible(
+                NSRange(location: anchor, length: 0)
+            )
+            layoutViewport(in: textView)
+
+            let generation = positionRestoreGeneration
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.finishRestore(
+                    position, generation: generation, attemptsRemaining: 2,
+                    in: textView
+                )
+            }
+        }
+
+        private func finishRestore(
+            _ position: MarkdownEditorPosition,
+            generation: Int,
+            attemptsRemaining: Int,
+            in textView: NSTextView
+        ) {
+            guard generation == positionRestoreGeneration else { return }
+            guard !textView.hasMarkedText() else {
+                pendingPosition = position
+                return
+            }
+            layoutViewport(in: textView)
+            let anchor = textView.string.clampedSelection(
+                NSRange(location: position.scrollAnchor, length: 0)
+            ).location
+            guard let scrollView = textView.enclosingScrollView,
+                  let anchorRect = localCaretRect(at: anchor, in: textView)
+            else { return }
+            let clipView = scrollView.contentView
+            let offset = position.scrollAnchorOffset.isFinite
+                ? CGFloat(position.scrollAnchorOffset) : 0
+            let minimumY = textView.bounds.minY
+            let maximumY = max(
+                minimumY, textView.bounds.maxY - clipView.bounds.height
+            )
+            let targetY = min(maximumY, max(minimumY, anchorRect.minY - offset))
+            if abs(clipView.bounds.minY - targetY) <= 0.5 { return }
+            clipView.scroll(to: NSPoint(x: clipView.bounds.minX, y: targetY))
+            scrollView.reflectScrolledClipView(clipView)
+            // Layout after scrolling can replace estimated fragment positions.
+            // Check again on the next layout turn, with a strict attempt limit.
+            guard attemptsRemaining > 0 else { return }
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.finishRestore(
+                    position, generation: generation,
+                    attemptsRemaining: attemptsRemaining - 1, in: textView
+                )
+            }
+        }
+
+        private func layoutViewport(in textView: NSTextView) {
+            textView.layoutSubtreeIfNeeded()
+            textView.textLayoutManager?.textViewportLayoutController
+                .layoutViewport()
+            textView.layoutSubtreeIfNeeded()
+        }
+
+        private func localCaretRect(
+            at location: Int,
+            in textView: NSTextView
+        ) -> NSRect? {
+            guard let layoutManager = textView.textLayoutManager,
+                  let contentManager = layoutManager.textContentManager,
+                  let start = contentManager.location(
+                      contentManager.documentRange.location, offsetBy: location
+                  ), let range = NSTextRange(location: start, end: start)
+            else { return nil }
+            // Query the anchor itself. NSTextView's input-method rectangle
+            // can describe the active selection instead of an offscreen range.
+            layoutManager.ensureLayout(for: range)
+            var caretRect: NSRect?
+            layoutManager.enumerateTextSegments(
+                in: range, type: .selection, options: [.rangeNotRequired]
+            ) { _, frame, _, _ in
+                if frame.minY.isFinite, !frame.isNull {
+                    caretRect = frame.offsetBy(
+                        dx: textView.textContainerOrigin.x,
+                        dy: textView.textContainerOrigin.y
+                    )
+                }
+                return false
+            }
+            return caretRect
         }
 
         private func synchronizeBinding(from textView: NSTextView) {
@@ -544,6 +804,28 @@ final class MarkdownTextView: UITextView {
         markdownState.syntaxCache
     }
 
+    var markdownDidAttachToWindow: (() -> Void)? {
+        get { markdownState.didAttachToWindow }
+        set {
+            markdownState.didAttachToWindow = newValue
+            reportWindowAttachmentIfNeeded()
+        }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        reportWindowAttachmentIfNeeded()
+    }
+
+    private func reportWindowAttachmentIfNeeded() {
+        guard window != nil, !markdownState.reportedWindowAttachment,
+              let didAttachToWindow = markdownState.didAttachToWindow else {
+            return
+        }
+        markdownState.reportedWindowAttachment = true
+        didAttachToWindow()
+    }
+
     @discardableResult
     func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
         guard isEditable, markedTextRange == nil,
@@ -639,6 +921,8 @@ final class MarkdownTextView: UITextView {
 private final class MarkdownTextViewState: NSObject {
     var isApplyingCommand = false
     var isPasting = false
+    var reportedWindowAttachment = false
+    var didAttachToWindow: (() -> Void)?
     let syntaxCache = MarkdownSyntaxCache()
     var layoutDelegate: MarkdownLayoutManagerDelegate?
 }
@@ -756,6 +1040,7 @@ struct MarkdownEditor: UIViewRepresentable {
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
     var onEditError: ((Error) -> Void)?
     var navigation: MarkdownEditorNavigation?
+    var onBeginEditing: () -> Void
     var fontSize: Double
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
@@ -766,6 +1051,7 @@ struct MarkdownEditor: UIViewRepresentable {
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
         onEditError: ((Error) -> Void)? = nil,
         navigation: MarkdownEditorNavigation? = nil,
+        onBeginEditing: @escaping () -> Void = {},
         fontSize: Double = 17,
         fontFamily: EditorFontFamily = .system,
         mode: MarkdownEditorMode = .source
@@ -775,6 +1061,7 @@ struct MarkdownEditor: UIViewRepresentable {
         self.commitEdit = commitEdit
         self.onEditError = onEditError
         self.navigation = navigation
+        self.onBeginEditing = onBeginEditing
         self.fontSize = fontSize
         self.fontFamily = fontFamily
         self.mode = mode
@@ -836,8 +1123,13 @@ struct MarkdownEditor: UIViewRepresentable {
         private var displayedFontFamily: EditorFontFamily
         private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
+        private var pendingPosition: MarkdownEditorPosition?
+        private var positionRestoreScheduled = false
+        private var positionRestoreGeneration = 0
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            positionRestoreGeneration &+= 1
+            pendingPosition = nil
             scrollView.endEditing(false)
         }
 
@@ -852,7 +1144,8 @@ struct MarkdownEditor: UIViewRepresentable {
             )
         }
 
-        func attachNavigation(to textView: UITextView) {
+        func attachNavigation(to textView: MarkdownTextView) {
+            let navigation = parent.navigation
             parent.navigation?.prepareToLeave = { [weak self, weak textView] in
                 guard let self, let textView else { return true }
                 guard textView.markedTextRange == nil else { return false }
@@ -862,7 +1155,8 @@ struct MarkdownEditor: UIViewRepresentable {
                 return true
             }
             parent.navigation?.performCommand = { [weak textView] command in
-                _ = (textView as? MarkdownTextView)?.performMarkdownCommand(command)
+                _ = (textView as? MarkdownTextView)?
+                    .performMarkdownCommand(command)
             }
             parent.navigation?.resumeEditing = { [weak textView] in
                 textView?.isEditable = true
@@ -875,6 +1169,18 @@ struct MarkdownEditor: UIViewRepresentable {
                         _ = textView.becomeFirstResponder()
                     }
                 }
+            }
+            parent.navigation?.capturePosition = { [weak self, weak textView] in
+                guard let self, let textView else { return nil }
+                return self.capturePosition(in: textView)
+            }
+            parent.navigation?.restorePosition = {
+                [weak self, weak textView] position in
+                guard let self, let textView else { return }
+                self.schedulePositionRestore(position, in: textView)
+            }
+            textView.markdownDidAttachToWindow = { [weak navigation] in
+                navigation?.didAttach()
             }
         }
 
@@ -898,6 +1204,7 @@ struct MarkdownEditor: UIViewRepresentable {
             if textView.text.utf8.elementsEqual(parent.text.utf8) {
                 displayedText = textView.text
                 acceptParentRevision(parent.editRevision)
+                schedulePendingPositionRestore(in: textView)
                 return
             }
 
@@ -912,15 +1219,20 @@ struct MarkdownEditor: UIViewRepresentable {
                 revision: parent.editRevision,
                 in: textView
             )
+            schedulePendingPositionRestore(in: textView)
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
-            guard !isUpdating, parent.mode == .livePreview else { return }
-            schedulePresentationRefresh(for: textView)
+            guard !isUpdating else { return }
+            if parent.mode == .livePreview {
+                schedulePresentationRefresh(for: textView)
+            }
+            schedulePendingPositionRestore(in: textView)
         }
 
         func textViewDidChange(_ textView: UITextView) {
             guard !isUpdating, textView.markedTextRange == nil else { return }
+            defer { schedulePendingPositionRestore(in: textView) }
             let nativeText = textView.text ?? ""
             guard !displayedText.utf8.elementsEqual(nativeText.utf8) else {
                 return
@@ -955,6 +1267,175 @@ struct MarkdownEditor: UIViewRepresentable {
                 hasUncommittedText = true
                 parent.onEditError?(error)
             }
+        }
+
+        private func capturePosition(
+            in textView: UITextView
+        ) -> MarkdownEditorPosition? {
+            guard textView.markedTextRange == nil else { return nil }
+            let source = textView.text ?? ""
+            let selection = source.clampedSelection(textView.selectedRange)
+            let visibleBounds = textView.bounds
+            let point = CGPoint(
+                x: visibleBounds.minX + textView.textContainerInset.left
+                    + textView.textContainer.lineFragmentPadding + 1,
+                y: visibleBounds.minY + 1
+            )
+            let rawAnchor: Int
+            if let textPosition = textView.closestPosition(to: point) {
+                rawAnchor = textView.offset(
+                    from: textView.beginningOfDocument,
+                    to: textPosition
+                )
+            } else {
+                rawAnchor = selection.location
+            }
+            let anchor = source.clampedSelection(
+                NSRange(location: rawAnchor, length: 0)
+            ).location
+            let offset = localCaretRect(at: anchor, in: textView)
+                .map { Double($0.minY - visibleBounds.minY) } ?? 0
+            return MarkdownEditorPosition(
+                selection: selection,
+                scrollAnchor: anchor,
+                scrollAnchorOffset: offset.isFinite ? offset : 0
+            )
+        }
+
+        private func schedulePositionRestore(
+            _ position: MarkdownEditorPosition,
+            in textView: UITextView
+        ) {
+            positionRestoreGeneration &+= 1
+            pendingPosition = position
+            schedulePendingPositionRestore(in: textView)
+        }
+
+        private func schedulePendingPositionRestore(in textView: UITextView) {
+            guard pendingPosition != nil, !positionRestoreScheduled else {
+                return
+            }
+            positionRestoreScheduled = true
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self else { return }
+                self.positionRestoreScheduled = false
+                guard let textView, textView.markedTextRange == nil,
+                      let position = self.pendingPosition else { return }
+                self.pendingPosition = nil
+                self.restore(
+                    position,
+                    generation: self.positionRestoreGeneration,
+                    in: textView
+                )
+            }
+        }
+
+        private func restore(
+            _ position: MarkdownEditorPosition,
+            generation: Int,
+            in textView: UITextView
+        ) {
+            let source = textView.text ?? ""
+            let selection = source.clampedSelection(position.selection)
+            let anchor = source.clampedSelection(
+                NSRange(location: position.scrollAnchor, length: 0)
+            ).location
+
+            textView.layoutIfNeeded()
+            textView.selectedRange = selection
+            textView.scrollRangeToVisible(
+                NSRange(location: anchor, length: 0)
+            )
+            textView.setNeedsLayout()
+            textView.layoutIfNeeded()
+            // TextKit 2 can expose an estimated contentSize until a scroll
+            // reaches that provisional extent. Apply the offset after this
+            // layout turn, then converge again if the anchor misses its saved
+            // viewport coordinate as more content is materialized.
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                guard textView.markedTextRange == nil else {
+                    guard generation == self.positionRestoreGeneration else {
+                        return
+                    }
+                    self.pendingPosition = position
+                    return
+                }
+                self.finishRestore(
+                    position,
+                    generation: generation,
+                    attemptsRemaining: 2,
+                    in: textView
+                )
+            }
+        }
+
+        private func finishRestore(
+            _ position: MarkdownEditorPosition,
+            generation: Int,
+            attemptsRemaining: Int,
+            in textView: UITextView
+        ) {
+            guard generation == positionRestoreGeneration else { return }
+            let source = textView.text ?? ""
+            let anchor = source.clampedSelection(
+                NSRange(location: position.scrollAnchor, length: 0)
+            ).location
+            textView.layoutIfNeeded()
+
+            guard let anchorRect = localCaretRect(at: anchor, in: textView)
+            else { return }
+            let offset = position.scrollAnchorOffset.isFinite
+                ? CGFloat(position.scrollAnchorOffset) : 0
+            let insets = textView.adjustedContentInset
+            let minimumY = -insets.top
+            let maximumY = max(
+                minimumY,
+                textView.contentSize.height - textView.bounds.height
+                    + insets.bottom
+            )
+            let desiredY = anchorRect.minY - offset
+            textView.setContentOffset(
+                CGPoint(
+                    x: textView.contentOffset.x,
+                    y: min(maximumY, max(minimumY, desiredY))
+                ),
+                animated: false
+            )
+            let restoredOffset = anchorRect.minY - textView.bounds.minY
+            guard attemptsRemaining > 0,
+                  abs(restoredOffset - offset) > 1 else { return }
+            textView.setNeedsLayout()
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, let textView,
+                      generation == self.positionRestoreGeneration else {
+                    return
+                }
+                guard textView.markedTextRange == nil else {
+                    self.pendingPosition = position
+                    return
+                }
+                textView.layoutIfNeeded()
+                self.finishRestore(
+                    position,
+                    generation: generation,
+                    attemptsRemaining: attemptsRemaining - 1,
+                    in: textView
+                )
+            }
+        }
+
+        private func localCaretRect(
+            at location: Int,
+            in textView: UITextView
+        ) -> CGRect? {
+            guard let position = textView.position(
+                from: textView.beginningOfDocument,
+                offset: location
+            ) else { return nil }
+            let rect = textView.caretRect(for: position)
+            guard rect.minX.isFinite, rect.minY.isFinite else { return nil }
+            return rect
         }
 
         private func acceptParentRevision(_ revision: Data?) {
@@ -1019,6 +1500,9 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            parent.onBeginEditing()
+            positionRestoreGeneration &+= 1
+            pendingPosition = nil
             schedulePresentationRefresh(for: textView)
         }
 

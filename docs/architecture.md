@@ -31,6 +31,11 @@ received during composition. Remote buffer replacement clears stale native
 undo/redo entries; subsequent local edits start a new undo history. Failed
 commits retain the visible buffer.
 
+Each notebook view now owns its selection/session through a small scene-local
+navigation model. Recents, collapse state, last-note selection, and native
+positions are device-local preferences; see the [local navigation
+contract](notebook-local-navigation.md). Multiple windows remain separate work.
+
 ## Document core and local storage
 
 `Sources/NoteCore` owns stable identities, literal note text, metadata,

@@ -11,6 +11,7 @@ final class EditorKeyboardUITests: XCTestCase {
         let newItem = app.buttons["notebook-new-item"]
         XCTAssertTrue(newItem.waitForExistence(timeout: 15))
         newItem.tap()
+        commitDefaultTitle(in: app)
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
@@ -43,6 +44,7 @@ final class EditorKeyboardUITests: XCTestCase {
         let newItem = app.buttons["notebook-new-item"]
         XCTAssertTrue(newItem.waitForExistence(timeout: 15))
         newItem.tap()
+        commitDefaultTitle(in: app)
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
@@ -182,11 +184,22 @@ final class EditorKeyboardUITests: XCTestCase {
         let newItem = app.buttons["notebook-new-item"]
         XCTAssertTrue(newItem.waitForExistence(timeout: 15))
         newItem.tap()
+        commitDefaultTitle(in: app)
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         return editor
+    }
+
+    private func commitDefaultTitle(in app: XCUIApplication) {
+        let titleField = app.textFields["title-field"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 10))
+        #if os(macOS)
+        titleField.typeKey(.return, modifierFlags: [])
+        #else
+        titleField.typeText("\n")
+        #endif
     }
 
     private func dragEditor(_ editor: XCUIElement) {
