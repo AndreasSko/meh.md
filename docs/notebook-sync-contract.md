@@ -47,8 +47,9 @@ checkpoints, but is not uploaded until listed. This prevents accidental
 publication while ensuring that a lost staged body triggers replay.
 Overlapping exchanges are prevented. See the
 [progress and batching contract](notebook-sync-progress.md) for current
-upload grouping and foreground checks. Background scheduling remains separate
-work; no background delivery or large-library performance claim is made.
+upload grouping. [Automatic scheduling](notebook-sync-scheduling.md) is
+implemented around these finite exchanges; actual background delivery remains
+a physical-device validation item.
 
 ## Permanent deletion boundary
 
@@ -65,7 +66,11 @@ survives catalog recovery. Cloud cleanup follows acknowledged catalog markers
 and preserves cursor positions. Delete Permanently and Empty Trash expose
 this contract with confirmation and retryable failures.
 
-## Verification
+## Stage 2 verification record
+
+These results describe the original stage 2 checkpoint. Later coverage and
+scale measurements are in [notebook sync
+validation](notebook-sync-validation.md).
 
 The stage passed 190 Swift tests, including 22 native-editor regressions,
 13 Python service tests, and Local Mac/iOS Simulator builds. Tests inject
@@ -83,7 +88,8 @@ MEH_NOTEBOOK_HTTP_URL=http://127.0.0.1:8765 swift test --disable-sandbox
 python3 -m unittest discover -s Tools/LocalSyncServer -p 'test_*.py'
 ```
 
-Navigation and app activation are integrated. A signed Mac iCloud Dev launch
-joined the existing canonical note and synced a newly created folder. Physical
-cross-device notebook sync, iPad behavior, library import, cleanup, scale, and
-energy acceptance remain later milestone work.
+At that checkpoint, a signed Mac iCloud Dev launch joined the existing
+canonical note and synced a newly created folder. Import, permanent cleanup,
+and automatic scheduling were delivered later in milestone 3; see its
+[closeout record](milestone-3-plan.md). Physical-device delivery and energy
+acceptance are distinct from those implementation results.

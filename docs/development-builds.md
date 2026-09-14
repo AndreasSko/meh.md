@@ -15,8 +15,8 @@ commands continue to work. All schemes use the same app target.
 1. Select `meh.md iCloud Dev` and run it on your Mac.
 2. Select the same scheme and run it on your iPhone. Both devices must use the
    same iCloud account.
-3. Edit notes or folder metadata while both apps are open. The prototype
-   checks while foregrounded. Open Sync Details from the cloud toolbar button
+3. Edit notes or folder metadata while both apps are open. CloudKit schedules
+   sync automatically. Open Sync Details from the cloud toolbar button
    for Sync Now, progress, and errors. The bottom indicator hides when idle.
    Sync Event Log retains recent local diagnostics; use Copy Log or Share Log
    after an unexpected upload or retry.

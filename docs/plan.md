@@ -4,41 +4,21 @@ Updated: 2026-09-13
 
 ## Current state
 
-- Product scope and initial plan are documented.
-- A basic multiplatform Xcode project exists for macOS, iPhone, and iPad.
-- A literal-Markdown editor spike exists and has passed macOS and generic iOS
-  simulator builds. Its macOS editing checks are recorded separately.
-- The Automerge spike validates Unicode, history through file replacement,
-  local merges, and interrupted saves. Real native adapter tests pass on
-  macOS and iOS after a targeted macOS undo callback correction.
-- The milestone 1 single-note core saves serialized Automerge files, tracks
-  saved state with heads, and supports explicit previous-file recovery. Its
-  managed Markdown copy and signed Mac app checks passed. The activated app
-  now imports that state into the milestone 3 notebook.
-- The editor has been visually checked in iPhone and iPad simulators. The owner
-  has exercised editing and undo on a physical iPhone; iPad device interaction
-  remains open.
-- The editor direction is recorded: SwiftUI hosts thin native text views,
-  both explicitly using TextKit 2, while syntax detection and later document
-  behavior remain shared. Paint-only styles use rendering attributes; font
-  styles use undo-suppressed text-storage attributes.
-- The document boundary is recorded: shared document state is authoritative,
-  while Markdown files are derived copies maintained by a separate writer.
-- Editor styling is implemented, with 14 macOS native editor tests passing.
-- The iPhone 17 simulator save/reopen and Files checks passed. Milestones 1
-  and 2 are complete; historical validation limits remain in their records.
-- Milestone 3 is complete as an implementation milestone. PRs #14, #16, and
-  #18 were reviewed and merged on 2026-09-13. The notebook supports folders,
-  import, structured Markdown copies, permanent deletion, sync diagnostics,
-  and automatic scheduling. The development legacy bridge is removed.
-- Final validation passed 317 Swift tests and 16 Python tests, a signed Mac
-  iCloud Dev build, and iOS Simulator app/UI-test compilation. Automated
-  evidence does not establish physical-device notification delivery.
-- Milestone 4 now prioritizes pleasant everyday writing, as specified in its
-  [execution plan](milestone-4-plan.md). The reported persisted sync pause
-  remains in [recovery issue 22][issue-22]; automatic Mac receiving still
-  needs [device verification][issue-24]. Reprioritizing these follow-ups does
-  not establish complete device-level sync acceptance.
+Milestones 0-3 delivered a native Markdown editor, Automerge-backed local
+saving, a sync transport, and a notebook with folders, import, Markdown copies,
+Trash, permanent deletion, and automatic sync scheduling. Milestone 3 closed
+on 2026-09-13; its [closeout record](milestone-3-plan.md) preserves review and
+validation evidence.
+
+Milestone 4 prioritizes pleasant everyday writing; see its
+[execution plan](milestone-4-plan.md). [Sync-pause recovery][issue-22] and
+[Mac automatic receiving][issue-24] are explicit follow-ups. GitHub issues
+track ongoing work; completed implementation milestones do not imply complete
+physical-device acceptance. Earlier single-note checks remain historical
+evidence, and physical iPad interaction still needs validation.
+
+See the [architecture](architecture.md) for the implemented design and the
+[documentation index](README.md) for contracts and verification records.
 
 ## Working method
 
