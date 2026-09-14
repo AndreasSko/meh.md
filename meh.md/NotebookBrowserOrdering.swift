@@ -7,6 +7,22 @@ struct NotebookBrowserReorderRequest: Equatable, Sendable {
 }
 
 enum NotebookBrowserOrdering {
+    /// Maps the gap after a visible folder subtree to its last sibling slot.
+    static func requestFromVisibleTree(
+        sources: [UUID],
+        before: UUID?,
+        parentID: UUID?,
+        siblingIDs: [UUID],
+        endAnchor: UUID?
+    ) -> NotebookBrowserReorderRequest? {
+        guard before != nil || endAnchor == nil else { return nil }
+        return request(
+            sources: sources,
+            before: before == endAnchor ? nil : before,
+            parentID: parentID,
+            siblingIDs: siblingIDs
+        )
+    }
 
     static func request(
         sources: [UUID],

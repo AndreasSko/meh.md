@@ -60,5 +60,37 @@ final class NotebookBrowserOrderingTests: XCTestCase {
             siblingIDs: [first, second, third]
         ))
     }
+    func testFolderEndGapMapsToSiblingEndWithoutCrossParentMoves() {
+        let parent = UUID()
+        let followingRootItem = UUID()
+        let moved = NotebookBrowserOrdering.requestFromVisibleTree(
+            sources: [first], before: followingRootItem, parentID: parent,
+            siblingIDs: [first, second, third], endAnchor: followingRootItem
+        )
+        XCTAssertEqual(moved?.sources, [first])
+        XCTAssertEqual(moved?.parentID, parent)
+        XCTAssertNil(moved?.before)
+        XCTAssertNil(NotebookBrowserOrdering.requestFromVisibleTree(
+            sources: [first], before: nil, parentID: parent,
+            siblingIDs: [first, second, third], endAnchor: followingRootItem
+        ))
+        XCTAssertNil(NotebookBrowserOrdering.requestFromVisibleTree(
+            sources: [first], before: UUID(), parentID: parent,
+            siblingIDs: [first, second, third], endAnchor: followingRootItem
+        ))
+        XCTAssertNil(NotebookBrowserOrdering.requestFromVisibleTree(
+            sources: [first, followingRootItem], before: third, parentID: parent,
+            siblingIDs: [first, second, third], endAnchor: followingRootItem
+        ))
+    }
+
+    func testLastFolderCanUseGlobalEnd() {
+        let request = NotebookBrowserOrdering.requestFromVisibleTree(
+            sources: [first], before: nil, parentID: UUID(),
+            siblingIDs: [first, second], endAnchor: nil
+        )
+        XCTAssertEqual(request?.sources, [first])
+        XCTAssertNil(request?.before)
+    }
 
 }

@@ -1,6 +1,9 @@
+import CoreTransferable
 import Foundation
 import NoteCore
 import SwiftUI
+
+import UniformTypeIdentifiers
 
 #if os(macOS)
     import AppKit
@@ -13,12 +16,26 @@ private struct EditorAttachmentID: Hashable {
     let isEditingEnabled: Bool
 }
 
-private struct NotebookSidebarRow: Identifiable {
+private struct NotebookSidebarRow: Codable, Identifiable, Transferable {
+    let notebookID: UUID?
     let id: UUID
+    let parentID: UUID?
+    let kind: NotebookItemKind
     let depth: Int
 
-    init(placement: NotebookPlacement, depth: Int) {
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+    }
+
+    init(
+        notebookID: UUID?,
+        placement: NotebookPlacement,
+        depth: Int
+    ) {
+        self.notebookID = notebookID
         id = placement.item.id
+        parentID = placement.parentID
+        kind = placement.item.kind
         self.depth = depth
     }
 }
@@ -91,6 +108,7 @@ struct NotebookView: View {
                             Text("Notebook")
                         }
                         .buttonStyle(.plain)
+                        // A sidebar-wide menu intercepts native row drags.
                         .contextMenu { creationActions(parentID: nil) }
                         .accessibilityIdentifier("notebook-tree-toggle")
                         .accessibilityValue(
@@ -105,6 +123,23 @@ struct NotebookView: View {
                     if navigationState.isTreeExpanded {
                         activeTree
                     }
+                    Color.clear
+                        .frame(height: 24)
+                        .contentShape(Rectangle())
+                        .dropDestination(
+                            for: NotebookSidebarRow.self,
+                            isEnabled: !busy && !selectingItems
+                        ) { items, _ in
+                            guard let notebookID =
+                                    replica.catalogSnapshot?.notebookID,
+                                  items.count == 1,
+                                  let item = items.first,
+                                  item.notebookID == notebookID,
+                                  canAcceptDrop(item, into: nil)
+                            else { return }
+                            move(item.id, to: nil)
+                        }
+                        .accessibilityHidden(true)
                     Button {
                         perform {
                             try await flushEditor()
@@ -130,6 +165,22 @@ struct NotebookView: View {
                     }
                 }
                 .padding(10)
+                .reorderContainer(
+                    for: NotebookSidebarRow.self,
+                    isEnabled: !busy && !selectingItems
+                ) { difference in
+                    let before: UUID?
+                    switch difference.destination.position {
+                    case .before(let id): before = id
+                    case .end: before = nil
+                    }
+                    reorderVisibleItems(difference.sources, before: before)
+                }
+                .dragContainer(for: NotebookSidebarRow.self, itemID: \.id) {
+                    (ids: [UUID]) -> [NotebookSidebarRow] in
+                    dragPayload(ids)
+                }
+                .dragConfiguration(DragConfiguration(allowMove: true))
             }
             .swipeActionsContainer()
             .navigationTitle("meh.md")
@@ -485,6 +536,7 @@ struct NotebookView: View {
                             selectedID == id ? Color.accentColor.opacity(0.14) : Color.clear,
                             in: RoundedRectangle(cornerRadius: 6)
                         )
+                        .id("notebook-recent-" + id.uuidString)
                         .accessibilityIdentifier("notebook-recent-" + id.uuidString)
                         .contextMenu { actions(for: placement, allowsCreation: false) }
                     }
@@ -514,9 +566,52 @@ struct NotebookView: View {
     private var activeTree: some View {
         ForEach(visibleActiveRows) { row in
             sidebarRow(row)
+                .draggable(containerItemID: row.id)
         }
+        .reorderable()
     }
 
+    private func reorderVisibleItems(_ sources: [UUID], before: UUID?) {
+        let rows = visibleActiveRows
+        guard let first = sources.first,
+              let source = rows.first(where: { $0.id == first })
+        else { return }
+        let parentID = source.parentID
+        let siblingIDs = replica.orderedChildren(parentID: parentID)
+            .map(\.item.id)
+        let endAnchor: UUID?
+        if let parentID,
+           let parentIndex = rows.firstIndex(where: { $0.id == parentID }) {
+            let parentDepth = rows[parentIndex].depth
+            endAnchor = rows.dropFirst(parentIndex + 1)
+                .first(where: { $0.depth <= parentDepth })?.id
+        } else {
+            endAnchor = nil
+        }
+        guard let request = NotebookBrowserOrdering.requestFromVisibleTree(
+            sources: sources,
+            before: before,
+            parentID: parentID,
+            siblingIDs: siblingIDs,
+            endAnchor: endAnchor
+        )
+        else { return }
+        reorder(request)
+    }
+
+    private func dragPayload(_ ids: [UUID]) -> [NotebookSidebarRow] {
+        guard !busy && !selectingItems,
+              editingID == nil,
+              let notebookID = replica.catalogSnapshot?.notebookID
+        else { return [] }
+        return visibleActiveRows.filter { row in
+            ids.contains(row.id) && row.notebookID == notebookID
+                && replica.placements.contains { placement in
+                    placement.item.id == row.id
+                        && placement.parentID == placement.item.parentID
+                }
+        }
+    }
 
     private var activeBrowserIDs: Set<UUID> {
         Set(replica.placements.filter { !$0.isInTrash }.map(\.item.id))
@@ -605,6 +700,7 @@ struct NotebookView: View {
             inTrash: inTrash
         ) {
             result.append(NotebookSidebarRow(
+                notebookID: replica.catalogSnapshot?.notebookID,
                 placement: placement,
                 depth: initialDepth
             ))
@@ -736,7 +832,19 @@ struct NotebookView: View {
                     .accessibilityIdentifier("notebook-swipe-trash")
                 }
             }
-
+            .dropDestination(
+                for: NotebookSidebarRow.self,
+                isEnabled: placement.item.kind == .folder
+                    && !placement.isInTrash && !busy && !selectingItems
+            ) { items, _ in
+                guard items.count == 1,
+                      let dragged = items.first,
+                      dragged.notebookID == row.notebookID,
+                      dragged.id != placement.item.id,
+                      canAcceptDrop(dragged, into: placement.item.id)
+                else { return }
+                move(dragged.id, to: placement.item.id)
+            }
         }
     }
 
@@ -1107,6 +1215,10 @@ struct NotebookView: View {
         }
     }
 
+    private func move(_ id: UUID, to parentID: UUID?) {
+        moveItems([id], to: parentID)
+    }
+
     private func moveItems(
         _ ids: [UUID], to parentID: UUID?, fromTrash: Bool = false
     ) {
@@ -1180,6 +1292,35 @@ struct NotebookView: View {
                   !placement.isInTrash, placement.item.kind == .folder
             else { return false }
             ancestor = placement.parentID
+        }
+        return true
+    }
+
+    private func canAcceptDrop(
+        _ dragged: NotebookSidebarRow,
+        into destinationID: UUID?
+    ) -> Bool {
+        guard let source = replica.placements.first(where: {
+            $0.item.id == dragged.id
+        }), !source.isInTrash,
+              source.item.kind == dragged.kind,
+              source.parentID == dragged.parentID
+        else { return false }
+        guard let destinationID else { return true }
+        guard let destination = replica.placements.first(where: {
+            $0.item.id == destinationID
+        }), destination.item.kind == .folder, !destination.isInTrash
+        else { return false }
+
+        var ancestor: NotebookPlacement? = destination
+        while let current = ancestor {
+            if current.item.id == source.item.id { return false }
+            guard let parentID = current.parentID else { break }
+            guard let parent = replica.placements.first(where: {
+                $0.item.id == parentID
+            }), !parent.isInTrash
+            else { return false }
+            ancestor = parent
         }
         return true
     }
