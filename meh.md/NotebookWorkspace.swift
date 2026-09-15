@@ -61,7 +61,12 @@ final class NotebookWorkspace {
     private let documentsDirectory: URL
     private var notebookTransport: (any SyncTransport)?
     private var publisher: NotebookMarkdownPublisher?
-    private var scheduledRefresh: Task<Void, Never>?
+    @ObservationIgnored private var scheduledRefresh: Task<Void, Never>?
+    @ObservationIgnored private var syncSchedule = NotebookSyncSchedule()
+    @ObservationIgnored private let syncClock = ContinuousClock()
+    @ObservationIgnored private let syncClockOrigin = ContinuousClock.now
+    @ObservationIgnored private var pendingSyncTrigger = "automatic refresh"
+
     @ObservationIgnored private var cloudActivityTask: Task<Void, Never>?
     @ObservationIgnored private var connectivityMonitor: NWPathMonitor?
     @ObservationIgnored private var previousConnectivity: NWPath.Status?
@@ -73,6 +78,8 @@ final class NotebookWorkspace {
     private var backgroundExecution: UIBackgroundTaskIdentifier = .invalid
     #endif
     private var needsAnotherRefresh = false
+    private var needsImmediateRefresh = false
+    private var needsManualRefresh = false
     private var isPublishingCopies = false
     private var needsAnotherCopyPublication = false
 
@@ -157,11 +164,11 @@ final class NotebookWorkspace {
     /// Deterministic app-model tests use the same scheduler with an isolated
     /// replica and transport, without a signed app or CloudKit account.
     init(directory: URL, documentsDirectory: URL, transport: any SyncTransport,
-         automaticSync: Bool) {
+         automaticSync: Bool, mode: Mode? = nil) {
         self.directory = directory
         self.documentsDirectory = documentsDirectory
         self.automaticSync = automaticSync
-        mode = .development(URL(string: "http://127.0.0.1")!, "model-test")
+        self.mode = mode ?? .development(URL(string: "http://127.0.0.1")!, "model-test")
         notebookTransport = transport
     }
 
@@ -226,23 +233,47 @@ final class NotebookWorkspace {
         }
     }
 
+    private var syncTime: Duration { syncClockOrigin.duration(to: syncClock.now) }
+
+    func noteDidEdit() {
+        guard automaticSync, usesSync else { return }
+        syncSchedule.noteEdited(at: syncTime)
+        armScheduledRefresh()
+    }
+
+    func requestAutomaticRefresh(trigger: String) {
+        guard automaticSync else { return }
+        scheduleRefresh(trigger: trigger)
+    }
+
     func contentDidSave(trigger: String = "saved content or catalog update") {
         guard !isPreview else { return }
         scheduleRefresh(trigger: trigger)
     }
 
     private func scheduleRefresh(trigger: String, notBefore: Date? = nil) {
+        pendingSyncTrigger = trigger
+        syncSchedule.request(at: syncTime)
+        armScheduledRefresh(notBefore: notBefore)
+    }
+
+    private func armScheduledRefresh(notBefore: Date? = nil) {
+        guard let policyDelay = syncSchedule.delay(at: syncTime) else { return }
         scheduledRefresh?.cancel()
-        let earliest = max(Date().addingTimeInterval(0.75),
-                           notBefore ?? syncRetryNotBefore ?? Date())
+        guard isForeground || !usesSync || !automaticSync else { return }
+        let retryDelay = Duration.seconds(max(
+            0, (notBefore ?? syncRetryNotBefore ?? Date()).timeIntervalSinceNow
+        ))
+        let delay = max(policyDelay, retryDelay)
         scheduledRefresh = Task { @MainActor [weak self] in
-            do { try await Task.sleep(for: .seconds(max(0, earliest.timeIntervalSinceNow))) }
+            do { try await Task.sleep(for: delay) }
             catch { return }
-            guard let self else { return }
+            guard let self, !Task.isCancelled else { return }
             scheduledRefresh = nil
             if usesSync && !automaticSync {
+                syncSchedule.clearPending()
                 await publishCopies()
-            } else { await refresh(trigger: trigger) }
+            } else { await refresh(trigger: pendingSyncTrigger) }
         }
     }
 
@@ -251,14 +282,18 @@ final class NotebookWorkspace {
         isForeground = isActive
         guard automaticSync, changed else { return }
         if isActive {
-            Task { await refresh(trigger: "foreground activation") }
+            requestAutomaticRefresh(trigger: "foreground activation")
         } else {
             // The engine owns background scheduling. App retry timers resume
             // at the next activation; their durable pending work stays saved.
             scheduledRefresh?.cancel()
             scheduledRefresh = nil
             if usesSync {
-                Task { await refresh(trigger: "background transition") }
+                Task {
+                    do { try await replica?.flushOpenNotes() }
+                    catch { errorMessage = error.localizedDescription; return }
+                    await refresh(trigger: "background transition")
+                }
             }
         }
     }
@@ -306,10 +341,13 @@ final class NotebookWorkspace {
             if manual { showSyncCheck = true }
             if usesSync { syncEventLog.record("refresh coalesced: " + trigger) }
             needsAnotherRefresh = true
+            needsImmediateRefresh = needsImmediateRefresh || manual || !isForeground
+            needsManualRefresh = needsManualRefresh || manual
             return
         }
         scheduledRefresh?.cancel()
         scheduledRefresh = nil
+        syncSchedule.clearPending()
         plannedRetryDate = nil
         isRefreshing = true
         // The app may enter the background after this exchange starts, so
@@ -321,7 +359,16 @@ final class NotebookWorkspace {
             isRefreshing = false
             if needsAnotherRefresh {
                 needsAnotherRefresh = false
-                contentDidSave(trigger: "coalesced follow-up")
+                if needsImmediateRefresh {
+                    let manual = needsManualRefresh
+                    needsImmediateRefresh = false
+                    needsManualRefresh = false
+                    Task {
+                        await refresh(manual: manual, trigger: "coalesced follow-up")
+                    }
+                } else {
+                    contentDidSave(trigger: "coalesced follow-up")
+                }
             }
         }
         if usesSync {
@@ -366,9 +413,11 @@ final class NotebookWorkspace {
             if let failure {
                 plannedRetryDate = retryPolicy.retryDate(
                     for: failure, now: Date(), serverNotBefore: syncRetryNotBefore)
-                if automaticSync, isForeground, let deadline = plannedRetryDate {
+                if let deadline = plannedRetryDate {
                     syncRetryNotBefore = deadline
-                    scheduleRefresh(trigger: "scheduled retry", notBefore: deadline)
+                    if automaticSync, isForeground {
+                        scheduleRefresh(trigger: "scheduled retry", notBefore: deadline)
+                    }
                 }
             } else {
                 retryPolicy.reset()
@@ -504,7 +553,12 @@ final class NotebookWorkspace {
         }
         // AsyncStream delivery never awaits the CK delegate. This serialized
         // exchange applies the durable inbox to editors.
-        await refresh(trigger: "cloud activity")
+        guard automaticSync else { return }
+        if isForeground {
+            requestAutomaticRefresh(trigger: "cloud activity")
+        } else {
+            await refresh(trigger: "cloud activity")
+        }
     }
 
     private func unavailableWhenRequested(
