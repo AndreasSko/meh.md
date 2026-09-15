@@ -43,15 +43,15 @@ struct NotebookNoteEditor: View {
                                 hasUnrecordedEdit = true
                             }
                         }),
-                    editRevision: session.currentSnapshot?.data,
+                    editRevision: session.editorRevision,
                     commitEdit: { text, revision in
                         let changed = text != session.text
-                        let snapshot = try session.commitEditorText(text, basedOn: revision)
+                        let revision = try session.commitEditorText(text, basedOn: revision)
                         if changed { onLocalEdit() }
                         unrecordedText = nil
                         editError = nil
                         hasUnrecordedEdit = false
-                        return MarkdownEditorCommit(text: session.text, revision: snapshot.data)
+                        return MarkdownEditorCommit(text: session.text, revision: revision)
                     },
                     onEditError: { error in
                         editError = error.localizedDescription
@@ -84,6 +84,9 @@ struct NotebookNoteEditor: View {
             .accessibilityIdentifier("note-save-status")
         }
         .onChange(of: session.persistedSnapshot) { _, _ in onPersist() }
+        .onDisappear {
+            Task { try? await session.flush() }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
                 Task { try? await session.flush() }

@@ -34,12 +34,12 @@ struct ContentView: View {
                             editError = error.localizedDescription
                         }
                     }
-                ), editRevision: session.currentSnapshot?.data,
+                ), editRevision: session.editorRevision,
                 commitEdit: { newText, revision in
-                    let snapshot = try session.commitEditorText(newText, basedOn: revision)
+                    let revision = try session.commitEditorText(newText, basedOn: revision)
                     unrecordedText = nil
                     editError = nil
-                    return MarkdownEditorCommit(text: session.text, revision: snapshot.data)
+                    return MarkdownEditorCommit(text: session.text, revision: revision)
                 }, onEditError: { error in
                     editError = error.localizedDescription
                 })

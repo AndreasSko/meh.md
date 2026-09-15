@@ -80,3 +80,34 @@ Three targeted iPad UI tests and three iPhone UI tests passed for formatting,
 mode changes, source preservation, quote/bullet rendering, and continued
 editing. The iPhone set also checked keyboard dismissal. Captured iPad
 screenshots were inspected for marker and quote alignment.
+
+## Note-session typing and save batching
+
+The editor now passes a small, session-scoped revision token containing the
+current Automerge heads. A matching revision applies directly to the live
+in-memory document. A stale revision forks that document at the displayed
+heads, applies the native edit, and merges the fork back. This retains remote
+changes received during composition without a full-history ancestry scan for
+ordinary typing. General remote-document validation is unchanged.
+
+Full snapshots are cached by revision and created on demand. Disk saves start
+at one second idle or at most five seconds into continuous typing. A single
+writer coalesces edits made during a save; flush, retry, and first creation
+bypass the timer. See the updated durability contract for the crash-loss
+window and lifecycle behavior.
+
+A bounded synthetic debug check with roughly 12 KB of text and 100 prior edits
+completed 20 session commits in about 30 ms total on the development Mac.
+This excludes rendering, disk completion, network work, and real-library
+history; it is not a frame-time or end-to-end acceptance result. Reproduce:
+
+```sh
+MEH_MEASURE_EDITOR_COMMITS=1 swift test \
+  --filter NoteEditorCommitTests
+```
+
+Deterministic coverage includes delayed saves, the maximum delay, slow and
+failed writes, deletion cancellation, stale local/remote revisions, malformed
+and foreign editor tokens, persistence, and convergence. Full owner profiling
+remains a separate acceptance check. Moving sync processing off the UI thread
+is tracked separately in GitHub issue #52.

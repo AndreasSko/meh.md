@@ -1,6 +1,29 @@
 import Foundation
 import Observation
 
+struct NoteSaveSchedulingPolicy: Sendable {
+    let idleDelay: Duration
+    let maximumDelay: Duration
+    let now: @MainActor @Sendable () -> UInt64
+    let sleep: @Sendable (Duration) async -> Void
+
+    static let live = NoteSaveSchedulingPolicy(
+        idleDelay: .seconds(1),
+        maximumDelay: .seconds(5),
+        now: { DispatchTime.now().uptimeNanoseconds },
+        sleep: { delay in
+            try? await Task.sleep(for: delay)
+        }
+    )
+
+    static let immediate = NoteSaveSchedulingPolicy(
+        idleDelay: .zero,
+        maximumDelay: .zero,
+        now: { 0 },
+        sleep: { _ in }
+    )
+}
+
 @MainActor
 @Observable
 public final class NoteSession {
@@ -19,8 +42,18 @@ public final class NoteSession {
     public private(set) var status: Status = .loading
     public private(set) var recoveryErrorMessage: String?
     public private(set) var persistedSnapshot: NoteSnapshot?
+    /// Opaque, session-scoped editor token. Never persist it as note content.
+    public private(set) var editorRevision: Data?
 
-    public var currentSnapshot: NoteSnapshot? { document?.snapshot() }
+    public var currentSnapshot: NoteSnapshot? {
+        guard let document, let editorRevision else { return nil }
+        if cachedSnapshot?.revision == editorRevision {
+            return cachedSnapshot?.snapshot
+        }
+        let snapshot = document.snapshot()
+        cachedSnapshot = (editorRevision, snapshot)
+        return snapshot
+    }
 
     public var isEditingEnabled: Bool {
         if isPermanentlyDeleted { return false }
@@ -33,10 +66,17 @@ public final class NoteSession {
     }
 
     @ObservationIgnored private let storage: any NoteStorage
+    @ObservationIgnored private let saveScheduling: NoteSaveSchedulingPolicy
     @ObservationIgnored private var document: NoteDocument?
+    @ObservationIgnored private var editorIdentity = Data()
+    @ObservationIgnored private var cachedSnapshot: (
+        revision: Data, snapshot: NoteSnapshot
+    )?
     @ObservationIgnored private var persistedHeads: Set<String>?
-    @ObservationIgnored private var pendingSnapshot: NoteSnapshot?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var delayedSaveTask: Task<Void, Never>?
+    @ObservationIgnored private var scheduledSaveID = 0
+    @ObservationIgnored private var pendingSince: UInt64?
     @ObservationIgnored private var loadStarted = false
     @ObservationIgnored private var loadInFlight = false
     @ObservationIgnored private var recoveryInFlight = false
@@ -44,10 +84,23 @@ public final class NoteSession {
 
     public init(storage: any NoteStorage) {
         self.storage = storage
+        saveScheduling = .live
+    }
+
+    init(
+        storage: any NoteStorage,
+        saveScheduling: NoteSaveSchedulingPolicy = .live
+    ) {
+        self.storage = storage
+        self.saveScheduling = saveScheduling
     }
 
     public func load() async {
-        guard !loadInFlight, document == nil, saveTask == nil else { return }
+        guard !loadInFlight,
+            document == nil,
+            saveTask == nil,
+            delayedSaveTask == nil
+        else { return }
         switch status {
         case .loading where !loadStarted, .blocked, .loadFailed:
             break
@@ -63,9 +116,11 @@ public final class NoteSession {
         }
         status = .loading
         document = nil
+        editorRevision = nil
+        cachedSnapshot = nil
         persistedHeads = nil
         persistedSnapshot = nil
-        pendingSnapshot = nil
+        cancelDelayedSave()
         recoveryErrorMessage = nil
 
         switch await storage.load() {
@@ -73,7 +128,7 @@ public final class NoteSession {
             do {
                 let document = try NoteDocument()
                 try install(document, persistedHeads: nil)
-                queueCurrentSnapshot()
+                queueSave(immediately: true)
             } catch {
                 status = .loadFailed(message: Self.message(for: error))
             }
@@ -95,6 +150,7 @@ public final class NoteSession {
 
     func markPermanentlyDeleted() {
         isPermanentlyDeleted = true
+        cancelDelayedSave()
     }
 
     /// Permanent deletion disables new edits first, then waits for the one
@@ -111,11 +167,12 @@ public final class NoteSession {
 
     func discardPermanentlyDeletedContent() {
         guard isPermanentlyDeleted, !loadInFlight, !recoveryInFlight,
-            saveTask == nil
+            saveTask == nil, delayedSaveTask == nil
         else { return }
         document = nil
+        editorRevision = nil
+        cachedSnapshot = nil
         persistedHeads = nil
-        pendingSnapshot = nil
         persistedSnapshot = nil
         text = ""
     }
@@ -129,7 +186,7 @@ public final class NoteSession {
         try document.replaceUTF16(range: range, with: replacement)
         guard document.heads != heads else { return }
         text = try document.text
-        queueCurrentSnapshot()
+        queueSave()
     }
 
     public func replaceAll(with replacement: String) throws {
@@ -137,12 +194,12 @@ public final class NoteSession {
         guard !replacement.utf8.elementsEqual(text.utf8) else { return }
         try document.replaceAll(with: replacement)
         text = try document.text
-        queueCurrentSnapshot()
+        queueSave()
     }
 
     public func retrySave() {
         guard isEditingEnabled, document != nil else { return }
-        queueCurrentSnapshot()
+        queueSave(immediately: true)
     }
 
     /// Apply native edits to the revision the editor actually displayed.
@@ -151,19 +208,24 @@ public final class NoteSession {
     @discardableResult
     public func commitEditorText(
         _ replacement: String,
-        basedOn serializedRevision: Data
-    ) throws -> NoteSnapshot {
+        basedOn revision: Data
+    ) throws -> Data {
         guard isEditingEnabled, let document else {
             throw SyncError.localSaveRequired
         }
-        let heads = document.heads
-        let branch = try NoteDocument(serializedData: serializedRevision)
-        try branch.replaceAll(with: replacement)
-        try document.merge(branch)
-        guard document.heads != heads else { return document.snapshot() }
+        guard !editorIdentity.isEmpty, revision.starts(with: editorIdentity) else {
+            throw SyncError.invalidRecord
+        }
+        let heads = document.editorHeads
+        try document.applyEditorText(
+            replacement, basedOn: Data(revision.dropFirst(editorIdentity.count))
+        )
+        guard document.editorHeads != heads else {
+            return editorIdentity + heads
+        }
         text = try document.text
-        queueCurrentSnapshot()
-        return document.snapshot()
+        queueSave()
+        return editorIdentity + document.editorHeads
     }
 
     /// Remote state always joins the live document, including unsaved typing.
@@ -180,12 +242,13 @@ public final class NoteSession {
         try document.merge(remote)
         guard document.heads != before else { return }
         text = try document.text
-        queueCurrentSnapshot()
+        queueSave()
     }
 
     /// Await this session's serialized save loop without creating another
     /// writer. A failed local save never acknowledges a remote download.
     public func flush() async throws {
+        queueSave(immediately: true)
         while let task = saveTask { await task.value }
         guard case .saved = status,
               let persistedHeads, document?.heads == persistedHeads else {
@@ -223,26 +286,75 @@ public final class NoteSession {
         persistedHeads: Set<String>?
     ) throws {
         self.document = document
+        editorIdentity = Data(UUID().uuidString.utf8)
+        editorRevision = editorIdentity + document.editorHeads
+        cachedSnapshot = nil
         self.persistedHeads = persistedHeads
         text = try document.text
     }
 
-    private func queueCurrentSnapshot() {
-        guard let document else { return }
-        pendingSnapshot = document.snapshot()
+    private func queueSave(immediately: Bool = false) {
+        if let document, !isPermanentlyDeleted {
+            editorRevision = editorIdentity + document.editorHeads
+        }
+        guard !isPermanentlyDeleted,
+            let document,
+            document.heads != persistedHeads
+        else { return }
         status = .saving
         guard saveTask == nil else { return }
+        if immediately {
+            cancelDelayedSave()
+            startSaveLoop()
+            return
+        }
+        let now = saveScheduling.now()
+        if pendingSince == nil { pendingSince = now }
+        let started = pendingSince!
+        let elapsedNanoseconds = now >= started ? now - started : 0
+        let elapsed = Duration.nanoseconds(
+            Int64(min(elapsedNanoseconds, UInt64(Int64.max)))
+        )
+        let delay = min(
+            saveScheduling.idleDelay,
+            max(.zero, saveScheduling.maximumDelay - elapsed)
+        )
+        scheduleSave(after: delay)
+    }
+
+    private func scheduleSave(after delay: Duration) {
+        cancelDelayedTask()
+        let id = scheduledSaveID
+        delayedSaveTask = Task { [saveScheduling] in
+            await saveScheduling.sleep(delay)
+            guard !Task.isCancelled else { return }
+            self.startScheduledSave(id: id)
+        }
+    }
+
+    private func startScheduledSave(id: Int) {
+        guard id == scheduledSaveID, !isPermanentlyDeleted else { return }
+        delayedSaveTask = nil
+        startSaveLoop()
+    }
+
+    private func startSaveLoop() {
+        guard !isPermanentlyDeleted, saveTask == nil else { return }
+        pendingSince = nil
         saveTask = Task { await runSaveLoop() }
     }
 
     private func runSaveLoop() async {
-        while let snapshot = pendingSnapshot {
-            pendingSnapshot = nil
+        while !isPermanentlyDeleted,
+            let document,
+            document.heads != persistedHeads
+        {
+            guard let snapshot = currentSnapshot else { break }
             do {
                 try await storage.save(snapshot)
                 persistedHeads = snapshot.heads
                 persistedSnapshot = snapshot
-                if document?.heads == persistedHeads {
+                if document.heads == persistedHeads {
                     status = .saved
                 } else {
                     status = .saving
@@ -254,6 +366,17 @@ public final class NoteSession {
         }
         saveTask = nil
         resumeOperationWaiters()
+    }
+
+    private func cancelDelayedSave() {
+        cancelDelayedTask()
+        pendingSince = nil
+    }
+
+    private func cancelDelayedTask() {
+        scheduledSaveID += 1
+        delayedSaveTask?.cancel()
+        delayedSaveTask = nil
     }
 
     private func resumeOperationWaiters() {

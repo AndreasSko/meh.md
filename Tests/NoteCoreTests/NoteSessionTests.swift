@@ -9,7 +9,7 @@ final class NoteSessionTests: XCTestCase {
         let initial = try NoteDocument(text: "initial").snapshot()
         let storage = ControlledStorage(loadResult: .current(initial))
         await storage.setPaused(true)
-        let session = NoteSession(storage: storage)
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
         await session.load()
 
         XCTAssertEqual(session.persistedSnapshot, initial)
@@ -42,7 +42,7 @@ final class NoteSessionTests: XCTestCase {
         let initial = try NoteDocument(text: "initial").snapshot()
         let storage = ControlledStorage(loadResult: .current(initial))
         await storage.failNextSave()
-        let session = NoteSession(storage: storage)
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
         await session.load()
 
         try session.replaceAll(with: "unsaved")
@@ -69,7 +69,7 @@ final class NoteSessionTests: XCTestCase {
         let storage = ControlledStorage(loadResult: .current(initial))
         await storage.setPaused(true)
         await storage.failNextSave()
-        let session = NoteSession(storage: storage)
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
         await session.load()
 
         try session.replaceAll(with: "first")
@@ -94,7 +94,7 @@ final class NoteSessionTests: XCTestCase {
         let initial = try NoteDocument(text: "initial").snapshot()
         let storage = ControlledStorage(loadResult: .current(initial))
         await storage.setPaused(true)
-        let session = NoteSession(storage: storage)
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
         await session.load()
         try session.replaceAll(with: "editing")
         await waitUntil { await storage.saveCount == 1 }
@@ -115,16 +115,18 @@ final class NoteSessionTests: XCTestCase {
             metadata: .now(Date(timeIntervalSince1970: 100))
         ).snapshot()
         let storage = ControlledStorage(loadResult: .current(initial))
-        let session = NoteSession(storage: storage)
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
         await session.load()
 
+        let revision = try XCTUnwrap(session.editorRevision)
         let result = try session.commitEditorText(
             "unchanged",
-            basedOn: initial.data
+            basedOn: revision
         )
         let saveCount = await storage.saveCount
 
-        XCTAssertEqual(result, initial)
+        XCTAssertEqual(result, revision)
+        XCTAssertEqual(session.currentSnapshot, initial)
         XCTAssertEqual(session.status, .saved)
         XCTAssertEqual(saveCount, 0)
         XCTAssertEqual(
@@ -143,7 +145,7 @@ final class NoteSessionTests: XCTestCase {
             loadResult: .recoveryRequired(recovery)
         )
         await storage.failNextRecovery()
-        let session = NoteSession(storage: storage)
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
         await session.load()
 
         await session.recoverFromPrevious()
@@ -156,6 +158,124 @@ final class NoteSessionTests: XCTestCase {
         XCTAssertTrue(session.isEditingEnabled)
     }
 
+    func testEditsCoalesceAfterOneSecondIdle() async throws {
+        let initial = try NoteDocument(text: "initial").snapshot()
+        let clock = TestClock()
+        let sleeper = ManualSleeper()
+        let storage = ControlledStorage(loadResult: .current(initial))
+        let session = NoteSession(
+            storage: storage,
+            saveScheduling: .manual(clock: clock, sleeper: sleeper)
+        )
+        await session.load()
+
+        try session.replaceAll(with: "first")
+        await waitUntil { await sleeper.requestCount == 1 }
+        clock.advance(by: 300_000_000)
+        try session.replaceAll(with: "latest")
+        await waitUntil { await sleeper.requestCount == 2 }
+
+        let requestedDelays = await sleeper.requestedDelays
+        XCTAssertEqual(requestedDelays, [.seconds(1), .seconds(1)])
+        await sleeper.releaseAll()
+        await waitUntil { session.status == .saved }
+        let saved = await storage.savedSnapshots
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(try NoteDocument(snapshot: saved[0]).text, "latest")
+    }
+
+    func testContinuousTypingUsesFiveSecondDeadline() async throws {
+        let initial = try NoteDocument(text: "initial").snapshot()
+        let clock = TestClock()
+        let sleeper = ManualSleeper()
+        let storage = ControlledStorage(loadResult: .current(initial))
+        let session = NoteSession(
+            storage: storage,
+            saveScheduling: .manual(clock: clock, sleeper: sleeper)
+        )
+        await session.load()
+
+        try session.replaceAll(with: "first")
+        await waitUntil { await sleeper.requestCount == 1 }
+        clock.advance(by: 4_500_000_000)
+        try session.replaceAll(with: "latest")
+        await waitUntil { await sleeper.requestCount == 2 }
+
+        let requestedDelays = await sleeper.requestedDelays
+        XCTAssertEqual(
+            requestedDelays,
+            [.seconds(1), .milliseconds(500)]
+        )
+        await sleeper.releaseAll()
+        await waitUntil { session.status == .saved }
+        let saved = await storage.savedSnapshots
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(try NoteDocument(snapshot: saved[0]).text, "latest")
+    }
+
+    func testFlushBypassesDelayedSaveAndWaitsForLatestText() async throws {
+        let initial = try NoteDocument(text: "initial").snapshot()
+        let clock = TestClock()
+        let sleeper = ManualSleeper()
+        let storage = ControlledStorage(loadResult: .current(initial))
+        let session = NoteSession(
+            storage: storage,
+            saveScheduling: .manual(clock: clock, sleeper: sleeper)
+        )
+        await session.load()
+        try session.replaceAll(with: "latest")
+        await waitUntil { await sleeper.requestCount == 1 }
+
+        try await session.flush()
+
+        let saveCount = await storage.saveCount
+        XCTAssertEqual(saveCount, 1)
+        let saved = await storage.savedSnapshots
+        XCTAssertEqual(try NoteDocument(snapshot: XCTUnwrap(saved.first)).text, "latest")
+    }
+
+    func testDeletionCancelsDelayedSave() async throws {
+        let initial = try NoteDocument(text: "initial").snapshot()
+        let clock = TestClock()
+        let sleeper = ManualSleeper()
+        let storage = ControlledStorage(loadResult: .current(initial))
+        let session = NoteSession(
+            storage: storage,
+            saveScheduling: .manual(clock: clock, sleeper: sleeper)
+        )
+        await session.load()
+        try session.replaceAll(with: "pending")
+        await waitUntil { await sleeper.requestCount == 1 }
+
+        session.markPermanentlyDeleted()
+        await session.waitForPendingSave()
+        await sleeper.releaseAll()
+        await Task.yield()
+
+        let saveCount = await storage.saveCount
+        XCTAssertEqual(saveCount, 0)
+        session.discardPermanentlyDeletedContent()
+        XCTAssertEqual(session.text, "")
+    }
+
+    func testFirstLaunchSavesImmediately() async throws {
+        let clock = TestClock()
+        let sleeper = ManualSleeper()
+        let storage = ControlledStorage(loadResult: .firstLaunch)
+        let session = NoteSession(
+            storage: storage,
+            saveScheduling: .manual(clock: clock, sleeper: sleeper)
+        )
+
+        await session.load()
+        await waitUntil { session.status == .saved }
+
+        let saveCount = await storage.saveCount
+        let requestCount = await sleeper.requestCount
+        XCTAssertEqual(saveCount, 1)
+        XCTAssertEqual(requestCount, 0)
+    }
+
     private func waitUntil(
         _ condition: @escaping @MainActor () async -> Bool
     ) async {
@@ -164,6 +284,49 @@ final class NoteSessionTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Condition did not become true")
+    }
+}
+
+private final class TestClock: @unchecked Sendable {
+    private(set) var now: UInt64 = 0
+
+    func advance(by nanoseconds: UInt64) {
+        now += nanoseconds
+    }
+}
+
+private actor ManualSleeper {
+    private var delays: [Duration] = []
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    var requestCount: Int { delays.count }
+    var requestedDelays: [Duration] { delays }
+
+    func sleep(for delay: Duration) async {
+        delays.append(delay)
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func releaseAll() {
+        let pending = continuations
+        continuations.removeAll()
+        for continuation in pending { continuation.resume() }
+    }
+}
+
+private extension NoteSaveSchedulingPolicy {
+    static func manual(
+        clock: TestClock,
+        sleeper: ManualSleeper
+    ) -> NoteSaveSchedulingPolicy {
+        NoteSaveSchedulingPolicy(
+            idleDelay: .seconds(1),
+            maximumDelay: .seconds(5),
+            now: { clock.now },
+            sleep: { delay in await sleeper.sleep(for: delay) }
+        )
     }
 }
 

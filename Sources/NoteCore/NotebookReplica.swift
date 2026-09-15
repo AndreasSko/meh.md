@@ -655,6 +655,13 @@ public final class NotebookReplica {
         try await apply(SyncRecord(snapshot: snapshot, notebookID: catalog.notebookID))
     }
 
+    /// Flush editing sessions without starting a network exchange.
+    public func flushOpenNotes() async throws {
+        for session in Array(sessions.values) where session.isEditingEnabled {
+            try await session.flush()
+        }
+    }
+
     func records(includeUnlisted: Bool = false) async throws -> [SyncRecord] {
         await waitForWrites()
         try await withCatalogWrite {
