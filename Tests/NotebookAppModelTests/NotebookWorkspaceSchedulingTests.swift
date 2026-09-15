@@ -75,6 +75,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         _ = try await workspace.replica?.createNote(
             name: "paused.md", text: "paused"
         )
+        workspace.noteDidEdit()
         workspace.contentDidSave()
         workspace.sceneActivityChanged(isActive: false)
         try await waitUntil {
@@ -88,12 +89,12 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         XCTAssertEqual(repeatedBackgroundFetches, backgroundFetches)
 
         workspace.sceneActivityChanged(isActive: true)
-        try await waitUntil {
+        try await waitUntil(timeout: .seconds(12)) {
             await transport.fetchCount > backgroundFetches
         }
     }
 
-    func testCloudFailureDoesNotEchoButRemoteChangesReconcile() async {
+    func testCloudFailureDoesNotEchoButRemoteChangesReconcile() async throws {
         let transport = RecordingTransport(scope: "cloud-activity")
         let workspace = makeWorkspace(transport: transport)
         await workspace.start()
@@ -111,6 +112,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
             .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
         )
 
+        try await waitUntil { await transport.fetchCount > baselineFetches }
         let fetchesAfterRemoteChanges = await transport.fetchCount
         XCTAssertEqual(fetchesAfterRemoteChanges, baselineFetches + 1)
         XCTAssertTrue(workspace.syncEventLog.entries.contains {
@@ -118,9 +120,73 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         })
     }
 
+    func testTypingDefersSavesAndCloudEventsButManualSyncIsImmediate() async throws {
+        let transport = RecordingTransport(scope: "typing")
+        let workspace = makeWorkspace(transport: transport)
+        await workspace.start()
+        let baseline = await transport.fetchCount
+        workspace.noteDidEdit()
+        workspace.contentDidSave()
+        await workspace.receiveCloudActivity(
+            .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
+        )
+        try await Task.sleep(for: .seconds(1))
+        let deferred = await transport.fetchCount
+        XCTAssertEqual(deferred, baseline)
+        await workspace.refresh(manual: true)
+        let manual = await transport.fetchCount
+        XCTAssertEqual(manual, baseline + 1)
+    }
+
+    func testManualRequestDuringExchangeRunsImmediateFollowUp() async throws {
+        let transport = RecordingTransport(scope: "in-flight")
+        let workspace = makeWorkspace(transport: transport)
+        await workspace.start()
+        let baseline = await transport.fetchCount
+        await transport.pauseNextFetch()
+        let exchange = Task { await workspace.refresh(manual: true) }
+        try await waitUntil { await transport.isFetchPaused }
+        workspace.noteDidEdit()
+        workspace.contentDidSave()
+        await workspace.refresh(manual: true)
+        await transport.resumeFetch()
+        await exchange.value
+        try await waitUntil { await transport.fetchCount >= baseline + 2 }
+        let fetches = await transport.fetchCount
+        XCTAssertEqual(fetches, baseline + 2)
+    }
+
+    func testLocalModePublishesSavedMarkdownWithoutSync() async throws {
+        let transport = RecordingTransport(scope: "local-copies")
+        let workspace = makeWorkspace(transport: transport, mode: .local)
+        await workspace.start()
+        let replica = try XCTUnwrap(workspace.replica)
+        let copies = try XCTUnwrap(workspace.copiesURL)
+        let noteID = try await replica.createNote(name: "local.md", text: "first")
+        workspace.noteDidEdit()
+        workspace.contentDidSave()
+        let copy = copies.appending(path: "local.md")
+        try await waitUntil {
+            (try? String(contentsOf: copy, encoding: .utf8)) == "first"
+        }
+
+        let session = try await replica.openNote(noteID)
+        try session.replaceAll(with: "updated")
+        workspace.noteDidEdit()
+        try await session.flush()
+        workspace.contentDidSave()
+        try await waitUntil {
+            (try? String(contentsOf: copy, encoding: .utf8)) == "updated"
+        }
+        XCTAssertNil(workspace.copyError)
+        let operations = await transport.operationCount
+        XCTAssertEqual(operations, 0)
+    }
+
     private func makeWorkspace(
         transport: any SyncTransport,
-        automaticSync: Bool = true
+        automaticSync: Bool = true,
+        mode: NotebookWorkspace.Mode? = nil
     ) -> NotebookWorkspace {
         let root = FileManager.default.temporaryDirectory.appending(
             path: UUID().uuidString
@@ -130,7 +196,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
             directory: root.appending(path: "Notebook"),
             documentsDirectory: root.appending(path: "Documents"),
             transport: transport,
-            automaticSync: automaticSync
+            automaticSync: automaticSync, mode: mode
         )
     }
 
@@ -157,6 +223,15 @@ private actor RecordingTransport: SyncTransport {
     private(set) var publishCount = 0
     private(set) var fetchCount = 0
     private(set) var purgeCount = 0
+    private var shouldPauseFetch = false
+    private var pausedFetch: CheckedContinuation<Void, Never>?
+    var isFetchPaused: Bool { pausedFetch != nil }
+
+    func pauseNextFetch() { shouldPauseFetch = true }
+    func resumeFetch() {
+        pausedFetch?.resume()
+        pausedFetch = nil
+    }
 
     var operationCount: Int {
         bootstrapCount + publishCount + fetchCount + purgeCount
@@ -184,6 +259,10 @@ private actor RecordingTransport: SyncTransport {
 
     func fetch(after cursor: String?) async throws -> SyncPage {
         fetchCount += 1
+        if shouldPauseFetch {
+            shouldPauseFetch = false
+            await withCheckedContinuation { pausedFetch = $0 }
+        }
         return try await base.fetch(after: cursor)
     }
 

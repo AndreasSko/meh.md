@@ -172,7 +172,10 @@ struct NotebookView: View {
                             onPersist: {
                                 workspace?.contentDidSave(trigger: "note persisted")
                             },
-                            onLocalEdit: { navigationState.recordEdited(selectedID) },
+                            onLocalEdit: {
+                                navigationState.recordEdited(selectedID)
+                                workspace?.noteDidEdit()
+                            },
                             onBeginEditing: {
                                 if detailEditingID == selectedID {
                                     submitDetailTitle(focusBody: false)

@@ -40,7 +40,7 @@ struct NotebookApplicationView: View {
                   scenePhase == .active, workspace.automaticSync else { return }
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
-                await workspace.refresh(trigger: "local service foreground check")
+                workspace.requestAutomaticRefresh(trigger: "local service foreground check")
             }
         }
     }

@@ -8,14 +8,22 @@ and the iOS remote-notification background mode.
 
 ## Triggers and durability
 
-- Startup, foreground activation, saved local changes, and Sync Now retain
-  explicit finite exchanges. Saved changes are coalesced for 750 milliseconds.
+- Local note saves retain their 1-second idle / 5-second maximum delay.
+  Automatic exchanges wait until 10 seconds after the last local edit, with
+  a 60-second maximum from the first pending request. Further edits or cloud
+  events do not reset that maximum. With no recent typing, requests retain
+  the short 750-millisecond coalescing delay.
+- Saved changes, foreground activation, incoming cloud activity, connectivity
+  restoration, and development polling share that automatic schedule.
+  Startup and Sync Now bypass the typing delay. An exchange already running
+  finishes normally; requests received meanwhile are combined into a follow-up.
 - CloudKit commits fetched changes and background upload acknowledgements to
   the transport store before notifying the workspace through an async stream.
   The workspace then applies the inbox through the existing coordinator.
 - Empty or duplicate downloads do not request another workspace exchange.
   The delegate never awaits an exchange that could reenter the sync engine.
-- Leaving the foreground requests one final exchange of saved changes. On
+- Leaving the foreground flushes open notes locally and requests one final
+  exchange without the typing delay, subject to server retry deadlines. On
   iOS, a bounded background execution allowance helps finish checkpointing;
   expiration releases that allowance and durable pending work remains.
 - Network restoration requests a foreground retry. Transient app/setup errors
@@ -40,7 +48,12 @@ Details and the event log; activation and Sync Now remain available.
 ## What this does not guarantee
 
 Apple decides when background work and silent notifications can run. Delivery
-can be delayed, and force-quitting an app must not be treated as a promise of
+can be delayed. The 60-second cap bounds the app's typing-related delay;
+server cooldowns, an active exchange, and background limits can take longer.
+CloudKit may transfer already queued data independently of this app scheduler.
+This changes when main-thread reconciliation starts; it does not move that
+work off the main thread. Force-quitting an app must not be treated as a
+promise of
 background synchronization. Local editing remains available when CloudKit is
 unavailable. No cloud reset or single-note compatibility bridge is introduced.
 
