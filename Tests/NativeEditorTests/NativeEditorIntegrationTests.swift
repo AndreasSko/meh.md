@@ -95,6 +95,43 @@ final class NativeEditorIntegrationTests: XCTestCase {
         XCTAssertEqual(try boundary.note.text, source + "\n")
     }
 
+    func testNestedListReturnAndQuotedItemIndentReachBinding() throws {
+        for mode in [MarkdownEditorMode.source, .livePreview] {
+            for (source, commands, suffixes) in [
+                (
+                    "    * Moon 🪐",
+                    [MarkdownEditingCommand.continueLine, .continueLine,
+                     .continueLine, .continueLine],
+                    ["\n    * ", "\n  * ", "\n* ", "\n"]
+                ),
+                (
+                    "* > Moon 🪐",
+                    [MarkdownEditingCommand.continueLine, .indent],
+                    ["\n* > ", "\n  * "]
+                ),
+            ] {
+                let boundary = try DocumentBinding(
+                    note: SpikeNoteDocument(text: source)
+                )
+                let editor = MarkdownEditor(
+                    text: Binding(
+                        get: { boundary.text }, set: { boundary.text = $0 }
+                    ),
+                    mode: mode
+                )
+                let mounted = mount(editor)
+                defer { mounted.tearDown() }
+                let textView = try XCTUnwrap(mounted.textView as? MarkdownTextView)
+                moveInsertionPointToEnd(of: textView)
+                for (command, suffix) in zip(commands, suffixes) {
+                    XCTAssertTrue(textView.performMarkdownCommand(command))
+                    XCTAssertEqual(nativeText(in: textView), source + suffix)
+                    XCTAssertEqual(try boundary.note.text, source + suffix)
+                }
+            }
+        }
+    }
+
     func testLivePreviewAndSourceSwitchPreserveBufferSelectionAndUndo() throws {
         let source = "# Moon\n\n**Orbit** and [map](https://example.test)"
         let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))

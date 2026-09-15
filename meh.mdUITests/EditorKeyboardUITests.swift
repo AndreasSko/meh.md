@@ -1,8 +1,14 @@
 import XCTest
 
 #if os(iOS)
+import UIKit
+
 final class EditorKeyboardUITests: XCTestCase {
     func testScrollDismissesKeyboardAndEditingCanResume() throws {
+        try XCTSkipUnless(
+            UIDevice.current.userInterfaceIdiom == .phone,
+            "iPad keeps the editor focused while scrolling"
+        )
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
@@ -33,6 +39,43 @@ final class EditorKeyboardUITests: XCTestCase {
         editor.typeText("Still editable")
         XCTAssertTrue((editor.value as? String)?.contains("Still editable") == true)
         dragEditor(editor)
+    }
+
+    func testIPadScrollKeepsCaretAndTypingRevealsIt() throws {
+        try XCTSkipUnless(
+            UIDevice.current.userInterfaceIdiom == .pad,
+            "iPad-specific editor focus behavior"
+        )
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        app.launch()
+        let newItem = app.buttons["notebook-new-item"]
+        XCTAssertTrue(newItem.waitForExistence(timeout: 15))
+        newItem.tap()
+        commitDefaultTitle(in: app)
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+
+        let lines = (1...40).map { "Line \($0)" }.joined(separator: "\n")
+        editor.typeText(lines)
+        capture(app, name: "iPad caret before scrolling")
+        dragEditor(editor)
+
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        capture(app, name: "iPad caret scrolled offscreen")
+        app.typeText(" resumed")
+        let typingAtCaret = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value ENDSWITH %@", "Line 40 resumed"),
+            object: editor
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [typingAtCaret], timeout: 5), .completed)
+        XCTAssertEqual(editor.value as? String, lines + " resumed")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 2))
+        capture(app, name: "iPad typing reveals caret after scrolling")
     }
 
     func testWritingControlsContinueListsAndSwitchModes() throws {
