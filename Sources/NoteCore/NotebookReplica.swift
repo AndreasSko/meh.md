@@ -61,6 +61,7 @@ public final class NotebookReplica {
     @ObservationIgnored private let storage: NotebookCatalogStorage
     @ObservationIgnored private let importStorage: NotebookImportStorage
     @ObservationIgnored private let deletionStorage: NotebookDeletionStorage
+    @ObservationIgnored private let historyChecker = NotebookHistoryChecker()
     @ObservationIgnored private var sessions: [UUID: NoteSession] = [:]
     @ObservationIgnored private var sessionLoads: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var rememberedDeletions: Set<UUID> = []
@@ -695,23 +696,9 @@ public final class NotebookReplica {
         -> Bool
     {
         let records = try await records(includeUnlisted: true)
-        let indexed = Dictionary(uniqueKeysWithValues: records.map { ($0.documentKey, $0) })
-        for (key, heads) in checkpoints {
-            if key.hasPrefix("note:"), let id = UUID(uuidString: String(key.dropFirst(5))),
-                deleted.contains(id)
-            {
-                continue
-            }
-            guard let record = indexed[key] else { return false }
-            let history: Set<String>
-            if let catalog = record.catalogSnapshot {
-                history = try NotebookCatalogDocument(snapshot: catalog).historyHeads
-            } else {
-                history = try NoteDocument(snapshot: record.snapshot).historyHeads
-            }
-            if !heads.isSubset(of: history) { return false }
-        }
-        return true
+        return try await historyChecker.containsHistory(
+            checkpoints, records: records, deleted: deleted
+        )
     }
 
     func rememberDeletions(_ ids: Set<UUID>) async throws {

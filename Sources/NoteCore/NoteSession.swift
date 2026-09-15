@@ -234,11 +234,21 @@ public final class NoteSession {
         guard isEditingEnabled, let document else {
             throw SyncError.localSaveRequired
         }
+        let before = document.heads
+        if snapshot.noteID == document.noteID, snapshot.heads == before {
+            // These exact bytes were validated on load or produced locally.
+            // Claimed heads alone never bypass validation of incoming data.
+            if snapshot == persistedSnapshot || snapshot == cachedSnapshot?.snapshot {
+                return
+            }
+        }
         let remote = try NoteDocument(snapshot: snapshot)
         guard remote.noteID == document.noteID else {
             throw SyncError.identityConflict
         }
-        let before = document.heads
+        // Independently serialized copies can have different bytes while
+        // representing the same validated revision. No history scan needed.
+        guard remote.heads != before else { return }
         try document.merge(remote)
         guard document.heads != before else { return }
         text = try document.text
