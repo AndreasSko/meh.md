@@ -276,6 +276,81 @@ final class NoteSessionTests: XCTestCase {
         XCTAssertEqual(requestCount, 0)
     }
 
+    func testDuplicateRemoteRevisionDoesNotScheduleSaveOrChangeEditor() async throws {
+        let initial = try NoteDocument(text: "unchanged").snapshot()
+        let storage = ControlledStorage(loadResult: .current(initial))
+        let session = NoteSession(storage: storage)
+        await session.load()
+        let revision = session.editorRevision
+
+        for _ in 0..<10 { try session.mergeRemote(initial) }
+
+        XCTAssertEqual(session.text, "unchanged")
+        XCTAssertEqual(session.editorRevision, revision)
+        XCTAssertEqual(session.status, .saved)
+        let count = await storage.saveCount
+        XCTAssertEqual(count, 0)
+    }
+
+    func testDuplicateUnsavedRevisionStillRequiresSuccessfulFlush() async throws {
+        let initial = try NoteDocument(text: "initial").snapshot()
+        let storage = ControlledStorage(loadResult: .current(initial))
+        let session = NoteSession(storage: storage)
+        await session.load()
+        try session.replaceAll(with: "pending")
+        let pending = try XCTUnwrap(session.currentSnapshot)
+
+        try session.mergeRemote(pending)
+        XCTAssertEqual(session.status, .saving)
+        XCTAssertEqual(session.persistedSnapshot, initial)
+        await storage.failNextSave()
+        do {
+            try await session.flush()
+            XCTFail("Duplicate reception must not acknowledge an unsaved revision")
+        } catch { }
+        guard case .saveFailed = session.status else {
+            return XCTFail("Failed persistence must remain visible")
+        }
+        try session.mergeRemote(pending)
+        guard case .saveFailed = session.status else {
+            return XCTFail("Duplicate reception must preserve the save failure")
+        }
+        try await session.flush()
+        XCTAssertEqual(session.persistedSnapshot, pending)
+    }
+
+    func testMatchingClaimedHeadsDoNotBypassRemoteValidation() async throws {
+        let initial = try NoteDocument(text: "initial").snapshot()
+        let session = NoteSession(storage: ControlledStorage(loadResult: .current(initial)))
+        await session.load()
+        let other = try NoteDocument(text: "different history").snapshot()
+        for bytes in [Data("corrupt".utf8), other.data] {
+            let forged = NoteSnapshot(data: bytes, heads: initial.heads, noteID: initial.noteID)
+            XCTAssertThrowsError(try session.mergeRemote(forged))
+        }
+        XCTAssertEqual(session.text, "initial")
+        XCTAssertEqual(session.persistedSnapshot, initial)
+        XCTAssertEqual(session.status, .saved)
+    }
+
+    func testSameTextWithNewRemoteHistoryStillMerges() async throws {
+        let document = try NoteDocument(text: "same text")
+        let initial = document.snapshot()
+        let session = NoteSession(storage: ControlledStorage(loadResult: .current(initial)))
+        await session.load()
+        let remote = try document.fork()
+        try remote.replaceAll(with: "intermediate")
+        try remote.replaceAll(with: "same text")
+        XCTAssertNotEqual(remote.heads, initial.heads)
+
+        try session.mergeRemote(remote.snapshot())
+        XCTAssertEqual(session.text, "same text")
+        XCTAssertEqual(session.currentSnapshot?.heads, remote.heads)
+        XCTAssertEqual(session.status, .saving)
+        try await session.flush()
+        XCTAssertEqual(session.persistedSnapshot?.heads, remote.heads)
+    }
+
     private func waitUntil(
         _ condition: @escaping @MainActor () async -> Bool
     ) async {

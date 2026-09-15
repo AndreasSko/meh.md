@@ -106,3 +106,43 @@ A CPU sample during the 1,000-note case showed active replica application and
 Automerge snapshot decoding/merging. Profiling that path is a performance
 follow-up; these results do not justify changing merge or durability rules.
 Actual-library profiling remains deferred to daily use as requested.
+
+## Cached checkpoint checks and catalog reads
+
+After PR #53 reduced per-keystroke work, the next small optimization keeps
+checkpoint-history decoding and enumeration in `NotebookHistoryChecker`, a
+serial actor. It receives only immutable records captured from durable local
+storage. It never reads or mutates live editor documents and never writes
+files. The main-actor coordinator still controls acknowledgement ordering.
+
+The worker caches successful history checks using the entire record,
+including snapshot bytes, identity, and claimed heads. Every pass still
+checks record presence; losing a file cannot be hidden by the cache. Changed,
+rolled-back, or malformed data is checked again. The cache retains at most
+256 records, with a 32 MiB payload-and-hash cost budget; oversized records are
+checked without caching. The budget is an estimate, not an exact heap limit.
+
+Each catalog document also caches its decoded items for one exact Automerge
+head set. All mutations invalidate it through their changed heads, including
+writes inside a batch. Failed decoding is never cached, and forks have their
+own caches. This avoids repeated map traversal for an unchanged catalog.
+
+Deterministic tests verify reuse, mutation and merge invalidation, failed
+merge safety, rollback, corruption, identity mismatch, eviction, missing-file
+replay, and cancellation. No network format, merge algorithm, durable-write
+ordering, or file-validation rule changes.
+
+Open notes skip redundant remote merges when validated heads match. If the
+incoming snapshot exactly matches a saved or locally captured snapshot of
+the current revision, it also skips decoding. Otherwise it validates the
+incoming bytes before comparing heads. Matching text or unverified claimed
+heads are never sufficient. A duplicate cannot mark unsaved edits as saved;
+the caller must still flush successfully before acknowledging the download.
+
+### Deferred work
+
+Issue #52 remains open. Moving live open-note merging off the main actor
+requires a separate design for edits arriving while a remote merge is being
+computed. Do not replace newer editor state with a stale worker result.
+Unopened-note merges and other sync processing also remain on their existing
+paths in this deliberately limited change. Reprofile before expanding scope.

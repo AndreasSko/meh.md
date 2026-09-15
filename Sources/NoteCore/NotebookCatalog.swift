@@ -78,6 +78,12 @@ private struct NotebookLegacyMigrationReceipt: Codable {
 final class NotebookCatalogDocument {
     private let document: Document
     private let itemsObject: ObjId
+    private typealias ItemEntry = (
+        item: NotebookItem,
+        issues: Set<NotebookPlacementIssue>
+    )
+    private var itemsCache: (heads: Set<ChangeHash>, entries: [ItemEntry])?
+    private(set) var readItemsDecodeCount = 0
     let notebookID: UUID
 
     var heads: Set<String> {
@@ -780,7 +786,20 @@ final class NotebookCatalogDocument {
         return object
     }
 
-    private func readItems() throws -> [(item: NotebookItem, issues: Set<NotebookPlacementIssue>)] {
+    private func readItems() throws -> [ItemEntry] {
+        let currentHeads = document.heads()
+        if let itemsCache, itemsCache.heads == currentHeads {
+            return itemsCache.entries
+        }
+        // This non-Sendable document has one serial owner. All mutations,
+        // including writes inside a batch, change the heads used here.
+        readItemsDecodeCount += 1
+        let entries = try decodeItems()
+        itemsCache = (heads: currentHeads, entries: entries)
+        return entries
+    }
+
+    private func decodeItems() throws -> [ItemEntry] {
         try document.keys(obj: itemsObject).sorted().map { key in
             guard let id = UUID(uuidString: key), key == id.uuidString,
                 try document.getAll(obj: itemsObject, key: key).count == 1
