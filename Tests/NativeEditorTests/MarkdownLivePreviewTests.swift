@@ -105,6 +105,42 @@ final class MarkdownLivePreviewTests: XCTestCase {
         XCTAssertEqual(hidden, ["**", "**"])
     }
 
+    func testInactiveEmptyHeadingsKeepTheirSourceMarkersVisible() {
+        let source = [
+            "#", "##   ", "###", "####", "#####", "######", "> ##",
+            "Active",
+        ].joined(separator: "\n")
+        let selection = (source as NSString).range(of: "Active")
+
+        XCTAssertEqual(
+            hiddenSubstrings(in: source, selection: selection),
+            []
+        )
+    }
+
+    func testEmptyHeadingBeforeTrailingNewlineRemainsVisible() {
+        let source = "##\n"
+        let selection = NSRange(
+            location: (source as NSString).length,
+            length: 0
+        )
+
+        XCTAssertEqual(
+            hiddenSubstrings(in: source, selection: selection),
+            []
+        )
+    }
+
+    func testInactiveHeadingWithContentStillCollapsesOpeningMarker() {
+        let source = "## Heading ##\nActive"
+        let selection = (source as NSString).range(of: "Active")
+
+        XCTAssertEqual(
+            hiddenSubstrings(in: source, selection: selection),
+            ["## "]
+        )
+    }
+
     func testNestedQuoteAndListPrefixesKeepInlineRangesBounded() {
         let source = """
         > * **quoted _café_**
@@ -159,6 +195,35 @@ final class MarkdownLivePreviewTests: XCTestCase {
     }
 
 #if os(macOS)
+    func testInactiveEmptyHeadingRetainsVisibleTextAttributes() throws {
+        let source = "##\nActive"
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        textView.string = source
+        textView.setSelectedRange(
+            (source as NSString).range(of: "Active")
+        )
+
+        MarkdownPresentation.configure(textView, mode: .livePreview)
+
+        let storage = try XCTUnwrap(textView.textStorage)
+        let markerFont = try XCTUnwrap(
+            storage.attribute(
+                .font,
+                at: 0,
+                effectiveRange: nil
+            ) as? NSFont
+        )
+        let markerColor = try XCTUnwrap(
+            storage.attribute(
+                .foregroundColor,
+                at: 0,
+                effectiveRange: nil
+            ) as? NSColor
+        )
+        XCTAssertGreaterThan(markerFont.pointSize, 1)
+        XCTAssertEqual(markerColor, NSColor.textColor)
+    }
+
     func testTypingStrikethroughAfterPreviouslyHiddenStrongText() throws {
         let source = "**B**"
         let textView = MarkdownTextView(usingTextLayoutManager: true)
