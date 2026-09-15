@@ -56,6 +56,26 @@ final class NoteDocument {
         Set(document.heads().map(\.debugDescription))
     }
 
+    /// An editor revision contains only the current change heads, not a
+    /// serialized document or its full history.
+    var editorHeads: Data { document.heads().raw() }
+
+    func applyEditorText(_ replacement: String, basedOn revision: Data) throws {
+        guard let heads = revision.heads(), !heads.isEmpty else {
+            throw SyncError.invalidRecord
+        }
+        if heads == document.heads() {
+            try replaceAll(with: replacement)
+        } else {
+            // forkAt establishes ancestry using this document's own history.
+            // Only the stale-editor path needs a fork; ordinary typing edits
+            // the live document directly without loading or merging a copy.
+            let branch = try NoteDocument(validating: document.forkAt(heads: heads))
+            try branch.replaceAll(with: replacement)
+            try document.merge(other: branch.document)
+        }
+    }
+
     var historyHeads: Set<String> {
         Set(document.getHistory().map(\.debugDescription))
     }

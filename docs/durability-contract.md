@@ -21,8 +21,15 @@ Scope: milestone 1's first usable single-note increment.
 - Show saved only when current heads equal successfully persisted heads. Keep
   persisted heads in memory; derive them from the file on reopening. An
   Automerge commit is not an operating-system file flush.
-- Capture and save promptly after edits, with bounded coalescing if needed.
-  A pause in typing or app termination must not be the only save trigger.
+- Update Automerge in memory on every edit. Capture a snapshot for disk after
+  one second idle, or after at most five seconds of continuous typing. While
+  a write is active, coalesce further edits and persist the latest state next.
+  These are scheduling bounds, not guarantees of disk completion latency.
+- Explicit flush, retry, first creation, note navigation, and app lifecycle
+  flushes bypass the delay. Normal macOS termination waits for opened notes
+  to flush and cancels quitting if saving fails. A crash or forced termination
+  can lose edits since the last completed save; this includes the debounce
+  window. A pause in typing must not be the only save trigger.
 - A failed save preserves the editor buffer, displays an error, and offers
   retry. Do not automatically loop on persistent disk failures. Later edits
   and explicit retry may trigger another attempt.

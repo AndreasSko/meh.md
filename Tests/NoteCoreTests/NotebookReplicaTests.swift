@@ -5,6 +5,32 @@ import XCTest
 
 @MainActor
 final class NotebookReplicaTests: XCTestCase {
+    func testLifecycleFlushPersistsAllOpenNotesWithoutSync() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let first = try await replica.createNote(name: "First.md", text: "first")
+        let second = try await replica.createNote(name: "Second.md", text: "second")
+        let a = try await replica.openNote(first)
+        let b = try await replica.openNote(second)
+        try a.replaceAll(with: "first edited")
+        try b.replaceAll(with: "second edited")
+        XCTAssertEqual(a.status, .saving)
+        XCTAssertEqual(b.status, .saving)
+
+        try await replica.flushOpenNotes()
+
+        XCTAssertEqual(a.status, .saved)
+        XCTAssertEqual(b.status, .saved)
+        for (id, expected) in [(first, "first edited"), (second, "second edited")] {
+            let stored = try NoteDocument(serializedData: Data(
+                contentsOf: replica.noteStorage(id).currentURL
+            ))
+            XCTAssertEqual(try stored.text, expected)
+        }
+    }
+
     func testUnlistedBodyIsCheckpointedButNotUploaded() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

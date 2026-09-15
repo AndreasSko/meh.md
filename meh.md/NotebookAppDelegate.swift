@@ -1,4 +1,5 @@
 import Foundation
+import NoteCore
 
 #if os(iOS)
 import UIKit
@@ -40,6 +41,26 @@ import AppKit
 
 @MainActor
 final class NotebookAppDelegate: NSObject, NSApplicationDelegate {
+    private var isFlushingForTermination = false
+
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        guard !isFlushingForTermination else { return .terminateLater }
+        isFlushingForTermination = true
+        Task { @MainActor in
+            do {
+                try await NotebookWorkspace.shared.replica?.flushOpenNotes()
+                sender.reply(toApplicationShouldTerminate: true)
+            } catch {
+                isFlushingForTermination = false
+                sender.reply(toApplicationShouldTerminate: false)
+                sender.presentError(error)
+            }
+        }
+        return .terminateLater
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard RemoteNotificationLaunch.isEnabled else { return }
         Task { await NotebookWorkspace.shared.start() }
