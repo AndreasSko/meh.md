@@ -44,24 +44,18 @@ extension XCUIApplication {
             "Expected the notebook sidebar to finish loading"
         )
 
-        let canonicalNote = staticTexts["note.md"]
-        let markdownName = staticTexts.matching(
+        let notebookNote = buttons.matching(
             NSPredicate(
-                format: "label MATCHES[c] %@ AND label != %@",
-                ".*\\.(md|markdown)$", "meh.md"
+                format: "identifier BEGINSWITH %@",
+                "notebook-sidebar-note-"
             )
         ).firstMatch
         // The toolbar can appear before asynchronous placements finish loading.
-        _ = markdownName.waitForExistence(timeout: timeout)
-        if canonicalNote.exists {
-            activate(canonicalNote)
+        _ = notebookNote.waitForExistence(timeout: timeout)
+        if notebookNote.exists {
+            activate(notebookNote)
         } else {
-            if markdownName.exists {
-                activate(markdownName)
-            } else {
-                activate(sidebar)
-
-            }
+            activate(sidebar)
         }
 
         XCTAssertTrue(

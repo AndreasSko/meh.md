@@ -69,7 +69,7 @@ final class NotebookOrderingUITests: XCTestCase {
         editor.typeText("Fictional batch source")
         showSidebar(app)
 
-        activate(app.buttons["notebook-select-items"])
+        enterSelectionMode(in: app)
         activate(alpha)
         activate(bravo)
         XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
@@ -127,7 +127,7 @@ final class NotebookOrderingUITests: XCTestCase {
         #endif
         let folder = app.staticTexts["Folder \(suffix)"].firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 5))
-        activate(app.buttons["notebook-select-items"])
+        enterSelectionMode(in: app)
         activate(alpha)
         activate(bravo)
         activate(app.buttons["notebook-selection-actions"])
@@ -205,10 +205,10 @@ final class NotebookOrderingUITests: XCTestCase {
         #endif
         XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 5))
         showSidebar(app)
-        let label = app.staticTexts.matching(
+        let label = app.buttons.matching(
             NSPredicate(
                 format: "identifier BEGINSWITH %@ AND label == %@",
-                "notebook-sidebar-title-", title + ".md"
+                "notebook-sidebar-note-", title
             )
         ).firstMatch
         XCTAssertTrue(label.waitForExistence(timeout: 5))
@@ -216,7 +216,10 @@ final class NotebookOrderingUITests: XCTestCase {
     }
 
     private func chooseSort(_ title: String, in app: XCUIApplication) {
-        let menu = app.buttons["notebook-sort-root"]
+        let filesMenu = filesMenu(in: app)
+        XCTAssertTrue(filesMenu.waitForExistence(timeout: 5))
+        activate(filesMenu)
+        let menu = app.descendants(matching: .any)["notebook-sort-root"]
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
         activate(menu)
         #if os(macOS)
@@ -226,6 +229,15 @@ final class NotebookOrderingUITests: XCTestCase {
         #endif
         XCTAssertTrue(action.waitForExistence(timeout: 5))
         activate(action)
+    }
+
+    private func enterSelectionMode(in app: XCUIApplication) {
+        let filesMenu = filesMenu(in: app)
+        XCTAssertTrue(filesMenu.waitForExistence(timeout: 5))
+        activate(filesMenu)
+        let select = app.descendants(matching: .any)["notebook-select-items"]
+        XCTAssertTrue(select.waitForExistence(timeout: 5))
+        activate(select)
     }
 
     private func assertOrder(
@@ -265,16 +277,24 @@ final class NotebookOrderingUITests: XCTestCase {
 
     private func showSidebar(_ app: XCUIApplication) {
         #if os(iOS)
-        if !app.buttons["notebook-sort-root"].isHittable {
+        if !app.buttons["notebook-files-menu"].isHittable {
             app.navigationBars.buttons.element(boundBy: 0).tap()
         }
         #endif
-        XCTAssertTrue(app.buttons["notebook-sort-root"].waitForExistence(timeout: 5))
+        XCTAssertTrue(filesMenu(in: app).waitForExistence(timeout: 5))
         let tree = app.buttons["notebook-tree-toggle"]
         XCTAssertTrue(tree.waitForExistence(timeout: 5))
         if tree.value as? String == "Collapsed" {
             activate(tree)
         }
+    }
+
+    private func filesMenu(in app: XCUIApplication) -> XCUIElement {
+        #if os(macOS)
+        app.menuButtons["notebook-files-menu"]
+        #else
+        app.buttons["notebook-files-menu"]
+        #endif
     }
 
     private func activate(_ element: XCUIElement) {

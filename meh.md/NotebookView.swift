@@ -81,56 +81,82 @@ struct NotebookView: View {
     var body: some View {
         NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
+                LazyVStack(alignment: .leading, spacing: 28) {
                     recentsSection
-                    HStack(spacing: 6) {
+                    NotebookSidebarSection {
+                        HStack(spacing: 6) {
+                            NotebookSectionToggle(
+                                title: "Files",
+                                isExpanded: navigationState.isTreeExpanded,
+                                identifier: "notebook-tree-toggle"
+                            ) { navigationState.isTreeExpanded.toggle() }
+                            .contextMenu { creationActions(parentID: nil) }
+                            Menu {
+                                Button("Select Items") {
+                                    selectingItems = true
+                                    navigationState.isTreeExpanded = true
+                                    browserSelection.clear()
+                                }
+                                .accessibilityIdentifier("notebook-select-items")
+                                sortMenu(parentID: nil, label: "Sort Files")
+                                    .accessibilityIdentifier("notebook-sort-root")
+                                Divider()
+                                creationActions(parentID: nil)
+                            } label: {
+                                Label("Files Actions", systemImage: "ellipsis")
+                                    .labelStyle(.iconOnly)
+                                    .frame(minWidth: sidebarRowHeight,
+                                           minHeight: sidebarRowHeight)
+                                    .contentShape(Rectangle())
+                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
+                            .disabled(busy)
+                            .accessibilityIdentifier("notebook-files-menu")
+                        }
+                    } content: {
+                        browserActions
+                        if navigationState.isTreeExpanded {
+                            activeTree
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Divider()
+                            .padding(.bottom, 8)
                         Button {
-                            navigationState.isTreeExpanded.toggle()
+                            perform {
+                                try await flushEditor()
+                                trashExpanded.toggle()
+                            }
                         } label: {
-                            disclosureIcon(expanded: navigationState.isTreeExpanded)
-                            Text("Notebook")
+                            HStack(spacing: 8) {
+                                Label("Trash", systemImage: "trash")
+                                Spacer(minLength: 0)
+                                disclosureIcon(expanded: trashExpanded)
+                            }
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .frame(minHeight: sidebarRowHeight)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .contextMenu { creationActions(parentID: nil) }
-                        .accessibilityIdentifier("notebook-tree-toggle")
-                        .accessibilityValue(
-                            navigationState.isTreeExpanded
-                                ? "Expanded" : "Collapsed"
-                        )
-                        Spacer(minLength: 0)
-                        sortMenu(parentID: nil, label: "Sort Notebook")
-                            .accessibilityIdentifier("notebook-sort-root")
-                    }
-                    browserActions
-                    if navigationState.isTreeExpanded {
-                        activeTree
-                    }
-                    Button {
-                        perform {
-                            try await flushEditor()
-                            trashExpanded.toggle()
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            disclosureIcon(expanded: trashExpanded)
-                            Label("Trash", systemImage: "trash")
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu { emptyTrashAction }
-                    .accessibilityIdentifier("notebook-trash-toggle")
-
-                    if trashExpanded {
-                        ForEach(trashRows) { row in sidebarRow(row) }
-                        if replica.placements.contains(where: \.isInTrash) {
-                            emptyTrashAction
-                                .font(.caption)
-                                .padding(.leading, 24)
+                        .contextMenu { emptyTrashAction }
+                        .accessibilityIdentifier("notebook-trash-toggle")
+                        .accessibilityValue(trashExpanded ? "Expanded" : "Collapsed")
+                        if trashExpanded {
+                            ForEach(trashRows) { row in sidebarRow(row) }
+                            if replica.placements.contains(where: \.isInTrash) {
+                                emptyTrashAction
+                                    .font(.caption)
+                                    .padding(.leading, 24)
+                            }
                         }
                     }
                 }
-                .padding(10)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
             }
+            .background(NotebookSidebarPalette.background)
             .swipeActionsContainer()
             .navigationTitle("meh.md")
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
@@ -447,66 +473,64 @@ struct NotebookView: View {
     }
 
     private var recentsSection: some View {
-        Section {
-            Button {
-                navigationState.isRecentsExpanded.toggle()
-            } label: {
-                HStack(spacing: 6) {
-                    disclosureIcon(expanded: navigationState.isRecentsExpanded)
-                    Text("Recents")
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("notebook-recents-toggle")
-            .accessibilityValue(navigationState.isRecentsExpanded ? "Expanded" : "Collapsed")
+        NotebookSidebarSection {
+            NotebookSectionToggle(
+                title: "Recents",
+                isExpanded: navigationState.isRecentsExpanded,
+                identifier: "notebook-recents-toggle"
+            ) { navigationState.isRecentsExpanded.toggle() }
+        } content: {
             if navigationState.isRecentsExpanded {
-                ForEach(navigationState.recentNoteIDs, id: \.self) { id in
-                    if let placement = replica.placements.first(where: { $0.item.id == id }) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(recentPlacements, id: \.item.id) { placement in
                         Button {
                             perform {
-                                try await selectNote(id)
-                                reveal(id)
+                                try await selectNote(placement.item.id)
+                                reveal(placement.item.id)
                             }
                         } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(NotebookNoteName.title(from: placement.displayName))
-                                    .font(.body)
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                Text(recentPreview(for: id))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .contentShape(Rectangle())
+                            NotebookRecentRow(
+                                title: NotebookNoteName.title(from: placement.displayName),
+                                preview: recentPreview(for: placement.item.id),
+                                isCurrent: showsCurrentNote && selectedID == placement.item.id,
+                                showsDivider: placement.item.id != recentPlacements.last?.item.id
+                            )
                         }
                         .buttonStyle(.plain)
-                        .background(
-                            selectedID == id ? Color.accentColor.opacity(0.14) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 6)
-                        )
-                        .accessibilityIdentifier("notebook-recent-" + id.uuidString)
+                        .accessibilityIdentifier("notebook-recent-" + placement.item.id.uuidString)
                         .contextMenu { actions(for: placement, allowsCreation: false) }
                     }
+                    if recentPlacements.isEmpty {
+                        Text("Notes you edit or rename appear here.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(14)
+                    }
                 }
-                if navigationState.recentNoteIDs.isEmpty {
-                    Text("Notes you edit or rename appear here.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                }
+                .background(NotebookSidebarPalette.recents,
+                            in: RoundedRectangle(cornerRadius: 16))
             }
         }
+    }
+
+    private var recentPlacements: [NotebookPlacement] {
+        navigationState.recentNoteIDs.compactMap { id in
+            replica.placements.first { $0.item.id == id }
+        }
+    }
+
+    private var showsCurrentNote: Bool {
+        #if os(macOS)
+        true
+        #else
+        horizontalSizeClass != .compact
+        #endif
     }
 
     private func recentPreview(for id: UUID) -> String {
         guard let recent = navigationState.recentSessions[id] else { return "Preview unavailable" }
         guard recent.isEditingEnabled else { return "Note unavailable" }
-        let preview = recent.text.prefix(160)
-            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        let preview = NotebookRecentPreview.text(from: recent.text)
         return preview.isEmpty ? "Empty note" : preview
     }
 
@@ -537,14 +561,14 @@ struct NotebookView: View {
 
     private var browserActions: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Button(selectingItems ? "Done" : "Select") {
-                    selectingItems.toggle()
-                    browserSelection.clear()
-                }
-                .accessibilityIdentifier("notebook-select-items")
-                .disabled(busy)
-                if selectingItems {
+            if selectingItems {
+                HStack {
+                    Button("Done") {
+                        selectingItems.toggle()
+                        browserSelection.clear()
+                    }
+                    .accessibilityIdentifier("notebook-select-items")
+                    .disabled(busy)
                     Text("\(browserSelection.count) selected")
                         .font(.caption)
                     Spacer(minLength: 0)
@@ -674,7 +698,9 @@ struct NotebookView: View {
                             }
                             Image(systemName: placement.item.kind == .folder
                                 ? "folder" : "note.text")
-                            Text(placement.displayName)
+                            Text(placement.item.kind == .note
+                                ? NotebookNoteName.title(from: placement.displayName)
+                                : placement.displayName)
                                 .lineLimit(1)
                                 .accessibilityIdentifier(
                                     "notebook-sidebar-title-"
@@ -692,6 +718,11 @@ struct NotebookView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier(
+                        (placement.item.kind == .note
+                            ? "notebook-sidebar-note-" : "notebook-sidebar-folder-")
+                            + placement.item.id.uuidString
+                    )
                     // Keep row actions off the inline name editor.
                     .contextMenu {
                         if selectingItems, browserSelection.contains(placement.item.id) {
@@ -717,9 +748,10 @@ struct NotebookView: View {
             .background(
                 (selectingItems && !placement.isInTrash
                     ? browserSelection.contains(placement.item.id)
-                    : selectedID == placement.item.id || editingID == placement.item.id)
+                    : (showsCurrentNote && selectedID == placement.item.id)
+                        || editingID == placement.item.id)
                     ? Color.accentColor.opacity(0.14) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6)
+                in: RoundedRectangle(cornerRadius: 9)
             )
             .accessibilityValue(
                 selectingItems && !placement.isInTrash
@@ -805,7 +837,6 @@ struct NotebookView: View {
             }
         } label: {
             Label(label, systemImage: "arrow.up.arrow.down")
-                .labelStyle(.iconOnly)
         }
         .disabled(busy)
     }
