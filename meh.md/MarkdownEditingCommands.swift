@@ -104,11 +104,14 @@ enum MarkdownEditingRules {
         if source.substring(with: content)
             .trimmingCharacters(in: .whitespaces).isEmpty,
            let innermost = prefix.containers.last {
-            let remaining = prefix.containers.dropLast()
-                .map(\.source).joined()
             var indentation = prefix.indentation
-            if innermost.isList {
+            let remaining: String
+            if innermost.isList, !indentation.isEmpty {
                 indentation = removingIndentLevel(from: indentation)
+                remaining = prefix.containers.map(\.source).joined()
+            } else {
+                remaining = prefix.containers.dropLast()
+                    .map(\.source).joined()
             }
             let replacement = indentation + remaining
             return MarkdownEditingChange(
@@ -162,12 +165,38 @@ enum MarkdownEditingRules {
                     )
                 }
             } else {
-                edits.append(
-                    SourceEdit(
-                        range: NSRange(location: line.location, length: 0),
-                        replacement: "  "
-                    )
+                let contentLine = contentLine(containing: line.location, in: source)
+                let prefix = containerPrefix(in: source, line: contentLine)
+                let content = NSRange(
+                    location: prefix.contentStart,
+                    length: NSMaxRange(contentLine) - prefix.contentStart
                 )
+                let isEmptyQuotedList = prefix.containers.contains(where: \.isList)
+                    && prefix.containers.contains(where: \.isQuote)
+                    && source.substring(with: content)
+                        .trimmingCharacters(in: .whitespaces).isEmpty
+                if isEmptyQuotedList {
+                    let replacement = "  " + prefix.indentation
+                        + prefix.containers
+                            .filter { !$0.isQuote }
+                            .map(\.source).joined()
+                    edits.append(
+                        SourceEdit(
+                            range: NSRange(
+                                location: contentLine.location,
+                                length: prefix.contentStart - contentLine.location
+                            ),
+                            replacement: replacement
+                        )
+                    )
+                } else {
+                    edits.append(
+                        SourceEdit(
+                            range: NSRange(location: line.location, length: 0),
+                            replacement: "  "
+                        )
+                    )
+                }
             }
         }
         guard !edits.isEmpty else { return nil }
@@ -487,6 +516,11 @@ private extension MarkdownEditingRules {
             case .quote:
                 return false
             }
+        }
+
+        var isQuote: Bool {
+            if case .quote = kind { return true }
+            return false
         }
 
         var continuation: String {

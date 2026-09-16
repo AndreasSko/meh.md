@@ -231,7 +231,7 @@ enum MarkdownLivePreview {
             guard character == 32 || character == 9 else { break }
             end += 1
         }
-        guard end > range.location else { return [] }
+        guard end > range.location, end < limit else { return [] }
         return [NSRange(location: range.location, length: end - range.location)]
     }
 

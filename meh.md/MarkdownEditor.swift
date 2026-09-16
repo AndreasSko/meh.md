@@ -1,5 +1,11 @@
 import SwiftUI
 
+enum MarkdownEditorScrollPadding {
+    static func bottom(for viewportHeight: CGFloat) -> CGFloat {
+        max(0, viewportHeight / 2)
+    }
+}
+
 /// Synchronously commits the native buffer and freezes input before an
 /// asynchronous navigation/save operation can replace the editor.
 @MainActor
@@ -165,9 +171,42 @@ private enum MarkdownEditorSelection {
 #if os(macOS)
 import AppKit
 
+final class MarkdownEditorScrollView: NSScrollView {
+    override func layout() {
+        super.layout()
+        (documentView as? MarkdownTextView)?.updateScrollPastEndPadding(
+            viewportHeight: contentView.bounds.height
+        )
+    }
+}
+
 final class MarkdownTextView: NSTextView {
     let markdownSyntaxCache = MarkdownSyntaxCache()
     var markdownDidBeginEditing: (() -> Void)?
+    private let markdownTopInset: CGFloat = 20
+
+    override var textContainerOrigin: NSPoint {
+        // NSTextView sizes with symmetric insets. Keep the text at its normal
+        // top position so the additional sizing space stays below the note.
+        var origin = super.textContainerOrigin
+        origin.y = markdownTopInset
+        return origin
+    }
+
+    func updateScrollPastEndPadding(viewportHeight: CGFloat) {
+        let bottom = MarkdownEditorScrollPadding.bottom(
+            for: viewportHeight
+        )
+        let verticalInset = max(markdownTopInset, bottom / 2)
+        guard textContainerInset.height != verticalInset else { return }
+        let heightChange = 2 * (verticalInset - textContainerInset.height)
+        textContainerInset.height = verticalInset
+        // An inset change alone does not immediately resize a TextKit 2 view.
+        setFrameSize(NSSize(
+            width: frame.width,
+            height: max(0, frame.height + heightChange)
+        ))
+    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -292,7 +331,7 @@ struct MarkdownEditor: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = MarkdownEditorScrollView()
         let textView = MarkdownTextView(usingTextLayoutManager: true)
 
         scrollView.hasVerticalScroller = true
@@ -783,6 +822,15 @@ nonisolated(unsafe) private var markdownTextViewStateKey: UInt8 = 0
 // UIKit's TextKit factory can bypass Swift subclass property initializers.
 // Keep editor state in a normally initialized object attached to the view.
 final class MarkdownTextView: UITextView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let bottom = MarkdownEditorScrollPadding.bottom(
+            for: bounds.height
+        )
+        guard contentInset.bottom != bottom else { return }
+        contentInset.bottom = bottom
+    }
+
     private var markdownState: MarkdownTextViewState {
         if let state = objc_getAssociatedObject(
             self,
@@ -1079,7 +1127,8 @@ struct MarkdownEditor: UIViewRepresentable {
 
         textView.delegate = context.coordinator
         textView.installMarkdownKeyboardToolbar()
-        textView.keyboardDismissMode = .onDrag
+        textView.keyboardDismissMode = UIDevice.current.userInterfaceIdiom == .pad
+            ? .none : .onDrag
         textView.alwaysBounceVertical = true
         textView.text = text
         textView.allowsEditingTextAttributes = false
@@ -1130,7 +1179,10 @@ struct MarkdownEditor: UIViewRepresentable {
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             positionRestoreGeneration &+= 1
             pendingPosition = nil
-            scrollView.endEditing(false)
+            // Keep iPad keyboard input at the existing caret after scrolling.
+            if UIDevice.current.userInterfaceIdiom != .pad {
+                scrollView.endEditing(false)
+            }
         }
 
         init(parent: MarkdownEditor) {

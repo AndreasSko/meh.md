@@ -67,8 +67,77 @@ final class MarkdownEditingCommandsTests: XCTestCase {
             .continueLine,
             text: "  - ",
             selection: caret(atEndOf: "  - "),
+            equals: "- ",
+            selected: NSRange(location: 2, length: 0)
+        )
+    }
+
+    func testRepeatedReturnOutdentsThenExitsNestedLists() throws {
+        try assertChange(
+            .continueLine,
+            text: "    * ",
+            selection: caret(atEndOf: "    * "),
+            equals: "  * ",
+            selected: NSRange(location: 4, length: 0)
+        )
+        try assertChange(
+            .continueLine,
+            text: "  4. ",
+            selection: caret(atEndOf: "  4. "),
+            equals: "4. ",
+            selected: NSRange(location: 3, length: 0)
+        )
+        try assertChange(
+            .continueLine,
+            text: "\t\t* ",
+            selection: caret(atEndOf: "\t\t* "),
+            equals: "\t* ",
+            selected: NSRange(location: 3, length: 0)
+        )
+        try assertChange(
+            .continueLine,
+            text: "      - ",
+            selection: caret(atEndOf: "      - "),
+            equals: "    - ",
+            selected: NSRange(location: 6, length: 0)
+        )
+        try assertChange(
+            .continueLine,
+            text: "* ",
+            selection: caret(atEndOf: "* "),
             equals: "",
             selected: NSRange(location: 0, length: 0)
+        )
+    }
+
+    func testIndentingEmptyQuotedListContinuationRemovesQuote() throws {
+        try assertChange(
+            .indent,
+            text: "* > ",
+            selection: caret(atEndOf: "* > "),
+            equals: "  * ",
+            selected: NSRange(location: 4, length: 0)
+        )
+        try assertChange(
+            .indent,
+            text: "  2. > > ",
+            selection: caret(atEndOf: "  2. > > "),
+            equals: "    2. ",
+            selected: NSRange(location: 7, length: 0)
+        )
+        try assertChange(
+            .indent,
+            text: "\t3. > ",
+            selection: caret(atEndOf: "\t3. > "),
+            equals: "  \t3. ",
+            selected: NSRange(location: 6, length: 0)
+        )
+        try assertChange(
+            .indent,
+            text: "* > quoted",
+            selection: caret(atEndOf: "* > quoted"),
+            equals: "  * > quoted",
+            selected: NSRange(location: 12, length: 0)
         )
     }
 
