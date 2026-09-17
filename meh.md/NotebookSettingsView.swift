@@ -7,6 +7,8 @@ struct NotebookSettingsView: View {
     let onImport: (NotebookImportPlan?) async throws -> Void
     let beforeExport: () async throws -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var confirmingReset = false
+    @State private var resetScheduled = false
     @State private var importing = false
     @State private var saving = false
     @State private var preparing = false
@@ -25,6 +27,15 @@ struct NotebookSettingsView: View {
                     if preparing { ProgressView("Preparing Markdown…") }
                 }
                 .disabled(preparing || saving)
+                Section("Local Storage") {
+                    Button("Reset All Local Data…", role: .destructive) {
+                        confirmingReset = true
+                    }
+                    .foregroundStyle(.red)
+                    .disabled(preparing || saving || resetScheduled)
+                    Text("Removes local notes, settings, and sync data on the next launch. Unsynced changes will be lost. iCloud data is kept.")
+                        .font(.footnote)
+                }
             }
             .formStyle(.grouped)
             .navigationTitle("Settings")
@@ -36,9 +47,29 @@ struct NotebookSettingsView: View {
             }
         }
         #if os(macOS)
-        .frame(width: 480, height: 320)
+        .frame(width: 480, height: 460)
         #endif
         .interactiveDismissDisabled(preparing || saving)
+        .alert("Reset All Local Data?", isPresented: $confirmingReset) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset on Next Launch", role: .destructive) {
+                let defaults = UserDefaults.standard
+                defaults.set(true, forKey: "meh.md.resetLocalStorage")
+                defaults.synchronize()
+                resetScheduled = true
+            }
+        } message: {
+            Text("This cannot be undone. All local notes, including unsynced changes, settings, and sync history will be removed when you reopen the app. Export anything you need first. Notes already in iCloud remain there and will download again.")
+        }
+        .alert("Reset Scheduled", isPresented: $resetScheduled) {
+            #if os(macOS)
+            Button("Quit Now") { NSApplication.shared.terminate(nil) }
+            #else
+            Button("OK", role: .cancel) {}
+            #endif
+        } message: {
+            Text("Quit and reopen meh.md to complete the reset. Any changes made before restarting will also be discarded.")
+        }
         .sheet(isPresented: $importing) {
             NotebookImportView(replica: replica, onImport: onImport)
         }
