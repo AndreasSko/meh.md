@@ -89,7 +89,7 @@ private enum RemoteNotificationLaunch {
         let environment = ProcessInfo.processInfo.environment
         guard environment["MEH_SYNC_AUTOMATIC"] != "0" else { return false }
 
-        #if ICLOUD_DEV
+        #if ICLOUD_ENABLED
         return true
         #elseif DEBUG
         return environment["MEH_SYNC_CLOUDKIT"] == "1"

@@ -25,8 +25,12 @@ final class AppWorkspace {
             var transport: (any SyncTransport)?
             let environment = ProcessInfo.processInfo.environment
             automaticSync = environment["MEH_SYNC_AUTOMATIC"] != "0"
-#if ICLOUD_DEV
+#if ICLOUD_ENABLED
+            #if ICLOUD_DEV
             label = "iCloud Dev"
+            #else
+            label = "iCloud"
+            #endif
             if hasExistingNote(in: directory) {
                 // An established iCloud workspace remains editable when the
                 // account or network is temporarily unavailable.
@@ -102,7 +106,7 @@ final class AppWorkspace {
             let fileStore = NoteFileStorage(directory: directory)
             let storage: any NoteStorage
             var bootstrapStorage: SyncBootstrapStorage?
-#if ICLOUD_DEV
+#if ICLOUD_ENABLED
             let allowsOfflineFirstLaunch = false
 #else
             let allowsOfflineFirstLaunch = true
@@ -118,11 +122,11 @@ final class AppWorkspace {
             } else {
                 storage = fileStore
             }
-#if ICLOUD_DEV
+#if ICLOUD_ENABLED
             guard transport != nil || session != nil else { return }
 #endif
             let note = session ?? NoteSession(storage: storage)
-#if ICLOUD_DEV
+#if ICLOUD_ENABLED
             if session == nil, let bootstrapStorage {
                 await note.load()
                 guard note.isEditingEnabled else {
@@ -155,7 +159,7 @@ final class AppWorkspace {
         guard !retrying else { return }
         retrying = true
         defer { retrying = false }
-#if ICLOUD_DEV
+#if ICLOUD_ENABLED
         if session == nil {
             started = false
             syncSetupError = nil
@@ -204,7 +208,7 @@ struct WorkspaceView: View {
                 )
             } else if let error = workspace.syncSetupError {
                 ContentUnavailableView {
-                    Label("iCloud Dev unavailable", systemImage: "icloud.slash")
+                    Label("iCloud unavailable", systemImage: "icloud.slash")
                 } description: {
                     Text(error)
                 } actions: {

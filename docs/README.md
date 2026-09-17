@@ -15,7 +15,8 @@ and the evidence collected along the way.
 
 ## Build and validate
 
-- [Development builds](development-builds.md): Local and iCloud Dev schemes.
+- [Development builds](development-builds.md): Local, development-cloud, and
+  production-cloud schemes.
 - [CloudKit setup](cloudkit-sync-setup.md): signing and container setup.
 - [Local sync service](local-sync-service.md): account-free replication tests.
 - [Notebook sync validation](notebook-sync-validation.md): local checks, CI,

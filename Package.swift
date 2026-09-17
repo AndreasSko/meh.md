@@ -38,6 +38,7 @@ let package = Package(
             exclude: [
                 "AppWorkspace.swift", "Assets.xcassets", "CloudKitSmokeCheck.swift",
                 "ContentView.swift", "Info-iCloud.plist", "Info.plist",
+                "PrivacyInfo.xcprivacy",
                 "MarkdownEditor.swift", "EditorTextSizeControl.swift",
                 "MarkdownEditingCommands.swift", "MarkdownLivePreview.swift",
                 "EditorWritingControls.swift",
@@ -80,6 +81,7 @@ let package = Package(
                 "NotebookNavigationState.swift",
                 "NotebookRecentPreview.swift",
                 "icon.icon", "Info-iCloud.plist", "Info.plist", "macOS.entitlements",
+                "PrivacyInfo.xcprivacy",
                 "iOS.entitlements", "CloudKitSmokeCheck.swift",
                 "NotebookAppDelegate.swift", "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",
             ],

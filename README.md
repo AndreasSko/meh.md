@@ -7,8 +7,8 @@
 # meh.md - Minimalistic Markdown with a great sync
 
 meh.md is my attempt to finally build the note taking app of my dreams:
-Markdown-first, without the whole ‘everything is a block’ thing (I look at you,
-Notion and Craft), simple, minimalistic UI, AND: having a great sync
+Markdown-first, without the whole ‘everything is a block’ thing (I look at
+you, Notion and Craft), simple, minimalistic UI, AND: having a great sync
 out-of-the-box ⚡️.
 
 ## How does sync work?
@@ -63,8 +63,8 @@ The project currently targets macOS 27, iOS 27, and iPadOS 27 and needs Xcode
 with the corresponding SDKs.
 
 1. Open `meh.md.xcodeproj`.
-2. Choose `meh.md Local` for local notes or `meh.md iCloud Dev` for development
-   iCloud sync.
+2. Choose `meh.md Local` for local notes, `meh.md iCloud Dev` for development
+   iCloud sync, or `meh.md` to exercise the production Release configuration.
 3. Select your Mac, simulator, or connected device and run the app.
 
 For signing, iCloud setup, and the separate development app identities, see

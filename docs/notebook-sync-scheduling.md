@@ -3,8 +3,8 @@
 Cloud builds use CKSyncEngine automatic scheduling and its database change
 subscription. The app registers for silent remote notifications and creates
 its notebook workspace early during launch. It does not request permission
-to show alerts. The signed iCloud Dev configuration includes APNs entitlements
-and the iOS remote-notification background mode.
+to show alerts. The development and production cloud configurations include
+APNs entitlements and the iOS remote-notification background mode.
 
 ## Triggers and durability
 
@@ -42,8 +42,9 @@ registration disabled for deterministic manual/device test workflows.
 
 The Local build's Debug environment override can still use CloudKit, but its
 signing configuration does not include APNs. Use the iCloud Dev scheme for
-push/background acceptance. Notification registration failures appear in Sync
-Details and the event log; activation and Sync Now remain available.
+Development push/background acceptance and TestFlight for Production
+acceptance. Notification registration failures appear in Sync Details and the
+event log; activation and Sync Now remain available.
 
 ## What this does not guarantee
 
