@@ -180,11 +180,29 @@ final class NotebookWorkspace {
     func start() async {
         guard !isLoading else { return }
         isLoading = true
-        if usesSync { syncEventLog.record("workspace opening") }
+
         errorMessage = nil
         recoveryAction = nil
         defer { isLoading = false }
         do {
+            // Run before opening documents or starting any sync/save tasks.
+            if replica == nil, UserDefaults.standard.bool(forKey: "meh.md.resetLocalStorage") {
+                let manager = FileManager.default
+                let paths = [directory,
+                             documentsDirectory.appending(path: "Notebook Copies"),
+                             URL.applicationSupportDirectory.appending(path: "Notes")]
+                for path in paths where manager.fileExists(atPath: path.path) {
+                    try manager.removeItem(at: path)
+                }
+                // Keep the request until every removal succeeds, so failures
+                // block startup and can be retried without opening partial data.
+                if let identifier = Bundle.main.bundleIdentifier {
+                    UserDefaults.standard.removePersistentDomain(forName: identifier)
+                }
+                UserDefaults.standard.removeObject(forKey: "meh.md.resetLocalStorage")
+                UserDefaults.standard.synchronize()
+            }
+            if usesSync { syncEventLog.record("workspace opening") }
             if case .invalid = mode {
                 throw SyncError.unavailable("Set a valid local sync URL and workspace name.")
             }
