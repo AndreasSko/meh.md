@@ -27,6 +27,7 @@ struct NotebookView: View {
     let replica: NotebookReplica
     var workspace: NotebookWorkspace? = nil
     @State private var showingImport = false
+    @State private var showingSettings = false
     @State private var showingTextSize = false
     @AppStorage("editor.fontSize") private var editorFontSize = 17.0
     @AppStorage("editor.fontFamily") private var editorFontFamilyRaw =
@@ -157,6 +158,20 @@ struct NotebookView: View {
                 .padding(.vertical, 12)
             }
             .background(NotebookSidebarPalette.background)
+            .safeAreaInset(edge: .bottom, alignment: .leading) {
+                Button { showingSettings = true } label: {
+                    Label("Settings", systemImage: "gearshape")
+                        .labelStyle(.iconOnly)
+                        .frame(minWidth: 32, minHeight: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .help("Settings")
+                .padding(12)
+                .disabled(busy)
+                .accessibilityIdentifier("notebook-settings")
+            }
             .swipeActionsContainer()
             .navigationTitle("meh.md")
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
@@ -165,13 +180,6 @@ struct NotebookView: View {
                     ToolbarItem {
                         NotebookSyncToolbarButton(workspace: workspace)
                     }
-                }
-                ToolbarItem {
-                    Button { showingImport = true } label: {
-                        Label("Import Markdown", systemImage: "square.and.arrow.down")
-                    }
-                    .disabled(busy)
-                    .accessibilityIdentifier("notebook-import")
                 }
                 ToolbarItem {
                     Button {
@@ -346,6 +354,10 @@ struct NotebookView: View {
         ) { moveSheet }
         .sheet(isPresented: $showingImport) {
             NotebookImportView(replica: replica, onImport: importMarkdown)
+        }
+        .sheet(isPresented: $showingSettings) {
+            NotebookSettingsView(replica: replica, onImport: importMarkdown,
+                                 beforeExport: flushEditor)
         }
         .confirmationDialog(
             deletionSelection?.rootID == nil ? "Empty Trash?" : "Delete permanently?",

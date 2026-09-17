@@ -29,7 +29,7 @@ with the confidence that everything will be fine. That's pretty cool 😎
 This is an incomplete list of things accomplished so far:
 
 - All the basic Markdown that I need works
-- Existing notes can be imported (export comes soon, promise!)
+- Notes can be imported and exported
 - Sync across devices works fairly well, though can still be slow sometimes
 - It is pretty responsive, but every now and then there might be a quick
   hiccup
