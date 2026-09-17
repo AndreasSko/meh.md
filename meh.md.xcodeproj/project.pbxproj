@@ -29,11 +29,8 @@
 		000000000000000000000204 /* Exceptions for "meh.md" folder in "meh.md" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				Info-iCloud.plist,
+				"Info-iCloud.plist",
 				Info.plist,
-				iOS-iCloud.entitlements,
-				macOS.entitlements,
-				macOS-iCloud.entitlements,
 			);
 			target = 000000000000000100000000 /* meh.md */;
 		};
@@ -146,6 +143,12 @@
 					000000000000000100000000 = {
 						CreatedOnToolsVersion = 26.3;
 						SystemCapabilities = {
+							com.apple.BackgroundModes = {
+								enabled = 1;
+							};
+							com.apple.Push = {
+								enabled = 1;
+							};
 							com.apple.iCloud = {
 								enabled = 1;
 							};
@@ -340,6 +343,7 @@
 				MTL_FAST_MATH = YES;
 				PROJECT_UNIQUE_VALUE = SSMIQMDC;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "ICLOUD_ENABLED $(inherited)";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				TVOS_DEPLOYMENT_TARGET = 27.0;
 				WATCHOS_DEPLOYMENT_TARGET = 27.0;
@@ -409,7 +413,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PROJECT_UNIQUE_VALUE = SSMIQMDC;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG ICLOUD_DEV $(inherited)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG ICLOUD_ENABLED ICLOUD_DEV $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				TVOS_DEPLOYMENT_TARGET = 27.0;
 				WATCHOS_DEPLOYMENT_TARGET = 27.0;
@@ -434,6 +438,7 @@
 				ICLOUD_CONTAINER_ENVIRONMENT = Development;
 				INFOPLIST_FILE = meh.md/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = meh.md;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = NO;
@@ -448,7 +453,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "de.andreas-sk.meh-md";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -487,9 +492,9 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = icon;
-				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = meh.md/iOS.entitlements;
-				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = meh.md/iOS.entitlements;
-				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = meh.md/macOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "meh.md/iOS-iCloud.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "meh.md/iOS-iCloud.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "meh.md/macOS-iCloud.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 9YFM7J3EH3;
@@ -498,8 +503,9 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				ICLOUD_CONTAINER_ENVIRONMENT = Production;
-				INFOPLIST_FILE = meh.md/Info.plist;
+				INFOPLIST_FILE = "meh.md/Info-iCloud.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = meh.md;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = NO;
@@ -514,7 +520,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "de.andreas-sk.meh-md";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -565,7 +571,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				ICLOUD_CONTAINER_ENVIRONMENT = Development;
 				INFOPLIST_FILE = "meh.md/Info-iCloud.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "meh.md iCloud Dev";
+				INFOPLIST_KEY_CFBundleDisplayName = meh.md;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = NO;
@@ -580,7 +587,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 0.1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "de.andreas-sk.meh-md.icloud-dev";
 				PRODUCT_NAME = "meh.md iCloud Dev";
 				REGISTER_APP_GROUPS = YES;

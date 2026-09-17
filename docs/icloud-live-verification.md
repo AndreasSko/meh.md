@@ -32,10 +32,11 @@ below checks a real Mac/iPhone round trip through the same development zone.
 ## Signing
 
 Xcode automatic provisioning uses the existing team `9YFM7J3EH3`. Debug builds
-select Development; Release builds select Production. Cloud sync remains
-development-only, selected by the iCloud Dev scheme or the legacy Debug smoke
-environment flags. The project includes CloudKit entitlements for macOS and
-iOS. The available physical iPhone is signed through automatic provisioning.
+select Development; Release builds select Production. The iCloud Dev scheme
+selects cloud sync with its isolated identity, and the regular Release build
+selects cloud sync with the production identity. The project includes CloudKit
+and APNs entitlements for macOS and iOS. The available physical iPhone is
+signed through automatic provisioning.
 
 The first signed Mac build and signature verification succeeded on
 2026-09-13. Its embedded development profile authorizes the expected container.

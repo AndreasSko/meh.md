@@ -11,7 +11,8 @@ records describe what was tested at each checkpoint.
 The app targets Mac, iPhone, and iPad, currently on macOS 27 and iOS/iPadOS 27.
 SwiftUI owns navigation and presentation. Thin AppKit and UIKit text views
 use TextKit 2 for editing, with shared Markdown syntax and document behavior.
-The Local and iCloud Dev schemes have separate app identities and stores; see
+The Local and iCloud Dev schemes have separate app identities and stores. The
+regular Release app uses the production identity and CloudKit environment; see
 [development builds](development-builds.md) for configuration.
 
 The editor keeps literal Markdown as its backing text. Derived styling must

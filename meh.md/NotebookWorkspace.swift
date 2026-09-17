@@ -29,7 +29,7 @@ final class NotebookWorkspace {
     }
 
     static var isPreviewEnabled: Bool {
-        #if DEBUG && !ICLOUD_DEV
+        #if DEBUG && !ICLOUD_ENABLED
         let environment = ProcessInfo.processInfo.environment
         return environment["MEH_NOTEBOOK_PREVIEW"] == "1"
             && environment["MEH_SYNC_URL"] == nil
@@ -95,7 +95,12 @@ final class NotebookWorkspace {
     }
     var label: String {
         switch mode {
-        case .cloud: "iCloud Dev"
+        case .cloud:
+            #if ICLOUD_DEV
+            "iCloud Dev"
+            #else
+            "iCloud"
+            #endif
         case .development(_, let name): "Local sync · \(name)"
         case .preview: "Notebook preview · Local only"
         default: "On this device"
@@ -106,7 +111,7 @@ final class NotebookWorkspace {
         let environment = ProcessInfo.processInfo.environment
         automaticSync = environment["MEH_SYNC_AUTOMATIC"] != "0"
         var mode: Mode = preview ? .preview : .local
-        #if ICLOUD_DEV
+        #if ICLOUD_ENABLED
         mode = .cloud
         #elseif DEBUG
         if !preview, let endpoint = environment["MEH_SYNC_URL"] {

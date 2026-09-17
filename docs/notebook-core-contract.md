@@ -1,7 +1,7 @@
 # Notebook core contract
 
 This began as the first implementation stage of milestone 3. The running app
-now activates this notebook core in both Local and iCloud Dev builds.
+now activates this notebook core in Local, iCloud Dev, and production builds.
 Replication, navigation, and structured managed copies use the same storage
 boundary. Single-note migration and compatibility sync are no longer active.
 

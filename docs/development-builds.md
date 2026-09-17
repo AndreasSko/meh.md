@@ -6,9 +6,14 @@ Use the shared scheme menu beside Xcode's Run button:
 | --- | --- | --- |
 | `meh.md Local` | `meh.md` | Local notebook |
 | `meh.md iCloud Dev` | `meh.md iCloud Dev` | Notebook with iCloud |
+| `meh.md` | `meh.md` | Production iCloud notebook |
 
-The legacy `meh.md` scheme is an alias for the local build, so existing build
-commands continue to work. All schemes use the same app target.
+All schemes use the same app target. `meh.md Local` runs and archives Debug for
+local-only development. `meh.md iCloud Dev` uses `Debug-iCloud`, the separate
+development identity, and CloudKit's Development environment. The regular
+`meh.md` scheme runs, profiles, analyzes, and archives Release with the
+production identity and CloudKit's Production environment. Its tests continue
+to use Debug so the UI test target remains testable.
 
 ## Test iCloud yourself
 
@@ -35,12 +40,11 @@ its own sandbox, and the visible app name `meh.md iCloud Dev`. It coexists with
 Set `MEH_NOTEBOOK_PREVIEW=1` only for the separate Debug preview workspace.
 Normal Local and iCloud Dev launches use their activated notebook stores.
 
-`Debug-iCloud` compiles in the iCloud default and uses CloudKit's Development
-environment. This is a development build, including when archived through its
-scheme. It includes APNs entitlements and iOS background notification mode
-for [automatic sync](notebook-sync-scheduling.md). Production distribution
-remains separate work. The regular Local scheme archives its Release
-configuration.
+`Debug-iCloud` and Release both compile with `ICLOUD_ENABLED`. Only
+`Debug-iCloud` also defines `ICLOUD_DEV`. Both cloud configurations include
+APNs entitlements and the iOS background notification mode for
+[automatic sync](notebook-sync-scheduling.md). A distribution profile selects
+production APNs for TestFlight and App Store builds.
 
 ## Automated acceptance checks
 

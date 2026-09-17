@@ -11,9 +11,10 @@ The app target includes CloudKit entitlements for macOS and iOS with this
 container selected. Xcode automatic provisioning successfully signed the Mac
 Debug build for team `9YFM7J3EH3`; its embedded profile authorizes the
 container. Debug and Debug-iCloud select Development; Release selects
-Production. The shared `meh.md iCloud Dev` scheme enables iCloud at build time
-and uses a separate app identity. See [development
-builds](development-builds.md).
+Production. The shared `meh.md iCloud Dev` scheme enables iCloud with a
+separate development identity. The regular `meh.md` scheme enables iCloud for
+the production Release identity. See
+[development builds](development-builds.md).
 
 An active Apple Developer Program membership and valid signing assets are
 required. A signed physical iPhone round trip has also passed. An iPad run
@@ -23,9 +24,11 @@ schema.
 See [live verification](icloud-live-verification.md) for the isolated Mac smoke
 check and historical single-note evidence.
 
-The iCloud Dev configuration includes APNs entitlements and the iOS remote
+Both cloud configurations include APNs entitlements and the iOS remote
 notification background mode for [automatic sync](notebook-sync-scheduling.md).
-Physical-device delivery still needs separate verification.
+The production App ID must have Push Notifications enabled before its
+distribution profile is generated. Physical-device delivery still needs
+separate verification.
 
 Create a notebook transport with its own Application Support state directory.
 The app enables automatic scheduling by default:
@@ -44,6 +47,8 @@ An established activated notebook opens before account discovery completes and
 remains editable offline. The Local scheme uses its local notebook by default;
 its legacy Debug `MEH_SYNC_CLOUDKIT=1` override remains available for targeted
 tests. Use the isolated iCloud Dev scheme for manual cross-device testing.
+Use a TestFlight build of the regular scheme to verify the Production
+environment before App Store submission.
 
 Factory creation binds persisted transport state to the current iCloud user
 record ID. Every bootstrap, fetch, and publish checks that binding again. An

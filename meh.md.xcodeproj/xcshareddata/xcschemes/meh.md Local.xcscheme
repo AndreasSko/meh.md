@@ -13,5 +13,5 @@
   </LaunchAction>
   <ProfileAction buildConfiguration="Debug" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="000000000000000100000000" BuildableName="meh.md.app" BlueprintName="meh.md" ReferencedContainer="container:meh.md.xcodeproj"/></BuildableProductRunnable></ProfileAction>
   <AnalyzeAction buildConfiguration="Debug"/>
-  <ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
+  <ArchiveAction buildConfiguration="Debug" revealArchiveInOrganizer="YES"/>
 </Scheme>
