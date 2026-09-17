@@ -4,40 +4,60 @@
   width="160"
 />
 
-# meh.md
+# meh.md - Minimalistic Markdown with a great sync
 
-A small, native Markdown notes app for Mac, iPhone, and iPad.
+meh.md is my attempt to finally build the note taking app of my dreams:
+Markdown-first, without the whole ‘everything is a block’ thing (I look at you,
+Notion and Craft), simple, minimalistic UI, AND: having a great sync
+out-of-the-box ⚡️.
 
-This is my vibe-coded app, built to solve my own note-taking problems and fit
-how I like to work. I want a comfortable native editor, simple Markdown, and
-sync I can trust when I switch devices. Nothing fancy beyond that.
+## How does sync work?
 
-I might bring it to the App Store eventually. For now, making it useful for
-me comes first.
+What I personally find REALLY COOL is the way data is synced: Many apps
+either "trust" iCloud files for it (which I found horrible with Obsidian,
+especially when editing the same note on multiple devices), or they require
+you to sign up for their service (including paying a monthly subscription).
+Meh.md goes a slightly different way: Yes, it uses iCloud for storage, but with
+[CRDT](https://crdt.tech) under the hood (thanks to the AWESOME
+[Automerge](https://automerge.org)
+library). What does that mean for you? Local-first syncing without the risk of
+conflicts. You can feel safe to edit the same note across multiple devices
+with the confidence that everything will be fine. That's pretty cool 😎
 
-## What I'm building
+## What's the state of the app?
 
-- A native Apple app, written in Swift with a SwiftUI interface.
-- Easy Markdown editing, with familiar text selection and undo.
-- Notes in simple folders, with Markdown import and readable Markdown copies.
-- Local saving and offline writing, with dependable iCloud sync as the goal.
+This is an incomplete list of things accomplished so far:
 
-The scope stays small: a place to write and find my notes, without turning it
-into a whole productivity system.
+- All the basic Markdown that I need works
+- Existing notes can be imported (export comes soon, promise!)
+- Sync across devices works fairly well, though can still be slow sometimes
+- It is pretty responsive, but every now and then there might be a quick
+  hiccup
+- UI is good enough, but faaar from beautiful
+- The code is.. a LOT. I'm 1000% it can be simplified and made more beautiful
+  quite a bit. But that's ok. We'll handle that in the future. For now I'm
+  trusting my tests and the many ones that AI is doing for me.
 
-## Where it stands
+If you are curious about the roadmap: Have a look at the open issues. I
+use them to track my ideas and goals for the app, and if my limits aren't at
+0%, let Codex to implementation for me.
 
-The app is in active development. It already has a Markdown editor, multiple
-notes, nested folders, import, Trash, and an iCloud development build. Daily
-use, sync recovery, and device testing are still being worked through. See the
-[roadmap](docs/plan.md) for recorded progress and follow-up work.
+## Where can I get it?
 
-Under the hood, native AppKit/UIKit text views handle editing, Automerge
-stores and merges document state, and CloudKit carries sync data. The app
-maintains ordinary Markdown copies for portability; changes made to those
-copies in another editor are not imported back into the app.
+The app is still a work-in-progress, and I'm HEAVILY using AI for it. But
+I already trust it as my only note taking app - across iPhone, Mac, and iPad.
+For now it is available via TestFlight,
+while I iron out things and make the experience nice.
+If you are curious, feel free to
+[join that group](https://testflight.apple.com/join/NRAvtpSJ). But keep
+in mind: Use it at your own risk 🤞
 
-## Run it from Xcode
+For the long run I plan to make it available on the App Store, most likely
+with the option to [buy me a coffee](https://paypal.me/AndreasSkor)
+for anyone who likes to. But I think I want
+to keep it free (I'm sick of yet another forced subscription service).
+
+## Build it yourself
 
 The project currently targets macOS 27, iOS 27, and iPadOS 27 and needs Xcode
 with the corresponding SDKs.
@@ -52,6 +72,9 @@ For signing, iCloud setup, and the separate development app identities, see
 [CloudKit setup](docs/cloudkit-sync-setup.md).
 
 ## Documentation
+
+Be aware: Those docs are 100% AI-written. Some of them I will probably
+refine eventually, but that wasn't my priority so far.
 
 - [Product brief](docs/product.md): goals, scope, and what success looks like.
 - [Roadmap](docs/plan.md): milestones and remaining acceptance work.
