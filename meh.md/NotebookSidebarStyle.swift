@@ -102,3 +102,98 @@ struct NotebookRecentRow: View {
         .accessibilityValue(isCurrent ? "Current note" : "")
     }
 }
+
+struct NotebookFilesHeader<Actions: View, CreationActions: View>: View {
+    let isExpanded: Bool
+    let toggle: () -> Void
+    @ViewBuilder var actions: Actions
+    @ViewBuilder var creationActions: CreationActions
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: toggle) {
+                Text("Files")
+                    .frame(maxWidth: .infinity, minHeight: minimumHeight,
+                           alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .contextMenu { creationActions }
+            .accessibilityIdentifier("notebook-tree-toggle")
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            actions
+            Button(action: toggle) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .frame(width: minimumHeight, height: minimumHeight,
+                           alignment: .trailing)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Files")
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("notebook-tree-disclosure")
+        }
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .buttonStyle(.plain)
+    }
+
+    private var minimumHeight: CGFloat {
+        #if os(macOS)
+        28
+        #else
+        44
+        #endif
+    }
+}
+
+struct NotebookSidebarControls: View {
+    let busy: Bool
+    let showSettings: () -> Void
+    let showTrash: () -> Void
+
+    var body: some View {
+        HStack {
+            NotebookFloatingButton(
+                title: "Settings", symbol: "gearshape",
+                identifier: "notebook-settings", action: showSettings
+            )
+            Spacer(minLength: 0)
+            NotebookFloatingButton(
+                title: "Trash", symbol: "trash",
+                identifier: "notebook-trash-toggle", action: showTrash
+            )
+        }
+        .disabled(busy)
+        .padding(12)
+    }
+}
+
+private struct NotebookFloatingButton: View {
+    let title: LocalizedStringResource
+    let symbol: String
+    let identifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label { Text(title) } icon: { Image(systemName: symbol) }
+                .labelStyle(.iconOnly)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: controlSize, height: controlSize)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .help(Text(title))
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var controlSize: CGFloat {
+        #if os(macOS)
+        36
+        #else
+        44
+        #endif
+    }
+}

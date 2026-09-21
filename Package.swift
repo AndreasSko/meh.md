@@ -46,6 +46,7 @@ let package = Package(
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
                 "NotebookSettingsView.swift",
                 "NotebookImportView.swift", "NotebookNoteEditor.swift",
+                "NotebookTrashView.swift",
                 "NotebookSyncStatusView.swift", "NotebookView.swift", "icon.icon",
                 "NotebookSidebarStyle.swift",
                 "iOS-iCloud.entitlements", "iOS.entitlements",
@@ -53,6 +54,7 @@ let package = Package(
             ],
             sources: [
                 "NotebookWorkspace.swift",
+                "NotebookSyncIndicator.swift",
                 "NotebookNoteName.swift",
                 "NotebookBrowserOrdering.swift",
                 "NotebookBrowserSelection.swift",
@@ -73,6 +75,8 @@ let package = Package(
             exclude: [
                 "ContentView.swift", "MyApp.swift", "AppWorkspace.swift", "Assets.xcassets",
                 "NotebookView.swift", "NotebookNoteEditor.swift", "NotebookWorkspace.swift",
+                "NotebookTrashView.swift",
+                "NotebookSyncIndicator.swift",
                 "NotebookSidebarStyle.swift",
                 "NotebookApplicationView.swift", "UnavailableDevelopmentTransport.swift",
                 "NotebookSettingsView.swift",

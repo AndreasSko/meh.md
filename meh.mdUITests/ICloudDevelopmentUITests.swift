@@ -22,7 +22,7 @@ final class ICloudDevelopmentUITests: XCTestCase {
     func test01MacPublishesFromNormalEditor() throws {
         app.launch()
         let editor = try openEditor()
-        append(macMarker, to: editor)
+        try append(macMarker, to: editor)
         exchange()
         app.terminate()
         app.launch()
@@ -40,7 +40,7 @@ final class ICloudDevelopmentUITests: XCTestCase {
         app.launch()
         _ = try openEditor()
         waitForText(macMarker)
-        append(phoneMarker, to: editor)
+        try append(phoneMarker, to: editor)
         exchange()
     }
 
@@ -82,7 +82,7 @@ final class ICloudDevelopmentUITests: XCTestCase {
         waitForText(macMarker)
         waitForText(phoneMarker)
         XCTAssertFalse((editor.value as? String ?? "").contains(otherMarker))
-        append(marker, to: editor)
+        try append(marker, to: editor)
         waitForOutage()
         app.terminate()
         app.launch()
@@ -126,14 +126,10 @@ final class ICloudDevelopmentUITests: XCTestCase {
     }
 
     private func openEditor() throws -> XCUIElement {
-        let editor = try app.openOrCreateNotebookEditor(timeout: 60)
-        XCTAssertTrue(
-            app.buttons["notebook-sync-details"].waitForExistence(timeout: 15)
-        )
-        return editor
+        try app.openOrCreateNotebookEditor(timeout: 60)
     }
 
-    private func append(_ text: String, to editor: XCUIElement) {
+    private func append(_ text: String, to editor: XCUIElement) throws {
 #if os(macOS)
         editor.click()
 #else
@@ -142,9 +138,14 @@ final class ICloudDevelopmentUITests: XCTestCase {
         editor.typeKey(.downArrow, modifierFlags: .command)
         editor.typeText("\n\n" + text)
         waitForText(text)
-        let saved = app.staticTexts["note-save-status"]
-        expectation(for: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Saved on this device", "Saved on this device"), evaluatedWith: saved)
-        waitForExpectations(timeout: 20)
+        app.terminate()
+        app.launch()
+        _ = try openEditor()
+        waitForText(text)
+        XCTAssertFalse(
+            app.descendants(matching: .any)
+                .matching(identifier: "note-save-status").firstMatch.exists
+        )
     }
 
     private func exchange() {

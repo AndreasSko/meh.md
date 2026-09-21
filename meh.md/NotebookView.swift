@@ -28,6 +28,7 @@ struct NotebookView: View {
     var workspace: NotebookWorkspace? = nil
     @State private var showingImport = false
     @State private var showingSettings = false
+    @State private var showingTrash = false
     @State private var showingTextSize = false
     @AppStorage("editor.fontSize") private var editorFontSize = 17.0
     @AppStorage("editor.fontFamily") private var editorFontFamilyRaw =
@@ -74,9 +75,12 @@ struct NotebookView: View {
         get { navigationState.expandedFolderIDs }
         nonmutating set { navigationState.expandedFolderIDs = newValue }
     }
-    private var trashExpanded: Bool {
-        get { navigationState.isTrashExpanded }
-        nonmutating set { navigationState.isTrashExpanded = newValue }
+    private var syncToolbarPlacement: ToolbarItemPlacement {
+        #if os(macOS)
+        .navigation
+        #else
+        .topBarLeading
+        #endif
     }
 
     var body: some View {
@@ -85,13 +89,10 @@ struct NotebookView: View {
                 LazyVStack(alignment: .leading, spacing: 28) {
                     recentsSection
                     NotebookSidebarSection {
-                        HStack(spacing: 6) {
-                            NotebookSectionToggle(
-                                title: "Files",
-                                isExpanded: navigationState.isTreeExpanded,
-                                identifier: "notebook-tree-toggle"
-                            ) { navigationState.isTreeExpanded.toggle() }
-                            .contextMenu { creationActions(parentID: nil) }
+                        NotebookFilesHeader(
+                            isExpanded: navigationState.isTreeExpanded,
+                            toggle: { navigationState.isTreeExpanded.toggle() }
+                        ) {
                             Menu {
                                 Button("Select Items") {
                                     selectingItems = true
@@ -114,6 +115,8 @@ struct NotebookView: View {
                             .fixedSize()
                             .disabled(busy)
                             .accessibilityIdentifier("notebook-files-menu")
+                        } creationActions: {
+                            creationActions(parentID: nil)
                         }
                     } content: {
                         browserActions
@@ -121,74 +124,44 @@ struct NotebookView: View {
                             activeTree
                         }
                     }
-                    VStack(alignment: .leading, spacing: 8) {
-                        Divider()
-                            .padding(.bottom, 8)
-                        Button {
-                            perform {
-                                try await flushEditor()
-                                trashExpanded.toggle()
-                            }
-                        } label: {
-                            HStack(spacing: 8) {
-                                Label("Trash", systemImage: "trash")
-                                Spacer(minLength: 0)
-                                disclosureIcon(expanded: trashExpanded)
-                            }
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .frame(minHeight: sidebarRowHeight)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu { emptyTrashAction }
-                        .accessibilityIdentifier("notebook-trash-toggle")
-                        .accessibilityValue(trashExpanded ? "Expanded" : "Collapsed")
-                        if trashExpanded {
-                            ForEach(trashRows) { row in sidebarRow(row) }
-                            if replica.placements.contains(where: \.isInTrash) {
-                                emptyTrashAction
-                                    .font(.caption)
-                                    .padding(.leading, 24)
-                            }
-                        }
-                    }
+
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+                .padding(.bottom, 60)
             }
             .background(NotebookSidebarPalette.background)
-            .safeAreaInset(edge: .bottom, alignment: .leading) {
-                Button { showingSettings = true } label: {
-                    Label("Settings", systemImage: "gearshape")
-                        .labelStyle(.iconOnly)
-                        .frame(minWidth: 32, minHeight: 32)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .help("Settings")
-                .padding(12)
-                .disabled(busy)
-                .accessibilityIdentifier("notebook-settings")
+            .overlay(alignment: .bottom) {
+                NotebookSidebarControls(
+                    busy: busy,
+                    showSettings: { showingSettings = true },
+                    showTrash: {
+                        perform {
+                            try await flushEditor()
+                            showingTrash = true
+                        }
+                    }
+                )
             }
             .swipeActionsContainer()
             .navigationTitle("meh.md")
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
-                if let workspace, workspace.usesSync {
+                if !showingTrash {
+                    if let workspace, workspace.usesSync {
+                        ToolbarItem(placement: syncToolbarPlacement) {
+                            NotebookSyncButton(workspace: workspace)
+                        }
+                    }
                     ToolbarItem {
-                        NotebookSyncToolbarButton(workspace: workspace)
+                        Button {
+                            createItem(kind: .note, parentID: nil)
+                        } label: {
+                            Label("New Note", systemImage: "plus")
+                        }
+                        .disabled(busy)
+                        .accessibilityIdentifier("notebook-new-item")
                     }
-                }
-                ToolbarItem {
-                    Button {
-                        createItem(kind: .note, parentID: nil)
-                    } label: {
-                        Label("New Note", systemImage: "plus")
-                    }
-                    .disabled(busy)
-                    .accessibilityIdentifier("notebook-new-item")
                 }
             }
         } detail: {
@@ -243,11 +216,6 @@ struct NotebookView: View {
                         if let placement = selectedPlacement {
                             #if os(iOS)
                             if horizontalSizeClass == .compact {
-                                if let workspace, workspace.usesSync {
-                                    ToolbarItem {
-                                        NotebookSyncToolbarButton(workspace: workspace)
-                                    }
-                                }
                                 ToolbarItem {
                                     Button {
                                         createItem(kind: .note, parentID: nil)
@@ -314,7 +282,7 @@ struct NotebookView: View {
                 }
             }
         }
-        .safeAreaInset(edge: .bottom) {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             if let workspace { NotebookWorkspaceStatusView(workspace: workspace) }
         }
         .onChange(of: replica.catalogSnapshot) { previous, current in
@@ -354,6 +322,20 @@ struct NotebookView: View {
         ) { moveSheet }
         .sheet(isPresented: $showingImport) {
             NotebookImportView(replica: replica, onImport: importMarkdown)
+        }
+        .sheet(isPresented: $showingTrash) {
+            NavigationStack {
+                trashView
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showingTrash = false }
+                                .accessibilityIdentifier("notebook-trash-close")
+                        }
+                    }
+            }
+            #if os(macOS)
+            .frame(minWidth: 400, idealWidth: 560, minHeight: 360, idealHeight: 540)
+            #endif
         }
         .sheet(isPresented: $showingSettings) {
             NotebookSettingsView(replica: replica, onImport: importMarkdown,
@@ -607,16 +589,16 @@ struct NotebookView: View {
                     .disabled(busy)
                 }
             }
-            if browserUndo != nil || browserRedo != nil {
+            if browserUndo?.action == .move || browserRedo?.action == .move {
                 HStack {
-                    if let browserUndo {
-                        Button(browserUndo.action == .move ? "Undo Move" : "Undo Trash") {
+                    if browserUndo?.action == .move {
+                        Button("Undo Move") {
                             undoBrowserChange(redo: false)
                         }
                         .accessibilityIdentifier("notebook-browser-undo")
                     }
-                    if let browserRedo {
-                        Button(browserRedo.action == .move ? "Redo Move" : "Redo Trash") {
+                    if browserRedo?.action == .move {
+                        Button("Redo Move") {
                             undoBrowserChange(redo: true)
                         }
                         .accessibilityIdentifier("notebook-browser-redo")
@@ -629,8 +611,26 @@ struct NotebookView: View {
         .buttonStyle(.borderless)
     }
 
-    private var trashRows: [NotebookSidebarRow] {
-        flattenedRows(inTrash: true, initialDepth: 1)
+    private var trashView: some View {
+        NotebookTrashView(
+            replica: replica,
+            beforeMutation: flushEditor,
+            onMutation: {
+                browserUndo = nil
+                browserRedo = nil
+                if let selectedID,
+                   !replica.placements.contains(where: { $0.item.id == selectedID }) {
+                    navigationState.clearSelection()
+                    unrecordedEdit = false
+                    preferredCompactColumn = .sidebar
+                }
+                workspace?.contentDidSave(trigger: "trash changed")
+            },
+            onOpenNote: { id in
+                showingTrash = false
+                perform { try await selectNote(id) }
+            }
+        )
     }
 
     private func flattenedRows(
@@ -871,12 +871,6 @@ struct NotebookView: View {
             Divider()
         }
         if allowsRename { Button("Rename…") { beginRenaming(placement) } }
-        if !placement.isInTrash {
-            Button("Move Up") { moveOneStep(placement, direction: -1) }
-                .disabled(!canMoveOneStep(placement, direction: -1))
-            Button("Move Down") { moveOneStep(placement, direction: 1) }
-                .disabled(!canMoveOneStep(placement, direction: 1))
-        }
         Button("Move…") {
             destination = placement.item.parentID
             movingIDs = [placement.item.id]
@@ -1089,7 +1083,6 @@ struct NotebookView: View {
         perform {
             try await flushEditor()
             try await replica.setTrashed(placement.item.id, trashed)
-            if trashed { trashExpanded = true }
             reveal(placement.item.id)
         }
     }
@@ -1146,7 +1139,6 @@ struct NotebookView: View {
 
     private func reveal(_ id: UUID) {
         var next = replica.placements.first { $0.item.id == id }
-        if next?.isInTrash == true { trashExpanded = true }
         while let parentID = next?.parentID {
             expandedIDs.insert(parentID)
             next = replica.placements.first { $0.item.id == parentID }
@@ -1187,7 +1179,6 @@ struct NotebookView: View {
             browserRedo = nil
             browserSelection.clear()
             selectingItems = false
-            trashExpanded = true
         }
     }
 
@@ -1270,49 +1261,6 @@ struct NotebookView: View {
             try await flushEditor()
             try await replica.sortChildren(parentID: parentID, by: order)
         }
-    }
-
-    private func canMoveOneStep(
-        _ placement: NotebookPlacement,
-        direction: Int
-    ) -> Bool {
-        stepRequest(for: placement, direction: direction) != nil
-    }
-
-    private func moveOneStep(
-        _ placement: NotebookPlacement,
-        direction: Int
-    ) {
-        if let request = stepRequest(for: placement, direction: direction) {
-            reorder(request)
-        }
-    }
-
-    private func stepRequest(
-        for placement: NotebookPlacement,
-        direction: Int
-    ) -> NotebookBrowserReorderRequest? {
-        guard placement.parentID == placement.item.parentID else { return nil }
-        let siblingIDs = replica.orderedChildren(
-            parentID: placement.parentID,
-            inTrash: false
-        ).map(\.item.id)
-        let request: NotebookBrowserReorderRequest?
-        if direction < 0 {
-            request = NotebookBrowserOrdering.moveUpRequest(
-                id: placement.item.id,
-                parentID: placement.parentID,
-                siblingIDs: siblingIDs
-            )
-        } else {
-            request = NotebookBrowserOrdering.moveDownRequest(
-                id: placement.item.id,
-                parentID: placement.parentID,
-                siblingIDs: siblingIDs
-            )
-        }
-        guard let request, canApplyReorder(request) else { return nil }
-        return request
     }
 
     private func importMarkdown(_ plan: NotebookImportPlan?) async throws {
