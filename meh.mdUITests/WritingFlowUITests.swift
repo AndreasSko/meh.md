@@ -108,6 +108,7 @@ final class WritingFlowUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.typeText("A fictional cloud observatory entry")
         XCTAssertFalse(app.staticTexts["note-sync-status"].exists)
+        XCTAssertFalse(saveStatus(in: app).exists)
         app.openSyncDetails()
         activate(app.buttons["sync-now"])
         let synced = app.staticTexts.matching(
@@ -123,8 +124,11 @@ final class WritingFlowUITests: XCTestCase {
         app.launchEnvironment["MEH_SYNC_SIMULATE_OFFLINE"] = "1"
         app.launch()
         _ = try app.openOrCreateNotebookEditor(timeout: 20)
-        let cloud = app.buttons["notebook-sync-details"].firstMatch
-        XCTAssertTrue(cloud.waitForExistence(timeout: 5))
+        #if os(iOS)
+        if app.frame.width < 600 {
+            XCTAssertFalse(app.buttons["notebook-sync-details"].isHittable)
+        }
+        #endif
         app.openSyncDetails()
         activate(app.buttons["sync-now"])
         let paused = app.staticTexts.matching(
@@ -133,8 +137,8 @@ final class WritingFlowUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(paused.waitForExistence(timeout: 20))
         app.closeSyncDetails()
-        XCTAssertTrue(cloud.label.contains("paused"))
         XCTAssertFalse(app.staticTexts["note-sync-status"].exists)
+        XCTAssertFalse(saveStatus(in: app).exists)
         capture(app, name: "Paused cloud indicator without a writing progress bar")
     }
 
@@ -148,6 +152,11 @@ final class WritingFlowUITests: XCTestCase {
         #else
         element.tap()
         #endif
+    }
+
+    private func saveStatus(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(identifier: "note-save-status").firstMatch
     }
 
     private func capture(_ app: XCUIApplication, name: String) {

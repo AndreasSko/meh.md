@@ -28,19 +28,15 @@ final class NotePersistenceUITests: XCTestCase {
         editor.typeText(addition)
 
         XCTAssertEqual(editor.value as? String, expected)
-        try waitForStatus(
-            identifier: "note-save-status",
-            containing: "Saved on this device"
-        )
+        let flushedEditor = app.flushCurrentEditorBySwitchingNotes()
+        XCTAssertEqual(flushedEditor.value as? String, expected)
+        XCTAssertFalse(saveStatus.exists)
         app.terminate()
         app.launch()
 
         let relaunchedEditor = try app.openOrCreateNotebookEditor(timeout: 15)
         XCTAssertEqual(relaunchedEditor.value as? String, expected)
-        try waitForStatus(
-            identifier: "note-save-status",
-            containing: "Saved on this device"
-        )
+        XCTAssertFalse(saveStatus.exists)
         let details = """
         Preserved \(original.utf8.count) original UTF-8 bytes.
         Appended marker: \(marker)
@@ -52,22 +48,8 @@ final class NotePersistenceUITests: XCTestCase {
         add(attachment)
     }
 
-    private func waitForStatus(
-        identifier: String,
-        containing expectedText: String
-    ) throws {
-        let predicate = NSPredicate(
-            format: "label CONTAINS %@ OR value CONTAINS %@",
-            expectedText,
-            expectedText
-        )
-        let status = app.descendants(matching: .any)
-            .matching(identifier: identifier)
-            .matching(predicate)
-            .firstMatch
-        XCTAssertTrue(
-            status.waitForExistence(timeout: 15),
-            "Expected \(identifier) to contain '\(expectedText)'"
-        )
+    private var saveStatus: XCUIElement {
+        app.descendants(matching: .any)
+            .matching(identifier: "note-save-status").firstMatch
     }
 }

@@ -1,7 +1,7 @@
 import XCTest
 
 final class NotebookOrderingUITests: XCTestCase {
-    func testOneTimeSortPersistsAndPreservesEditorUndo() throws {
+    func testOneTimeSortPersistsWithoutManualMoveActions() throws {
         continueAfterFailure = false
         let suffix = String(UUID().uuidString.prefix(8))
         let app = XCUIApplication()
@@ -15,25 +15,19 @@ final class NotebookOrderingUITests: XCTestCase {
         let alpha = try createNote(named: "Alpha \(suffix)", in: app)
         let bravo = try createNote(named: "Bravo \(suffix)", in: app)
         activate(bravo)
+        XCTAssertEqual(app.buttons["note-title"].label, bravo.label)
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        #if os(macOS)
         activate(editor)
         editor.typeText("Fictional orbit")
+        #endif
 
         showSidebar(app)
         chooseSort("Name, A–Z", in: app)
         try assertOrder([alpha, bravo, charlie], in: app)
         capture(app, name: "Notebook sorted by name ascending")
-
-        #if os(macOS)
-        charlie.rightClick()
-        activate(app.menuItems["Move Up"])
-        #else
-        charlie.press(forDuration: 1.0)
-        activate(app.buttons["Move Up"])
-        #endif
-        try assertOrder([alpha, charlie, bravo], in: app)
-        capture(app, name: "Notebook manually reordered with Move Up")
+        assertManualMoveActionsAbsent(on: charlie, in: app)
 
         chooseSort("Name, Z–A", in: app)
         try assertOrder([charlie, bravo, alpha], in: app)
@@ -51,7 +45,7 @@ final class NotebookOrderingUITests: XCTestCase {
         try assertOrder([charlie, bravo, alpha], in: app)
     }
 
-    func testBatchTrashUndoRedoPreservesNoteSource() throws {
+    func testBatchTrashRestoresFromTrashAndPreservesNoteSource() throws {
         continueAfterFailure = false
         let suffix = String(UUID().uuidString.prefix(8))
         let app = XCUIApplication()
@@ -63,6 +57,7 @@ final class NotebookOrderingUITests: XCTestCase {
         let alpha = try createNote(named: "Alpha \(suffix)", in: app)
         let bravo = try createNote(named: "Bravo \(suffix)", in: app)
         activate(bravo)
+        XCTAssertEqual(app.buttons["note-title"].label, bravo.label)
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         activate(editor)
@@ -73,25 +68,32 @@ final class NotebookOrderingUITests: XCTestCase {
         activate(alpha)
         activate(bravo)
         XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
-        activate(app.buttons["notebook-selection-actions"])
+        openSelectionActions(in: app)
         #if os(macOS)
         activate(app.menuItems["Trash Selected"])
         #else
         activate(app.buttons["Trash Selected"])
         #endif
-        let undo = app.buttons["notebook-browser-undo"]
-        XCTAssertTrue(undo.waitForExistence(timeout: 5))
         let trash = app.buttons["notebook-trash-toggle"]
-        try assertOrder([trash, alpha, bravo], in: app)
+        XCTAssertTrue(trash.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["notebook-browser-undo"].exists)
+        XCTAssertFalse(app.buttons["notebook-browser-redo"].exists)
+        XCTAssertFalse(alpha.exists)
+        XCTAssertFalse(bravo.exists)
+        app.openTrash()
+        XCTAssertTrue(alpha.waitForExistence(timeout: 5))
+        XCTAssertTrue(bravo.waitForExistence(timeout: 5))
+        try assertOrder([alpha, bravo], in: app)
         capture(app, name: "Batch selection moved to Trash")
 
-        activate(undo)
-        try assertOrder([alpha, bravo, trash], in: app)
-        activate(app.buttons["notebook-browser-redo"])
-        try assertOrder([trash, alpha, bravo], in: app)
-        activate(undo)
-        try assertOrder([alpha, bravo, trash], in: app)
-        capture(app, name: "Batch Trash undone")
+        restore(alpha, in: app)
+        restore(bravo, in: app)
+        XCTAssertTrue(app.staticTexts["Trash is empty"].waitForExistence(timeout: 5))
+        app.closeTrash()
+        XCTAssertTrue(alpha.waitForExistence(timeout: 5))
+        XCTAssertTrue(bravo.waitForExistence(timeout: 5))
+        try assertOrder([alpha, bravo], in: app)
+        capture(app, name: "Batch restored from Trash")
 
         activate(bravo)
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
@@ -125,12 +127,17 @@ final class NotebookOrderingUITests: XCTestCase {
         replaceTitle(in: field, app: app, with: "Folder \(suffix)")
         field.typeText("\n")
         #endif
-        let folder = app.staticTexts["Folder \(suffix)"].firstMatch
+        let folder = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@",
+                "notebook-sidebar-folder-", "Folder \(suffix)"
+            )
+        ).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 5))
         enterSelectionMode(in: app)
         activate(alpha)
         activate(bravo)
-        activate(app.buttons["notebook-selection-actions"])
+        openSelectionActions(in: app)
         #if os(macOS)
         activate(app.menuItems["Move Selected…"])
         #else
@@ -161,7 +168,7 @@ final class NotebookOrderingUITests: XCTestCase {
     }
 
     #if os(iOS)
-    func testSwipeToTrashCanBeUndone() throws {
+    func testSwipeToTrashCanBeRestored() throws {
         continueAfterFailure = false
         let suffix = String(UUID().uuidString.prefix(8))
         let app = XCUIApplication()
@@ -176,13 +183,18 @@ final class NotebookOrderingUITests: XCTestCase {
         if trashAction.waitForExistence(timeout: 2), trashAction.isHittable {
             trashAction.tap()
         }
-        let undo = app.buttons["notebook-browser-undo"]
-        XCTAssertTrue(undo.waitForExistence(timeout: 5))
         let trash = app.buttons["notebook-trash-toggle"]
-        try assertOrder([trash, note], in: app)
+        XCTAssertTrue(trash.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["notebook-browser-undo"].exists)
+        XCTAssertFalse(app.buttons["notebook-browser-redo"].exists)
+        XCTAssertFalse(note.exists)
+        app.openTrash()
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
         capture(app, name: "Native swipe to Trash")
-        undo.tap()
-        try assertOrder([note, trash], in: app)
+        restore(note, in: app)
+        XCTAssertTrue(app.staticTexts["Trash is empty"].waitForExistence(timeout: 5))
+        app.closeTrash()
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
     }
     #endif
 
@@ -231,6 +243,17 @@ final class NotebookOrderingUITests: XCTestCase {
         activate(action)
     }
 
+    private func openSelectionActions(in app: XCUIApplication) {
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
+        #if os(macOS)
+        let actions = app.menuButtons["notebook-selection-actions"]
+        #else
+        let actions = app.buttons["notebook-selection-actions"]
+        #endif
+        XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        activate(actions)
+    }
+
     private func enterSelectionMode(in app: XCUIApplication) {
         let filesMenu = filesMenu(in: app)
         XCTAssertTrue(filesMenu.waitForExistence(timeout: 5))
@@ -238,6 +261,39 @@ final class NotebookOrderingUITests: XCTestCase {
         let select = app.descendants(matching: .any)["notebook-select-items"]
         XCTAssertTrue(select.waitForExistence(timeout: 5))
         activate(select)
+    }
+
+    private func assertManualMoveActionsAbsent(
+        on note: XCUIElement,
+        in app: XCUIApplication
+    ) {
+        #if os(macOS)
+        visibleRowCenter(note).rightClick()
+        XCTAssertTrue(app.menuItems["Move…"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.menuItems["Move Up"].exists)
+        XCTAssertFalse(app.menuItems["Move Down"].exists)
+        app.typeKey(.escape, modifierFlags: [])
+        #else
+        note.press(forDuration: 1.0)
+        XCTAssertFalse(app.buttons["Move Up"].exists)
+        XCTAssertFalse(app.buttons["Move Down"].exists)
+        activate(app.buttons["Move…"])
+        let cancel = app.buttons["Cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        activate(cancel)
+        #endif
+    }
+
+    private func restore(_ item: XCUIElement, in app: XCUIApplication) {
+        #if os(macOS)
+        visibleRowCenter(item).rightClick()
+        let restore = app.menuItems["Restore"]
+        #else
+        item.press(forDuration: 1.0)
+        let restore = app.buttons["Restore"]
+        #endif
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
+        activate(restore)
     }
 
     private func assertOrder(
@@ -282,6 +338,10 @@ final class NotebookOrderingUITests: XCTestCase {
         }
         #endif
         XCTAssertTrue(filesMenu(in: app).waitForExistence(timeout: 5))
+        let recents = app.buttons["notebook-recents-toggle"]
+        if recents.value as? String == "Expanded" {
+            activate(recents)
+        }
         let tree = app.buttons["notebook-tree-toggle"]
         XCTAssertTrue(tree.waitForExistence(timeout: 5))
         if tree.value as? String == "Collapsed" {
@@ -299,11 +359,35 @@ final class NotebookOrderingUITests: XCTestCase {
 
     private func activate(_ element: XCUIElement) {
         #if os(macOS)
-        element.click()
+        if element.identifier.hasPrefix("notebook-sidebar-note-")
+            || element.identifier.hasPrefix("notebook-sidebar-folder-") {
+            visibleRowCenter(element).click()
+        } else {
+            element.click()
+        }
         #else
         element.tap()
         #endif
     }
+
+    #if os(macOS)
+    private func visibleRowCenter(_ row: XCUIElement) -> XCUICoordinate {
+        // SwiftUI sidebar rows can report isHittable=false even though a real
+        // click at their current accessibility bounds selects the right note.
+        // Bypass XCTest's erroneous auto-scroll only for these visible rows.
+        XCTAssertTrue(row.exists)
+        let frame = row.frame
+        XCTAssertFalse(frame.isEmpty)
+        let app = XCUIApplication()
+        XCTAssertTrue(app.windows.allElementsBoundByIndex.contains {
+            $0.frame.contains(frame)
+        }, "Sidebar row must be fully inside an app window")
+        XCTAssertTrue(app.scrollViews.allElementsBoundByIndex.contains {
+            $0.frame.contains(frame)
+        }, "Sidebar row must be fully inside a visible scroll viewport")
+        return row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+    }
+    #endif
 
     private func capture(_ app: XCUIApplication, name: String) {
         #if os(macOS)

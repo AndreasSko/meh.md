@@ -6,22 +6,23 @@ import AppKit
 import UIKit
 #endif
 
-struct NotebookSyncToolbarButton: View {
+struct NotebookSyncButton: View {
     let workspace: NotebookWorkspace
     @State private var showingDetails = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
             Button { showingDetails = true } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: presentation.symbol)
-                    if presentation.showsActivity {
-                        ProgressView()
-                            .controlSize(.mini)
-                    }
-                }
+                Image(systemName: presentation.indicator.symbol)
+                    .symbolEffect(
+                        .pulse, options: .repeating,
+                        isActive: presentation.showsActivity && !reduceMotion
+                    )
+                    .contentShape(Rectangle())
             }
+            .help(presentation.accessibilityLabel)
             .accessibilityIdentifier("notebook-sync-details")
             .accessibilityLabel(presentation.accessibilityLabel)
             .accessibilityValue(presentation.accessibilityValue)
@@ -32,6 +33,7 @@ struct NotebookSyncToolbarButton: View {
             }
         }
     }
+
 }
 
 struct NotebookWorkspaceStatusView: View {
@@ -186,10 +188,21 @@ private struct NotebookSyncPresentation {
         return min(1, max(0, Double(progress.completedNotes) / Double(progress.totalNotes)))
     }
 
-    var symbol: String {
-        if retryDeadline != nil { return "pause.circle" }
-        if !workspace.isSyncing, summary != nil { return "exclamationmark.icloud" }
-        return workspace.isSyncing ? "icloud.and.arrow.up" : "icloud"
+    var indicator: NotebookSyncIndicator {
+        let failed: Bool
+        if case .failed = workspace.sync?.status { failed = true }
+        else { failed = false }
+        let pending: Bool
+        if case .pending = workspace.sync?.status { pending = true }
+        else { pending = false }
+        return NotebookSyncIndicator(
+            isSyncing: workspace.isSyncing,
+            phase: workspace.sync?.progress?.phase,
+            isRetryPaused: retryDeadline != nil,
+            hasError: failed || workspace.syncSetupError != nil
+                || workspace.notificationRegistrationError != nil,
+            hasPendingChanges: pending
+        )
     }
 
     var showsActivity: Bool {

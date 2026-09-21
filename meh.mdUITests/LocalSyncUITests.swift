@@ -23,7 +23,12 @@ final class LocalSyncUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "")
         editor.tap()
         editor.typeText(first)
-        waitForSaved()
+        app.terminate()
+        app.launch()
+        XCTAssertEqual(
+            try app.openOrCreateNotebookEditor(timeout: 20).value as? String,
+            first
+        )
         synchronize()
         app.terminate()
         app.launch()
@@ -39,7 +44,12 @@ final class LocalSyncUITests: XCTestCase {
         editor.tap()
         editor.typeKey(.downArrow, modifierFlags: .command)
         editor.typeText(second)
-        waitForSaved()
+        app.terminate()
+        app.launch()
+        XCTAssertEqual(
+            try app.openOrCreateNotebookEditor(timeout: 20).value as? String,
+            first + second
+        )
         synchronize()
         waitForEditor(first + second)
     }
@@ -53,7 +63,10 @@ final class LocalSyncUITests: XCTestCase {
         app.launch()
         let relaunchedEditor = try app.openOrCreateNotebookEditor(timeout: 20)
         XCTAssertEqual(relaunchedEditor.value as? String, first + second)
-        waitForSaved()
+        XCTAssertFalse(
+            app.descendants(matching: .any)
+                .matching(identifier: "note-save-status").firstMatch.exists
+        )
     }
 
     private func synchronize() {
@@ -67,10 +80,6 @@ final class LocalSyncUITests: XCTestCase {
         app.closeSyncDetails()
     }
 
-    private func waitForSaved() {
-        waitForStatus("note-save-status", containing: "Saved on this device")
-    }
-
     private func waitForEditor(_ expected: String) {
         let editor = app.textViews["markdown-editor"]
         let predicate = NSPredicate(format: "value == %@", expected)
@@ -78,10 +87,4 @@ final class LocalSyncUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 20), .completed)
     }
 
-    private func waitForStatus(_ identifier: String, containing text: String) {
-        let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)
-        let status = app.descendants(matching: .any)
-            .matching(identifier: identifier).matching(predicate).firstMatch
-        XCTAssertTrue(status.waitForExistence(timeout: 20))
-    }
 }

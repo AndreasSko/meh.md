@@ -63,26 +63,26 @@ struct NotebookNoteEditor: View {
             } else {
                 unavailableContent.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            Divider()
-            HStack {
-                if let editError {
-                    Text("Edit not recorded: \(editError)").foregroundStyle(.red)
-                } else {
-                    switch session.status {
-                    case .saved:
-                        Label("Saved on this device", systemImage: "checkmark")
-                    case .saving: Text("Saving…")
-                    case .saveFailed(let message):
-                        Text("Couldn’t save: \(message)")
+            if editError != nil || saveError != nil {
+                Divider()
+                HStack {
+                    if let editError {
+                        Text("Edit not recorded: \(editError)")
+                            .foregroundStyle(.red)
+                    } else if let saveError {
+                        Text("Couldn’t save: \(saveError)")
                         Button("Retry") { session.retrySave() }
-                    default: Text("Note unavailable")
                     }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .font(.caption).padding(10)
+                .accessibilityIdentifier("note-save-status")
             }
-            .font(.caption).padding(10)
-            .accessibilityIdentifier("note-save-status")
         }
+        // Extend scrolling beneath the home indicator, but continue respecting
+        // the keyboard and keep actionable errors inside the safe area.
+        .ignoresSafeArea(.container, edges: editError == nil && saveError == nil
+            ? .bottom : [])
         .onChange(of: session.persistedSnapshot) { _, _ in onPersist() }
         .onDisappear {
             Task { try? await session.flush() }
@@ -93,6 +93,11 @@ struct NotebookNoteEditor: View {
             }
         }
     }
+    private var saveError: String? {
+        if case .saveFailed(let message) = session.status { return message }
+        return nil
+    }
+
     @ViewBuilder private var unavailableContent: some View {
         switch session.status {
         case .recoveryRequired:

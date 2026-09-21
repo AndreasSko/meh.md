@@ -111,7 +111,7 @@ final class EditorKeyboardUITests: XCTestCase {
             "editor-command-indent", "editor-command-outdent",
             "editor-command-bold", "editor-command-italic", "editor-formatting",
         ].map { app.buttons[$0] }
-        let centers = toolbarButtons.map { $0.frame.midX }
+        let centers = toolbarButtons.map { $0.frame.midX }.sorted()
         let spacing = centers[1] - centers[0]
         XCTAssertGreaterThan(spacing, 44)
         for index in 1..<centers.count {
@@ -123,6 +123,8 @@ final class EditorKeyboardUITests: XCTestCase {
         app.buttons["editor-formatting"].tap()
         let highlight = app.cells["editor-command-highlight"]
         XCTAssertTrue(highlight.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.cells["editor-command-continue-line"].exists)
+        XCTAssertFalse(app.cells["editor-reset-toolbar-order"].exists)
         XCTAssertLessThan(highlight.frame.maxY, app.keyboards.firstMatch.frame.minY)
         highlight.tap()
         XCTAssertTrue(app.keyboards.firstMatch.exists)
@@ -207,30 +209,33 @@ final class EditorKeyboardUITests: XCTestCase {
         let editor = openToolbarTestNote(app)
         editor.typeText("Fictional toolbar sample")
         let source = try XCTUnwrap(editor.value as? String)
-        let more = app.buttons["editor-formatting"]
-        more.tap()
-        app.cells["editor-reset-toolbar-order"].tap()
-        XCTAssertTrue(app.cells["editor-reset-toolbar-order"].waitForNonExistence(timeout: 5))
         let bold = app.buttons["editor-command-bold"]
         let indent = app.buttons["editor-command-indent"]
+        XCTAssertTrue(bold.waitForExistence(timeout: 5))
+        XCTAssertTrue(indent.waitForExistence(timeout: 5))
+        let boldWasFirst = bold.frame.midX < indent.frame.midX
+        let first = boldWasFirst ? bold : indent
+        let second = boldWasFirst ? indent : bold
         capture(app, name: "Formatting bar before reorder")
         let start = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: bold.frame.midX, dy: bold.frame.midY))
+            .withOffset(CGVector(dx: first.frame.midX, dy: first.frame.midY))
         let end = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: indent.frame.midX, dy: indent.frame.midY))
+            .withOffset(CGVector(dx: second.frame.midX, dy: second.frame.midY))
         start.press(forDuration: 0.8, thenDragTo: end)
-        XCTAssertLessThan(bold.frame.midX, indent.frame.midX)
+        let reordered = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                first.frame.midX > second.frame.midX
+            },
+            object: app
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [reordered], timeout: 5), .completed)
         XCTAssertEqual(editor.value as? String, source)
         XCTAssertTrue(app.keyboards.firstMatch.exists)
         capture(app, name: "Reordered formatting bar")
         app.terminate()
         app.launch()
         _ = openToolbarTestNote(app)
-        XCTAssertLessThan(bold.frame.midX, indent.frame.midX)
-        more.tap()
-        app.cells["editor-reset-toolbar-order"].tap()
-        XCTAssertTrue(app.cells["editor-reset-toolbar-order"].waitForNonExistence(timeout: 5))
-        XCTAssertLessThan(indent.frame.midX, bold.frame.midX)
+        XCTAssertGreaterThan(first.frame.midX, second.frame.midX)
     }
 
     private func openToolbarTestNote(_ app: XCUIApplication) -> XCUIElement {

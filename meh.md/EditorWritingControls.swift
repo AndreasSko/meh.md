@@ -52,10 +52,6 @@ struct EditorWritingControls: View {
             commandButton(
                 "Code Block", systemImage: "curlybraces.square", command: .codeBlock
             )
-            commandButton(
-                "Continue Line", systemImage: "return", command: .continueLine
-            )
-
             Divider()
 
             commandButton(
@@ -403,7 +399,6 @@ private final class MarkdownKeyboardAccessoryView: UIView,
                 .inlineCode
             ),
             ("Code Block", "curlybraces.square", .codeBlock),
-            ("Continue Line", "return", .continueLine),
         ]
         guard let textView,
               let presenter = Self.owningViewController(for: textView) else {
@@ -414,12 +409,11 @@ private final class MarkdownKeyboardAccessoryView: UIView,
             - presenter.view.safeAreaInsets.top - 16
         let menu = MarkdownFormattingMenuViewController(
             commands: commands,
-            textView: textView,
-            reset: { [weak self] in self?.resetOrder() }
+            textView: textView
         )
         menu.preferredContentSize = CGSize(
             width: 300,
-            height: min(CGFloat(commands.count + 1) * 44, max(176, availableHeight))
+            height: min(CGFloat(commands.count) * 44, max(176, availableHeight))
         )
         menu.modalPresentationStyle = .popover
         guard let popover = menu.popoverPresentationController else { return }
@@ -428,12 +422,6 @@ private final class MarkdownKeyboardAccessoryView: UIView,
         popover.permittedArrowDirections = .down
         popover.delegate = menu
         presenter.present(menu, animated: true)
-    }
-
-    private func resetOrder() {
-        order = Self.defaultOrder
-        saveOrder()
-        collectionView.reloadData()
     }
 
     private func saveOrder() {
@@ -461,16 +449,13 @@ private final class MarkdownFormattingMenuViewController: UITableViewController,
     UIPopoverPresentationControllerDelegate {
     private let commands: [(String, String, MarkdownEditingCommand)]
     private weak var textView: MarkdownTextView?
-    private let reset: () -> Void
 
     init(
         commands: [(String, String, MarkdownEditingCommand)],
-        textView: MarkdownTextView,
-        reset: @escaping () -> Void
+        textView: MarkdownTextView
     ) {
         self.commands = commands
         self.textView = textView
-        self.reset = reset
         super.init(style: .plain)
     }
 
@@ -489,7 +474,7 @@ private final class MarkdownFormattingMenuViewController: UITableViewController,
         _ tableView: UITableView,
         numberOfRowsInSection section: Int
     ) -> Int {
-        commands.count + 1
+        commands.count
     }
 
     override func tableView(
@@ -506,10 +491,6 @@ private final class MarkdownFormattingMenuViewController: UITableViewController,
             content.text = command.0
             content.image = UIImage(systemName: command.1)
             cell.accessibilityIdentifier = command.2.accessibilityIdentifier
-        } else {
-            content.text = "Reset Toolbar Order"
-            content.image = UIImage(systemName: "arrow.counterclockwise")
-            cell.accessibilityIdentifier = "editor-reset-toolbar-order"
         }
         cell.contentConfiguration = content
         cell.isAccessibilityElement = true
@@ -528,8 +509,6 @@ private final class MarkdownFormattingMenuViewController: UITableViewController,
             dismiss(animated: true) { [weak textView] in
                 _ = textView?.performMarkdownCommand(command)
             }
-        } else {
-            dismiss(animated: true) { [reset] in reset() }
         }
     }
 
