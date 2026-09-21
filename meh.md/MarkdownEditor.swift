@@ -737,16 +737,20 @@ struct MarkdownEditor: NSViewRepresentable {
                 guard let self else { return }
                 self.presentationRefreshScheduled = false
                 guard let textView, !textView.hasMarkedText() else { return }
-                MarkdownPresentation.refresh(
-                    textView,
-                    fontSize: self.parent.fontSize,
-                    fontFamily: self.parent.fontFamily,
-                    mode: self.parent.mode
-                )
-                // Deferred TextKit styling can leave the native indicator
-                // hidden after successive empty lines. Restore its normal
-                // focus and blink lifecycle after presentation settles.
-                textView.updateInsertionPointStateAndRestartTimer(true)
+                let cache = MarkdownPresentation.syntaxCache(for: textView)
+                cache.prepareInBackground(for: textView.string) {
+                    [weak self, weak textView] in
+                    guard let self, let textView,
+                          !textView.hasMarkedText() else { return }
+                    MarkdownPresentation.refresh(
+                        textView,
+                        fontSize: self.parent.fontSize,
+                        fontFamily: self.parent.fontFamily,
+                        mode: self.parent.mode
+                    )
+                    // Restore the insertion indicator after deferred styling.
+                    textView.updateInsertionPointStateAndRestartTimer(true)
+                }
             }
         }
 
@@ -1511,12 +1515,18 @@ struct MarkdownEditor: UIViewRepresentable {
                 guard let textView, textView.markedTextRange == nil else {
                     return
                 }
-                MarkdownPresentation.refresh(
-                    textView,
-                    fontSize: self.parent.fontSize,
-                    fontFamily: self.parent.fontFamily,
-                    mode: self.parent.mode
-                )
+                let cache = MarkdownPresentation.syntaxCache(for: textView)
+                cache.prepareInBackground(for: textView.text ?? "") {
+                    [weak self, weak textView] in
+                    guard let self, let textView,
+                          textView.markedTextRange == nil else { return }
+                    MarkdownPresentation.refresh(
+                        textView,
+                        fontSize: self.parent.fontSize,
+                        fontFamily: self.parent.fontFamily,
+                        mode: self.parent.mode
+                    )
+                }
             }
         }
 
