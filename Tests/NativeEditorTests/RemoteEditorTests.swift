@@ -11,6 +11,77 @@ import UIKit
 
 @MainActor
 final class RemoteEditorTests: XCTestCase {
+    func testSuccessfulCommitDoesNotWriteBindingAgainAndPreservesUndo() throws {
+        let model = EditorModel(text: "hello", revision: revision(0))
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+
+        moveInsertionPointToEnd(of: textView)
+        insert("!", in: textView)
+        mounted.flushUpdates()
+        XCTAssertEqual(model.text, "hello!")
+        XCTAssertEqual(nativeText(in: textView), model.text)
+        XCTAssertEqual(model.requests.count, 1)
+        XCTAssertTrue(model.bindingWrites.isEmpty)
+
+        let undo = try XCTUnwrap(textView.undoManager)
+        undo.undo()
+        mounted.flushUpdates()
+        XCTAssertEqual(model.text, "hello")
+        XCTAssertEqual(nativeText(in: textView), model.text)
+        undo.redo()
+        mounted.flushUpdates()
+        XCTAssertEqual(model.text, "hello!")
+        XCTAssertEqual(nativeText(in: textView), model.text)
+        XCTAssertTrue(model.bindingWrites.isEmpty)
+    }
+
+    func testAcknowledgedRevisionDoesNotReadWholeBindingText() {
+        var reads = 0
+        let editor = MarkdownEditor(
+            text: Binding(get: { reads += 1; return "hello" }, set: { _ in }),
+            editRevision: revision(0),
+            commitEdit: { text, revision in
+                MarkdownEditorCommit(text: text, revision: revision)
+            }
+        )
+        let coordinator = editor.makeCoordinator()
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+#if os(macOS)
+        textView.string = "hello"
+#else
+        textView.text = "hello"
+#endif
+        reads = 0
+        coordinator.update(parent: editor, textView: textView)
+        XCTAssertEqual(reads, 0)
+        XCTAssertEqual(nativeText(in: textView), "hello")
+    }
+
+    func testStaleParentAfterCommitDoesNotRollBackOrChangeNextEditBase() throws {
+        let model = EditorModel(text: "hello", revision: revision(0))
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        let coordinator = try XCTUnwrap(textView.delegate as? MarkdownEditor.Coordinator)
+        defer { mounted.tearDown() }
+        let staleParent = MarkdownEditor(
+            text: .constant("hello"),
+            editRevision: revision(0),
+            commitEdit: { try model.commit($0, basedOn: $1) }
+        )
+        moveInsertionPointToEnd(of: textView)
+        insert("!", in: textView)
+        coordinator.update(parent: staleParent, textView: textView)
+        XCTAssertEqual(nativeText(in: textView), "hello!")
+        insert("?", in: textView)
+        mounted.flushUpdates()
+        XCTAssertEqual(model.requests.map(\.revision), [revision(0), revision(1)])
+        XCTAssertEqual(nativeText(in: textView), "hello!?")
+        XCTAssertEqual(model.text, "hello!?")
+        XCTAssertTrue(model.bindingWrites.isEmpty)
+    }
+
     func testCommandAfterRemoteUpdateUsesFreshRevisionInLivePreview() throws {
         let model = EditorModel(text: "* Moon", revision: revision(0))
         model.mode = .livePreview
@@ -98,6 +169,7 @@ final class RemoteEditorTests: XCTestCase {
         XCTAssertEqual(model.requests.map(\.revision), [revision(0)])
         XCTAssertEqual(nativeText(in: textView), "Remote hello世界")
         XCTAssertEqual(model.text, "Remote hello世界")
+        XCTAssertTrue(model.bindingWrites.isEmpty)
         XCTAssertFalse(textView.undoManager?.canUndo == true)
     }
 
@@ -254,6 +326,7 @@ private final class EditorModel: ObservableObject {
     @Published var mode: MarkdownEditorMode = .source
     let navigation = MarkdownEditorNavigation()
     var requests: [Request] = []
+    var bindingWrites: [String] = []
     @Published var errorCount = 0
     var commitResult: ((String, Data) throws -> MarkdownEditorCommit)?
     private var nextRevision: UInt8 = 1
@@ -281,6 +354,8 @@ private final class EditorModel: ObservableObject {
             )
             nextRevision += 1
         }
+        // Match NoteSession: a successful commit has already updated the model.
+        self.text = result.text
         self.revision = result.revision
         return result
     }
@@ -292,7 +367,10 @@ private struct EditorHost: View {
 
     var body: some View {
         MarkdownEditor(
-            text: $model.text,
+            text: Binding(get: { model.text }, set: {
+                model.bindingWrites.append($0)
+                model.text = $0
+            }),
             editRevision: model.revision,
             commitEdit: { replacement, revision in
                 try model.commit(replacement, basedOn: revision)

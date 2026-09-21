@@ -66,6 +66,9 @@ struct MarkdownEditorPosition: Codable, Equatable, Sendable {
     }
 }
 
+/// Acknowledges text already committed to the backing model by `commitEdit`.
+/// The revision identifies that exact model state; it must change when the
+/// model text changes. The editor does not write this text through its binding.
 struct MarkdownEditorCommit {
     let text: String
     let revision: Data
@@ -485,6 +488,15 @@ struct MarkdownEditor: NSViewRepresentable {
             }
             guard !hasUncommittedText else { return }
 
+            if parent.commitEdit != nil, let revision = parent.editRevision,
+               revision == displayedRevision {
+                // A local commit or an earlier replacement already installed
+                // this state. Avoid scanning the entire native/model buffer.
+                acceptParentRevision(revision)
+                schedulePendingPositionRestore(in: textView)
+                return
+            }
+
             if textView.string.utf8.elementsEqual(parent.text.utf8) {
                 displayedText = textView.string
                 acceptParentRevision(parent.editRevision)
@@ -688,7 +700,9 @@ struct MarkdownEditor: NSViewRepresentable {
 
         private func synchronizeBinding(from textView: NSTextView) {
             guard !isUpdating, !textView.hasMarkedText() else { return }
-            let nativeText = textView.string
+            guard let storage = textView.textStorage else { return }
+            let nativeText = MarkdownPresentation.syntaxCache(for: textView)
+                .textSnapshot(in: storage)
             guard !displayedText.utf8.elementsEqual(nativeText.utf8) else {
                 return
             }
@@ -708,7 +722,6 @@ struct MarkdownEditor: NSViewRepresentable {
                 if nativeText.utf8.elementsEqual(commit.text.utf8) {
                     displayedText = nativeText
                     displayedRevision = commit.revision
-                    parent.text = commit.text
                     schedulePresentationRefresh(for: textView)
                 } else {
                     replaceDisplayedText(
@@ -716,7 +729,6 @@ struct MarkdownEditor: NSViewRepresentable {
                         revision: commit.revision,
                         in: textView
                     )
-                    parent.text = commit.text
                 }
             } catch {
                 hasUncommittedText = true
@@ -1252,6 +1264,15 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             guard !hasUncommittedText else { return }
 
+            if parent.commitEdit != nil, let revision = parent.editRevision,
+               revision == displayedRevision {
+                // A local commit or an earlier replacement already installed
+                // this state. Avoid scanning the entire native/model buffer.
+                acceptParentRevision(revision)
+                schedulePendingPositionRestore(in: textView)
+                return
+            }
+
             if textView.text.utf8.elementsEqual(parent.text.utf8) {
                 displayedText = textView.text
                 acceptParentRevision(parent.editRevision)
@@ -1284,7 +1305,8 @@ struct MarkdownEditor: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             guard !isUpdating, textView.markedTextRange == nil else { return }
             defer { schedulePendingPositionRestore(in: textView) }
-            let nativeText = textView.text ?? ""
+            let nativeText = MarkdownPresentation.syntaxCache(for: textView)
+                .textSnapshot(in: textView.textStorage)
             guard !displayedText.utf8.elementsEqual(nativeText.utf8) else {
                 return
             }
@@ -1304,7 +1326,6 @@ struct MarkdownEditor: UIViewRepresentable {
                 if nativeText.utf8.elementsEqual(commit.text.utf8) {
                     displayedText = nativeText
                     displayedRevision = commit.revision
-                    parent.text = commit.text
                     schedulePresentationRefresh(for: textView)
                 } else {
                     replaceDisplayedText(
@@ -1312,7 +1333,6 @@ struct MarkdownEditor: UIViewRepresentable {
                         revision: commit.revision,
                         in: textView
                     )
-                    parent.text = commit.text
                 }
             } catch {
                 hasUncommittedText = true
