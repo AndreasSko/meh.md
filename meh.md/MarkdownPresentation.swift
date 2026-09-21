@@ -1767,6 +1767,65 @@ final class MarkdownSyntaxCache: NSObject {
     private var cachedDecorationPlan: MarkdownDecorationPlan?
     private var cachedGroupLefts: [GroupGeometryKey: CGFloat] = [:]
     private(set) var parseCount = 0
+    private var characterRevision: UInt64 = 0
+    private var latestRequestID: UInt64 = 0
+    private struct ParseRequest {
+        let text: String
+        let revision: UInt64
+        let id: UInt64
+        let completion: @MainActor () -> Void
+    }
+    private var pendingParse: ParseRequest?
+    private var parseTask: Task<Void, Never>?
+    var isParsing: Bool { parseTask != nil || pendingParse != nil }
+
+    /// Keeps one parse running and only the latest pending request.
+    /// Character edits invalidate results even during composition.
+    func prepareInBackground(
+        for text: String,
+        completion: @escaping @MainActor () -> Void
+    ) {
+        latestRequestID &+= 1
+        var snapshot = text
+        snapshot.makeContiguousUTF8()
+        if let cachedText, cachedText.utf8.elementsEqual(snapshot.utf8),
+           cachedResult != nil {
+            pendingParse = nil
+            completion()
+            return
+        }
+        pendingParse = ParseRequest(
+            text: snapshot,
+            revision: characterRevision,
+            id: latestRequestID,
+            completion: completion
+        )
+        startNextParse()
+    }
+
+    private func startNextParse() {
+        guard parseTask == nil, let request = pendingParse else { return }
+        pendingParse = nil
+        let text = request.text
+        parseTask = Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                MarkdownSyntax.parse(text)
+            }.value
+            guard let self else { return }
+            self.parseTask = nil
+            self.parseCount += 1
+            let latest = self.pendingParse ?? request
+            if request.revision == self.characterRevision,
+               latest.id == self.latestRequestID,
+               latest.revision == request.revision,
+               latest.text.utf8.elementsEqual(request.text.utf8) {
+                self.pendingParse = nil
+                self.install(result, for: request.text)
+                latest.completion()
+            }
+            self.startNextParse()
+        }
+    }
 
     func result(for text: String) -> MarkdownSyntaxResult {
         if let cachedText, cachedText.utf8.elementsEqual(text.utf8),
@@ -1775,6 +1834,11 @@ final class MarkdownSyntaxCache: NSObject {
         }
         let result = MarkdownSyntax.parse(text)
         parseCount += 1
+        install(result, for: text)
+        return result
+    }
+
+    private func install(_ result: MarkdownSyntaxResult, for text: String) {
         cachedText = text
         cachedResult = result
         cachedPreviewSnapshot = nil
@@ -1783,7 +1847,6 @@ final class MarkdownSyntaxCache: NSObject {
         presentationIsCurrent = false
         cachedDecorationPlan = nil
         cachedGroupLefts.removeAll(keepingCapacity: true)
-        return result
     }
 
     var currentPresentation: MarkdownRenderingPresentation? {
@@ -1850,6 +1913,8 @@ final class MarkdownSyntaxCache: NSObject {
         }
         presentationIsCurrent = false
         cachedRenderingPresentation = nil
+        characterRevision &+= 1
+        pendingParse = nil
     }
 
     deinit {

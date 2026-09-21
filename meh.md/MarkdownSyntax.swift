@@ -1,6 +1,6 @@
 import Foundation
 
-enum MarkdownStyleRole: Equatable {
+nonisolated enum MarkdownStyleRole: Equatable, Sendable {
     case heading(level: Int)
     case strong
     case emphasis
@@ -13,12 +13,12 @@ enum MarkdownStyleRole: Equatable {
     case blockquoteMarker
 }
 
-struct MarkdownStyleSpan: Equatable {
+nonisolated struct MarkdownStyleSpan: Equatable, Sendable {
     let range: NSRange
     let role: MarkdownStyleRole
 }
 
-struct MarkdownFontTraits: OptionSet, Equatable {
+nonisolated struct MarkdownFontTraits: OptionSet, Equatable, Sendable {
     let rawValue: Int
 
     static let bold = MarkdownFontTraits(rawValue: 1 << 0)
@@ -26,13 +26,13 @@ struct MarkdownFontTraits: OptionSet, Equatable {
     static let monospaced = MarkdownFontTraits(rawValue: 1 << 2)
 }
 
-struct MarkdownFontRun: Equatable {
+nonisolated struct MarkdownFontRun: Equatable, Sendable {
     let range: NSRange
     let traits: MarkdownFontTraits
     let headingLevel: Int?
 }
 
-enum MarkdownParagraphKind: Equatable {
+nonisolated enum MarkdownParagraphKind: Equatable, Sendable {
     case heading(level: Int)
     case list
     case indented
@@ -40,20 +40,20 @@ enum MarkdownParagraphKind: Equatable {
     case codeBlock
 }
 
-struct MarkdownParagraphRun: Equatable {
+nonisolated struct MarkdownParagraphRun: Equatable, Sendable {
     let range: NSRange
     let kind: MarkdownParagraphKind
     let contentColumn: Int
     let contentPrefixRange: NSRange
 }
 
-struct MarkdownSyntaxResult: Equatable {
+nonisolated struct MarkdownSyntaxResult: Equatable, Sendable {
     let spans: [MarkdownStyleSpan]
     let fontRuns: [MarkdownFontRun]
     let paragraphRuns: [MarkdownParagraphRun]
 }
 
-enum MarkdownSyntax {
+nonisolated enum MarkdownSyntax {
     static func parse(_ text: String) -> MarkdownSyntaxResult {
         let source = text as NSString
         let fenced = fencedCodeRanges(in: source)
@@ -972,7 +972,7 @@ enum MarkdownSyntax {
 
 }
 
-private enum ASCII {
+nonisolated private enum ASCII {
     static let tab: unichar = 9
     static let lineFeed: unichar = 10
     static let carriageReturn: unichar = 13

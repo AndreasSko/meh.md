@@ -8,6 +8,41 @@ import AppKit
 
 @MainActor
 final class MarkdownPresentationTests: XCTestCase {
+    func testBackgroundParseKeepsOnlyLatestEditedBuffer() async {
+        let cache = MarkdownSyntaxCache()
+        let storage = NSTextStorage(string: "**old**")
+        cache.observeCharacterEdits(in: storage)
+        let ready = expectation(description: "Latest syntax ready")
+        var callbacks: [String] = []
+        cache.prepareInBackground(for: storage.string) {
+            callbacks.append("old")
+        }
+        storage.replaceCharacters(
+            in: NSRange(location: 0, length: storage.length),
+            with: "**intermediate**"
+        )
+        cache.prepareInBackground(for: storage.string) {
+            callbacks.append("intermediate")
+        }
+        let latest = "```\n**literal e\u{0301} 🪐**"
+        storage.replaceCharacters(
+            in: NSRange(location: 0, length: storage.length),
+            with: latest
+        )
+        cache.prepareInBackground(for: storage.string) {
+            callbacks.append("latest")
+            ready.fulfill()
+        }
+
+        await fulfillment(of: [ready], timeout: 5)
+
+        XCTAssertEqual(callbacks, ["latest"])
+        XCTAssertFalse(cache.isParsing)
+        XCTAssertEqual(cache.parseCount, 2)
+        XCTAssertEqual(cache.result(for: latest), MarkdownSyntax.parse(latest))
+        XCTAssertEqual(cache.parseCount, 2)
+    }
+
     func testAgreedSyntaxProducesLiteralUnicodeSafeSpans() {
         let source = """
         # Héllo 👩🏽‍💻
