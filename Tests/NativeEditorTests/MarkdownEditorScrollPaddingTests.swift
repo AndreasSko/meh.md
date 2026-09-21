@@ -4,6 +4,8 @@ import XCTest
 
 #if os(macOS)
 import AppKit
+#elseif os(iOS)
+import UIKit
 #endif
 
 @MainActor
@@ -121,6 +123,106 @@ final class MarkdownEditorScrollPaddingTests: XCTestCase {
         let layoutManager = try XCTUnwrap(textView.textLayoutManager)
         layoutManager.ensureLayout(
             for: try XCTUnwrap(layoutManager.textContentManager).documentRange
+        )
+    }
+#endif
+
+#if os(iOS)
+    func testKeyboardResizeKeepsPaddingOutOfCaretViewport() {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        textView.font = .systemFont(ofSize: 17)
+        textView.text = (1...200).map { "Line \($0) of the note" }
+            .joined(separator: "\n")
+        let selection = NSRange(location: 900, length: 0)
+        textView.selectedRange = selection
+
+        // Model keyboard appearance and dismissal without depending on
+        // the simulator's hardware-keyboard setting.
+        for height: CGFloat in [706, 343, 706] {
+            textView.frame = CGRect(x: 0, y: 0, width: 390, height: height)
+            textView.setNeedsLayout()
+            textView.layoutIfNeeded()
+            textView.scrollRangeToVisible(selection)
+
+            // UIKit treats scroll insets as obscured space when revealing
+            // the caret. Document whitespace must not consume that space.
+            XCTAssertEqual(textView.contentInset.bottom, 0)
+            XCTAssertEqual(textView.adjustedContentInset.bottom, 0)
+            XCTAssertEqual(textView.selectedRange, selection)
+            let caret = textView.caretRect(for: textView.selectedTextRange!.start)
+            XCTAssertGreaterThanOrEqual(caret.minY, textView.bounds.minY - 1)
+            XCTAssertLessThanOrEqual(caret.maxY, textView.bounds.maxY + 1)
+        }
+    }
+
+    func testScrollPastEndSurvivesKeyboardResize() {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        textView.font = .systemFont(ofSize: 17)
+        textView.text = (1...200).map { "Line \($0) of the note" }
+            .joined(separator: "\n")
+
+        for height: CGFloat in [706, 343, 706] {
+            textView.frame = CGRect(x: 0, y: 0, width: 390, height: height)
+            textView.setNeedsLayout()
+            textView.layoutIfNeeded()
+            if let manager = textView.textLayoutManager,
+               let content = manager.textContentManager {
+                manager.ensureLayout(for: content.documentRange)
+            }
+            textView.scrollRangeToVisible(
+                NSRange(location: textView.text.utf16.count, length: 0)
+            )
+            textView.setContentOffset(
+                CGPoint(x: 0, y: textView.contentSize.height - height),
+                animated: false
+            )
+            let caret = textView.caretRect(for: textView.endOfDocument)
+            let spaceBelowText = textView.bounds.maxY - caret.maxY
+            XCTAssertGreaterThanOrEqual(spaceBelowText, height / 2)
+            XCTAssertLessThan(spaceBelowText, height)
+        }
+    }
+
+    func testRotatingLongEditorKeepsLastLineReachable() throws {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        let host = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = host
+        host.view.addSubview(textView)
+        textView.frame = host.view.bounds
+        textView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        textView.font = .systemFont(ofSize: 17)
+        textView.text = (1...600).map {
+            "Line \($0) has enough text to wrap differently after rotation."
+        }.joined(separator: "\n")
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+
+        host.view.layoutIfNeeded()
+        let end = NSRange(location: textView.text.utf16.count, length: 0)
+        textView.scrollRangeToVisible(end)
+
+        window.frame.size = CGSize(width: 844, height: 390)
+        host.view.frame = window.bounds
+        host.view.layoutIfNeeded()
+        window.frame.size = CGSize(width: 390, height: 844)
+        host.view.frame = window.bounds
+        host.view.layoutIfNeeded()
+
+        let insets = textView.adjustedContentInset
+        let maximumY = textView.contentSize.height - textView.bounds.height
+            + insets.bottom
+        textView.setContentOffset(
+            CGPoint(x: 0, y: max(-insets.top, maximumY)),
+            animated: false
+        )
+        let caret = textView.caretRect(for: textView.endOfDocument)
+
+        XCTAssertLessThanOrEqual(caret.maxY, textView.bounds.maxY + 1)
+        XCTAssertGreaterThanOrEqual(caret.minY, textView.bounds.minY - 1)
+        XCTAssertEqual(
+            textView.textContainerInset.bottom,
+            18 + MarkdownEditorScrollPadding.bottom(for: textView.bounds.height)
         )
     }
 #endif

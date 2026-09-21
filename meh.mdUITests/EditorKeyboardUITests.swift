@@ -4,7 +4,7 @@ import XCTest
 import UIKit
 
 final class EditorKeyboardUITests: XCTestCase {
-    func testScrollDismissesKeyboardAndEditingCanResume() throws {
+    func testOrdinaryScrollRetainsKeyboardAndDragDismissesIt() throws {
         try XCTSkipUnless(
             UIDevice.current.userInterfaceIdiom == .phone,
             "iPad keeps the editor focused while scrolling"
@@ -23,9 +23,19 @@ final class EditorKeyboardUITests: XCTestCase {
         editor.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         editor.typeText("> Sky\n\n* > Stars\n")
+        editor.typeText((1...24).map { "Line \($0)" }.joined(separator: "\n"))
         let editedText = try XCTUnwrap(editor.value as? String)
         XCTAssertFalse(app.buttons["dismiss-editor-keyboard"].exists)
-        dragEditor(editor)
+        editor.swipeUp()
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        let keyboard = app.keyboards.firstMatch
+        let dragStart = editor.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)
+        )
+        let dragEnd = keyboard.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)
+        )
+        dragStart.press(forDuration: 0.05, thenDragTo: dragEnd)
         let hidden = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"),
             object: app.keyboards.firstMatch

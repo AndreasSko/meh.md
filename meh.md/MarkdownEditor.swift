@@ -824,11 +824,14 @@ nonisolated(unsafe) private var markdownTextViewStateKey: UInt8 = 0
 final class MarkdownTextView: UITextView {
     override func layoutSubviews() {
         super.layoutSubviews()
-        let bottom = MarkdownEditorScrollPadding.bottom(
+        // Scroll-past-end space belongs to the document. A content inset
+        // also reduces UIKit's caret-reveal viewport, which can become
+        // smaller than that inset as the keyboard appears.
+        let bottom = 18 + MarkdownEditorScrollPadding.bottom(
             for: bounds.height
         )
-        guard contentInset.bottom != bottom else { return }
-        contentInset.bottom = bottom
+        guard textContainerInset.bottom != bottom else { return }
+        textContainerInset.bottom = bottom
     }
 
     private var markdownState: MarkdownTextViewState {
@@ -1128,7 +1131,7 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.delegate = context.coordinator
         textView.installMarkdownKeyboardToolbar()
         textView.keyboardDismissMode = UIDevice.current.userInterfaceIdiom == .pad
-            ? .none : .onDrag
+            ? .none : .interactive
         textView.alwaysBounceVertical = true
         textView.text = text
         textView.allowsEditingTextAttributes = false
@@ -1179,10 +1182,6 @@ struct MarkdownEditor: UIViewRepresentable {
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             positionRestoreGeneration &+= 1
             pendingPosition = nil
-            // Keep iPad keyboard input at the existing caret after scrolling.
-            if UIDevice.current.userInterfaceIdiom != .pad {
-                scrollView.endEditing(false)
-            }
         }
 
         init(parent: MarkdownEditor) {
@@ -1394,6 +1393,13 @@ struct MarkdownEditor: UIViewRepresentable {
             ).location
 
             textView.layoutIfNeeded()
+            if let layoutManager = textView.textLayoutManager,
+               let contentManager = layoutManager.textContentManager {
+                // A newly launched editor initially exposes a provisional
+                // TextKit extent. Materialize the document before positioning
+                // the saved anchor so clamping uses the real scroll range.
+                layoutManager.ensureLayout(for: contentManager.documentRange)
+            }
             textView.selectedRange = selection
             textView.scrollRangeToVisible(
                 NSRange(location: anchor, length: 0)
