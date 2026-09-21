@@ -74,7 +74,11 @@ final class MarkdownEditorPositionTests: XCTestCase {
     }
 
     func testRestoreIntoFreshEditorPreservesReadingViewport() async throws {
-        let lines = (1...45).map { "Moon log \($0)" }
+        // A short note is fully laid out before restoration and does not
+        // exercise TextKit 2's provisional content extent on relaunch.
+        let lines = (1...600).map {
+            "Moon log \($0) records a long observation that wraps on phones."
+        }
         let source = lines.joined(separator: "\n")
         let captureNavigation = MarkdownEditorNavigation()
         #if os(iOS)
@@ -94,7 +98,7 @@ final class MarkdownEditorPositionTests: XCTestCase {
         scrollSelectionToVisible(in: capturedTextView)
         layout(capturedEditor)
         #if os(iOS)
-        setVerticalScrollOffset(681, in: capturedTextView)
+        setVerticalScrollOffset(6_000, in: capturedTextView)
         #else
         setVerticalScrollOffset(200, in: capturedTextView)
         #endif
