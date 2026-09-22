@@ -18,19 +18,6 @@ enum NotebookSidebarPalette {
     }
 }
 
-struct NotebookSidebarSection<Header: View, Content: View>: View {
-    @ViewBuilder var header: Header
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            header
-                .padding(.horizontal, 8)
-            content
-        }
-    }
-}
-
 struct NotebookSectionToggle: View {
     let title: LocalizedStringResource
     let isExpanded: Bool
@@ -46,7 +33,7 @@ struct NotebookSectionToggle: View {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.caption2.weight(.semibold))
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.secondary)
             .frame(minHeight: minimumHeight)
             .contentShape(Rectangle())
         }
@@ -100,49 +87,6 @@ struct NotebookRecentRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityValue(isCurrent ? "Current note" : "")
-    }
-}
-
-struct NotebookFilesHeader<Actions: View, CreationActions: View>: View {
-    let isExpanded: Bool
-    let toggle: () -> Void
-    @ViewBuilder var actions: Actions
-    @ViewBuilder var creationActions: CreationActions
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Button(action: toggle) {
-                Text("Files")
-                    .frame(maxWidth: .infinity, minHeight: minimumHeight,
-                           alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .contextMenu { creationActions }
-            .accessibilityIdentifier("notebook-tree-toggle")
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-            actions
-            Button(action: toggle) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .frame(width: minimumHeight, height: minimumHeight,
-                           alignment: .trailing)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel("Files")
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-            .accessibilityIdentifier("notebook-tree-disclosure")
-        }
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(.secondary)
-        .buttonStyle(.plain)
-    }
-
-    private var minimumHeight: CGFloat {
-        #if os(macOS)
-        28
-        #else
-        44
-        #endif
     }
 }
 

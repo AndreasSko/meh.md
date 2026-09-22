@@ -33,10 +33,10 @@ extension XCUIApplication {
         XCTAssertEqual(details.frame.midY, newNote.frame.midY, accuracy: 4)
         XCTAssertLessThan(details.frame.midX, newNote.frame.midX)
 #endif
-        let disclosure = buttons["notebook-tree-disclosure"]
         let recents = buttons["notebook-recents-toggle"]
-        if disclosure.exists, recents.exists {
-            XCTAssertEqual(disclosure.frame.maxX, recents.frame.maxX, accuracy: 4)
+        if files.exists, recents.exists {
+            XCTAssertEqual(files.frame.minX, recents.frame.minX, accuracy: 4)
+            XCTAssertEqual(files.frame.maxX, recents.frame.maxX, accuracy: 4)
         }
         activate(details)
         XCTAssertTrue(
@@ -236,7 +236,7 @@ extension XCUIApplication {
     private func revealNotebookSidebar(timeout: TimeInterval) {
 #if os(iOS)
         let cloud = buttons["notebook-sync-details"]
-        let files = buttons["notebook-files-menu"]
+        let files = buttons["notebook-tree-toggle"]
         guard !cloud.isHittable && !files.isHittable else { return }
         let back = navigationBars.buttons.firstMatch
         XCTAssertTrue(
