@@ -10,18 +10,29 @@ extension XCUIApplication {
             details.waitForExistence(timeout: timeout),
             "Expected the notebook sync details button"
         )
-        let settings = buttons["notebook-settings"]
         let files = buttons["notebook-tree-toggle"]
-        let trash = buttons["notebook-trash-toggle"]
         let newNote = buttons["notebook-new-item"].firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: timeout))
+#if os(iOS)
+        XCTAssertTrue(
+            buttons["notebook-app-menu"].waitForExistence(timeout: 1)
+                || (buttons["notebook-settings"].waitForExistence(timeout: timeout)
+                    && buttons["notebook-trash-toggle"].exists),
+            "Expected compact app actions or wide settings controls"
+        )
+#else
+        let settings = buttons["notebook-settings"]
+        let trash = buttons["notebook-trash-toggle"]
         XCTAssertTrue(settings.waitForExistence(timeout: timeout))
         XCTAssertTrue(trash.waitForExistence(timeout: timeout))
-        XCTAssertTrue(newNote.waitForExistence(timeout: timeout))
         XCTAssertGreaterThan(settings.frame.minY, files.frame.maxY)
         XCTAssertEqual(settings.frame.midY, trash.frame.midY, accuracy: 4)
         XCTAssertLessThan(settings.frame.midX, trash.frame.midX)
+#endif
+#if os(macOS)
         XCTAssertEqual(details.frame.midY, newNote.frame.midY, accuracy: 4)
         XCTAssertLessThan(details.frame.midX, newNote.frame.midX)
+#endif
         let disclosure = buttons["notebook-tree-disclosure"]
         let recents = buttons["notebook-recents-toggle"]
         if disclosure.exists, recents.exists {
@@ -61,11 +72,9 @@ extension XCUIApplication {
 #if os(iOS)
         revealNotebookSidebar(timeout: timeout)
 #endif
-        let trash = buttons["notebook-trash-toggle"]
-        XCTAssertTrue(
-            trash.waitForExistence(timeout: timeout),
-            "Expected the Trash button in the notebook sidebar"
-        )
+        guard let trash = notebookMenuAction(
+            identifier: "notebook-trash-toggle", timeout: timeout
+        ) else { return }
         XCTAssertFalse(
             ["Expanded", "Collapsed"].contains(trash.value as? String ?? ""),
             "Trash opens a separate view instead of expanding inline"
@@ -95,10 +104,20 @@ extension XCUIApplication {
             XCTFail("Expected the Trash sheet to provide Done")
 #endif
         }
+#if os(iOS)
+        XCTAssertTrue(
+            buttons["notebook-app-menu"].waitForExistence(timeout: 1)
+                || buttons["notebook-trash-toggle"].waitForExistence(
+                    timeout: timeout
+                ),
+            "Expected to return to the notebook browser"
+        )
+#else
         XCTAssertTrue(
             buttons["notebook-trash-toggle"].waitForExistence(timeout: timeout),
             "Expected to return to the notebook browser"
         )
+#endif
         XCTAssertFalse(
             descendants(matching: .any)
                 .matching(identifier: "notebook-trash-view").firstMatch.exists
@@ -257,6 +276,37 @@ extension XCUIApplication {
             textViews["markdown-editor"].waitForExistence(timeout: timeout),
             "Expected the editor after closing sync details"
         )
+#endif
+    }
+
+    private func notebookMenuAction(
+        identifier: String, timeout: TimeInterval
+    ) -> XCUIElement? {
+        func waitUntilHittable(_ element: XCUIElement) -> Bool {
+            let ready = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true AND hittable == true"),
+                object: element
+            )
+            return XCTWaiter.wait(for: [ready], timeout: timeout) == .completed
+        }
+
+        let action = buttons[identifier]
+        if waitUntilHittable(action) { return action }
+#if os(iOS)
+        let menu = buttons["notebook-app-menu"]
+        guard waitUntilHittable(menu) else {
+            XCTFail("Expected a hittable notebook app menu")
+            return nil
+        }
+        menu.tap()
+        guard waitUntilHittable(action) else {
+            XCTFail("Expected a hittable \(identifier) in the notebook app menu")
+            return nil
+        }
+        return action
+#else
+        XCTFail("Expected a hittable \(identifier)")
+        return nil
 #endif
     }
 

@@ -556,6 +556,8 @@ final class NotebookWorkspace {
         }
     }
 
+    private(set) var searchScopeGeneration = 0
+
     func receiveCloudActivity(_ activity: CloudKitSyncActivity) async {
         switch activity {
         case .remoteChanges(let records, let deletions, let reason):
@@ -565,6 +567,7 @@ final class NotebookWorkspace {
             syncEventLog.record("cloud background uploads acknowledged",
                                 counts: ["records": count])
         case .accountChanged:
+            searchScopeGeneration += 1
             syncEventLog.record("cloud account changed")
         case .failed(let message):
             syncEventLog.record("cloud automatic operation failed")

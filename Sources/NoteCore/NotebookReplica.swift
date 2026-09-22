@@ -1,10 +1,27 @@
 import Foundation
 import Observation
 
-public enum NotebookReplicaError: Error, Equatable {
+public enum NotebookReplicaError: Error, Equatable, LocalizedError {
     case notJoined, busy, catalogNeedsRecovery, catalogUnavailable
     case noteUnavailable(UUID)
     case permanentlyDeleted(UUID)
+
+    public var errorDescription: String? {
+        switch self {
+        case .notJoined:
+            "This notebook is not ready yet."
+        case .busy:
+            "The notebook is updating. Try again in a moment."
+        case .catalogNeedsRecovery:
+            "The notebook catalog needs recovery."
+        case .catalogUnavailable:
+            "The notebook catalog is unavailable."
+        case .noteUnavailable:
+            "This note is unavailable."
+        case .permanentlyDeleted:
+            "This note was permanently deleted."
+        }
+    }
 }
 
 public enum NotebookDeletionError: Error, Equatable, LocalizedError {
@@ -57,6 +74,7 @@ public final class NotebookReplica {
     public private(set) var placements: [NotebookPlacement] = []
     public private(set) var hasPendingImport: Bool
     public private(set) var deletionCleanupErrorMessage: String?
+    private var searchBodyGeneration: UInt64 = 0
     @ObservationIgnored private var catalog: NotebookCatalogDocument?
     @ObservationIgnored private let storage: NotebookCatalogStorage
     @ObservationIgnored private let importStorage: NotebookImportStorage
@@ -70,6 +88,23 @@ public final class NotebookReplica {
     @ObservationIgnored private var writeWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored var importFaultInjector: ((NotebookImportStage) throws -> Void)?
     @ObservationIgnored var deletionFaultInjector: ((NotebookDeletionStage) throws -> Void)?
+    @ObservationIgnored var catalogWriteSuspension: (@MainActor () async -> Void)?
+
+    /// A cheap invalidation token for derived search state. Reading it also
+    /// observes live editor revisions, so unsaved local typing invalidates a
+    /// cached corpus without requiring a second copy of note text.
+    public var searchRevision: NotebookSearchRevision {
+        NotebookSearchRevision(
+            notebookID: catalogSnapshot?.notebookID,
+            catalogHeads: catalogSnapshot?.heads ?? [],
+            bodyGeneration: searchBodyGeneration,
+            openNotes: sessions.compactMap { id, session in
+                session.editorRevision.map {
+                    NotebookSearchRevision.OpenNote(id: id, revision: $0)
+                }
+            }.sorted { $0.id.uuidString < $1.id.uuidString }
+        )
+    }
 
     public init(directory: URL) {
         self.directory = directory
@@ -234,6 +269,7 @@ public final class NotebookReplica {
     }
 
     public func rename(_ id: UUID, to name: String) async throws {
+        await waitForWrites()
         try ensureAlive(id)
         let next = try catalog!.fork()
         try next.rename(id, to: name)
@@ -591,6 +627,59 @@ public final class NotebookReplica {
         }
     }
 
+    /// Capture searchable note text without flushing edits or opening editor
+    /// sessions. Open sessions are authoritative; unopened notes are decoded
+    /// from their local stores away from the main actor.
+    public func searchCorpus() async throws -> NotebookSearchCorpus {
+        await waitForWrites()
+        guard let catalog else { throw NotebookReplicaError.notJoined }
+        let notebookID = catalog.notebookID
+        let active = placements.filter {
+            $0.item.kind == .note && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+        }
+        let placementsByID = Dictionary(uniqueKeysWithValues: placements.map {
+            ($0.item.id, $0)
+        })
+        var entries: [NotebookSearchCorpus.Entry] = []
+        var unavailableCount = 0
+
+        for placement in active {
+            try Task.checkCancellation()
+            let text: String?
+            if let session = sessions[placement.item.id] {
+                if let load = sessionLoads[placement.item.id] { await load.value }
+                text = session.isEditingEnabled ? session.text : nil
+            } else {
+                switch await noteStorage(placement.item.id).load() {
+                case .current(let snapshot):
+                    if snapshot.noteID == placement.item.id {
+                        text = try await Task.detached(priority: .userInitiated) {
+                            try Task.checkCancellation()
+                            return try NoteDocument(snapshot: snapshot).text
+                        }.value
+                    } else {
+                        text = nil
+                    }
+                case .firstLaunch, .recoveryRequired, .blocked:
+                    text = nil
+                }
+            }
+            if text == nil { unavailableCount += 1 }
+            entries.append(NotebookSearchCorpus.Entry(
+                id: placement.item.id,
+                title: Self.searchTitle(from: placement.displayName),
+                path: Self.searchPath(for: placement, in: placementsByID),
+                text: text ?? ""
+            ))
+            await Task.yield()
+        }
+        return NotebookSearchCorpus(
+            notebookID: notebookID,
+            entries: entries,
+            unavailableCount: unavailableCount
+        )
+    }
+
     func acceptSeed(_ record: SyncRecord) async throws {
         try record.validate()
         guard let snapshot = record.catalogSnapshot else { throw SyncError.invalidRecord }
@@ -643,6 +732,7 @@ public final class NotebookReplica {
                 throw NotebookReplicaError.noteUnavailable(id)
             }
         }
+        searchBodyGeneration &+= 1
     }
 
     /// Preserve a legacy body only after confirming canonical membership.
@@ -953,6 +1043,7 @@ public final class NotebookReplica {
     }
 
     private func persistCatalog(_ next: NotebookCatalogDocument) async throws {
+        await catalogWriteSuspension?()
         let represented = Set(try next.items().map(\.id))
         let alreadyDeleted = Set(try next.items().filter(\.isPermanentlyDeleted).map(\.id))
         let missing = rememberedDeletions.intersection(represented).subtracting(alreadyDeleted)
@@ -975,12 +1066,14 @@ public final class NotebookReplica {
         catalog = document
         catalogSnapshot = snapshot
         placements = nextPlacements
+        searchBodyGeneration &+= 1
         for id in try deletedIDs { sessions[id]?.markPermanentlyDeleted() }
     }
 
     private func applyRememberedDeletions() {
         for id in rememberedDeletions { sessions[id]?.markPermanentlyDeleted() }
         placements.removeAll { rememberedDeletions.contains($0.item.id) }
+        searchBodyGeneration &+= 1
     }
 
     private func drainDeletedSessions(_ ids: Set<UUID>) async {
@@ -1043,6 +1136,35 @@ public final class NotebookReplica {
             in: .whitespacesAndNewlines
         )
         return message.isEmpty ? String(describing: error) : message
+    }
+
+    private static func searchTitle(from filename: String) -> String {
+        let lowercase = filename.lowercased(with: Locale(identifier: "en_US_POSIX"))
+        let extensionLength: Int
+        if lowercase.hasSuffix(".markdown") {
+            extensionLength = 9
+        } else if lowercase.hasSuffix(".md") {
+            extensionLength = 3
+        } else {
+            return filename
+        }
+        let stem = String(filename.dropLast(extensionLength))
+        return stem.isEmpty ? filename : stem
+    }
+
+    private static func searchPath(
+        for placement: NotebookPlacement,
+        in placements: [UUID: NotebookPlacement]
+    ) -> String {
+        var names: [String] = []
+        var parentID = placement.parentID
+        var visited: Set<UUID> = []
+        while let id = parentID, visited.insert(id).inserted,
+              let parent = placements[id] {
+            names.append(parent.displayName)
+            parentID = parent.parentID
+        }
+        return names.reversed().joined(separator: "/")
     }
 }
 
