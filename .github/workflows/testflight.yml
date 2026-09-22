@@ -162,7 +162,7 @@ jobs:
           build_id=$(jq -er '.buildId' "$RUNNER_TEMP/publish.json")
           asc testflight groups list --build-id "$build_id" --output json \
             | jq -e --arg id "$GROUP_ID" \
-                'any(.data[]; .id == $id and .attributes.isInternalGroup == true)'
+                '.complete == true and any(.groups[]; .id == $id and .type == "internal")'
           printf '### %s %s (%s)\n\nCommit: `%s`\n\nProcessed and assigned to the internal group. Build ID: `%s`\n' \
             "$PLATFORM" "$version" "$BUILD_NUMBER" "$GITHUB_SHA" "$build_id" \
             >> "$GITHUB_STEP_SUMMARY"
