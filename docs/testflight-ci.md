@@ -117,19 +117,22 @@ Using your Apple account locally, prepare:
 
 Use App Store distribution assets, not Developer ID or development profiles.
 The certificate-import action manages a temporary keychain and its cleanup.
-A short workflow step installs each profile from its existing secret in the
-Xcode 27 profile directory. We retain profile secrets because the existing
-Xcode-managed iOS profile is not listed by Apple's profile API.
+A short workflow step installs each manually managed App Store profile
+from its existing secret in the Xcode 27 profile directory. Xcode-managed
+team profiles cannot be used with this manual-signing workflow.
 Xcode validates signing compatibility during
 archive and export; the export plists explicitly select Production CloudKit
 and internal-only distribution. GitHub destroys the hosted VM after the job.
 
 The selected profile names are checked into the workflow and export plists:
 
-- iOS: `iOS Team Store Provisioning Profile: de.andreas-sk.meh-md`
+- iOS: `meh.md iOS TestFlight`
 - macOS: `meh.md Mac TestFlight`
 
 Preserve those names when renewing profiles, or update both places.
+The Mac export selects the installer certificate by its full Keychain name,
+`3rd Party Mac Developer Installer: Andreas Skorczyk (9YFM7J3EH3)`.
+Update that value if the certificate owner or team changes.
 
 For each signing binary, copy its Base64 representation into the matching
 secret using `base64 -i /path/to/file | pbcopy`. Paste `.p8` contents directly
