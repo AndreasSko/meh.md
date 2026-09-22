@@ -27,6 +27,7 @@ and the evidence collected along the way.
 ## Notebook behavior and contracts
 
 - [Notebook core](notebook-core-contract.md): identity, folders, and Trash.
+- [Local search](notebook-search.md): matching, Quick Open, and native Find.
 - [Navigation and preview](notebook-navigation-preview.md): app interaction
   and the isolated Debug workspace.
 - [Markdown import](notebook-import-contract.md): source-preserving import.

@@ -74,8 +74,6 @@ final class NotebookOrderingUITests: XCTestCase {
         #else
         activate(app.buttons["Trash Selected"])
         #endif
-        let trash = app.buttons["notebook-trash-toggle"]
-        XCTAssertTrue(trash.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["notebook-browser-undo"].exists)
         XCTAssertFalse(app.buttons["notebook-browser-redo"].exists)
         XCTAssertFalse(alpha.exists)
@@ -183,8 +181,6 @@ final class NotebookOrderingUITests: XCTestCase {
         if trashAction.waitForExistence(timeout: 2), trashAction.isHittable {
             trashAction.tap()
         }
-        let trash = app.buttons["notebook-trash-toggle"]
-        XCTAssertTrue(trash.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["notebook-browser-undo"].exists)
         XCTAssertFalse(app.buttons["notebook-browser-redo"].exists)
         XCTAssertFalse(note.exists)

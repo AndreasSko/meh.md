@@ -13,7 +13,11 @@ final class MarkdownEditorNavigation {
     var prepareToLeave: (() -> Bool)?
     var resumeEditing: (() -> Void)?
     var focusEditor: (() -> Void)?
+    var captureHasEditingFocus: (() -> Bool)?
     var performCommand: ((MarkdownEditingCommand) -> Void)?
+    var showFind: (() -> Void)?
+    var revealSearchMatch: ((NSRange) -> Void)?
+    var searchLandingPosition: MarkdownEditorPosition?
     var capturePosition: (() -> MarkdownEditorPosition?)?
     var restorePosition: ((MarkdownEditorPosition) -> Void)?
 
@@ -76,6 +80,50 @@ struct MarkdownEditorCommit {
     init(text: String, revision: Data) {
         self.text = text
         self.revision = revision
+    }
+}
+
+private enum MarkdownEditorDestinationHighlight {
+    static func textRange(
+        for range: NSRange,
+        in layoutManager: NSTextLayoutManager
+    ) -> NSTextRange? {
+        guard let contentManager = layoutManager.textContentManager,
+              let start = contentManager.location(
+                contentManager.documentRange.location,
+                offsetBy: range.location
+              ), let end = contentManager.location(
+                start, offsetBy: range.length
+              ) else { return nil }
+        return NSTextRange(location: start, end: end)
+    }
+
+    static func nsRange(
+        for range: NSTextRange,
+        in layoutManager: NSTextLayoutManager
+    ) -> NSRange? {
+        guard let contentManager = layoutManager.textContentManager else {
+            return nil
+        }
+        let documentStart = contentManager.documentRange.location
+        let location = contentManager.offset(
+            from: documentStart, to: range.location
+        )
+        let end = contentManager.offset(
+            from: documentStart, to: range.endLocation
+        )
+        return NSRange(location: location, length: max(0, end - location))
+    }
+
+    static func invalidate(
+        _ range: NSRange,
+        in layoutManager: NSTextLayoutManager?
+    ) {
+        guard range.length > 0, let layoutManager,
+              let textRange = textRange(for: range, in: layoutManager)
+        else { return }
+        layoutManager.invalidateRenderingAttributes(for: textRange)
+        layoutManager.textViewportLayoutController.layoutViewport()
     }
 }
 
@@ -177,15 +225,18 @@ import AppKit
 final class MarkdownEditorScrollView: NSScrollView {
     override func layout() {
         super.layout()
-        (documentView as? MarkdownTextView)?.updateScrollPastEndPadding(
+        guard let textView = documentView as? MarkdownTextView else { return }
+        textView.updateScrollPastEndPadding(
             viewportHeight: contentView.bounds.height
         )
+        textView.markdownDidLayout?()
     }
 }
 
 final class MarkdownTextView: NSTextView {
     let markdownSyntaxCache = MarkdownSyntaxCache()
     var markdownDidBeginEditing: (() -> Void)?
+    var markdownDidLayout: (() -> Void)?
     private let markdownTopInset: CGFloat = 20
 
     override var textContainerOrigin: NSPoint {
@@ -357,6 +408,7 @@ struct MarkdownEditor: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
+        textView.usesFindBar = true
         textView.setAccessibilityIdentifier("markdown-editor")
         MarkdownPresentation.configure(
             textView,
@@ -392,6 +444,9 @@ struct MarkdownEditor: NSViewRepresentable {
         private var pendingPosition: MarkdownEditorPosition?
         private var positionRestoreScheduled = false
         private var positionRestoreGeneration = 0
+        private var pendingSearchMatch: NSRange?
+        private var destinationHighlightRange: NSRange?
+        private var destinationCenterGeometry: CGSize?
 
         init(parent: MarkdownEditor) {
             self.parent = parent
@@ -427,10 +482,15 @@ struct MarkdownEditor: NSViewRepresentable {
         }
 
         func attachNavigation(to textView: MarkdownTextView) {
+            installDestinationHighlightRendering(in: textView)
             textView.markdownDidBeginEditing = { [weak self] in
                 self?.positionRestoreGeneration &+= 1
                 self?.pendingPosition = nil
                 self?.parent.onBeginEditing()
+            }
+            textView.markdownDidLayout = { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.centerDestinationIfGeometryChanged(in: textView)
             }
             let navigation = parent.navigation
             parent.navigation?.prepareToLeave = { [weak self, weak textView] in
@@ -456,6 +516,22 @@ struct MarkdownEditor: NSViewRepresentable {
                     guard let textView, textView.isEditable else { return }
                     textView.window?.makeFirstResponder(textView)
                 }
+            }
+            parent.navigation?.captureHasEditingFocus = { [weak textView] in
+                guard let textView else { return false }
+                return textView.window?.firstResponder === textView
+            }
+            parent.navigation?.showFind = { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.clearDestinationHighlight(in: textView)
+                let sender = NSMenuItem()
+                sender.tag = NSTextFinder.Action.showFindInterface.rawValue
+                textView.performFindPanelAction(sender)
+            }
+            parent.navigation?.revealSearchMatch = {
+                [weak self, weak textView] range in
+                guard let self, let textView else { return }
+                self.scheduleSearchMatchReveal(range, in: textView)
             }
             parent.navigation?.capturePosition = { [weak self, weak textView] in
                 guard let self, let textView else { return nil }
@@ -493,6 +569,7 @@ struct MarkdownEditor: NSViewRepresentable {
                 // A local commit or an earlier replacement already installed
                 // this state. Avoid scanning the entire native/model buffer.
                 acceptParentRevision(revision)
+                schedulePendingSearchMatchReveal(in: textView)
                 schedulePendingPositionRestore(in: textView)
                 return
             }
@@ -500,6 +577,7 @@ struct MarkdownEditor: NSViewRepresentable {
             if textView.string.utf8.elementsEqual(parent.text.utf8) {
                 displayedText = textView.string
                 acceptParentRevision(parent.editRevision)
+                schedulePendingSearchMatchReveal(in: textView)
                 schedulePendingPositionRestore(in: textView)
                 return
             }
@@ -515,6 +593,7 @@ struct MarkdownEditor: NSViewRepresentable {
                 revision: parent.editRevision,
                 in: textView
             )
+            schedulePendingSearchMatchReveal(in: textView)
             schedulePendingPositionRestore(in: textView)
         }
 
@@ -535,6 +614,7 @@ struct MarkdownEditor: NSViewRepresentable {
             if parent.mode == .livePreview {
                 schedulePresentationRefresh(for: textView)
             }
+            schedulePendingSearchMatchReveal(in: textView)
             schedulePendingPositionRestore(in: textView)
         }
 
@@ -542,8 +622,146 @@ struct MarkdownEditor: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else {
                 return
             }
+            clearDestinationHighlight(in: textView)
             synchronizeBinding(from: textView)
+            schedulePendingSearchMatchReveal(in: textView)
             schedulePendingPositionRestore(in: textView)
+        }
+
+        private func scheduleSearchMatchReveal(
+            _ range: NSRange,
+            in textView: NSTextView
+        ) {
+            positionRestoreGeneration &+= 1
+            pendingPosition = nil
+            parent.navigation?.searchLandingPosition = nil
+            pendingSearchMatch = range
+            schedulePendingSearchMatchReveal(in: textView)
+        }
+
+        private func schedulePendingSearchMatchReveal(
+            in textView: NSTextView
+        ) {
+            guard !textView.hasMarkedText(),
+                  let range = pendingSearchMatch else { return }
+            pendingSearchMatch = nil
+            let selection = textView.string.clampedSelection(range)
+            if textView.window?.firstResponder === textView {
+                textView.window?.makeFirstResponder(nil)
+            }
+            textView.setSelectedRange(selection)
+            textView.scrollRangeToVisible(selection)
+            setDestinationHighlight(selection, in: textView)
+            centerDestination(selection, in: textView)
+        }
+
+        private func installDestinationHighlightRendering(
+            in textView: NSTextView
+        ) {
+            guard let layoutManager = textView.textLayoutManager else { return }
+            let baseValidator = layoutManager.renderingAttributesValidator
+            layoutManager.renderingAttributesValidator = {
+                [weak self] manager, fragment in
+                baseValidator?(manager, fragment)
+                self?.applyDestinationHighlight(
+                    to: manager, fragment: fragment
+                )
+            }
+        }
+
+        private func applyDestinationHighlight(
+            to layoutManager: NSTextLayoutManager,
+            fragment: NSTextLayoutFragment
+        ) {
+            guard let highlight = destinationHighlightRange,
+                  highlight.length > 0,
+                  let fragmentRange = MarkdownEditorDestinationHighlight
+                    .nsRange(for: fragment.rangeInElement, in: layoutManager)
+            else { return }
+            let intersection = NSIntersectionRange(highlight, fragmentRange)
+            guard intersection.length > 0,
+                  let textRange = MarkdownEditorDestinationHighlight.textRange(
+                    for: intersection, in: layoutManager
+                  ) else { return }
+            layoutManager.addRenderingAttribute(
+                .backgroundColor,
+                value: NSColor.systemYellow.withAlphaComponent(0.45),
+                for: textRange
+            )
+        }
+
+        private func setDestinationHighlight(
+            _ range: NSRange,
+            in textView: NSTextView
+        ) {
+            clearDestinationHighlight(in: textView)
+            guard range.length > 0 else { return }
+            destinationHighlightRange = range
+            destinationCenterGeometry = nil
+            if let layoutManager = textView.textLayoutManager,
+               let textRange = MarkdownEditorDestinationHighlight.textRange(
+                for: range, in: layoutManager
+               ) {
+                layoutManager.addRenderingAttribute(
+                    .backgroundColor,
+                    value: NSColor.systemYellow.withAlphaComponent(0.45),
+                    for: textRange
+                )
+            }
+            textView.needsDisplay = true
+        }
+
+        private func clearDestinationHighlight(in textView: NSTextView) {
+            guard let range = destinationHighlightRange else {
+                destinationCenterGeometry = nil
+                parent.navigation?.searchLandingPosition = nil
+                return
+            }
+            destinationHighlightRange = nil
+            destinationCenterGeometry = nil
+            parent.navigation?.searchLandingPosition = nil
+            MarkdownEditorDestinationHighlight.invalidate(
+                range, in: textView.textLayoutManager
+            )
+            textView.needsDisplay = true
+        }
+
+        private func centerDestinationIfGeometryChanged(
+            in textView: NSTextView
+        ) {
+            guard let range = destinationHighlightRange,
+                  let scrollView = textView.enclosingScrollView,
+                  destinationCenterGeometry != scrollView.contentView.bounds.size
+            else { return }
+            centerDestination(range, in: textView)
+        }
+
+        private func centerDestination(
+            _ range: NSRange,
+            in textView: NSTextView
+        ) {
+            guard let scrollView = textView.enclosingScrollView else { return }
+            layoutViewport(in: textView)
+            guard let targetRect = localCaretRect(
+                at: range.location, in: textView
+            ) else { return }
+            let clipView = scrollView.contentView
+            destinationCenterGeometry = clipView.bounds.size
+            let minimumY = textView.bounds.minY
+            let maximumY = max(
+                minimumY, textView.bounds.maxY - clipView.bounds.height
+            )
+            let targetY = min(
+                maximumY,
+                max(minimumY, targetRect.midY - clipView.bounds.height / 2)
+            )
+            if abs(clipView.bounds.minY - targetY) > 0.5 {
+                clipView.scroll(to: NSPoint(x: clipView.bounds.minX, y: targetY))
+                scrollView.reflectScrolledClipView(clipView)
+            }
+            parent.navigation?.searchLandingPosition = capturePosition(
+                in: textView
+            )
         }
 
         private func capturePosition(
@@ -767,6 +985,7 @@ struct MarkdownEditor: NSViewRepresentable {
             revision: Data?,
             in textView: NSTextView
         ) {
+            clearDestinationHighlight(in: textView)
             let oldText = textView.string
             let selection = MarkdownEditorSelection.map(
                 textView.selectedRange(),
@@ -842,8 +1061,10 @@ final class MarkdownTextView: UITextView {
         let bottom = 18 + MarkdownEditorScrollPadding.bottom(
             for: bounds.height
         )
-        guard textContainerInset.bottom != bottom else { return }
-        textContainerInset.bottom = bottom
+        if textContainerInset.bottom != bottom {
+            textContainerInset.bottom = bottom
+        }
+        markdownState.didLayout?()
     }
 
     private var markdownState: MarkdownTextViewState {
@@ -873,6 +1094,11 @@ final class MarkdownTextView: UITextView {
             markdownState.didAttachToWindow = newValue
             reportWindowAttachmentIfNeeded()
         }
+    }
+
+    var markdownDidLayout: (() -> Void)? {
+        get { markdownState.didLayout }
+        set { markdownState.didLayout = newValue }
     }
 
     override func didMoveToWindow() {
@@ -986,6 +1212,7 @@ private final class MarkdownTextViewState: NSObject {
     var isPasting = false
     var reportedWindowAttachment = false
     var didAttachToWindow: (() -> Void)?
+    var didLayout: (() -> Void)?
     let syntaxCache = MarkdownSyntaxCache()
     var layoutDelegate: MarkdownLayoutManagerDelegate?
 }
@@ -1142,6 +1369,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         textView.delegate = context.coordinator
         textView.installMarkdownKeyboardToolbar()
+        textView.isFindInteractionEnabled = true
         textView.keyboardDismissMode = UIDevice.current.userInterfaceIdiom == .pad
             ? .none : .interactive
         textView.alwaysBounceVertical = true
@@ -1190,6 +1418,15 @@ struct MarkdownEditor: UIViewRepresentable {
         private var pendingPosition: MarkdownEditorPosition?
         private var positionRestoreScheduled = false
         private var positionRestoreGeneration = 0
+        private var pendingSearchMatch: NSRange?
+        private var destinationHighlightRange: NSRange?
+        private var destinationCenterGeometry: DestinationCenterGeometry?
+
+        private struct DestinationCenterGeometry: Equatable {
+            let size: CGSize
+            let adjustedInset: UIEdgeInsets
+            let textContainerInset: UIEdgeInsets
+        }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             positionRestoreGeneration &+= 1
@@ -1208,6 +1445,11 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func attachNavigation(to textView: MarkdownTextView) {
+            installDestinationHighlightRendering(in: textView)
+            textView.markdownDidLayout = { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.centerDestinationIfGeometryChanged(in: textView)
+            }
             let navigation = parent.navigation
             parent.navigation?.prepareToLeave = { [weak self, weak textView] in
                 guard let self, let textView else { return true }
@@ -1232,6 +1474,24 @@ struct MarkdownEditor: UIViewRepresentable {
                         _ = textView.becomeFirstResponder()
                     }
                 }
+            }
+            parent.navigation?.captureHasEditingFocus = { [weak textView] in
+                textView?.isFirstResponder == true
+            }
+            parent.navigation?.showFind = { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.clearDestinationHighlight(in: textView)
+                // The find navigator owns keyboard input while it is visible.
+                // Resigning first removes the Markdown writing accessory.
+                _ = textView.resignFirstResponder()
+                textView.findInteraction?.presentFindNavigator(
+                    showingReplace: false
+                )
+            }
+            parent.navigation?.revealSearchMatch = {
+                [weak self, weak textView] range in
+                guard let self, let textView else { return }
+                self.scheduleSearchMatchReveal(range, in: textView)
             }
             parent.navigation?.capturePosition = { [weak self, weak textView] in
                 guard let self, let textView else { return nil }
@@ -1269,6 +1529,7 @@ struct MarkdownEditor: UIViewRepresentable {
                 // A local commit or an earlier replacement already installed
                 // this state. Avoid scanning the entire native/model buffer.
                 acceptParentRevision(revision)
+                schedulePendingSearchMatchReveal(in: textView)
                 schedulePendingPositionRestore(in: textView)
                 return
             }
@@ -1276,6 +1537,7 @@ struct MarkdownEditor: UIViewRepresentable {
             if textView.text.utf8.elementsEqual(parent.text.utf8) {
                 displayedText = textView.text
                 acceptParentRevision(parent.editRevision)
+                schedulePendingSearchMatchReveal(in: textView)
                 schedulePendingPositionRestore(in: textView)
                 return
             }
@@ -1291,6 +1553,7 @@ struct MarkdownEditor: UIViewRepresentable {
                 revision: parent.editRevision,
                 in: textView
             )
+            schedulePendingSearchMatchReveal(in: textView)
             schedulePendingPositionRestore(in: textView)
         }
 
@@ -1299,12 +1562,17 @@ struct MarkdownEditor: UIViewRepresentable {
             if parent.mode == .livePreview {
                 schedulePresentationRefresh(for: textView)
             }
+            schedulePendingSearchMatchReveal(in: textView)
             schedulePendingPositionRestore(in: textView)
         }
 
         func textViewDidChange(_ textView: UITextView) {
             guard !isUpdating, textView.markedTextRange == nil else { return }
-            defer { schedulePendingPositionRestore(in: textView) }
+            clearDestinationHighlight(in: textView)
+            defer {
+                schedulePendingSearchMatchReveal(in: textView)
+                schedulePendingPositionRestore(in: textView)
+            }
             let nativeText = MarkdownPresentation.syntaxCache(for: textView)
                 .textSnapshot(in: textView.textStorage)
             guard !displayedText.utf8.elementsEqual(nativeText.utf8) else {
@@ -1338,6 +1606,163 @@ struct MarkdownEditor: UIViewRepresentable {
                 hasUncommittedText = true
                 parent.onEditError?(error)
             }
+        }
+
+        private func scheduleSearchMatchReveal(
+            _ range: NSRange,
+            in textView: UITextView
+        ) {
+            positionRestoreGeneration &+= 1
+            pendingPosition = nil
+            parent.navigation?.searchLandingPosition = nil
+            pendingSearchMatch = range
+            schedulePendingSearchMatchReveal(in: textView)
+        }
+
+        private func schedulePendingSearchMatchReveal(
+            in textView: UITextView
+        ) {
+            guard textView.markedTextRange == nil,
+                  let range = pendingSearchMatch else { return }
+            pendingSearchMatch = nil
+            let selection = textView.text.clampedSelection(range)
+            if textView.window?.endEditing(false) != true {
+                _ = textView.resignFirstResponder()
+            }
+            textView.selectedRange = selection
+            textView.scrollRangeToVisible(selection)
+            setDestinationHighlight(selection, in: textView)
+            centerDestination(selection, in: textView)
+        }
+
+        private func installDestinationHighlightRendering(
+            in textView: UITextView
+        ) {
+            guard let layoutManager = textView.textLayoutManager else { return }
+            let baseValidator = layoutManager.renderingAttributesValidator
+            layoutManager.renderingAttributesValidator = {
+                [weak self] manager, fragment in
+                baseValidator?(manager, fragment)
+                self?.applyDestinationHighlight(
+                    to: manager, fragment: fragment
+                )
+            }
+        }
+
+        private func applyDestinationHighlight(
+            to layoutManager: NSTextLayoutManager,
+            fragment: NSTextLayoutFragment
+        ) {
+            guard let highlight = destinationHighlightRange,
+                  highlight.length > 0,
+                  let fragmentRange = MarkdownEditorDestinationHighlight
+                    .nsRange(for: fragment.rangeInElement, in: layoutManager)
+            else { return }
+            let intersection = NSIntersectionRange(highlight, fragmentRange)
+            guard intersection.length > 0,
+                  let textRange = MarkdownEditorDestinationHighlight.textRange(
+                    for: intersection, in: layoutManager
+                  ) else { return }
+            layoutManager.addRenderingAttribute(
+                .backgroundColor,
+                value: UIColor.systemYellow.withAlphaComponent(0.45),
+                for: textRange
+            )
+        }
+
+        private func setDestinationHighlight(
+            _ range: NSRange,
+            in textView: UITextView
+        ) {
+            clearDestinationHighlight(in: textView)
+            guard range.length > 0 else { return }
+            destinationHighlightRange = range
+            destinationCenterGeometry = nil
+            if let layoutManager = textView.textLayoutManager,
+               let textRange = MarkdownEditorDestinationHighlight.textRange(
+                for: range, in: layoutManager
+               ) {
+                layoutManager.addRenderingAttribute(
+                    .backgroundColor,
+                    value: UIColor.systemYellow.withAlphaComponent(0.45),
+                    for: textRange
+                )
+            }
+            textView.setNeedsDisplay()
+        }
+
+        private func clearDestinationHighlight(in textView: UITextView) {
+            guard let range = destinationHighlightRange else {
+                destinationCenterGeometry = nil
+                parent.navigation?.searchLandingPosition = nil
+                return
+            }
+            destinationHighlightRange = nil
+            destinationCenterGeometry = nil
+            parent.navigation?.searchLandingPosition = nil
+            MarkdownEditorDestinationHighlight.invalidate(
+                range, in: textView.textLayoutManager
+            )
+            textView.setNeedsDisplay()
+        }
+
+        private func centerDestinationIfGeometryChanged(
+            in textView: UITextView
+        ) {
+            guard let range = destinationHighlightRange else { return }
+            let geometry = centerGeometry(for: textView)
+            guard destinationCenterGeometry != geometry else { return }
+            centerDestination(range, in: textView)
+        }
+
+        private func centerDestination(
+            _ range: NSRange,
+            in textView: UITextView
+        ) {
+            textView.layoutIfNeeded()
+            guard let start = textView.position(
+                from: textView.beginningOfDocument,
+                offset: range.location
+            ) else { return }
+            let targetRect = textView.caretRect(for: start)
+            let inset = textView.adjustedContentInset
+            let visibleHeight = max(
+                0, textView.bounds.height - inset.top - inset.bottom
+            )
+            guard visibleHeight > 0 else { return }
+            destinationCenterGeometry = centerGeometry(for: textView)
+            let minimumY = -inset.top
+            let maximumY = max(
+                minimumY,
+                textView.contentSize.height - textView.bounds.height
+                    + inset.bottom
+            )
+            let targetY = min(
+                maximumY,
+                max(
+                    minimumY,
+                    targetRect.midY - inset.top - visibleHeight / 2
+                )
+            )
+            if abs(textView.contentOffset.y - targetY) > 0.5 {
+                textView.setContentOffset(
+                    CGPoint(x: textView.contentOffset.x, y: targetY),
+                    animated: false
+                )
+            }
+            parent.navigation?.searchLandingPosition = capturePosition(
+                in: textView
+            )
+        }
+
+        private func centerGeometry(
+            for textView: UITextView
+        ) -> DestinationCenterGeometry {
+            DestinationCenterGeometry(
+                size: textView.bounds.size,
+                adjustedInset: textView.adjustedContentInset,
+                textContainerInset: textView.textContainerInset
+            )
         }
 
         private func capturePosition(
@@ -1545,6 +1970,7 @@ struct MarkdownEditor: UIViewRepresentable {
             revision: Data?,
             in textView: UITextView
         ) {
+            clearDestinationHighlight(in: textView)
             let oldText = textView.text ?? ""
             let selection = MarkdownEditorSelection.map(
                 textView.selectedRange,

@@ -9,6 +9,7 @@ struct NotebookApplicationView: View {
         Group {
             if let replica = workspace.replica, replica.catalogSnapshot != nil {
                 NotebookView(replica: replica, workspace: workspace)
+                    .id(ObjectIdentifier(replica))
             } else if let message = workspace.errorMessage {
                 ContentUnavailableView {
                     Label("Notebook unavailable", systemImage: "exclamationmark.triangle")

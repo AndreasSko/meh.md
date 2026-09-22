@@ -26,6 +26,13 @@ private struct NotebookSidebarRow: Identifiable {
 struct NotebookView: View {
     let replica: NotebookReplica
     var workspace: NotebookWorkspace? = nil
+    @State private var search = NotebookSearchState()
+    @FocusState private var searchFocused: Bool
+    @State private var pendingSearchQuery: String?
+    @State private var searchDestinationID: UUID?
+    @State private var quickOpenDidNavigate = false
+    @State private var resumeEditorAfterQuickOpen = false
+    @State private var searchLandingPosition: MarkdownEditorPosition?
     @State private var showingImport = false
     @State private var showingSettings = false
     @State private var showingTrash = false
@@ -83,67 +90,34 @@ struct NotebookView: View {
         #endif
     }
 
-    var body: some View {
-        NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 28) {
-                    recentsSection
-                    NotebookSidebarSection {
-                        NotebookFilesHeader(
-                            isExpanded: navigationState.isTreeExpanded,
-                            toggle: { navigationState.isTreeExpanded.toggle() }
-                        ) {
-                            Menu {
-                                Button("Select Items") {
-                                    selectingItems = true
-                                    navigationState.isTreeExpanded = true
-                                    browserSelection.clear()
-                                }
-                                .accessibilityIdentifier("notebook-select-items")
-                                sortMenu(parentID: nil, label: "Sort Files")
-                                    .accessibilityIdentifier("notebook-sort-root")
-                                Divider()
-                                creationActions(parentID: nil)
-                            } label: {
-                                Label("Files Actions", systemImage: "ellipsis")
-                                    .labelStyle(.iconOnly)
-                                    .frame(minWidth: sidebarRowHeight,
-                                           minHeight: sidebarRowHeight)
-                                    .contentShape(Rectangle())
-                            }
-                            .menuStyle(.borderlessButton)
-                            .fixedSize()
-                            .disabled(busy)
-                            .accessibilityIdentifier("notebook-files-menu")
-                        } creationActions: {
-                            creationActions(parentID: nil)
-                        }
-                    } content: {
-                        browserActions
-                        if navigationState.isTreeExpanded {
-                            activeTree
-                        }
-                    }
-
+    private var notebookSidebar: some View {
+            ZStack {
+                libraryBrowser
+                    .opacity(search.isPresented ? 0 : 1)
+                    .allowsHitTesting(!search.isPresented)
+                    .accessibilityHidden(search.isPresented)
+                if search.isPresented {
+                    NotebookSearchResults(
+                        results: search.results, query: search.query,
+                        isPreparing: search.isPreparing,
+                        unavailableCount: search.unavailableCount, error: search.error,
+                        selection: $search.selectedResultID,
+                        open: { openSearchResult($0, query: search.resultQuery) }
+                    )
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .padding(.bottom, 60)
             }
-            .background(NotebookSidebarPalette.background)
+            .searchable(text: $search.query, isPresented: $search.isPresented,
+                        placement: .toolbar, prompt: "Search all notes")
+            .searchFocused($searchFocused)
             .overlay(alignment: .bottom) {
-                NotebookSidebarControls(
-                    busy: busy,
-                    showSettings: { showingSettings = true },
-                    showTrash: {
-                        perform {
-                            try await flushEditor()
-                            showingTrash = true
-                        }
-                    }
-                )
+                if !isPhoneLayout && !search.isPresented {
+                    NotebookSidebarControls(
+                        busy: busy,
+                        showSettings: { showingSettings = true },
+                        showTrash: { openTrash() }
+                    )
+                }
             }
-            .swipeActionsContainer()
             .navigationTitle("meh.md")
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
@@ -153,18 +127,23 @@ struct NotebookView: View {
                             NotebookSyncButton(workspace: workspace)
                         }
                     }
-                    ToolbarItem {
-                        Button {
-                            createItem(kind: .note, parentID: nil)
-                        } label: {
-                            Label("New Note", systemImage: "plus")
+                    if isPhoneLayout {
+                        ToolbarItem(placement: .primaryAction) { applicationMenu }
+                        #if os(iOS)
+                        DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                        if !search.isPresented {
+                            ToolbarSpacer(.fixed, placement: .bottomBar)
+                            ToolbarItem(placement: .bottomBar) { libraryNewNote }
                         }
-                        .disabled(busy)
-                        .accessibilityIdentifier("notebook-new-item")
+                        #endif
+                    } else {
+                        ToolbarItem { libraryNewNote }
                     }
                 }
             }
-        } detail: {
+    }
+
+    private var notebookDetail: some View {
             Group {
                 if let session, let selectedID {
                     VStack(spacing: 0) {
@@ -180,6 +159,8 @@ struct NotebookView: View {
                                 workspace?.contentDidSave(trigger: "note persisted")
                             },
                             onLocalEdit: {
+                                searchDestinationID = nil
+                                searchLandingPosition = nil
                                 navigationState.recordEdited(selectedID)
                                 workspace?.noteDidEdit()
                             },
@@ -207,7 +188,9 @@ struct NotebookView: View {
                         incomingNavigation.whenAttached { [weak incomingNavigation, weak state] in
                             guard let incomingNavigation,
                                   state?.selectedID == selectedID else { return }
-                            if let position {
+                            if searchDestinationID == selectedID {
+                                revealSearchDestination(in: incomingNavigation)
+                            } else if let position {
                                 incomingNavigation.restorePosition?(position)
                             }
                         }
@@ -238,6 +221,10 @@ struct NotebookView: View {
                             #endif
                             ToolbarItem {
                                 Menu {
+                                    Button("Find in Note…") { showFind() }
+                                        .disabled(!session.isEditingEnabled)
+                                        .accessibilityIdentifier("notebook-find")
+                                    Divider()
                                     EditorModeControl(
                                         mode: editorModeBinding,
                                         isEnabled: session.isEditingEnabled
@@ -281,7 +268,48 @@ struct NotebookView: View {
                     }
                 }
             }
+    }
+
+    private var searchNavigation: some View {
+        NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
+            notebookSidebar
+        } detail: {
+            notebookDetail
         }
+        .focusedSceneValue(\.notebookSearch, search)
+        .task(id: searchTaskID) {
+            // Warm once in the background; don't rescan on every editor
+            // keystroke while search is closed.
+            guard search.isPresented || search.showingQuickOpen
+                    || !search.hasPreparedCorpus else { return }
+            await search.refresh(replica: replica, recentIDs: navigationState.recentNoteIDs)
+        }
+        .onChange(of: search.quickOpenRequest) { _, _ in showQuickOpen() }
+        .onChange(of: search.findRequest) { _, _ in showFind() }
+        .onChange(of: session?.isEditingEnabled, initial: true) { _, enabled in
+            search.canFind = enabled == true
+        }
+        .onChange(of: workspace?.searchScopeGeneration) { _, _ in
+            search.clear()
+            searchLandingPosition = nil
+            pendingSearchQuery = nil
+            searchDestinationID = nil
+        }
+        .sheet(isPresented: $search.showingQuickOpen, onDismiss: {
+            editorNavigation.resumeEditing?()
+            if !quickOpenDidNavigate {
+                if resumeEditorAfterQuickOpen { editorNavigation.focusEditor?() }
+                else if search.isPresented { searchFocused = true }
+            }
+        }) {
+            NotebookQuickOpen(search: search) { result in
+                openSearchResult(result, query: search.resultQuery, fromQuickOpen: true)
+            }
+        }
+    }
+
+    var body: some View {
+        searchNavigation
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let workspace { NotebookWorkspaceStatusView(workspace: workspace) }
         }
@@ -289,6 +317,10 @@ struct NotebookView: View {
             workspace?.contentDidSave(trigger: "catalog snapshot changed")
             navigationState.refreshAvailability()
             if previous?.notebookID != current?.notebookID {
+                search.clear()
+                searchLandingPosition = nil
+                pendingSearchQuery = nil
+                searchDestinationID = nil
                 browserSelection.clear()
                 selectingItems = false
                 movingIDs = []
@@ -1026,8 +1058,10 @@ struct NotebookView: View {
             preservingExtensionFrom: detailOriginalName
         )
         let changed = replica.placements.first { $0.item.id == id }?.item.name != filename
-        try await replica.rename(id, to: filename)
-        if changed { navigationState.recordRenamed(id) }
+        if changed {
+            try await replica.rename(id, to: filename)
+            navigationState.recordRenamed(id)
+        }
         detailEditingID = nil
         focusedTitleID = nil
         detailOriginalName = ""
@@ -1055,9 +1089,9 @@ struct NotebookView: View {
                 for: NotebookNoteName.title(from: proposedName),
                 preservingExtensionFrom: originalName
             ) : proposedName
-        try await replica.rename(id, to: name)
-        if placement?.item.kind == .note, placement?.item.name != name {
-            navigationState.recordRenamed(id)
+        if placement?.item.name != name {
+            try await replica.rename(id, to: name)
+            if placement?.item.kind == .note { navigationState.recordRenamed(id) }
         }
         editingID = nil
         focusedNameID = nil
@@ -1281,6 +1315,172 @@ struct NotebookView: View {
         preferredCompactColumn = .sidebar
     }
 
+
+    private var isPhoneLayout: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
+    }
+
+    private var searchTaskID: SearchTaskID {
+        SearchTaskID(revision: replica.searchRevision, query: search.activeQuery,
+                     active: search.isPresented || search.showingQuickOpen,
+                     quick: search.showingQuickOpen, recents: navigationState.recentNoteIDs)
+    }
+
+    private var libraryBrowser: some View {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 28) {
+                    recentsSection
+                    NotebookSidebarSection {
+                        NotebookFilesHeader(
+                            isExpanded: navigationState.isTreeExpanded,
+                            toggle: { navigationState.isTreeExpanded.toggle() }
+                        ) {
+                            Menu {
+                                Button("Select Items") {
+                                    selectingItems = true
+                                    navigationState.isTreeExpanded = true
+                                    browserSelection.clear()
+                                }
+                                .accessibilityIdentifier("notebook-select-items")
+                                sortMenu(parentID: nil, label: "Sort Files")
+                                    .accessibilityIdentifier("notebook-sort-root")
+                                Divider()
+                                creationActions(parentID: nil)
+                            } label: {
+                                Label("Files Actions", systemImage: "ellipsis")
+                                    .labelStyle(.iconOnly)
+                                    .frame(minWidth: sidebarRowHeight,
+                                           minHeight: sidebarRowHeight)
+                                    .contentShape(Rectangle())
+                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
+                            .disabled(busy)
+                            .accessibilityIdentifier("notebook-files-menu")
+                        } creationActions: {
+                            creationActions(parentID: nil)
+                        }
+                    } content: {
+                        browserActions
+                        if navigationState.isTreeExpanded {
+                            activeTree
+                        }
+                    }
+
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .padding(.bottom, isPhoneLayout ? 0 : 60)
+            }
+            .background(NotebookSidebarPalette.background)
+
+            .swipeActionsContainer()
+    }
+
+    private var libraryNewNote: some View {
+        Button { createItem(kind: .note, parentID: nil) } label: {
+            Label("New Note", systemImage: "plus")
+        }
+        .disabled(busy)
+        .accessibilityIdentifier("notebook-new-item")
+    }
+
+    private var applicationMenu: some View {
+        Menu {
+            if isPhoneLayout {
+                Button { showingSettings = true } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                .accessibilityIdentifier("notebook-settings")
+                Button { openTrash() } label: {
+                    Label("Trash", systemImage: "trash")
+                }
+                .accessibilityIdentifier("notebook-trash-toggle")
+            }
+        } label: {
+            Label("App Actions", systemImage: "ellipsis")
+        }
+        .disabled(busy)
+        .accessibilityIdentifier("notebook-app-menu")
+    }
+
+    private func openTrash() {
+        perform {
+            try await flushEditor()
+            showingTrash = true
+        }
+    }
+
+    private func showFind() {
+        guard !busy, !search.showingQuickOpen else { return }
+        searchFocused = false
+        editorNavigation.showFind?()
+    }
+
+    private func showQuickOpen() {
+        guard !busy, !search.showingQuickOpen, !showingSettings,
+              !showingTrash, !showingImport else { return }
+        resumeEditorAfterQuickOpen = editorNavigation.captureHasEditingFocus?() == true
+        // Commit native marked-text safely before moving focus to the picker.
+        guard editorNavigation.prepareToLeave?() != false, !unrecordedEdit else {
+            errorMessage = NotebookNavigationError.unrecordedEdit.localizedDescription
+            editorNavigation.resumeEditing?()
+            return
+        }
+        searchFocused = false
+        quickOpenDidNavigate = false
+        search.beginQuickOpen()
+    }
+
+    private func openSearchResult(
+        _ result: NotebookSearchResult, query: String, fromQuickOpen: Bool = false
+    ) {
+        perform {
+            guard replica.placements.contains(where: {
+                $0.item.id == result.id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+            }) else { return }
+            // Save ordinary position before marking this visit as a search jump.
+            rememberEditorPosition()
+            searchFocused = false
+            let scope = workspace?.searchScopeGeneration
+            let notebookID = replica.catalogSnapshot?.notebookID
+            try await selectNote(result.id, searchVisit: true)
+            guard selectedID == result.id, scope == workspace?.searchScopeGeneration,
+                  notebookID == replica.catalogSnapshot?.notebookID,
+                  replica.placements.contains(where: {
+                      $0.item.id == result.id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+                  }) else { return }
+            searchDestinationID = result.id
+            pendingSearchQuery = query.isEmpty ? nil : query
+            if fromQuickOpen {
+                quickOpenDidNavigate = true
+                search.showingQuickOpen = false
+            }
+            let incoming = editorNavigation
+            incoming.whenAttached { [weak incoming] in
+                guard let incoming, selectedID == result.id else { return }
+                revealSearchDestination(in: incoming)
+            }
+        }
+    }
+
+    private func revealSearchDestination(in navigation: MarkdownEditorNavigation) {
+        guard let text = session?.text else { return }
+        var match = NSRange(location: 0, length: 0)
+        if let query = pendingSearchQuery, !query.isEmpty {
+            if let found = text.range(of: query, options: .caseInsensitive,
+                                      locale: Locale(identifier: "en_US_POSIX")) {
+                match = NSRange(found, in: text)
+            }
+        }
+        navigation.revealSearchMatch?(match)
+        searchLandingPosition = navigation.capturePosition?()
+    }
+
     private func flushEditor() async throws {
         try await commitInlineNameIfNeeded()
         try await commitDetailTitleIfNeeded()
@@ -1298,19 +1498,51 @@ struct NotebookView: View {
         guard let selectedID,
               let position = editorNavigation.capturePosition?(),
               let data = try? JSONEncoder().encode(position) else { return }
+        if searchDestinationID == selectedID {
+            // A passive search jump preserves the ordinary position. Once the
+            // reader moves elsewhere, that new position belongs to them.
+            guard let landing = editorNavigation.searchLandingPosition
+                    ?? searchLandingPosition,
+                  position.selection != landing.selection
+                    || position.scrollAnchor != landing.scrollAnchor
+                    || abs(position.scrollAnchorOffset - landing.scrollAnchorOffset) > 2
+            else { return }
+            searchDestinationID = nil
+            searchLandingPosition = nil
+        }
         navigationState.setPosition(data, for: selectedID)
     }
 
-    private func selectNote(_ id: UUID, revealDetail: Bool = true) async throws {
+    private func selectNote(
+        _ id: UUID, revealDetail: Bool = true, searchVisit: Bool = false
+    ) async throws {
         if id != selectedID {
             try await flushEditor()
+            searchDestinationID = nil
+            pendingSearchQuery = nil
+            let notebookID = replica.catalogSnapshot?.notebookID
             let openedSession = try await replica.openNote(id, allowingRecovery: true)
+            if searchVisit {
+                guard replica.catalogSnapshot?.notebookID == notebookID,
+                      replica.placements.contains(where: {
+                          $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+                      }) else { return }
+            }
             if navigationState.installSelection(id, session: openedSession, recordActivity: true) {
                 editorNavigation.invalidate()
                 editorNavigation = MarkdownEditorNavigation()
             }
         } else {
             if editingID != nil || detailEditingID != nil { try await flushEditor() }
+            if !searchVisit, searchDestinationID == id {
+                rememberEditorPosition()
+                searchDestinationID = nil
+                searchLandingPosition = nil
+                if let data = navigationState.position(for: id),
+                   let position = try? JSONDecoder().decode(MarkdownEditorPosition.self, from: data) {
+                    editorNavigation.restorePosition?(position)
+                }
+            }
             navigationState.recordOpened(id)
         }
         if revealDetail { preferredCompactColumn = .detail }
@@ -1370,4 +1602,12 @@ extension View {
             self
         #endif
     }
+}
+
+private struct SearchTaskID: Hashable {
+    let revision: NotebookSearchRevision
+    let query: String
+    let active: Bool
+    let quick: Bool
+    let recents: [UUID]
 }

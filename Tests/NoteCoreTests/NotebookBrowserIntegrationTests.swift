@@ -5,6 +5,39 @@ import XCTest
 
 @MainActor
 final class NotebookBrowserIntegrationTests: XCTestCase {
+    func testRenameWaitsForConcurrentCatalogWrite() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let note = try await replica.createNote(name: "Before.md")
+        let writeEntered = expectation(description: "catalog write entered")
+        var releaseWrite: CheckedContinuation<Void, Never>?
+        replica.catalogWriteSuspension = {
+            writeEntered.fulfill()
+            await withCheckedContinuation { releaseWrite = $0 }
+        }
+        let create = Task { try await replica.createFolder(name: "Concurrent") }
+        await fulfillment(of: [writeEntered], timeout: 1)
+        let rename = Task { try await replica.rename(note, to: "After.md") }
+        await Task.yield()
+
+        replica.catalogWriteSuspension = nil
+        releaseWrite?.resume()
+        let folder = try await create.value
+        try await rename.value
+
+        XCTAssertEqual(
+            replica.placements.first { $0.item.id == note }?.item.name,
+            "After.md"
+        )
+        XCTAssertTrue(replica.placements.contains { $0.item.id == folder })
+        XCTAssertEqual(
+            NotebookReplicaError.busy.localizedDescription,
+            "The notebook is updating. Try again in a moment."
+        )
+    }
+
     func testNoOpMoveDoesNotRotateDurableCatalog() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
