@@ -4,10 +4,92 @@ import XCTest
 
 #if os(macOS)
 import AppKit
+#else
+import UIKit
 #endif
 
 @MainActor
 final class MarkdownPresentationTests: XCTestCase {
+    func testBatchedEditsReuseSyntaxAndMatchFullParse() throws {
+        let initial = "# Heading\nOrdinary café 🪐 paragraph.\n**Later**"
+        let batches: [[(String, String)]] = [
+            [("Ordinary", "Ordinary bright"), ("bright", "brighter")],
+            [("paragraph", "words"), ("Ordinary", "Plain")],
+            [("café", "e\u{0301}"), ("🪐", "moon"), (" moon", "")],
+            [("café", "temporary"), ("temporary", "café")],
+            [("café 🪐", "x"), ("x paragraph", "new words")],
+        ]
+        for batch in batches {
+            let storage = NSTextStorage(string: initial)
+            let cache = MarkdownSyntaxCache()
+            cache.prepare(in: storage)
+            for (target, replacement) in batch {
+                storage.replaceCharacters(
+                    in: (storage.string as NSString).range(of: target),
+                    with: replacement
+                )
+                // The commit path may ask for snapshots between edits, but
+                // presentation is intentionally held until the whole batch.
+                XCTAssertEqual(cache.textSnapshot(in: storage), storage.string)
+            }
+            let snapshots = cache.snapshotCount
+            let text = cache.prepare(in: storage)
+            XCTAssertEqual(cache.result(for: text), MarkdownSyntax.parse(text))
+            XCTAssertEqual(cache.parseCount, 1)
+            XCTAssertEqual(cache.incrementalParseCount, 1)
+            XCTAssertEqual(cache.snapshotCount, snapshots)
+        }
+    }
+
+    func testStorageRevisionReusesSnapshotAndInvalidatesExternalReplacement() {
+        let storage = NSTextStorage(string: "# café")
+        let cache = MarkdownSyntaxCache()
+        cache.prepare(in: storage)
+        let original = cache.textSnapshot(in: storage)
+        storage.addAttribute(.kern, value: 1,
+                             range: NSRange(location: 0, length: storage.length))
+        cache.prepare(in: storage)
+        XCTAssertEqual(cache.snapshotCount, 1)
+        XCTAssertEqual(cache.parseCount, 1)
+
+        storage.replaceCharacters(in: NSRange(location: 0, length: storage.length),
+                                  with: "# moon")
+        let updated = cache.prepare(in: storage)
+        XCTAssertEqual(original, "# café")
+        XCTAssertEqual(updated, "# moon")
+        XCTAssertEqual(cache.snapshotCount, 2)
+        XCTAssertEqual(cache.result(for: updated), MarkdownSyntax.parse(updated))
+    }
+
+    func testCacheCannotReuseRevisionAcrossStorageOrUnrelatedString() {
+        let cache = MarkdownSyntaxCache()
+        let first = NSTextStorage(string: "first plain line")
+        let second = NSTextStorage(string: "**second** line")
+        cache.prepare(in: first)
+        cache.prepare(in: second)
+        XCTAssertEqual(cache.result(for: second.string), MarkdownSyntax.parse(second.string))
+        _ = cache.result(for: "# Unrelated")
+        second.replaceCharacters(in: NSRange(location: second.length, length: 0),
+                                 with: "!")
+        cache.prepare(in: second)
+        XCTAssertEqual(cache.result(for: second.string), MarkdownSyntax.parse(second.string))
+        first.replaceCharacters(in: NSRange(location: 0, length: 5), with: "other")
+        cache.prepare(in: first)
+        XCTAssertEqual(cache.result(for: first.string), MarkdownSyntax.parse(first.string))
+    }
+
+    func testBatchContainingNewlineUsesIncrementalParse() {
+        let storage = NSTextStorage(string: "ordinary words\n**Later**")
+        let cache = MarkdownSyntaxCache()
+        cache.prepare(in: storage)
+        storage.replaceCharacters(in: NSRange(location: 8, length: 0), with: "new ")
+        storage.replaceCharacters(in: NSRange(location: 8, length: 0), with: "\n")
+        let text = cache.prepare(in: storage)
+        XCTAssertEqual(cache.result(for: text), MarkdownSyntax.parse(text))
+        XCTAssertEqual(cache.parseCount, 1)
+        XCTAssertEqual(cache.incrementalParseCount, 1)
+    }
+
     func testAgreedSyntaxProducesLiteralUnicodeSafeSpans() {
         let source = """
         # Héllo 👩🏽‍💻
@@ -378,7 +460,8 @@ final class MarkdownPresentationTests: XCTestCase {
             initialCache === MarkdownPresentation.syntaxCache(for: textView)
         )
         XCTAssertNotNil(initialCache.currentPresentation)
-        XCTAssertEqual(initialCache.parseCount, 2)
+        XCTAssertEqual(initialCache.parseCount, 1)
+        XCTAssertEqual(initialCache.incrementalParseCount, 1)
     }
 
     func testRenderingCacheInvalidatesOnlyForCharacterEdits() throws {
@@ -1089,6 +1172,20 @@ final class MarkdownPresentationTests: XCTestCase {
         XCTAssertFalse(textView.undoManager?.canUndo == true)
     }
 
+    func testMultilineBoldUsesBoldFontsOnBothLines() throws {
+        for mode in [MarkdownEditorMode.source, .livePreview] {
+            let view = NSTextView(usingTextLayoutManager: true)
+            view.string = "**First line\nsecond line**\n\nPlain paragraph"
+            MarkdownPresentation.configure(view, mode: mode)
+            for word in ["First", "second"] {
+                let actual = try font(at: word, in: view.string, textView: view)
+                XCTAssertTrue(NSFontManager.shared.traits(of: actual).contains(.boldFontMask))
+            }
+            let plain = try font(at: "Plain", in: view.string, textView: view)
+            XCTAssertFalse(NSFontManager.shared.traits(of: plain).contains(.boldFontMask))
+        }
+    }
+
     func testExtendedPresentationPreservesLiteralSourceAndUndoState() {
         let source = "* > ==Café== and ~~old~~ 👋🏽"
         let textView = NSTextView(usingTextLayoutManager: true)
@@ -1185,6 +1282,84 @@ final class MarkdownPresentationTests: XCTestCase {
         XCTAssertFalse(
             codeBody.fontDescriptor.symbolicTraits.contains(.monoSpace)
         )
+    }
+
+    func testBatchedEditsMatchFreshNativeFormatting() throws {
+        let view = NSTextView(usingTextLayoutManager: true)
+        view.string = "# Heading\nOrdinary café 🪐 paragraph.\n**Later**"
+        MarkdownPresentation.configure(view, mode: .livePreview)
+        let cache = MarkdownPresentation.syntaxCache(for: view)
+        let storage = try XCTUnwrap(view.textStorage)
+        for (target, replacement) in [("paragraph", "words"), ("café 🪐", "moon")] {
+            storage.replaceCharacters(
+                in: (view.string as NSString).range(of: target), with: replacement
+            )
+        }
+        MarkdownPresentation.refresh(view, mode: .livePreview)
+        XCTAssertEqual(cache.incrementalParseCount, 1)
+        XCTAssertLessThan(cache.lastLayoutRange.length, storage.length)
+        let reference = NSTextView(usingTextLayoutManager: true)
+        reference.string = view.string
+        MarkdownPresentation.configure(reference, mode: .livePreview)
+        let expectedStorage = try XCTUnwrap(reference.textStorage)
+        let keys: [NSAttributedString.Key] = [
+            .font, .paragraphStyle, .foregroundColor, .kern, .obliqueness,
+            .strikethroughColor, .strikethroughStyle,
+        ]
+        for position in 0..<storage.length {
+            for key in keys {
+                XCTAssertEqual(
+                    storage.attribute(key, at: position, effectiveRange: nil) as? NSObject,
+                    expectedStorage.attribute(key, at: position, effectiveRange: nil) as? NSObject,
+                    "\(key) at \(position)"
+                )
+            }
+        }
+    }
+
+    func testIncrementalLayoutMatchesFullRefreshAfterEditsAndFallback() throws {
+        let view = NSTextView(usingTextLayoutManager: true)
+        view.string = "# Heading\n\nOrdinary café 🪐 paragraph.\n\n**Bold** and ~~old~~\nTail"
+        MarkdownPresentation.configure(view, mode: .livePreview)
+        let cache = MarkdownPresentation.syntaxCache(for: view)
+        let storage = try XCTUnwrap(view.textStorage)
+        let keys: [NSAttributedString.Key] = [
+            .font, .paragraphStyle, .foregroundColor, .kern, .obliqueness,
+            .strikethroughColor, .strikethroughStyle,
+        ]
+        for (target, replacement, incremental) in [
+            ("Ordinary", "Ordinary bright", true),
+            ("café", "e\u{0301}", true),
+            ("🪐", "moon", true),
+            ("# ", "", true),
+            ("paragraph.", "paragraph.\nNew line", true),
+            ("New line", "**New line**", true),
+        ] {
+            let previousCount = cache.incrementalParseCount
+            storage.replaceCharacters(
+                in: (view.string as NSString).range(of: target),
+                with: replacement
+            )
+            MarkdownPresentation.refresh(view, mode: .livePreview)
+            XCTAssertEqual(cache.incrementalParseCount - previousCount,
+                           incremental ? 1 : 0)
+            if incremental {
+                XCTAssertLessThan(cache.lastLayoutRange.length, storage.length)
+            }
+            XCTAssertEqual(cache.result(for: view.string), MarkdownSyntax.parse(view.string))
+            let reference = NSTextView(usingTextLayoutManager: true)
+            reference.string = view.string
+            MarkdownPresentation.configure(reference, mode: .livePreview)
+            let referenceStorage = try XCTUnwrap(reference.textStorage)
+            for position in 0..<storage.length {
+                for key in keys {
+                    let actual = storage.attribute(key, at: position, effectiveRange: nil)
+                    let expected = referenceStorage.attribute(key, at: position, effectiveRange: nil)
+                    XCTAssertEqual(actual as? NSObject, expected as? NSObject,
+                                   "\(target): \(key) at \(position)")
+                }
+            }
+        }
     }
 
     func testNativeRefreshPreservesSelectionAndAddsNoUndoAction() {

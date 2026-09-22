@@ -144,10 +144,10 @@ enum MarkdownPresentation {
               let textStorage = textView.textStorage else { return }
 
         let syntaxCache = suppliedSyntaxCache ?? Self.syntaxCache(for: textView)
-        let text = textView.string
+        let text = syntaxCache.prepare(in: textStorage)
         let snapshot = MarkdownLivePreview.snapshot(for: textView)
         let presentation = syntaxCache.presentation(
-            for: text,
+            in: textStorage,
             snapshot: snapshot
         )
         let result = presentation.result
@@ -156,6 +156,10 @@ enum MarkdownPresentation {
             pointSize: normalizedFontSize(fontSize)
         )
         let previewRanges = presentation.previewRanges
+        let layoutRange = syntaxCache.layoutRange(
+            for: presentation, text: text, bodyFont: bodyFont
+        )
+        syntaxCache.isApplyingLayoutAttributes = true
         applyLayoutAttributes(
             to: textStorage,
             text: text,
@@ -163,8 +167,10 @@ enum MarkdownPresentation {
             bodyFont: bodyFont,
             hiddenRanges: previewRanges.collapsed,
             transparentRanges: previewRanges.transparent,
-            undoManager: textView.undoManager
+            undoManager: textView.undoManager,
+            range: layoutRange
         )
+        syntaxCache.isApplyingLayoutAttributes = false
         if textView.selectedRange() != selection {
             textView.setSelectedRange(selection)
         }
@@ -173,7 +179,8 @@ enum MarkdownPresentation {
             in: textView.textLayoutManager,
             text: text,
             syntaxCache: syntaxCache,
-            presentation: presentation
+            presentation: presentation,
+            invalidatedRange: layoutRange
         )
         textView.needsDisplay = true
     }
@@ -323,10 +330,10 @@ enum MarkdownPresentation {
         guard textView.markedTextRange == nil else { return }
 
         let syntaxCache = suppliedSyntaxCache ?? Self.syntaxCache(for: textView)
-        let text = textView.text ?? ""
+        let text = syntaxCache.prepare(in: textView.textStorage)
         let snapshot = MarkdownLivePreview.snapshot(for: textView)
         let presentation = syntaxCache.presentation(
-            for: text,
+            in: textView.textStorage,
             snapshot: snapshot
         )
         let result = presentation.result
@@ -335,6 +342,10 @@ enum MarkdownPresentation {
             pointSize: normalizedFontSize(fontSize)
         )
         let previewRanges = presentation.previewRanges
+        let layoutRange = syntaxCache.layoutRange(
+            for: presentation, text: text, bodyFont: bodyFont
+        )
+        syntaxCache.isApplyingLayoutAttributes = true
         applyLayoutAttributes(
             to: textView.textStorage,
             text: text,
@@ -342,8 +353,10 @@ enum MarkdownPresentation {
             bodyFont: bodyFont,
             hiddenRanges: previewRanges.collapsed,
             transparentRanges: previewRanges.transparent,
-            undoManager: textView.undoManager
+            undoManager: textView.undoManager,
+            range: layoutRange
         )
+        syntaxCache.isApplyingLayoutAttributes = false
         if textView.selectedRange != selection {
             textView.selectedRange = selection
         }
@@ -352,7 +365,8 @@ enum MarkdownPresentation {
             in: textView.textLayoutManager,
             text: text,
             syntaxCache: syntaxCache,
-            presentation: presentation
+            presentation: presentation,
+            invalidatedRange: layoutRange
         )
         textView.setNeedsDisplay()
     }
@@ -699,9 +713,16 @@ enum MarkdownPresentation {
         bodyFont: PlatformFont,
         hiddenRanges: [NSRange],
         transparentRanges: [NSRange],
-        undoManager: UndoManager?
+        undoManager: UndoManager?,
+        range: NSRange
     ) {
-        let fullRange = NSRange(location: 0, length: (text as NSString).length)
+        let fullRange = NSRange(location: 0, length: range.length)
+        func local(_ source: NSRange) -> NSRange? {
+            let intersection = NSIntersectionRange(source, range)
+            guard intersection.length > 0 else { return nil }
+            return NSRange(location: intersection.location - range.location,
+                           length: intersection.length)
+        }
         let undoRegistrationWasEnabled =
             undoManager?.isUndoRegistrationEnabled == true
         if undoRegistrationWasEnabled {
@@ -714,7 +735,9 @@ enum MarkdownPresentation {
         }
 
         guard fullRange.length > 0 else { return }
-        let desired = NSMutableAttributedString(string: text)
+        let desired = NSMutableAttributedString(
+            string: (text as NSString).substring(with: range)
+        )
         desired.addAttribute(.font, value: bodyFont, range: fullRange)
         desired.addAttribute(
             .foregroundColor,
@@ -727,14 +750,16 @@ enum MarkdownPresentation {
             range: fullRange
         )
         for run in result.fontRuns {
+            guard let localRange = local(run.range) else { continue }
             let font = layoutFont(for: run, bodyFont: bodyFont)
-            desired.addAttribute(.font, value: font, range: run.range)
+            desired.addAttribute(.font, value: font, range: localRange)
             if run.traits.contains(.italic), !hasItalicTrait(font) {
                 // The rounded system design has no native italic face.
-                desired.addAttribute(.obliqueness, value: 0.18, range: run.range)
+                desired.addAttribute(.obliqueness, value: 0.18, range: localRange)
             }
         }
         for run in result.paragraphRuns {
+            guard let localRange = local(run.range) else { continue }
             let style = paragraphStyle(
                 for: run,
                 text: text as NSString,
@@ -743,16 +768,17 @@ enum MarkdownPresentation {
             desired.addAttribute(
                 .paragraphStyle,
                 value: style,
-                range: run.range
+                range: localRange
             )
         }
         for span in result.spans where span.role == .strikethrough {
+            guard let localRange = local(span.range) else { continue }
             desired.addAttributes(
                 [
                     .strikethroughColor: secondaryTextColor,
                     .strikethroughStyle: NSUnderlineStyle.single.rawValue,
                 ],
-                range: span.range
+                range: localRange
             )
         }
         let collapsedFont = fontWithSize(
@@ -760,6 +786,7 @@ enum MarkdownPresentation {
             size: MarkdownLivePreview.collapsedFontSize
         )
         for range in hiddenRanges {
+            guard let range = local(range) else { continue }
             desired.addAttributes(
                 [
                     .font: collapsedFont,
@@ -770,6 +797,7 @@ enum MarkdownPresentation {
             )
         }
         for range in transparentRanges {
+            guard let range = local(range) else { continue }
             desired.addAttribute(
                 .foregroundColor,
                 value: PlatformColor.clear,
@@ -790,7 +818,7 @@ enum MarkdownPresentation {
                 key,
                 from: desired,
                 to: textStorage,
-                range: fullRange
+                range: range
             ))
         }
         guard !changes.isEmpty else { return }
@@ -829,10 +857,11 @@ enum MarkdownPresentation {
             var existingRange = NSRange()
             let desiredValue = desired.attribute(
                 key,
-                at: location,
+                at: location - range.location,
                 longestEffectiveRange: &desiredRange,
-                in: range
+                in: NSRange(location: 0, length: range.length)
             )
+            desiredRange.location += range.location
             let existingValue = textStorage.attribute(
                 key,
                 at: location,
@@ -928,15 +957,25 @@ enum MarkdownPresentation {
         text: String,
         syntaxCache: MarkdownSyntaxCache? = nil,
         presentation suppliedPresentation: MarkdownRenderingPresentation? = nil,
-        hiddenRanges: [NSRange] = []
+        hiddenRanges: [NSRange] = [],
+        invalidatedRange: NSRange? = nil
     ) -> Int {
         guard let layoutManager,
               let contentManager = layoutManager.textContentManager else {
             return 0
         }
-        layoutManager.invalidateRenderingAttributes(
-            for: contentManager.documentRange
-        )
+        if let invalidatedRange {
+            if invalidatedRange.length > 0,
+               let range = textRange(
+                for: invalidatedRange,
+                documentStart: contentManager.documentRange.location,
+                contentManager: contentManager
+               ) {
+                layoutManager.invalidateRenderingAttributes(for: range)
+            }
+        } else {
+            layoutManager.invalidateRenderingAttributes(for: contentManager.documentRange)
+        }
         let viewportController = layoutManager.textViewportLayoutController
         viewportController.layoutViewport()
         guard let viewportRange = viewportController.viewportRange else {
@@ -1758,6 +1797,10 @@ final class MarkdownSyntaxCache: NSObject {
     }
 
     private var cachedText: String?
+    private var storageSnapshot: String?
+    private var snapshotRevision: UInt64?
+    private var parsedStorageRevision: UInt64?
+    private(set) var snapshotCount = 0
     private var cachedResult: MarkdownSyntaxResult?
     private var cachedPreviewSnapshot: MarkdownLivePreviewSnapshot?
     private var cachedPreviewRanges: MarkdownLivePreviewRanges?
@@ -1767,23 +1810,154 @@ final class MarkdownSyntaxCache: NSObject {
     private var cachedDecorationPlan: MarkdownDecorationPlan?
     private var cachedGroupLefts: [GroupGeometryKey: CGFloat] = [:]
     private(set) var parseCount = 0
+    private(set) var incrementalParseCount = 0
+    private struct CharacterEdit {
+        let range: NSRange
+        let delta: Int
+    }
+    var isApplyingLayoutAttributes = false
+    private var characterEdit: CharacterEdit?
+    private var cachedCharacterRevision: UInt64 = 0
+    // nil means that the complete layout must be refreshed.
+    private var dirtyLayoutRange: NSRange?
+    private var appliedPreviewRanges: MarkdownLivePreviewRanges?
+    private var appliedBodyFont: PlatformFont?
+    private(set) var lastLayoutRange = NSRange(location: 0, length: 0)
 
+    func layoutRange(
+        for presentation: MarkdownRenderingPresentation,
+        text: String,
+        bodyFont: PlatformFont
+    ) -> NSRange {
+        let source = text as NSString
+        let full = NSRange(location: 0, length: source.length)
+        var range = full
+        if let dirtyLayoutRange, let old = appliedPreviewRanges,
+           appliedBodyFont?.isEqual(bodyFont) == true {
+            var affected = dirtyLayoutRange
+            // Only concealment that changed needs updating on caret movement.
+            for (before, after) in [
+                (old.collapsed, presentation.previewRanges.collapsed),
+                (old.transparent, presentation.previewRanges.transparent),
+            ] {
+                for changed in Set(before).symmetricDifference(Set(after)) {
+                    affected = affected.length == 0 ? changed
+                        : NSUnionRange(affected, changed)
+                }
+            }
+            range = affected.length == 0 ? affected
+                : source.paragraphRange(for: NSIntersectionRange(affected, full))
+        }
+        appliedPreviewRanges = presentation.previewRanges
+        appliedBodyFont = bodyFont
+        dirtyLayoutRange = NSRange(location: 0, length: 0)
+        lastLayoutRange = range
+        return range
+    }
+
+    private func prepareIncrementally(for text: String) -> Bool {
+        guard let edit = characterEdit,
+              parsedStorageRevision == cachedCharacterRevision,
+              cachedCharacterRevision != characterRevision,
+              let cachedText, let cachedResult,
+              let update = MarkdownSyntax.incrementallyParse(
+                text, previousText: cachedText, previousResult: cachedResult,
+                editedRange: edit.range, changeInLength: edit.delta
+              ) else { return false }
+        let oldPreview = appliedPreviewRanges
+        let oldDirty = dirtyLayoutRange
+        install(update.result, for: text)
+        incrementalParseCount += 1
+        // Native text storage already shifts the attributes after an edit.
+        // Shift the matching concealment metadata before comparing it again.
+        let oldLine = NSRange(
+            location: update.invalidatedRange.location,
+            length: update.invalidatedRange.length - edit.delta
+        )
+        func shifted(_ ranges: [NSRange]) -> [NSRange] {
+            ranges.compactMap { range in
+                // The dirty line will reset all its attributes, including
+                // markers removed or resized by the edit.
+                if NSIntersectionRange(range, oldLine).length > 0 { return nil }
+                if range.location >= NSMaxRange(oldLine) {
+                    return NSRange(location: range.location + edit.delta,
+                                   length: range.length)
+                }
+                return range
+            }
+        }
+        if let oldPreview, let oldDirty, oldDirty.length == 0 {
+            appliedPreviewRanges = MarkdownLivePreviewRanges(
+                collapsed: shifted(oldPreview.collapsed),
+                transparent: shifted(oldPreview.transparent)
+            )
+            dirtyLayoutRange = update.invalidatedRange
+        }
+        return true
+    }
+    private var characterRevision: UInt64 = 0
+    /// Native text storage notifications identify changes without scanning text.
+    /// The immutable snapshot is shared by the commit and presentation paths.
+    func textSnapshot(in textStorage: NSTextStorage) -> String {
+        observeCharacterEdits(in: textStorage)
+        if snapshotRevision == characterRevision, let storageSnapshot {
+            return storageSnapshot
+        }
+        var text = textStorage.string
+        text.makeContiguousUTF8()
+        storageSnapshot = text
+        snapshotRevision = characterRevision
+        snapshotCount += 1
+        return text
+    }
+
+    @discardableResult
+    func prepare(in textStorage: NSTextStorage) -> String {
+        let text = textSnapshot(in: textStorage)
+        if parsedStorageRevision != characterRevision || cachedResult == nil {
+            _ = updateResult(for: text)
+            parsedStorageRevision = characterRevision
+        }
+        return text
+    }
+
+    // Arbitrary strings have no native revision identity. Keep exact equality
+    // here, including for callers that reuse a cache with unrelated text.
     func result(for text: String) -> MarkdownSyntaxResult {
         if let cachedText, cachedText.utf8.elementsEqual(text.utf8),
            let cachedResult {
             return cachedResult
         }
+        // Only the observed storage path can apply its pending edit range.
         let result = MarkdownSyntax.parse(text)
         parseCount += 1
+        install(result, for: text)
+        return result
+    }
+
+    private func updateResult(for text: String) -> MarkdownSyntaxResult {
+        if prepareIncrementally(for: text), let cachedResult {
+            return cachedResult
+        }
+        let result = MarkdownSyntax.parse(text)
+        parseCount += 1
+        install(result, for: text)
+        return result
+    }
+
+    private func install(_ result: MarkdownSyntaxResult, for text: String) {
+        parsedStorageRevision = nil
         cachedText = text
         cachedResult = result
+        cachedCharacterRevision = characterRevision
+        characterEdit = nil
+        dirtyLayoutRange = nil
         cachedPreviewSnapshot = nil
         cachedPreviewRanges = nil
         cachedRenderingPresentation = nil
         presentationIsCurrent = false
         cachedDecorationPlan = nil
         cachedGroupLefts.removeAll(keepingCapacity: true)
-        return result
     }
 
     var currentPresentation: MarkdownRenderingPresentation? {
@@ -1795,7 +1969,23 @@ final class MarkdownSyntaxCache: NSObject {
         for text: String,
         snapshot: MarkdownLivePreviewSnapshot
     ) -> MarkdownRenderingPresentation {
-        let result = result(for: text)
+        makePresentation(for: text, result: result(for: text), snapshot: snapshot)
+    }
+
+    func presentation(
+        in textStorage: NSTextStorage,
+        snapshot: MarkdownLivePreviewSnapshot
+    ) -> MarkdownRenderingPresentation {
+        let text = prepare(in: textStorage)
+        // prepare installs a result for this exact storage revision.
+        return makePresentation(for: text, result: cachedResult!, snapshot: snapshot)
+    }
+
+    private func makePresentation(
+        for text: String,
+        result: MarkdownSyntaxResult,
+        snapshot: MarkdownLivePreviewSnapshot
+    ) -> MarkdownRenderingPresentation {
         if presentationIsCurrent,
            cachedPreviewSnapshot == snapshot,
            let cachedRenderingPresentation {
@@ -1833,6 +2023,11 @@ final class MarkdownSyntaxCache: NSObject {
             )
         }
         observedTextStorage = textStorage
+        characterRevision &+= 1
+        characterEdit = nil
+        storageSnapshot = nil
+        snapshotRevision = nil
+        parsedStorageRevision = nil
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(cachedTextStorageDidProcessEditing(_:)),
@@ -1844,12 +2039,32 @@ final class MarkdownSyntaxCache: NSObject {
     @objc private func cachedTextStorageDidProcessEditing(
         _ notification: Notification
     ) {
-        guard let textStorage = notification.object as? NSTextStorage,
-              textStorage.editedMask.contains(.editedCharacters) else {
+        guard let textStorage = notification.object as? NSTextStorage else { return }
+        guard textStorage.editedMask.contains(.editedCharacters) else {
+            if !isApplyingLayoutAttributes { dirtyLayoutRange = nil }
             return
         }
         presentationIsCurrent = false
         cachedRenderingPresentation = nil
+        characterRevision &+= 1
+        let range = textStorage.editedRange
+        let delta = textStorage.changeInLength
+        if let pending = characterEdit {
+            // Both ranges below use coordinates immediately before this edit.
+            // Enclose the previous changes and this replacement, then map the
+            // enclosing range forward. This also handles deletions, overlapping
+            // replacements, and edits before an earlier pending edit.
+            let replaced = NSRange(location: range.location,
+                                   length: range.length - delta)
+            let start = min(pending.range.location, replaced.location)
+            let end = max(NSMaxRange(pending.range), NSMaxRange(replaced))
+            characterEdit = CharacterEdit(
+                range: NSRange(location: start, length: end - start + delta),
+                delta: pending.delta + delta
+            )
+        } else {
+            characterEdit = CharacterEdit(range: range, delta: delta)
+        }
     }
 
     deinit {

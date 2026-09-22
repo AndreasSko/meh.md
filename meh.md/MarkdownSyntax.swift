@@ -51,12 +51,22 @@ struct MarkdownSyntaxResult: Equatable {
     let spans: [MarkdownStyleSpan]
     let fontRuns: [MarkdownFontRun]
     let paragraphRuns: [MarkdownParagraphRun]
+    // Line boundaries with no open emphasis or fenced-code context. Unlike
+    // visible spans, these account for unmatched delimiters as well.
+    let restartOffsets: [Int]
+    let canRestartAtEnd: Bool
+}
+
+struct MarkdownSyntaxIncrementalResult: Equatable {
+    let result: MarkdownSyntaxResult
+    let invalidatedRange: NSRange
 }
 
 enum MarkdownSyntax {
     static func parse(_ text: String) -> MarkdownSyntaxResult {
         let source = text as NSString
-        let fenced = fencedCodeRanges(in: source)
+        let fences = fencedCodeRanges(in: source)
+        let fenced = fences.ranges
         let inline = inlineCodeRanges(in: source, excluding: fenced)
         let codeRanges = (fenced + inline).sorted { left, right in
             if left.location == right.location {
@@ -81,9 +91,12 @@ enum MarkdownSyntax {
             paragraphRuns: &paragraphRuns
         )
         appendLinkSpans(in: source, excluding: codeRanges, spans: &spans)
-        appendEmphasisSpans(
+        let emphasis = appendEmphasisSpans(
             in: source,
             excluding: codeRanges,
+            blockBoundaries: emphasisBlockBoundaries(
+                in: source, lines: lines, spans: spans, fenced: fenced
+            ),
             spans: &spans
         )
         appendPairedSpans(
@@ -106,10 +119,17 @@ enum MarkdownSyntax {
             }
             return left.range.location < right.range.location
         }
+        let canRestartAtEnd = emphasis.atEnd && !fences.hasOpenFence
+        var restartOffsets = emphasis.offsets
+        if canRestartAtEnd, restartOffsets.last != source.length {
+            restartOffsets.append(source.length)
+        }
         return MarkdownSyntaxResult(
             spans: spans,
             fontRuns: fontRuns(for: spans),
-            paragraphRuns: paragraphRuns
+            paragraphRuns: paragraphRuns,
+            restartOffsets: restartOffsets,
+            canRestartAtEnd: canRestartAtEnd
         )
     }
 
@@ -121,9 +141,218 @@ enum MarkdownSyntax {
         parse(text).fontRuns
     }
 
-    private static func fencedCodeRanges(in source: NSString) -> [NSRange] {
+    /// Reparse from a cached neutral line boundary until the outgoing context
+    /// is neutral again. Unchanged suffix syntax can then be reused exactly.
+    /// Edits use post-edit UTF-16 coordinates, including coalesced edits.
+    /// A large region without a safe boundary retains the full-parse fallback.
+    static func incrementallyParse(
+        _ text: String,
+        previousText: String,
+        previousResult: MarkdownSyntaxResult,
+        editedRange: NSRange,
+        changeInLength: Int
+    ) -> MarkdownSyntaxIncrementalResult? {
+        let source = text as NSString
+        let previousSource = previousText as NSString
+        let previousEditedLength = editedRange.length - changeInLength
+        guard editedRange.location >= 0,
+              editedRange.length >= 0,
+              previousEditedLength >= 0,
+              previousSource.length + changeInLength == source.length,
+              NSMaxRange(editedRange) <= source.length,
+              editedRange.location + previousEditedLength
+                <= previousSource.length else { return nil }
+
+        let previousEditedRange = NSRange(
+            location: editedRange.location,
+            length: previousEditedLength
+        )
+        let oldAffected = syntaxLineRange(
+            containing: previousEditedRange, in: previousSource
+        )
+        let start = previousResult.restartOffsets.last(where: {
+            $0 <= oldAffected.location
+        }) ?? 0
+        let ends = previousResult.restartOffsets.filter {
+            $0 >= NSMaxRange(oldAffected) && $0 > start
+        }
+        // EOF is also a valid stopping point even when delimiters remain open:
+        // there is then no unchanged suffix whose interpretation could differ.
+        var candidates = ends
+        if candidates.last != previousSource.length {
+            candidates.append(previousSource.length)
+        }
+        var replacement: (old: NSRange, new: NSRange, syntax: MarkdownSyntaxResult)?
+        var minimumEnd = start
+        for oldEnd in candidates {
+            guard oldEnd >= minimumEnd || oldEnd == previousSource.length else {
+                continue
+            }
+            let newEnd = oldEnd + changeInLength
+            guard newEnd >= start, newEnd <= source.length else { return nil }
+            // Bound speculative work for edits affecting long-range context.
+            // A full parse remains the correctness fallback for those cases.
+            guard newEnd - start <= 65_536 else { return nil }
+            let region = NSRange(location: start, length: newEnd - start)
+            let local = parse(source.substring(with: region))
+            if local.canRestartAtEnd || oldEnd == previousSource.length {
+                replacement = (
+                    NSRange(location: start, length: oldEnd - start),
+                    region, local
+                )
+                break
+            }
+            // Grow geometrically instead of reparsing every larger prefix.
+            minimumEnd = start + max(128, 2 * (oldEnd - start))
+        }
+        guard let replacement else { return nil }
+        let previousLine = replacement.old
+        let line = replacement.new
+        let local = replacement.syntax
+        let delta = changeInLength
+        var spans = previousResult.spans.compactMap { span in
+            splice(
+                span,
+                replacing: previousLine,
+                delta: delta
+            )
+        }
+        spans.append(contentsOf: local.spans.map {
+            MarkdownStyleSpan(
+                range: offset($0.range, by: line.location),
+                role: $0.role
+            )
+        })
+        spans.sort(by: spanOrdering)
+
+        // Adjacent equal font runs may cross an otherwise neutral boundary.
+        // Rebuild from cached spans so clipping never loses their other half.
+        let fontRuns = fontRuns(for: spans)
+
+        var paragraphs = previousResult.paragraphRuns.compactMap { paragraph in
+            splice(
+                paragraph,
+                replacing: previousLine,
+                delta: delta
+            )
+        }
+        paragraphs.append(contentsOf: local.paragraphRuns.map {
+            MarkdownParagraphRun(
+                range: offset($0.range, by: line.location),
+                kind: $0.kind,
+                contentColumn: $0.contentColumn,
+                contentPrefixRange: offset(
+                    $0.contentPrefixRange,
+                    by: line.location
+                )
+            )
+        })
+        paragraphs.sort(by: paragraphOrdering)
+
+        return MarkdownSyntaxIncrementalResult(
+            result: MarkdownSyntaxResult(
+                spans: spans,
+                fontRuns: fontRuns,
+                paragraphRuns: paragraphs,
+                restartOffsets: previousResult.restartOffsets.filter { $0 < start }
+                    + local.restartOffsets.map { $0 + start }
+                    + previousResult.restartOffsets.filter {
+                        $0 > NSMaxRange(previousLine)
+                    }.map { $0 + delta },
+                canRestartAtEnd: NSMaxRange(previousLine) == previousSource.length
+                    ? local.canRestartAtEnd : previousResult.canRestartAtEnd
+            ),
+            invalidatedRange: line
+        )
+    }
+
+    /// Matches ``lineRanges(in:)`` exactly. `NSString.lineRange(for:)` also
+    /// recognizes Unicode separators that this Markdown parser treats as
+    /// ordinary content, so it cannot define the incremental boundary.
+    private static func syntaxLineRange(
+        containing range: NSRange,
+        in source: NSString
+    ) -> NSRange {
+        var start = range.location
+        while start > 0, source.character(at: start - 1) != ASCII.lineFeed {
+            start -= 1
+        }
+        var end = NSMaxRange(range)
+        while end < source.length,
+              source.character(at: end) != ASCII.lineFeed {
+            end += 1
+        }
+        if end < source.length { end += 1 }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private static func overlaps(_ left: NSRange, _ right: NSRange) -> Bool {
+        left.location < NSMaxRange(right)
+            && right.location < NSMaxRange(left)
+    }
+
+    private static func offset(_ range: NSRange, by delta: Int) -> NSRange {
+        NSRange(location: range.location + delta, length: range.length)
+    }
+
+    private static func splice(
+        _ span: MarkdownStyleSpan,
+        replacing replacedRange: NSRange,
+        delta: Int
+    ) -> MarkdownStyleSpan? {
+        guard !overlaps(span.range, replacedRange) else { return nil }
+        guard span.range.location >= NSMaxRange(replacedRange) else {
+            return span
+        }
+        return MarkdownStyleSpan(
+            range: offset(span.range, by: delta),
+            role: span.role
+        )
+    }
+
+    private static func splice(
+        _ paragraph: MarkdownParagraphRun,
+        replacing replacedRange: NSRange,
+        delta: Int
+    ) -> MarkdownParagraphRun? {
+        guard !overlaps(paragraph.range, replacedRange) else { return nil }
+        guard paragraph.range.location >= NSMaxRange(replacedRange) else {
+            return paragraph
+        }
+        return MarkdownParagraphRun(
+            range: offset(paragraph.range, by: delta),
+            kind: paragraph.kind,
+            contentColumn: paragraph.contentColumn,
+            contentPrefixRange: offset(paragraph.contentPrefixRange, by: delta)
+        )
+    }
+
+    private static func spanOrdering(
+        _ left: MarkdownStyleSpan,
+        _ right: MarkdownStyleSpan
+    ) -> Bool {
+        if left.range.location == right.range.location {
+            return left.range.length > right.range.length
+        }
+        return left.range.location < right.range.location
+    }
+
+    private static func paragraphOrdering(
+        _ left: MarkdownParagraphRun,
+        _ right: MarkdownParagraphRun
+    ) -> Bool {
+        let leftIsCode = left.kind == .codeBlock
+        let rightIsCode = right.kind == .codeBlock
+        if leftIsCode != rightIsCode { return leftIsCode }
+        return left.range.location < right.range.location
+    }
+
+    private static func fencedCodeRanges(
+        in source: NSString
+    ) -> (ranges: [NSRange], hasOpenFence: Bool) {
         let lines = lineRanges(in: source)
         var ranges: [NSRange] = []
+        var hasOpenFence = false
         var lineIndex = 0
         while lineIndex < lines.count {
             let line = lines[lineIndex]
@@ -152,9 +381,10 @@ enum MarkdownSyntax {
             ranges.append(
                 NSRange(location: line.location, length: end - line.location)
             )
+            hasOpenFence = closingLineIndex == nil
             lineIndex = (closingLineIndex ?? (lines.count - 1)) + 1
         }
-        return ranges
+        return (ranges, hasOpenFence)
     }
 
     private static func inlineCodeRanges(
@@ -485,19 +715,66 @@ enum MarkdownSyntax {
         let location: Int
     }
 
+    /// Inline emphasis may cross a soft line break, but cannot match a
+    /// delimiter in another paragraph or a separate supported block.
+    private static func emphasisBlockBoundaries(
+        in source: NSString,
+        lines: [NSRange],
+        spans: [MarkdownStyleSpan],
+        fenced: [NSRange]
+    ) -> Set<Int> {
+        var boundaries = Set(fenced.flatMap { [$0.location, NSMaxRange($0)] })
+        for line in lines {
+            let end = contentEnd(for: line, in: source)
+            if skipHorizontalWhitespace(from: line.location, before: end,
+                                        in: source) == end {
+                boundaries.insert(line.location)
+            }
+        }
+        for span in spans {
+            switch span.role {
+            case .heading, .listMarker:
+                let line = syntaxLineRange(containing: span.range, in: source)
+                boundaries.insert(line.location)
+                if case .heading = span.role {
+                    // Reset before consuming the newline, so it becomes a
+                    // neutral restart even if the heading has an open marker.
+                    let end = NSMaxRange(line)
+                    boundaries.insert(end > 0 && source.character(at: end - 1) == ASCII.lineFeed
+                                      ? end - 1 : end)
+                }
+            default:
+                break
+            }
+        }
+        return boundaries
+    }
+
     private static func appendEmphasisSpans(
         in source: NSString,
         excluding codeRanges: [NSRange],
+        blockBoundaries: Set<Int>,
         spans: inout [MarkdownStyleSpan]
-    ) {
+    ) -> (offsets: [Int], atEnd: Bool) {
+        var restartOffsets = [0]
         var stack: [EmphasisDelimiter] = []
         var location = 0
         while location < source.length {
+            if blockBoundaries.contains(location) {
+                stack.removeAll(keepingCapacity: true)
+            }
             if let range = containingRange(location, in: codeRanges) {
                 location = NSMaxRange(range)
+                if stack.isEmpty, location < source.length, location > 0,
+                   source.character(at: location - 1) == ASCII.lineFeed {
+                    restartOffsets.append(location)
+                }
                 continue
             }
             let marker = source.character(at: location)
+            if marker == ASCII.lineFeed, stack.isEmpty {
+                restartOffsets.append(location + 1)
+            }
             guard marker == ASCII.asterisk || marker == ASCII.underscore,
                   !isEscaped(location, in: source) else {
                 location += 1
@@ -562,6 +839,8 @@ enum MarkdownSyntax {
             }
             location += runLength
         }
+        if blockBoundaries.contains(source.length) { stack.removeAll() }
+        return (restartOffsets, stack.isEmpty)
     }
 
     private static func fontRuns(

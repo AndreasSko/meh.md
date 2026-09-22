@@ -31,6 +31,13 @@ private final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let controller = UIViewController()
         controller.view.backgroundColor = .systemBackground
 
+#if LARGE_NOTE_PERFORMANCE
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        self.window = window
+        Task { await LargeNotePerformanceProbe.run(in: window) }
+#else
+
         let editor = MarkdownTextView(usingTextLayoutManager: true)
         if let layoutManager = editor.textLayoutManager {
             editor.installMarkdownLayoutManagerDelegate(on: layoutManager)
@@ -66,6 +73,7 @@ private final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.apply(stage: stage, to: editor)
         }
+#endif
     }
 
     private func apply(stage: String, to editor: MarkdownTextView) {
