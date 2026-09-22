@@ -73,7 +73,7 @@ jobs:
           - platform: IOS
             destination: generic/platform=iOS
             profile_secret: IOS_PROFILE_BASE64
-            profile_name: 'iOS Team Store Provisioning Profile: de.andreas-sk.meh-md'
+            profile_name: 'meh.md iOS TestFlight'
             profile_extension: mobileprovision
             artifact: ipa
           - platform: MAC_OS

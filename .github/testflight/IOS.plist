@@ -13,7 +13,7 @@
 	<key>provisioningProfiles</key>
 	<dict>
 		<key>de.andreas-sk.meh-md</key>
-		<string>iOS Team Store Provisioning Profile: de.andreas-sk.meh-md</string>
+		<string>meh.md iOS TestFlight</string>
 	</dict>
 	<key>signingCertificate</key>
 	<string>Apple Distribution</string>

@@ -7,7 +7,7 @@
 	<key>iCloudContainerEnvironment</key>
 	<string>Production</string>
 	<key>installerSigningCertificate</key>
-	<string>Mac Installer Distribution</string>
+	<string>3rd Party Mac Developer Installer: Andreas Skorczyk (9YFM7J3EH3)</string>
 	<key>manageAppVersionAndBuildNumber</key>
 	<false/>
 	<key>method</key>
