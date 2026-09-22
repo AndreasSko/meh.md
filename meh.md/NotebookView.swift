@@ -15,10 +15,12 @@ private struct EditorAttachmentID: Hashable {
 
 private struct NotebookSidebarRow: Identifiable {
     let id: UUID
+    let parentID: UUID?
     let depth: Int
 
     init(placement: NotebookPlacement, depth: Int) {
         id = placement.item.id
+        parentID = placement.parentID
         self.depth = depth
     }
 }
@@ -62,6 +64,8 @@ struct NotebookView: View {
     @State private var movingFromTrash = false
     @State private var browserSelection = NotebookBrowserSelection()
     @State private var selectingItems = false
+    @FocusState private var browserFocused: Bool
+    @State private var movingNotebookID: UUID?
     @State private var browserUndo: NotebookBrowserUndo?
     @State private var browserRedo: NotebookBrowserUndo?
     @State private var destination: UUID?
@@ -110,7 +114,7 @@ struct NotebookView: View {
                         placement: .toolbar, prompt: "Search all notes")
             .searchFocused($searchFocused)
             .overlay(alignment: .bottom) {
-                if !isPhoneLayout && !search.isPresented {
+                if !isPhoneLayout && !search.isPresented && !showsSelectionControls {
                     NotebookSidebarControls(
                         busy: busy,
                         showSettings: { showingSettings = true },
@@ -118,26 +122,45 @@ struct NotebookView: View {
                     )
                 }
             }
-            .navigationTitle("meh.md")
+            .navigationTitle(showsSelectionControls && !search.isPresented ? "" : "meh.md")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(showsSelectionControls ? .inline : .large)
+            #endif
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
                 if !showingTrash {
-                    if let workspace, workspace.usesSync {
+                    if let workspace, workspace.usesSync, !showsSelectionControls {
                         ToolbarItem(placement: syncToolbarPlacement) {
                             NotebookSyncButton(workspace: workspace)
                         }
                     }
-                    if isPhoneLayout {
-                        ToolbarItem(placement: .primaryAction) { applicationMenu }
+                    if showsSelectionControls && !search.isPresented {
+                        ToolbarItem(placement: .cancellationAction) { selectAllButton }
+                        ToolbarItem(placement: .principal) { selectionCount }
+                        ToolbarItem(placement: .confirmationAction) { selectionDone }
                         #if os(iOS)
-                        DefaultToolbarItem(kind: .search, placement: .bottomBar)
-                        if !search.isPresented {
-                            ToolbarSpacer(.fixed, placement: .bottomBar)
-                            ToolbarItem(placement: .bottomBar) { libraryNewNote }
+                        ToolbarItem(placement: .bottomBar) { moveSelectedButton }
+                        ToolbarSpacer(.flexible, placement: .bottomBar)
+                        ToolbarItem(placement: .bottomBar) { trashSelectedButton }
+                        #else
+                        ToolbarItemGroup {
+                            moveSelectedButton
+                            trashSelectedButton
                         }
                         #endif
                     } else {
-                        ToolbarItem { libraryNewNote }
+                        ToolbarItem(placement: .primaryAction) { applicationMenu }
+                        if isPhoneLayout {
+                            #if os(iOS)
+                            DefaultToolbarItem(kind: .search, placement: .bottomBar)
+                            if !search.isPresented {
+                                ToolbarSpacer(.fixed, placement: .bottomBar)
+                                ToolbarItem(placement: .bottomBar) { libraryNewNote }
+                            }
+                            #endif
+                        } else {
+                            ToolbarItem { libraryNewNote }
+                        }
                     }
                 }
             }
@@ -499,13 +522,7 @@ struct NotebookView: View {
     }
 
     private var recentsSection: some View {
-        NotebookSidebarSection {
-            NotebookSectionToggle(
-                title: "Recents",
-                isExpanded: navigationState.isRecentsExpanded,
-                identifier: "notebook-recents-toggle"
-            ) { navigationState.isRecentsExpanded.toggle() }
-        } content: {
+        Section {
             if navigationState.isRecentsExpanded {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(recentPlacements, id: \.item.id) { placement in
@@ -536,7 +553,23 @@ struct NotebookView: View {
                 .background(NotebookSidebarPalette.recents,
                             in: RoundedRectangle(cornerRadius: 16))
             }
+        } header: {
+            NotebookSectionToggle(
+                title: "Recents",
+                isExpanded: navigationState.isRecentsExpanded,
+                identifier: "notebook-recents-toggle"
+            ) { navigationState.isRecentsExpanded.toggle() }
+            .textCase(nil)
+            .listRowInsets(sidebarSectionInsets)
         }
+        .selectionDisabled()
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .listRowInsets(sidebarSectionInsets)
+    }
+
+    private var sidebarSectionInsets: EdgeInsets {
+        EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)
     }
 
     private var recentPlacements: [NotebookPlacement] {
@@ -561,15 +594,43 @@ struct NotebookView: View {
     }
 
     private var visibleActiveRows: [NotebookSidebarRow] {
-        flattenedRows(inTrash: false)
+        navigationState.isTreeExpanded ? flattenedRows(inTrash: false) : []
     }
 
     private var activeTree: some View {
         ForEach(visibleActiveRows) { row in
-            sidebarRow(row)
+            browserRow(row)
+                .tag(row.id)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(sidebarSectionInsets)
         }
     }
 
+    private func browserRow(_ row: NotebookSidebarRow) -> some View {
+        sidebarRow(row)
+    }
+
+    @ViewBuilder
+    private func browserRowActions(for placement: NotebookPlacement) -> some View {
+        if browserSelection.contains(placement.item.id), browserSelection.count > 1 {
+            Button("Move Selected…") {
+                beginMoving(browserSelection.orderedIDs(in: activeBrowserOrder))
+            }
+            Button("Trash Selected", role: .destructive) {
+                trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+            }
+        } else {
+            actions(for: placement)
+        }
+    }
+
+    private var nativeBrowserSelection: Binding<Set<UUID>> {
+        Binding(get: { browserSelection.selectedIDs }, set: { ids in
+            let hidden = browserSelection.selectedIDs.subtracting(visibleActiveRows.map(\.id))
+            browserSelection.selectAll(Array(ids.union(hidden)))
+        })
+    }
 
     private var activeBrowserIDs: Set<UUID> {
         Set(replica.placements.filter { !$0.isInTrash }.map(\.item.id))
@@ -585,62 +646,78 @@ struct NotebookView: View {
         return descendants(nil)
     }
 
-    private var browserActions: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if selectingItems {
-                HStack {
-                    Button("Done") {
-                        selectingItems.toggle()
-                        browserSelection.clear()
-                    }
-                    .accessibilityIdentifier("notebook-select-items")
-                    .disabled(busy)
-                    Text("\(browserSelection.count) selected")
-                        .font(.caption)
-                    Spacer(minLength: 0)
-                    Menu {
-                        Button("Select All") {
-                            browserSelection.selectAll(activeBrowserOrder)
-                        }
-                        Button("Clear Selection") { browserSelection.clear() }
-                        Divider()
-                        Button("Move Selected…") {
-                            movingIDs = browserSelection.orderedIDs(in: activeBrowserOrder)
-                            movingFromTrash = false
-                            destination = nil
-                        }
-                        .disabled(browserSelection.isEmpty)
-                        Button("Trash Selected", role: .destructive) {
-                            trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
-                        }
-                        .disabled(browserSelection.isEmpty)
-                    } label: {
-                        Label("Selection Actions", systemImage: "ellipsis.circle")
-                    }
-                    .accessibilityIdentifier("notebook-selection-actions")
-                    .disabled(busy)
-                }
-            }
-            if browserUndo?.action == .move || browserRedo?.action == .move {
-                HStack {
-                    if browserUndo?.action == .move {
-                        Button("Undo Move") {
-                            undoBrowserChange(redo: false)
-                        }
-                        .accessibilityIdentifier("notebook-browser-undo")
-                    }
-                    if browserRedo?.action == .move {
-                        Button("Redo Move") {
-                            undoBrowserChange(redo: true)
-                        }
-                        .accessibilityIdentifier("notebook-browser-redo")
-                    }
-                }
-                .disabled(busy)
-            }
+    private var showsSelectionControls: Bool {
+        selectingItems || browserSelection.count > 1
+    }
+
+    private var moveSelectedButton: some View {
+        Button {
+            beginMoving(browserSelection.orderedIDs(in: activeBrowserOrder))
+        } label: {
+            Image(systemName: "arrow.forward.folder")
         }
-        .font(.callout)
-        .buttonStyle(.borderless)
+        .accessibilityLabel("Move")
+        .help("Move selected items")
+        .accessibilityIdentifier("notebook-move-selected")
+        .disabled(busy || browserSelection.isEmpty)
+    }
+
+    private var trashSelectedButton: some View {
+        Button(role: .destructive) {
+            trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+        } label: {
+            Label("Trash", systemImage: "trash")
+        }
+        .labelStyle(.titleAndIcon)
+        .accessibilityIdentifier("notebook-trash-selected")
+        .disabled(busy || browserSelection.isEmpty)
+    }
+
+    private var selectAllButton: some View {
+        let visible = Set(visibleActiveRows.map(\.id))
+        let allSelected = !visible.isEmpty && visible.isSubset(of: browserSelection.selectedIDs)
+        return Button(allSelected ? "Deselect All" : "Select All") {
+            if allSelected { browserSelection.clear() }
+            else { browserSelection.selectAll(Array(visible)) }
+        }
+        .accessibilityIdentifier("notebook-select-all")
+        .disabled(busy)
+    }
+
+    private var selectionCount: some View {
+        Button {
+            navigationState.isTreeExpanded = true
+            for id in browserSelection.selectedIDs { reveal(id) }
+        } label: {
+            Text("\(browserSelection.count) selected")
+                .font(.headline)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("notebook-selection-count")
+        .accessibilityHint("Reveals selected items in collapsed folders")
+        .help("Reveal selected items")
+        .disabled(busy || browserSelection.isEmpty)
+    }
+
+    private var selectionDone: some View {
+        Button("Done") {
+            selectingItems = false
+            browserSelection.clear()
+        }
+        .accessibilityIdentifier("notebook-selection-done")
+        .disabled(busy)
+    }
+
+    @ViewBuilder
+    private var browserUndoActions: some View {
+        if browserUndo?.action == .move {
+            Button("Undo Move") { undoBrowserChange(redo: false) }
+                .accessibilityIdentifier("notebook-browser-undo")
+        }
+        if browserRedo?.action == .move {
+            Button("Redo Move") { undoBrowserChange(redo: true) }
+                .accessibilityIdentifier("notebook-browser-redo")
+        }
     }
 
     private var trashView: some View {
@@ -691,156 +768,85 @@ struct NotebookView: View {
         return result
     }
 
-    private func sorted(_ items: [NotebookPlacement]) -> [NotebookPlacement] {
-        items.sorted {
-            let order = folderPath($0).localizedStandardCompare(folderPath($1))
-            return order == .orderedSame
-                ? $0.item.id.uuidString < $1.item.id.uuidString
-                : order == .orderedAscending
-        }
-    }
-
     @ViewBuilder
     private func sidebarRow(_ row: NotebookSidebarRow) -> some View {
-        if let placement = replica.placements.first(where: {
-            $0.item.id == row.id
-        }) {
+        if let placement = replica.placements.first(where: { $0.item.id == row.id }) {
             HStack(spacing: 6) {
                 if placement.item.kind == .folder {
-                    Button {
-                        perform {
-                            try await flushEditor()
-                            toggleFolder(placement.item.id)
-                        }
-                    } label: {
-                        disclosureIcon(
-                            expanded: expandedIDs.contains(placement.item.id)
-                        )
+                    Button { toggleFolder(row.id) } label: {
+                        disclosureIcon(expanded: expandedIDs.contains(row.id))
+                            .frame(minWidth: 20, minHeight: sidebarRowHeight)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(placement.displayName)
+                    .accessibilityValue(expandedIDs.contains(row.id) ? "Expanded" : "Collapsed")
+                    .accessibilityIdentifier("notebook-disclosure-" + row.id.uuidString)
                 } else {
-                    Color.clear.frame(width: 10, height: 1)
+                    Color.clear.frame(width: 20, height: 1)
                 }
-                if editingID == placement.item.id {
-                    Image(systemName: placement.item.kind == .folder ? "folder" : "note.text")
+                if editingID == row.id {
                     TextField("Name", text: $proposedName)
                         .textFieldStyle(.plain)
-                        .focused($focusedNameID, equals: placement.item.id)
+                        .focused($focusedNameID, equals: row.id)
                         .disabled(busy)
                         .onSubmit { submitInlineName() }
                         .notebookEscapeAction { cancelInlineName() }
                         .notebookSelectNameOnFocus()
                 } else {
-                    Button {
-                        activateSidebarRow(placement)
-                    } label: {
-                        HStack(spacing: 6) {
-                            if selectingItems, !placement.isInTrash {
-                                Image(systemName: browserSelection.contains(placement.item.id)
-                                    ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(Color.accentColor)
-                            }
-                            Image(systemName: placement.item.kind == .folder
-                                ? "folder" : "note.text")
-                            Text(placement.item.kind == .note
-                                ? NotebookNoteName.title(from: placement.displayName)
-                                : placement.displayName)
-                                .lineLimit(1)
-                                .accessibilityIdentifier(
-                                    "notebook-sidebar-title-"
-                                        + placement.item.id.uuidString
-                                )
-                            if !placement.issues.isEmpty {
-                                Image(systemName: "exclamationmark.triangle")
-                                    .foregroundStyle(.orange)
-                                    .accessibilityLabel(
-                                        "Recovered placement or metadata conflict"
-                                    )
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .contentShape(Rectangle())
+                    Label {
+                        Text(placement.item.kind == .note
+                            ? NotebookNoteName.title(from: placement.displayName)
+                            : placement.displayName)
+                            .accessibilityIdentifier("notebook-sidebar-title-" + row.id.uuidString)
+                    } icon: {
+                        Image(systemName: placement.item.kind == .folder ? "folder" : "note.text")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier(
-                        (placement.item.kind == .note
-                            ? "notebook-sidebar-note-" : "notebook-sidebar-folder-")
-                            + placement.item.id.uuidString
-                    )
-                    // Keep row actions off the inline name editor.
-                    .contextMenu {
-                        if selectingItems, browserSelection.contains(placement.item.id) {
-                            Button("Move Selected…") {
-                                movingIDs = browserSelection.orderedIDs(in: activeBrowserOrder)
-                                movingFromTrash = false
-                                destination = nil
-                            }
-                            Button("Trash Selected", role: .destructive) {
-                                trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
-                            }
-                        } else {
-                            actions(for: placement)
-                        }
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        #if os(macOS)
+                        .simultaneousGesture(TapGesture().onEnded {
+                            guard !selectingItems, !busy,
+                                  NSEvent.modifierFlags.intersection([.command, .shift]).isEmpty
+                            else { return }
+                            // List owns range/toggle selection. A plain click also
+                            // opens the note, including an already selected row.
+                            browserSelection.selectOnly(row.id)
+                            activateSidebarRow(placement)
+                        })
+                        #endif
+                        .accessibilityAddTraits(
+                            browserSelection.contains(row.id) ? .isSelected : []
+                        )
+                    if !placement.issues.isEmpty {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel("Recovered placement or metadata conflict")
                     }
                 }
             }
             .padding(.leading, CGFloat(row.depth) * 16)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
             .frame(minHeight: sidebarRowHeight)
             .contentShape(Rectangle())
-            .background(
-                (selectingItems && !placement.isInTrash
-                    ? browserSelection.contains(placement.item.id)
-                    : (showsCurrentNote && selectedID == placement.item.id)
-                        || editingID == placement.item.id)
-                    ? Color.accentColor.opacity(0.14) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 9)
-            )
-            .accessibilityValue(
-                selectingItems && !placement.isInTrash
-                    ? (browserSelection.contains(placement.item.id)
-                        ? "Selected" : "Not selected") : ""
-            )
-
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(
+                (placement.item.kind == .note
+                    ? "notebook-sidebar-note-" : "notebook-sidebar-folder-") + row.id.uuidString)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                if !placement.isInTrash, !selectingItems {
-                    Button(role: .destructive) {
-                        trashItems([placement.item.id])
-                    } label: {
+                if !selectingItems, editingID == nil {
+                    Button(role: .destructive) { trashItems([row.id]) } label: {
                         Label("Trash", systemImage: "trash")
                     }
-                    // perform gates busy work; disabling this native action
-                    // can suppress its tap after it has been presented.
                     .accessibilityIdentifier("notebook-swipe-trash")
                 }
             }
-
         }
     }
 
     private func activateSidebarRow(_ placement: NotebookPlacement) {
-        guard !busy, editingID != placement.item.id else { return }
-        if !placement.isInTrash {
-            #if os(macOS)
-            if NSEvent.modifierFlags.contains(.command) {
-                selectingItems = true
-                browserSelection.toggle(placement.item.id)
-                return
-            }
-            #endif
-            if selectingItems {
-                browserSelection.toggle(placement.item.id)
-                return
-            }
-        }
+        guard !busy, editingID == nil, !selectingItems else { return }
         perform {
-            if placement.item.kind == .folder {
-                try await flushEditor()
-                toggleFolder(placement.item.id)
-            } else {
-                try await selectNote(placement.item.id)
-            }
+            if placement.item.kind == .note { try await selectNote(placement.item.id) }
         }
     }
 
@@ -848,7 +854,7 @@ struct NotebookView: View {
         Image(systemName: expanded ? "chevron.down" : "chevron.right")
             .font(.caption)
             .frame(width: 10)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.secondary)
     }
 
     private func toggleFolder(_ id: UUID) {
@@ -904,9 +910,7 @@ struct NotebookView: View {
         }
         if allowsRename { Button("Rename…") { beginRenaming(placement) } }
         Button("Move…") {
-            destination = placement.item.parentID
-            movingIDs = [placement.item.id]
-            movingFromTrash = placement.isInTrash
+            beginMoving([placement.item.id], fromTrash: placement.isInTrash)
         }
         if placement.isInTrash {
             if placement.item.isTrashed {
@@ -937,49 +941,34 @@ struct NotebookView: View {
         placement.item.kind == .folder ? placement.item.id : placement.item.parentID
     }
 
-    private var moveSheet: some View {
-        NavigationStack {
-            Form {
-                Picker("Destination", selection: $destination) {
-                    Text("Notebook root").tag(nil as UUID?)
-                    ForEach(
-                        sorted(
-                            replica.placements.filter {
-                                $0.item.kind == .folder && !$0.isInTrash
-                                    && canMoveSelection(into: $0.item.id)
-                            }), id: \.item.id
-                    ) { placement in
-                        Text(folderPath(placement)).tag(placement.item.id as UUID?)
-                    }
-                }
-                .accessibilityIdentifier("notebook-move-destination")
-            }
-            .navigationTitle(movingIDs.count == 1 ? "Move Item" : "Move Items")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { movingIDs = [] }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Move") {
-                        let ids = movingIDs
-                        let target = destination
-                        let fromTrash = movingFromTrash
-                        movingIDs = []
-                        moveItems(ids, to: target, fromTrash: fromTrash)
-                    }
-                    .disabled(busy || !canMoveSelection(into: destination))
-                    .accessibilityIdentifier("notebook-confirm-move")
-                }
-            }
-        }
-        .frame(minWidth: 300, minHeight: 220)
+    private func beginMoving(_ ids: [UUID], fromTrash: Bool = false) {
+        guard !busy, !ids.isEmpty else { return }
+        let sources = effectiveSelectionRoots(ids)
+        let parents = Set(sources.map(\.parentID))
+        destination = parents.count == 1 ? sources.first?.parentID : nil
+        movingNotebookID = replica.catalogSnapshot?.notebookID
+        movingFromTrash = fromTrash
+        movingIDs = ids
     }
 
-    private func folderPath(_ placement: NotebookPlacement) -> String {
-        if let parent = replica.placements.first(where: { $0.item.id == placement.parentID }) {
-            return folderPath(parent) + " / " + placement.displayName
-        }
-        return placement.displayName
+    private var moveSheet: some View {
+        NotebookMoveSheet(
+            placements: replica.placements,
+            sourceIDs: movingIDs,
+            initialParentID: destination,
+            isDestinationAllowed: { canMoveSelection(into: $0) },
+            onSubmit: { parentID in
+                #if DEBUG
+                // Make the in-flight layout observable in isolated UI tests.
+                if NotebookWorkspace.isPreviewEnabled,
+                   ProcessInfo.processInfo.environment["MEH_NOTEBOOK_MOVE_TEST_DELAY"] == "1" {
+                    try await Task.sleep(for: .seconds(8))
+                }
+                #endif
+                try await commitMove(to: parentID)
+            },
+            onSuccess: {}
+        )
     }
 
     private func createItem(kind: NotebookItemKind, parentID: UUID?) {
@@ -1179,30 +1168,63 @@ struct NotebookView: View {
         }
     }
 
-    private func moveItems(
-        _ ids: [UUID], to parentID: UUID?, fromTrash: Bool = false
-    ) {
-        perform {
-            try await flushEditor()
-            if fromTrash {
-                guard ids.count == 1, let id = ids.first,
-                      replica.placements.first(where: { $0.item.id == id })?.isInTrash == true
-                else { throw NotebookBrowserChangeError.invalidSelection }
-                try await replica.move(id, to: parentID)
-                browserUndo = nil
+    private func commitMove(to parentID: UUID?) async throws {
+        guard !busy else { throw NotebookReplicaError.busy }
+        let ids = movingIDs
+        let notebookID = movingNotebookID
+        let fromTrash = movingFromTrash
+        busy = true
+        defer {
+            editorNavigation.resumeEditing?()
+            busy = false
+        }
+        try await flushEditor()
+        guard notebookID == replica.catalogSnapshot?.notebookID else {
+            throw NotebookBrowserChangeError.invalidSelection
+        }
+        guard ids == movingIDs, canMoveSelection(into: parentID) else {
+            throw NotebookBrowserChangeError.invalidSelection
+        }
+        if fromTrash {
+            guard ids.count == 1, let id = ids.first,
+                  replica.placements.first(where: { $0.item.id == id })?.isInTrash == true
+            else { throw NotebookBrowserChangeError.invalidSelection }
+            try await replica.move(id, to: parentID)
+            browserUndo = nil
+            browserRedo = nil
+        } else if !selectionAlreadyAtDestination(ids, parentID: parentID) {
+            let previousHeads = replica.catalogSnapshot?.heads
+            let receipt = try await replica.moveItems(ids, to: parentID)
+            if replica.catalogSnapshot?.heads != previousHeads {
+                browserUndo = receipt
                 browserRedo = nil
-            } else {
-                let previousHeads = replica.catalogSnapshot?.heads
-                let receipt = try await replica.moveItems(ids, to: parentID)
-                if replica.catalogSnapshot?.heads != previousHeads {
-                    browserUndo = receipt
-                    browserRedo = nil
-                }
             }
-            if let parentID { expandedIDs.insert(parentID) }
-            for id in ids { reveal(id) }
-            browserSelection.clear()
-            selectingItems = false
+        }
+        if let parentID { expandedIDs.insert(parentID) }
+        for id in ids { reveal(id) }
+        browserSelection.clear()
+        selectingItems = false
+        movingIDs = []
+    }
+
+    private func effectiveSelectionRoots(_ ids: [UUID]) -> [NotebookPlacement] {
+        let selected = Set(ids)
+        return replica.placements.filter { placement in
+            guard selected.contains(placement.item.id) else { return false }
+            var ancestor = placement.parentID
+            var visited = Set<UUID>()
+            while let id = ancestor, visited.insert(id).inserted {
+                if selected.contains(id) { return false }
+                ancestor = replica.placements.first { $0.item.id == id }?.parentID
+            }
+            return true
+        }
+    }
+
+    private func selectionAlreadyAtDestination(_ ids: [UUID], parentID: UUID?) -> Bool {
+        let roots = effectiveSelectionRoots(ids)
+        return !roots.isEmpty && roots.allSatisfy {
+            $0.parentID == parentID && $0.item.parentID == parentID && $0.issues.isEmpty
         }
     }
 
@@ -1241,7 +1263,14 @@ struct NotebookView: View {
     }
 
     private func canMoveSelection(into parentID: UUID?) -> Bool {
-        guard !movingIDs.isEmpty else { return false }
+        guard !movingIDs.isEmpty,
+              movingNotebookID == replica.catalogSnapshot?.notebookID,
+              movingIDs.allSatisfy({ id in
+                  replica.placements.contains {
+                      $0.item.id == id && !$0.item.isPermanentlyDeleted
+                          && ($0.isInTrash == movingFromTrash)
+                  }
+              }) else { return false }
         let sources = Set(movingIDs)
         var ancestor = parentID
         var visited = Set<UUID>()
@@ -1252,41 +1281,6 @@ struct NotebookView: View {
             else { return false }
             ancestor = placement.parentID
         }
-        return true
-    }
-
-    private func reorder(_ request: NotebookBrowserReorderRequest) {
-        guard canApplyReorder(request) else { return }
-        perform {
-            try await flushEditor()
-            try await replica.reorder(
-                request.sources,
-                parentID: request.parentID,
-                before: request.before
-            )
-        }
-    }
-
-    private func canApplyReorder(
-        _ request: NotebookBrowserReorderRequest
-    ) -> Bool {
-        let sources = Set(request.sources)
-        guard !sources.isEmpty else { return false }
-        for sourceID in sources {
-            guard let source = replica.placements.first(where: {
-                $0.item.id == sourceID
-            }), !source.isInTrash,
-                  source.parentID == request.parentID,
-                  source.parentID == source.item.parentID
-            else { return false }
-        }
-        guard let before = request.before else { return true }
-        guard let anchor = replica.placements.first(where: {
-            $0.item.id == before
-        }), !anchor.isInTrash,
-              anchor.parentID == request.parentID,
-              anchor.parentID == anchor.item.parentID
-        else { return false }
         return true
     }
 
@@ -1331,54 +1325,86 @@ struct NotebookView: View {
     }
 
     private var libraryBrowser: some View {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 28) {
-                    recentsSection
-                    NotebookSidebarSection {
-                        NotebookFilesHeader(
-                            isExpanded: navigationState.isTreeExpanded,
-                            toggle: { navigationState.isTreeExpanded.toggle() }
-                        ) {
-                            Menu {
-                                Button("Select Items") {
-                                    selectingItems = true
-                                    navigationState.isTreeExpanded = true
-                                    browserSelection.clear()
-                                }
-                                .accessibilityIdentifier("notebook-select-items")
-                                sortMenu(parentID: nil, label: "Sort Files")
-                                    .accessibilityIdentifier("notebook-sort-root")
-                                Divider()
-                                creationActions(parentID: nil)
-                            } label: {
-                                Label("Files Actions", systemImage: "ellipsis")
-                                    .labelStyle(.iconOnly)
-                                    .frame(minWidth: sidebarRowHeight,
-                                           minHeight: sidebarRowHeight)
-                                    .contentShape(Rectangle())
-                            }
-                            .menuStyle(.borderlessButton)
-                            .fixedSize()
-                            .disabled(busy)
-                            .accessibilityIdentifier("notebook-files-menu")
-                        } creationActions: {
-                            creationActions(parentID: nil)
-                        }
-                    } content: {
-                        browserActions
-                        if navigationState.isTreeExpanded {
-                            activeTree
-                        }
-                    }
-
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .padding(.bottom, isPhoneLayout ? 0 : 60)
+        List(selection: nativeBrowserSelection) {
+            recentsSection
+            Section {
+                if navigationState.isTreeExpanded { activeTree }
+            } header: {
+                NotebookSectionToggle(
+                    title: "Files",
+                    isExpanded: navigationState.isTreeExpanded,
+                    identifier: "notebook-tree-toggle"
+                ) { navigationState.isTreeExpanded.toggle() }
+                .textCase(nil)
+                .listRowInsets(sidebarSectionInsets)
             }
-            .background(NotebookSidebarPalette.background)
+        }
+        .listStyle(.plain)
+        #if os(iOS)
+        .listSectionSpacing(12)
+        .listSectionMargins(.top, 8)
+        .listSectionMargins(.bottom, 0)
+        #endif
+        .scrollContentBackground(.hidden)
+        .background(NotebookSidebarPalette.background)
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            if editingID == nil {
+                if ids.count == 1, let id = ids.first,
+                   let placement = replica.placements.first(where: { $0.item.id == id }) {
+                    browserRowActions(for: placement)
+                } else if !ids.isEmpty {
+                    Button("Move Selected…") {
+                        beginMoving(browserSelection.orderedIDs(in: activeBrowserOrder))
+                    }
+                    Button("Trash Selected", role: .destructive) {
+                        trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+                    }
+                }
+            }
+        } primaryAction: { ids in
+            guard ids.count == 1, let id = ids.first,
+                  let placement = replica.placements.first(where: { $0.item.id == id })
+            else { return }
+            activateSidebarRow(placement)
+        }
+        .focused($browserFocused)
+        .onKeyPress { press in
+            guard browserFocused, editingID == nil, detailEditingID == nil,
+                  !search.isPresented, !busy else { return .ignored }
+            if press.modifiers.contains(.command), press.characters == "a" {
+                browserSelection.selectAll(visibleActiveRows.map(\.id))
+                return .handled
+            }
+            if press.modifiers.contains([.command, .shift]),
+               press.characters.lowercased() == "m", !browserSelection.isEmpty {
+                beginMoving(browserSelection.orderedIDs(in: activeBrowserOrder))
+                return .handled
+            }
+            if press.key == .delete, press.modifiers.contains(.command),
+               !browserSelection.isEmpty {
+                trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+                return .handled
+            }
+            if press.key == .return, browserSelection.count == 1,
+               let id = browserSelection.selectedIDs.first,
+               let placement = replica.placements.first(where: { $0.item.id == id }) {
+                activateSidebarRow(placement)
+                return .handled
+            }
+            return .ignored
+        }
+        .onChange(of: preferredCompactColumn) { _, column in
+            if isPhoneLayout, column == .sidebar, !selectingItems {
+                browserSelection.clear()
+            }
+        }
+        #if os(iOS)
+        .environment(\.editMode, Binding(
+            get: { selectingItems ? .active : .inactive },
+            set: { selectingItems = $0.isEditing }
+        ))
+        #endif
 
-            .swipeActionsContainer()
     }
 
     private var libraryNewNote: some View {
@@ -1391,6 +1417,17 @@ struct NotebookView: View {
 
     private var applicationMenu: some View {
         Menu {
+            Button("Select Items") {
+                selectingItems = true
+                navigationState.isTreeExpanded = true
+                browserSelection.clear()
+            }
+            .accessibilityIdentifier("notebook-select-items")
+            sortMenu(parentID: nil, label: "Sort Files Once")
+                .accessibilityIdentifier("notebook-sort-root")
+            Button("New Folder") { createItem(kind: .folder, parentID: nil) }
+            browserUndoActions
+            Divider()
             if isPhoneLayout {
                 Button { showingSettings = true } label: {
                     Label("Settings", systemImage: "gearshape")
@@ -1402,7 +1439,7 @@ struct NotebookView: View {
                 .accessibilityIdentifier("notebook-trash-toggle")
             }
         } label: {
-            Label("App Actions", systemImage: "ellipsis")
+            Label("Browser Actions", systemImage: "ellipsis")
         }
         .disabled(busy)
         .accessibilityIdentifier("notebook-app-menu")
