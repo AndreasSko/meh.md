@@ -1,0 +1,168 @@
+name: Internal TestFlight
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths: [meh.md.xcodeproj/project.pbxproj]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Uploads already accepted by Apple cannot be undone by cancellation.
+concurrency:
+  group: internal-testflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Release build (${{ matrix.platform }})
+    runs-on: xcode-27
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: IOS
+            destination: generic/platform=iOS Simulator
+          - platform: MAC_OS
+            destination: generic/platform=macOS
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: rudrankriyam/setup-asc@5358c70a27a3f0d1517604b0f1fdc43e70c1cc4d
+        with:
+          version: 5.3.4
+      - name: Check toolchain and export settings
+        run: |
+          xcodebuild -version
+          xcodebuild -version | head -1 | grep -Eq '^Xcode 27([. ]|$)'
+          asc --version
+          plutil -lint .github/testflight/*.plist
+      - name: Build Release without signing
+        env:
+          DESTINATION: ${{ matrix.destination }}
+        run: |
+          xcodebuild -project meh.md.xcodeproj -scheme meh.md \
+            -configuration Release -destination "$DESTINATION" \
+            -derivedDataPath "$RUNNER_TEMP/build" \
+            CODE_SIGNING_ALLOWED=NO build
+
+  validate:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: scripts/run_notebook_sync_validation.sh
+
+  publish:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [build, validate]
+    environment: testflight
+    runs-on: xcode-27
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: IOS
+            destination: generic/platform=iOS
+            profile_secret: IOS_PROFILE_BASE64
+            profile_name: 'iOS Team Store Provisioning Profile: de.andreas-sk.meh-md'
+            profile_extension: mobileprovision
+            artifact: ipa
+          - platform: MAC_OS
+            destination: generic/platform=macOS
+            profile_secret: MACOS_PROFILE_BASE64
+            profile_name: meh.md Mac TestFlight
+            profile_extension: provisionprofile
+            artifact: pkg
+    env:
+      ASC_APP_ID: ${{ vars.ASC_APP_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+      ASC_BYPASS_KEYCHAIN: '1'
+      ASC_NO_UPDATE: '1'
+      GROUP_ID: ${{ vars.TESTFLIGHT_INTERNAL_GROUP_ID }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: rudrankriyam/setup-asc@5358c70a27a3f0d1517604b0f1fdc43e70c1cc4d
+        with:
+          version: 5.3.4
+      - name: Check internal audience and choose build number
+        id: release
+        run: |
+          asc testflight groups list --app "$ASC_APP_ID" --internal \
+            --paginate --output json | jq -e --arg id "$GROUP_ID" \
+            'any(.data[]; .id == $id and .attributes.isInternalGroup == true)'
+          number=$(asc builds next-build-number --app "$ASC_APP_ID" \
+            --platform "$PLATFORM" --output json | jq -er '.nextBuildNumber')
+          [[ "$number" =~ ^[1-9][0-9]*$ ]]
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+      - name: Import signing identities
+        uses: apple-actions/import-codesign-certs@a533c09a88c7f2d5f26c2cb7925ba7a4b92173c8
+        with:
+          p12-file-base64: ${{ secrets.SIGNING_CERTIFICATES_P12_BASE64 }}
+          p12-password: ${{ secrets.SIGNING_CERTIFICATES_PASSWORD }}
+      - name: Install distribution profile
+        env:
+          PROFILE_BASE64: ${{ secrets[matrix.profile_secret] }}
+          PROFILE_EXTENSION: ${{ matrix.profile_extension }}
+        run: |
+          umask 077
+          printf '%s' "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile"
+          security cms -D -i "$RUNNER_TEMP/profile" > "$RUNNER_TEMP/profile.plist"
+          uuid=$(plutil -extract UUID raw "$RUNNER_TEMP/profile.plist")
+          directory="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          mkdir -p "$directory"
+          cp "$RUNNER_TEMP/profile" "$directory/$uuid.$PROFILE_EXTENSION"
+      - name: Archive Release
+        env:
+          DESTINATION: ${{ matrix.destination }}
+          PROFILE_NAME: ${{ matrix.profile_name }}
+          BUILD_NUMBER: ${{ steps.release.outputs.number }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          xcodebuild -project meh.md.xcodeproj -scheme meh.md \
+            -configuration Release -destination "$DESTINATION" \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY='Apple Distribution' \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" archive
+      - name: Export internal-only build
+        run: |
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist ".github/testflight/$PLATFORM.plist"
+      - name: Publish to internal testers
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+          BUILD_NUMBER: ${{ steps.release.outputs.number }}
+        run: |
+          files=("$RUNNER_TEMP/export/"*."$ARTIFACT")
+          [[ ${#files[@]} == 1 && -f "${files[0]}" ]]
+          version=$(plutil -extract ApplicationProperties.CFBundleShortVersionString \
+            raw "$RUNNER_TEMP/App.xcarchive/Info.plist")
+          asc publish testflight --app "$ASC_APP_ID" \
+            "--$ARTIFACT" "${files[0]}" --platform "$PLATFORM" \
+            --version "$version" --build-number "$BUILD_NUMBER" \
+            --group "$GROUP_ID" --wait --timeout 30m \
+            --test-notes "Automatic $PLATFORM build from main, commit $GITHUB_SHA." \
+            --locale en-US --output json > "$RUNNER_TEMP/publish.json"
+          build_id=$(jq -er '.buildId' "$RUNNER_TEMP/publish.json")
+          asc testflight groups list --build-id "$build_id" --output json \
+            | jq -e --arg id "$GROUP_ID" \
+                'any(.data[]; .id == $id and .attributes.isInternalGroup == true)'
+          printf '### %s %s (%s)\n\nCommit: `%s`\n\nProcessed and assigned to the internal group. Build ID: `%s`\n' \
+            "$PLATFORM" "$version" "$BUILD_NUMBER" "$GITHUB_SHA" "$build_id" \
+            >> "$GITHUB_STEP_SUMMARY"
