@@ -206,6 +206,7 @@ struct NotebookTrashView: View {
 
     private var deleteButton: some View {
         Button("Delete", role: .destructive) { prepareSelectedDeletion() }
+            .tint(.red)
             .disabled(busy || selectedIDs.isEmpty)
             .accessibilityIdentifier("notebook-trash-delete-selected")
     }
