@@ -268,7 +268,11 @@ private struct NotebookTrashItemRow: View {
             } label: {
                 Label("Trash Actions", systemImage: "ellipsis")
                     .labelStyle(.iconOnly)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
+            .menuStyle(.borderlessButton)
+            .accessibilityIdentifier("notebook-trash-actions-" + placement.item.id.uuidString)
             .disabled(busy)
         }
         .padding(.leading, CGFloat(depth) * 16)
