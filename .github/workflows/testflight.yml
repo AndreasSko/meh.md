@@ -13,7 +13,8 @@ permissions:
 # Uploads already accepted by Apple cannot be undone by cancellation.
 concurrency:
   group: internal-testflight-${{ github.ref }}
-  cancel-in-progress: true
+  # Finish an active main publication before starting another one.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -63,6 +64,9 @@ jobs:
   publish:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: [build, validate]
+    permissions:
+      contents: write
+      pull-requests: read
     environment: testflight
     runs-on: xcode-27
     timeout-minutes: 60
@@ -95,10 +99,19 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Prepare and snapshot release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/testflight_notes.py prepare --platform "$PLATFORM" \
+            --directory "$RUNNER_TEMP/testflight-notes"
       - uses: rudrankriyam/setup-asc@5358c70a27a3f0d1517604b0f1fdc43e70c1cc4d
         with:
           version: 5.3.4
       - name: Check internal audience and choose build number
+        if: steps.notes.outputs.already_published != 'true'
         id: release
         run: |
           asc testflight groups list --app "$ASC_APP_ID" --internal \
@@ -109,11 +122,13 @@ jobs:
           [[ "$number" =~ ^[1-9][0-9]*$ ]]
           echo "number=$number" >> "$GITHUB_OUTPUT"
       - name: Import signing identities
+        if: steps.notes.outputs.already_published != 'true'
         uses: apple-actions/import-codesign-certs@a533c09a88c7f2d5f26c2cb7925ba7a4b92173c8
         with:
           p12-file-base64: ${{ secrets.SIGNING_CERTIFICATES_P12_BASE64 }}
           p12-password: ${{ secrets.SIGNING_CERTIFICATES_PASSWORD }}
       - name: Install distribution profile
+        if: steps.notes.outputs.already_published != 'true'
         env:
           PROFILE_BASE64: ${{ secrets[matrix.profile_secret] }}
           PROFILE_EXTENSION: ${{ matrix.profile_extension }}
@@ -126,6 +141,7 @@ jobs:
           mkdir -p "$directory"
           cp "$RUNNER_TEMP/profile" "$directory/$uuid.$PROFILE_EXTENSION"
       - name: Archive Release
+        if: steps.notes.outputs.already_published != 'true'
         env:
           DESTINATION: ${{ matrix.destination }}
           PROFILE_NAME: ${{ matrix.profile_name }}
@@ -139,12 +155,15 @@ jobs:
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" archive
-      - name: Export internal-only build
+      - name: Export TestFlight build
+        if: steps.notes.outputs.already_published != 'true'
         run: |
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist ".github/testflight/$PLATFORM.plist"
       - name: Publish to internal testers
+        id: publish
+        if: steps.notes.outputs.already_published != 'true'
         env:
           ARTIFACT: ${{ matrix.artifact }}
           BUILD_NUMBER: ${{ steps.release.outputs.number }}
@@ -157,12 +176,39 @@ jobs:
             "--$ARTIFACT" "${files[0]}" --platform "$PLATFORM" \
             --version "$version" --build-number "$BUILD_NUMBER" \
             --group "$GROUP_ID" --wait --timeout 30m \
-            --test-notes "Automatic $PLATFORM build from main, commit $GITHUB_SHA." \
+            --test-notes "$(cat "$RUNNER_TEMP/testflight-notes/notes.txt")" \
             --locale en-US --output json > "$RUNNER_TEMP/publish.json"
           build_id=$(jq -er '.buildId' "$RUNNER_TEMP/publish.json")
           asc testflight groups list --build-id "$build_id" --output json \
             | jq -e --arg id "$GROUP_ID" \
                 '.complete == true and any(.groups[]; .id == $id and .type == "internal")'
+          [[ "$build_id" =~ ^[a-zA-Z0-9-]+$ ]]
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           printf '### %s %s (%s)\n\nCommit: `%s`\n\nProcessed and assigned to the internal group. Build ID: `%s`\n' \
             "$PLATFORM" "$version" "$BUILD_NUMBER" "$GITHUB_SHA" "$build_id" \
             >> "$GITHUB_STEP_SUMMARY"
+      - name: Record confirmed publication
+        if: steps.notes.outputs.already_published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_ID: ${{ steps.publish.outputs.build_id }}
+          APP_VERSION: ${{ steps.publish.outputs.version }}
+          BUILD_NUMBER: ${{ steps.release.outputs.number }}
+        run: |
+          python3 scripts/testflight_notes.py confirm --platform "$PLATFORM" \
+            --directory "$RUNNER_TEMP/testflight-notes" \
+            --build-id "$BUILD_ID" --version "$APP_VERSION" \
+            --build-number "$BUILD_NUMBER"
+      - name: Summarize release notes
+        if: always() && steps.notes.outcome == 'success'
+        run: |
+          python3 scripts/testflight_notes.py summary \
+            --directory "$RUNNER_TEMP/testflight-notes"
+      - name: Save release notes and publication manifest
+        if: always() && steps.notes.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: testflight-notes-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/testflight-notes/
+          if-no-files-found: error
