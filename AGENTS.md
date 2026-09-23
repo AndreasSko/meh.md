@@ -16,3 +16,5 @@ Just a few things to note:
   Use `gh pr edit <number> --body-file <body.md> --attach <image.png>`;
   repeat `--attach` for more files. Matching local Markdown image paths in
   the body are replaced with uploaded GitHub URLs.
+* Consider Apple’s Human Interface Guidelines for UI design:
+  https://developer.apple.com/design/human-interface-guidelines
