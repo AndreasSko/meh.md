@@ -97,9 +97,18 @@ final class NotebookNavigationState {
     }
 
     func clearSelection() {
-        selectionLoadGeneration += 1
         selectedID = nil
         selectedSession = nil
+        recordClosed()
+    }
+
+    /// Returning to the compact browser ends restoration, while the hidden
+    /// editor keeps its session and can finish saving its position.
+    func recordClosed() {
+        selectionLoadGeneration += 1
+        lastNoteID = nil
+        restorationMessage = nil
+        savePreferences()
     }
 
     /// Restores the last active note after startup without changing Recents.

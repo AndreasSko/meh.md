@@ -422,6 +422,40 @@ public final class NotebookReplica {
         }
     }
 
+    /// Restore a validated selection in one durable write. Selected children
+    /// whose parent remains in Trash return to the notebook root.
+    public func restoreItems(_ ids: [UUID]) async throws {
+        guard !ids.isEmpty else { return }
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else {
+                throw NotebookReplicaError.notJoined
+            }
+            let selected = Set(ids)
+            let trashIDs = Set(self.placements.filter(\.isInTrash).map(\.item.id))
+            for id in selected where !trashIDs.contains(id) {
+                throw NotebookDeletionError.itemNoLongerInTrash(id)
+            }
+            let next = try catalog.fork()
+            for id in selected { try next.setTrashed(id, false) }
+            let placements = try next.placements()
+            let byID = Dictionary(uniqueKeysWithValues: placements.map { ($0.item.id, $0) })
+            for placement in placements where selected.contains(placement.item.id)
+                && placement.isInTrash {
+                var parent = placement.parentID
+                var hasSelectedAncestor = false
+                while let id = parent {
+                    if selected.contains(id), byID[id]?.isInTrash == true {
+                        hasSelectedAncestor = true
+                        break
+                    }
+                    parent = byID[id]?.parentID
+                }
+                if !hasSelectedAncestor { try next.move(placement.item.id, to: nil) }
+            }
+            try await self.persistCatalog(next)
+        }
+    }
+
     /// A guarded compensating change. Unrelated remote edits remain intact.
     /// The returned receipt can redo the operation, subject to the same guards.
     public func undoBrowserChange(
@@ -443,15 +477,23 @@ public final class NotebookReplica {
     public func deletionSelection(
         rootID: UUID? = nil
     ) throws -> NotebookDeletionSelection {
+        try deletionSelection(rootIDs: rootID.map { [$0] })
+    }
+
+    /// Captures the union of selected Trash subtrees, without duplicates.
+    /// A nil selection means all Trash; an empty selection means no items.
+    public func deletionSelection(
+        rootIDs: [UUID]?
+    ) throws -> NotebookDeletionSelection {
         guard let catalog else { throw NotebookReplicaError.notJoined }
         let trash = placements.filter(\.isInTrash)
         let byID = Dictionary(uniqueKeysWithValues: trash.map { ($0.item.id, $0) })
         let selectedIDs: Set<UUID>
-        if let rootID {
-            guard byID[rootID] != nil else {
-                throw NotebookDeletionError.itemNoLongerInTrash(rootID)
+        if let rootIDs {
+            for id in rootIDs where byID[id] == nil {
+                throw NotebookDeletionError.itemNoLongerInTrash(id)
             }
-            var descendants: Set<UUID> = [rootID]
+            var descendants = Set(rootIDs)
             var changed = true
             while changed {
                 let before = descendants.count
@@ -478,7 +520,7 @@ public final class NotebookReplica {
             notebookID: catalog.notebookID,
             ids: selectedIDs,
             items: items,
-            rootID: rootID
+            rootID: rootIDs?.count == 1 ? rootIDs?.first : nil
         )
     }
 

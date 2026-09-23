@@ -9,17 +9,13 @@ import UIKit
 struct NotebookSyncButton: View {
     let workspace: NotebookWorkspace
     @State private var showingDetails = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
             Button { showingDetails = true } label: {
                 Image(systemName: presentation.indicator.symbol)
-                    .symbolEffect(
-                        .pulse, options: .repeating,
-                        isActive: presentation.showsActivity && !reduceMotion
-                    )
+                    .foregroundStyle(presentation.indicatorColor)
                     .contentShape(Rectangle())
             }
             .help(presentation.accessibilityLabel)
@@ -123,7 +119,7 @@ struct NotebookSyncDetailsView: View {
                 Button("Sync Event Log") { showingEventLog = true }
                     .accessibilityIdentifier("notebook-sync-event-log")
                 Button("Sync Now") { Task { await workspace.refresh(manual: true) } }
-                    .disabled(workspace.isRefreshing)
+                    .disabled(workspace.isRefreshing || !workspace.usesSync)
                     .accessibilityIdentifier("sync-now")
             }
             .padding(20)
@@ -153,7 +149,7 @@ private struct NotebookSyncPresentation {
     }
 
     var summary: String? {
-        guard workspace.usesSync else { return nil }
+        guard workspace.usesSync else { return "Sync not enabled" }
         if let deadline = retryDeadline {
             let seconds = max(1, Int(ceil(deadline.timeIntervalSince(now))))
             return "Sync paused · retry available in \(seconds)s"
@@ -196,13 +192,21 @@ private struct NotebookSyncPresentation {
         if case .pending = workspace.sync?.status { pending = true }
         else { pending = false }
         return NotebookSyncIndicator(
+            isEnabled: workspace.usesSync,
             isSyncing: workspace.isSyncing,
-            phase: workspace.sync?.progress?.phase,
             isRetryPaused: retryDeadline != nil,
             hasError: failed || workspace.syncSetupError != nil
                 || workspace.notificationRegistrationError != nil,
             hasPendingChanges: pending
         )
+    }
+
+    var indicatorColor: Color {
+        switch indicator {
+        case .synced, .syncing: .primary
+        case .failed: .orange
+        case .disabled: .secondary
+        }
     }
 
     var showsActivity: Bool {
@@ -215,6 +219,7 @@ private struct NotebookSyncPresentation {
     }
 
     var accessibilityValue: String {
+        guard workspace.usesSync else { return "Not enabled" }
         if let fraction {
             return "\(Int((fraction * 100).rounded())) percent complete"
         }

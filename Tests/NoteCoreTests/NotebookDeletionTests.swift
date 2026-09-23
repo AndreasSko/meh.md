@@ -7,6 +7,117 @@ import XCTest
 final class NotebookDeletionTests: XCTestCase {
     private enum InjectedFailure: Error { case stop }
 
+    func testBatchRestorePreservesFoldersAndUnselectedTrash() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let parent = try await replica.createFolder(name: "Parent")
+        let folder = try await replica.createFolder(name: "Folder", parentID: parent)
+        let child = try await replica.createNote(name: "Child.md", parentID: folder)
+        let other = try await replica.createNote(name: "Other.md")
+        try await replica.setTrashed(child, true)
+        try await replica.setTrashed(folder, true)
+        try await replica.setTrashed(other, true)
+
+        try await replica.restoreItems([child, folder, child])
+
+        let reopened = NotebookReplica(directory: root)
+        try await reopened.load()
+        let restoredFolder = try XCTUnwrap(reopened.placements.first { $0.item.id == folder })
+        let restoredChild = try XCTUnwrap(reopened.placements.first { $0.item.id == child })
+        XCTAssertFalse(restoredFolder.isInTrash)
+        XCTAssertEqual(restoredFolder.parentID, parent)
+        XCTAssertFalse(restoredChild.isInTrash)
+        XCTAssertEqual(restoredChild.parentID, folder)
+        XCTAssertTrue(try XCTUnwrap(reopened.placements.first { $0.item.id == other }).isInTrash)
+    }
+
+    func testBatchRestoreChildOfRetainedTrashReturnsToRoot() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let folder = try await replica.createFolder(name: "Folder")
+        let nested = try await replica.createFolder(name: "Nested", parentID: folder)
+        let child = try await replica.createNote(name: "Child.md", parentID: nested)
+        let other = try await replica.createNote(name: "Other.md", parentID: nested)
+        try await replica.setTrashed(nested, true)
+        try await replica.setTrashed(folder, true)
+
+        try await replica.restoreItems([folder, child])
+
+        let restored = try XCTUnwrap(replica.placements.first { $0.item.id == child })
+        XCTAssertFalse(restored.isInTrash)
+        XCTAssertNil(restored.parentID)
+        XCTAssertTrue(try XCTUnwrap(replica.placements.first { $0.item.id == nested }).isInTrash)
+        XCTAssertTrue(try XCTUnwrap(replica.placements.first { $0.item.id == other }).isInTrash)
+    }
+
+    func testInvalidBatchRestoreDoesNotRestoreAnyItems() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let trash = try await replica.createNote(name: "Trash.md")
+        let active = try await replica.createNote(name: "Active.md")
+        try await replica.setTrashed(trash, true)
+        let before = replica.catalogSnapshot
+
+        do {
+            try await replica.restoreItems([trash, active])
+            XCTFail("Expected the entire invalid selection to be refused")
+        } catch {
+            XCTAssertEqual(error as? NotebookDeletionError, .itemNoLongerInTrash(active))
+        }
+        XCTAssertEqual(replica.catalogSnapshot, before)
+    }
+
+    func testBatchDeletionDeduplicatesSubtreesAndKeepsUnselectedTrash() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let folder = try await replica.createFolder(name: "Folder")
+        let child = try await replica.createNote(name: "Child.md", parentID: folder)
+        let other = try await replica.createNote(name: "Other.md")
+        let retained = try await replica.createNote(name: "Retained.md")
+        for id in [folder, other, retained] { try await replica.setTrashed(id, true) }
+
+        let selection = try replica.deletionSelection(rootIDs: [folder, child, other, folder])
+        XCTAssertEqual(selection.ids, [folder, child, other])
+        XCTAssertEqual(selection.count, 3)
+        XCTAssertTrue(try replica.deletionSelection(rootIDs: []).ids.isEmpty)
+        try await replica.permanentlyDelete(selection)
+
+        XCTAssertTrue(replica.placements.contains { $0.item.id == retained && $0.isInTrash })
+        XCTAssertFalse(replica.placements.contains { selection.ids.contains($0.item.id) })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: replica.noteStorage(retained).currentURL.path))
+    }
+
+    func testBatchDeletionRefusesAllWhenOneItemWasRestored() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let first = try await replica.createNote(name: "First.md")
+        let second = try await replica.createNote(name: "Second.md")
+        for id in [first, second] { try await replica.setTrashed(id, true) }
+        let selection = try replica.deletionSelection(rootIDs: [first, second])
+        try await replica.restoreItems([second])
+
+        do {
+            try await replica.permanentlyDelete(selection)
+            XCTFail("Expected the stale selection to be refused")
+        } catch {
+            XCTAssertEqual(error as? NotebookDeletionError, .itemNoLongerInTrash(second))
+        }
+        for id in [first, second] {
+            XCTAssertFalse(try replica.deletedIDs.contains(id))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: replica.noteStorage(id).currentURL.path))
+        }
+    }
+
     func testSubtreeDeletesOnlyConfirmedTrashIdentities() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

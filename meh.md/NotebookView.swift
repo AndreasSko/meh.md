@@ -129,7 +129,7 @@ struct NotebookView: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
                 if !showingTrash {
-                    if let workspace, workspace.usesSync, !showsSelectionControls {
+                    if let workspace, !showsSelectionControls {
                         ToolbarItem(placement: syncToolbarPlacement) {
                             NotebookSyncButton(workspace: workspace)
                         }
@@ -381,12 +381,6 @@ struct NotebookView: View {
         .sheet(isPresented: $showingTrash) {
             NavigationStack {
                 trashView
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showingTrash = false }
-                                .accessibilityIdentifier("notebook-trash-close")
-                        }
-                    }
             }
             #if os(macOS)
             .frame(minWidth: 400, idealWidth: 560, minHeight: 360, idealHeight: 540)
@@ -1394,6 +1388,12 @@ struct NotebookView: View {
             return .ignored
         }
         .onChange(of: preferredCompactColumn) { _, column in
+            #if os(iOS)
+            if horizontalSizeClass == .compact, column == .sidebar {
+                rememberEditorPosition()
+                navigationState.recordClosed()
+            }
+            #endif
             if isPhoneLayout, column == .sidebar, !selectingItems {
                 browserSelection.clear()
             }
