@@ -1394,6 +1394,12 @@ struct NotebookView: View {
             return .ignored
         }
         .onChange(of: preferredCompactColumn) { _, column in
+            #if os(iOS)
+            if horizontalSizeClass == .compact, column == .sidebar {
+                rememberEditorPosition()
+                navigationState.recordClosed()
+            }
+            #endif
             if isPhoneLayout, column == .sidebar, !selectingItems {
                 browserSelection.clear()
             }

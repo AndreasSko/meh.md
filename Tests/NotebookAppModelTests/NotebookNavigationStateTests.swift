@@ -6,6 +6,54 @@ import XCTest
 
 @MainActor
 final class NotebookNavigationStateTests: XCTestCase {
+    func testLeavingNotePreventsRestoreAndReopeningEnablesIt() async throws {
+        let fixture = try await Fixture()
+        let note = try await fixture.replica.createNote(name: "Moon.md")
+        let state = fixture.makeState()
+        let session = try await fixture.replica.openNote(note)
+        state.installSelection(note, session: session, recordActivity: true)
+        state.recordEdited(note)
+        state.setPosition(Data([1, 2, 3]), for: note)
+
+        let withOpenNote = fixture.makeState()
+        await withOpenNote.restoreLastSelection()
+        XCTAssertEqual(withOpenNote.selectedID, note)
+
+        state.recordClosed()
+        // Position capture may still run when the app backgrounds.
+        state.setPosition(Data([4, 5, 6]), for: note)
+        let inBrowser = fixture.makeState()
+        await inBrowser.restoreLastSelection()
+        XCTAssertNil(inBrowser.lastNoteID)
+        XCTAssertNil(inBrowser.selectedID)
+        XCTAssertNil(inBrowser.selectedSession)
+        XCTAssertEqual(inBrowser.recentNoteIDs, [note])
+        XCTAssertEqual(inBrowser.position(for: note), Data([4, 5, 6]))
+
+        // Reopening the retained editor goes through recordOpened.
+        state.recordOpened(note)
+        let reopened = fixture.makeState()
+        await reopened.restoreLastSelection()
+        XCTAssertEqual(reopened.selectedID, note)
+    }
+
+    func testClearingSelectionAlsoClearsPersistedRestoreTarget() async throws {
+        let fixture = try await Fixture()
+        let note = try await fixture.replica.createNote(name: "Moon.md")
+        let state = fixture.makeState()
+        let session = try await fixture.replica.openNote(note)
+        state.installSelection(note, session: session, recordActivity: true)
+
+        state.clearSelection()
+
+        XCTAssertNil(state.selectedID)
+        XCTAssertNil(state.selectedSession)
+        let relaunched = fixture.makeState()
+        await relaunched.restoreLastSelection()
+        XCTAssertNil(relaunched.lastNoteID)
+        XCTAssertNil(relaunched.selectedID)
+    }
+
     func testSortingPreservesLocalRecentsPositionAndEditor() async throws {
         let fixture = try await Fixture()
         let alpha = try await fixture.replica.createNote(name: "Alpha.md")

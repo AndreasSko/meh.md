@@ -40,9 +40,11 @@ final class RecentNotesUITests: XCTestCase {
         app.terminate()
         app.launch()
         let editor = app.textViews["markdown-editor"]
+        #if os(macOS)
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         XCTAssertEqual(editor.value as? String, "Fictional observatory entry 5")
         XCTAssertEqual(app.buttons["note-title"].label, titles[5])
+        #endif
         showSidebar(app)
         XCTAssertEqual(tree.value as? String, "Collapsed")
         XCTAssertEqual(recentToggle.value as? String, "Collapsed")
@@ -59,6 +61,44 @@ final class RecentNotesUITests: XCTestCase {
     }
 
     #if os(iOS)
+    func testLeavingNoteRestoresBrowserUntilNoteIsOpenedAgain() throws {
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        let newNote = app.buttons["notebook-new-item"].firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        waitUntilEnabled(newNote)
+        newNote.tap()
+        commitDefaultTitle(in: app)
+        let editor = app.textViews["markdown-editor"]
+        editor.tap()
+        editor.typeText("Fictional moon journal")
+        try XCTSkipIf(app.buttons["notebook-recents-toggle"].isHittable,
+                      "Requires a compact navigation layout")
+        showSidebar(app)
+        XCTAssertFalse(editor.isHittable)
+
+        app.terminate()
+        app.launch()
+        let recentsToggle = app.buttons["notebook-recents-toggle"]
+        XCTAssertTrue(recentsToggle.waitForExistence(timeout: 15))
+        XCTAssertTrue(recentsToggle.isHittable)
+        XCTAssertFalse(editor.isHittable)
+        capture(app, name: "Browser after leaving a note and relaunching")
+
+        if recentsToggle.value as? String == "Collapsed" { recentsToggle.tap() }
+        let recent = recentButtons(app).firstMatch
+        XCTAssertTrue(recent.waitForExistence(timeout: 5))
+        recent.tap()
+        XCTAssertTrue(waitUntilHittable(editor))
+        XCTAssertEqual(editor.value as? String, "Fictional moon journal")
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(waitUntilHittable(editor, timeout: 15))
+        XCTAssertEqual(editor.value as? String, "Fictional moon journal")
+        capture(app, name: "Explicitly reopened note restored after relaunch")
+    }
+
     func testReadingPositionSurvivesBackgroundAndRelaunch() throws {
         continueAfterFailure = false
         let app = makeApp()
@@ -196,6 +236,15 @@ final class RecentNotesUITests: XCTestCase {
             predicate: NSPredicate(format: "enabled == true"), object: element
         )
         XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 15), .completed)
+    }
+
+    private func waitUntilHittable(
+        _ element: XCUIElement, timeout: TimeInterval = 10
+    ) -> Bool {
+        let visible = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"), object: element
+        )
+        return XCTWaiter.wait(for: [visible], timeout: timeout) == .completed
     }
 
     private func commitDefaultTitle(in app: XCUIApplication) {
