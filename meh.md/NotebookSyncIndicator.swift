@@ -1,40 +1,34 @@
-import NoteCore
-
-/// The compact control distinguishes queued work from an actual sync failure.
+/// Four stable toolbar states; detailed progress stays in the sync popover.
 nonisolated enum NotebookSyncIndicator: Equatable {
-    case idle, waiting, checking, uploading, receiving, paused, failed
+    case synced, syncing, failed, disabled
 
     init(
+        isEnabled: Bool,
         isSyncing: Bool,
-        phase: NotebookSyncProgress.Phase?,
         isRetryPaused: Bool,
         hasError: Bool,
         hasPendingChanges: Bool
     ) {
-        if isRetryPaused {
-            self = .paused
+        if !isEnabled {
+            self = .disabled
+        } else if isRetryPaused {
+            self = .failed
         } else if isSyncing {
-            switch phase {
-            case .receiving: self = .receiving
-            case .uploadingNotes, .uploadingCatalog: self = .uploading
-            default: self = .checking
-            }
+            self = .syncing
         } else if hasError {
             self = .failed
         } else if hasPendingChanges {
-            self = .waiting
+            self = .syncing
         } else {
-            self = .idle
+            self = .synced
         }
     }
 
     var symbol: String {
         switch self {
-        case .idle: "icloud"
-        case .waiting, .uploading: "icloud.and.arrow.up"
-        case .checking: "arrow.triangle.2.circlepath.icloud"
-        case .receiving: "icloud.and.arrow.down"
-        case .paused: "icloud.slash"
+        case .synced: "icloud"
+        case .syncing: "arrow.triangle.2.circlepath.icloud"
+        case .disabled: "icloud.slash"
         case .failed: "exclamationmark.icloud"
         }
     }

@@ -129,7 +129,7 @@ struct NotebookView: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
                 if !showingTrash {
-                    if let workspace, workspace.usesSync, !showsSelectionControls {
+                    if let workspace, !showsSelectionControls {
                         ToolbarItem(placement: syncToolbarPlacement) {
                             NotebookSyncButton(workspace: workspace)
                         }
