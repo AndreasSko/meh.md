@@ -381,12 +381,6 @@ struct NotebookView: View {
         .sheet(isPresented: $showingTrash) {
             NavigationStack {
                 trashView
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showingTrash = false }
-                                .accessibilityIdentifier("notebook-trash-close")
-                        }
-                    }
             }
             #if os(macOS)
             .frame(minWidth: 400, idealWidth: 560, minHeight: 360, idealHeight: 540)

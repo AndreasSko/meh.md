@@ -14,45 +14,119 @@ struct NotebookTrashView: View {
     let onMutation: () -> Void
     let onOpenNote: (UUID) -> Void
 
+    @Environment(\.dismiss) private var dismiss
     @State private var expandedFolderIDs: Set<UUID> = []
     @State private var busy = false
     @State private var errorMessage: String?
     @State private var movingID: UUID?
     @State private var destination: UUID?
     @State private var deletionSelection: NotebookDeletionSelection?
+    @State private var deletingAll = false
+    @State private var selectingItems = false
+    @State private var selectedIDs: Set<UUID> = []
 
     var body: some View {
         Group {
             if trashRows.isEmpty {
                 NotebookTrashEmptyState()
             } else {
-                List(trashRows) { row in
+                List(trashRows, selection: nativeSelection) { row in
                     NotebookTrashItemRow(
                         placement: row.placement,
                         depth: row.depth,
                         isExpanded: expandedFolderIDs.contains(row.id),
                         busy: busy,
+                        selecting: usesNativeSelection,
                         toggleFolder: { toggleFolder(row.id) },
                         openNote: { onOpenNote(row.id) },
                         restore: { restore(row.placement) },
                         move: { beginMoving(row.placement) },
                         delete: { preparePermanentDeletion(rootID: row.id) }
                     )
+                    .tag(row.id)
                 }
                 .listStyle(.inset)
+                .disabled(busy)
+                #if os(iOS)
+                .environment(\.editMode, Binding(
+                    get: { selectingItems ? .active : .inactive },
+                    set: { selectingItems = $0.isEditing }
+                ))
+                #else
+                .contextMenu(forSelectionType: UUID.self) { ids in
+                    Button("Restore") { restoreItems(Array(ids)) }
+                        .disabled(busy || ids.isEmpty)
+                    Button("Delete Permanently…", role: .destructive) {
+                        prepareDeletion(ids: Array(ids))
+                    }
+                    .disabled(busy || ids.isEmpty)
+                } primaryAction: { ids in
+                    guard !busy, ids.count == 1, let id = ids.first,
+                          let item = replica.placements.first(where: { $0.item.id == id })
+                    else { return }
+                    if item.item.kind == .folder { toggleFolder(id) }
+                    else { onOpenNote(id) }
+                }
+                #endif
             }
         }
         .navigationTitle("Trash")
         .accessibilityIdentifier("notebook-trash-view")
         .interactiveDismissDisabled(busy)
+        .onChange(of: replica.catalogSnapshot) { _, _ in
+            selectedIDs.formIntersection(trashRows.map(\.id))
+            if trashRows.isEmpty { selectingItems = false }
+        }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("Empty Trash…", role: .destructive) {
-                    preparePermanentDeletion(rootID: nil)
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") {
+                    if selectingItems {
+                        selectingItems = false
+                        selectedIDs.removeAll()
+                    } else {
+                        dismiss()
+                    }
                 }
-                .disabled(busy || trashRows.isEmpty)
-                .accessibilityIdentifier("notebook-empty-trash")
+                .disabled(busy)
+                .accessibilityIdentifier(selectingItems
+                    ? "notebook-trash-done-selection" : "notebook-trash-close")
             }
+            ToolbarItem(placement: .cancellationAction) {
+                if selectingItems {
+                    selectAllButton
+                } else {
+                    Button("Empty Trash…", role: .destructive) {
+                        preparePermanentDeletion(rootID: nil)
+                    }
+                    .disabled(busy || trashRows.isEmpty)
+                    .accessibilityIdentifier("notebook-empty-trash")
+                }
+            }
+            #if os(iOS)
+            if !selectingItems {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Select") { selectingItems = true }
+                        .disabled(busy || trashRows.isEmpty)
+                        .accessibilityIdentifier("notebook-trash-select")
+                }
+            }
+            if selectingItems {
+                ToolbarItemGroup(placement: .bottomBar) {
+                    restoreButton
+                    Spacer()
+                    deleteButton
+                }
+                ToolbarItem(placement: .status) { selectionCount }
+                    .sharedBackgroundVisibility(.hidden)
+            }
+            #else
+            ToolbarItemGroup(placement: .automatic) {
+                restoreButton
+                deleteButton
+            }
+            ToolbarItem(placement: .status) { selectionCount }
+                .sharedBackgroundVisibility(.hidden)
+            #endif
         }
         .sheet(
             isPresented: Binding(
@@ -80,7 +154,7 @@ struct NotebookTrashView: View {
             Text(errorMessage ?? "")
         }
         .confirmationDialog(
-            deletionSelection?.rootID == nil ? "Empty Trash?" : "Delete permanently?",
+            deletingAll ? "Empty Trash?" : "Delete permanently?",
             isPresented: Binding(
                 get: { deletionSelection != nil },
                 set: { if !$0 { deletionSelection = nil } }
@@ -94,6 +168,68 @@ struct NotebookTrashView: View {
             Button("Cancel", role: .cancel) { deletionSelection = nil }
         } message: { selection in
             Text(deletionMessage(selection))
+        }
+    }
+
+    private var usesNativeSelection: Bool {
+        #if os(macOS)
+        true
+        #else
+        selectingItems
+        #endif
+    }
+
+    private var nativeSelection: Binding<Set<UUID>>? {
+        usesNativeSelection ? $selectedIDs : nil
+    }
+
+    private var selectAllButton: some View {
+        Button("Select All") {
+            selectedIDs = Set(trashRows.map(\.id))
+        }
+        .disabled(busy || trashRows.isEmpty)
+        .accessibilityIdentifier("notebook-trash-select-all")
+    }
+
+    private var selectionCount: some View {
+        Text("\(selectedIDs.count) Selected")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("notebook-trash-selection-count")
+    }
+
+    private var restoreButton: some View {
+        Button("Restore") { restoreItems(Array(selectedIDs)) }
+            .disabled(busy || selectedIDs.isEmpty)
+            .accessibilityIdentifier("notebook-trash-restore-selected")
+    }
+
+    private var deleteButton: some View {
+        Button("Delete", role: .destructive) { prepareSelectedDeletion() }
+            .disabled(busy || selectedIDs.isEmpty)
+            .accessibilityIdentifier("notebook-trash-delete-selected")
+    }
+
+    private func restoreItems(_ selection: [UUID]) {
+        let ids = selection.sorted { $0.uuidString < $1.uuidString }
+        perform {
+            try await beforeMutation()
+            try await replica.restoreItems(ids)
+            selectedIDs.subtract(ids)
+            onMutation()
+        }
+    }
+
+    private func prepareSelectedDeletion() {
+        prepareDeletion(ids: Array(selectedIDs))
+    }
+
+    private func prepareDeletion(ids: [UUID]) {
+        guard !ids.isEmpty else { return }
+        perform {
+            try await beforeMutation()
+            deletingAll = false
+            deletionSelection = try replica.deletionSelection(rootIDs: ids)
         }
     }
 
@@ -136,6 +272,7 @@ struct NotebookTrashView: View {
     private func toggleFolder(_ id: UUID) {
         if expandedFolderIDs.contains(id) {
             expandedFolderIDs.remove(id)
+            selectedIDs.formIntersection(trashRows.map(\.id))
         } else {
             expandedFolderIDs.insert(id)
         }
@@ -177,6 +314,7 @@ struct NotebookTrashView: View {
     private func preparePermanentDeletion(rootID: UUID?) {
         perform {
             try await beforeMutation()
+            deletingAll = rootID == nil
             deletionSelection = try replica.deletionSelection(rootID: rootID)
         }
     }
@@ -187,6 +325,7 @@ struct NotebookTrashView: View {
             try await beforeMutation()
             try await replica.permanentlyDelete(selection)
             expandedFolderIDs.subtract(selection.ids)
+            selectedIDs.subtract(selection.ids)
             onMutation()
         }
     }
@@ -224,6 +363,7 @@ private struct NotebookTrashItemRow: View {
     let depth: Int
     let isExpanded: Bool
     let busy: Bool
+    let selecting: Bool
     let toggleFolder: () -> Void
     let openNote: () -> Void
     let restore: () -> Void
@@ -232,50 +372,84 @@ private struct NotebookTrashItemRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(action: placement.item.kind == .folder ? toggleFolder : openNote) {
-                HStack(spacing: 8) {
-                    if placement.item.kind == .folder {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.caption)
+            Group {
+                if selecting {
+                    rowLabel
+                } else {
+                    Button(action: placement.item.kind == .folder ? toggleFolder : openNote) {
+                        rowLabel
                     }
-                    Label(title, systemImage: placement.item.kind == .folder
-                        ? "folder" : "note.text")
-                    Spacer(minLength: 0)
+                    .buttonStyle(.plain)
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
             .disabled(busy)
             .accessibilityIdentifier(itemIdentifier)
             .contextMenu {
-                if placement.item.isTrashed { Button("Restore", action: restore) }
-                Button("Move…", action: move)
-                Divider()
-                Button("Delete Permanently…", role: .destructive, action: delete)
-            }
-            Menu {
-                if placement.item.isTrashed {
-                    Button("Restore", action: restore)
-                        .accessibilityIdentifier(
-                            "notebook-trash-restore-" + placement.item.id.uuidString
-                        )
-                } else {
-                    Text("Restore the parent folder, or move this item out.")
+                if !selecting {
+                    if placement.item.isTrashed { Button("Restore", action: restore) }
+                    Button("Move…", action: move)
+                    Divider()
+                    Button("Delete Permanently…", role: .destructive, action: delete)
                 }
-                Button("Move…", action: move)
-                Divider()
-                Button("Delete Permanently…", role: .destructive, action: delete)
-            } label: {
-                Label("Trash Actions", systemImage: "ellipsis")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
-            .accessibilityIdentifier("notebook-trash-actions-" + placement.item.id.uuidString)
-            .disabled(busy)
+            if selecting {
+                if placement.item.kind == .folder {
+                    Button(action: toggleFolder) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isExpanded ? "Collapse folder" : "Expand folder")
+                    .disabled(busy)
+                }
+            }
+            if showsActions {
+                Menu {
+                    if placement.item.isTrashed {
+                        Button("Restore", action: restore)
+                            .accessibilityIdentifier(
+                                "notebook-trash-restore-" + placement.item.id.uuidString
+                            )
+                    } else {
+                        Text("Restore the parent folder, or move this item out.")
+                    }
+                    Button("Move…", action: move)
+                    Divider()
+                    Button("Delete Permanently…", role: .destructive, action: delete)
+                } label: {
+                    Label("Trash Actions", systemImage: "ellipsis")
+                        .labelStyle(.iconOnly)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityIdentifier("notebook-trash-actions-" + placement.item.id.uuidString)
+                .disabled(busy)
+            }
         }
         .padding(.leading, CGFloat(depth) * 16)
+    }
+
+    private var showsActions: Bool {
+        #if os(macOS)
+        true
+        #else
+        !selecting
+        #endif
+    }
+
+    private var rowLabel: some View {
+        HStack(spacing: 8) {
+            if !selecting, placement.item.kind == .folder {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.caption)
+            }
+            Label(title, systemImage: placement.item.kind == .folder ? "folder" : "note.text")
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
     }
 
     private var title: String {
