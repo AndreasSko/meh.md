@@ -24,7 +24,9 @@ final class WritingFlowUITests: XCTestCase {
         let proposedTitle = "Fictional observatory field notes about distant moons "
             + "and bright stars across the northern winter sky "
             + UUID().uuidString.prefix(8)
-        replaceTitle(in: titleField, app: app, with: proposedTitle)
+        // The generated title is selected so typing starts a fresh note name.
+        titleField.typeText(proposedTitle)
+        XCTAssertEqual(titleField.value as? String, proposedTitle)
         #if os(macOS)
         titleField.typeKey(.return, modifierFlags: [])
         #else
@@ -80,7 +82,29 @@ final class WritingFlowUITests: XCTestCase {
             predicate: NSPredicate(format: "value == %@", ""), object: editor
         )
         XCTAssertEqual(XCTWaiter.wait(for: [emptyEditor], timeout: 5), .completed)
+        let unchangedTitleFocusedBody = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
+            object: editor
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [unchangedTitleFocusedBody], timeout: 5),
+            .completed
+        )
         XCTAssertNotEqual(title.label, revisedTitle)
+        #if os(macOS)
+        activate(title)
+        let tabTitleField = app.textFields["title-field"]
+        XCTAssertTrue(tabTitleField.waitForExistence(timeout: 5))
+        tabTitleField.typeKey(.tab, modifierFlags: [])
+        let bodyFocusedAfterTab = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
+            object: editor
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [bodyFocusedAfterTab], timeout: 5),
+            .completed
+        )
+        #endif
         capture(app, name: "New note ready for body writing")
     }
 

@@ -5,6 +5,10 @@ struct NotebookNoteEditor: View {
     let session: NoteSession
     let navigation: MarkdownEditorNavigation
     let isInTrash: Bool
+    var extendsUnderTopControls = false
+    var title: AnyView? = nil
+    var titleHeight: CGFloat = 0
+    var focusRequest = 0
     @Binding var hasUnrecordedEdit: Bool
     var onPersist: () -> Void = {}
     var onLocalEdit: () -> Void = {}
@@ -57,6 +61,8 @@ struct NotebookNoteEditor: View {
                         editError = error.localizedDescription
                         hasUnrecordedEdit = true
                     }, navigation: navigation, onBeginEditing: onBeginEditing,
+                    title: title, titleHeight: titleHeight,
+                    focusRequest: focusRequest,
                     fontSize: fontSize,
                     fontFamily: fontFamily, mode: mode
                 )
@@ -79,10 +85,9 @@ struct NotebookNoteEditor: View {
                 .accessibilityIdentifier("note-save-status")
             }
         }
-        // Extend scrolling beneath the home indicator, but continue respecting
-        // the keyboard and keep actionable errors inside the safe area.
-        .ignoresSafeArea(.container, edges: editError == nil && saveError == nil
-            ? .bottom : [])
+        // Let note content scroll beneath the floating top controls.
+        // Keep actionable errors and the keyboard within the bottom safe area.
+        .ignoresSafeArea(.container, edges: ignoredSafeAreaEdges)
         .onChange(of: session.persistedSnapshot) { _, _ in onPersist() }
         .onDisappear {
             Task { try? await session.flush() }
@@ -93,6 +98,13 @@ struct NotebookNoteEditor: View {
             }
         }
     }
+
+    private var ignoredSafeAreaEdges: Edge.Set {
+        var edges: Edge.Set = extendsUnderTopControls ? .top : []
+        if editError == nil && saveError == nil { edges.insert(.bottom) }
+        return edges
+    }
+
     private var saveError: String? {
         if case .saveFailed(let message) = session.status { return message }
         return nil
