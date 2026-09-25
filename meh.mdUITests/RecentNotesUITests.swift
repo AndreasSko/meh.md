@@ -61,6 +61,117 @@ final class RecentNotesUITests: XCTestCase {
     }
 
     #if os(iOS)
+    func testIPhoneTrailingSwipePinsAndUnpinsWithoutOpeningRecent() throws {
+        try XCTSkipIf(
+            UIDevice.current.userInterfaceIdiom != .phone,
+            "This test verifies the iPhone-only trailing swipe interaction."
+        )
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+
+        let firstSource = "Fictional pin target"
+        let secondSource = "Fictional active note"
+        createRecentNote(in: app, source: firstSource)
+        createRecentNote(in: app, source: secondSource)
+
+        showSidebar(app)
+        let recents = recentButtons(app)
+        let pinTarget = recents.element(boundBy: 1)
+        XCTAssertTrue(pinTarget.waitForExistence(timeout: 5))
+        pinTarget.swipeLeft(velocity: .slow)
+        let pinAction = app.buttons["Pin in Recents"]
+        XCTAssertTrue(pinAction.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["notebook-recents-toggle"].isHittable)
+        capture(app, name: "Orange pin swipe action in the fictional library")
+
+        pinAction.tap()
+        let pinnedRecent = recents.element(boundBy: 0)
+        XCTAssertTrue(pinnedRecent.waitForExistence(timeout: 5))
+        XCTAssertTrue(pinnedRecent.label.contains(firstSource))
+        XCTAssertTrue((pinnedRecent.value as? String)?.contains("Pinned") == true)
+        XCTAssertTrue(app.buttons["notebook-recents-toggle"].isHittable)
+        capture(app, name: "Pinned recent note in the fictional library")
+
+        pinnedRecent.swipeLeft(velocity: .slow)
+        let unpinAction = app.buttons["Unpin from Recents"]
+        XCTAssertTrue(unpinAction.waitForExistence(timeout: 5))
+        XCTAssertEqual(unpinAction.label, "Unpin from Recents")
+        capture(app, name: "Gray unpin swipe action in the fictional library")
+
+        unpinAction.tap()
+        let unpinnedRecent = recents.element(boundBy: 1)
+        XCTAssertTrue(unpinnedRecent.waitForExistence(timeout: 5))
+        XCTAssertTrue(unpinnedRecent.label.contains(firstSource))
+        XCTAssertFalse((unpinnedRecent.value as? String)?.contains("Pinned") == true)
+        XCTAssertTrue(app.buttons["notebook-recents-toggle"].isHittable)
+        Thread.sleep(forTimeInterval: 1)
+        capture(app, name: "Recent notes after partial unpin")
+
+        fullSwipeLeft(unpinnedRecent)
+        Thread.sleep(forTimeInterval: 1)
+        let fullSwipePinned = recents.element(boundBy: 0)
+        XCTAssertTrue(fullSwipePinned.waitForExistence(timeout: 5))
+        XCTAssertTrue(fullSwipePinned.label.contains(firstSource))
+        XCTAssertTrue((fullSwipePinned.value as? String)?.contains("Pinned") == true)
+        XCTAssertTrue(recents.element(boundBy: 1).label.contains(secondSource))
+        capture(app, name: "Recent notes after full-swipe pin")
+
+        fullSwipeLeft(fullSwipePinned)
+        Thread.sleep(forTimeInterval: 1)
+        let fullSwipeUnpinned = recents.element(boundBy: 1)
+        XCTAssertTrue(fullSwipeUnpinned.waitForExistence(timeout: 5))
+        XCTAssertTrue(fullSwipeUnpinned.label.contains(firstSource))
+        XCTAssertFalse((fullSwipeUnpinned.value as? String)?.contains("Pinned") == true)
+        XCTAssertTrue(recents.element(boundBy: 0).label.contains(secondSource))
+        capture(app, name: "Recent notes after full-swipe unpin")
+
+        fullSwipeUnpinned.tap()
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(waitUntilHittable(editor))
+        XCTAssertEqual(editor.value as? String, firstSource)
+    }
+
+    func testIPadContextMenuPinsWithoutOpeningRecent() throws {
+        try XCTSkipIf(
+            UIDevice.current.userInterfaceIdiom != .pad,
+            "This test verifies the iPad context-menu interaction."
+        )
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+
+        let firstSource = "Fictional iPad pin target"
+        let secondSource = "Fictional iPad active note"
+        createRecentNote(in: app, source: firstSource)
+        createRecentNote(in: app, source: secondSource)
+
+        showSidebar(app)
+        let recents = recentButtons(app)
+        let pinTarget = recents.element(boundBy: 1)
+        XCTAssertTrue(pinTarget.waitForExistence(timeout: 5))
+        let pinTargetIdentifier = pinTarget.identifier
+        pinTarget.press(forDuration: 1.0)
+        let pinAction = app.buttons["Pin in Recents"]
+        XCTAssertTrue(pinAction.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textViews["markdown-editor"].value as? String, secondSource)
+
+        pinAction.tap()
+        let pinnedRecent = recents.element(boundBy: 0)
+        XCTAssertTrue(pinnedRecent.waitForExistence(timeout: 5))
+        XCTAssertEqual(pinnedRecent.identifier, pinTargetIdentifier)
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertEqual(editor.value as? String, secondSource)
+        app.typeText(" suffix")
+        XCTAssertEqual(editor.value as? String, secondSource + " suffix")
+    }
+
+    private func fullSwipeLeft(_ row: XCUIElement) {
+        let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
+        let end = row.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
     func testLeavingNoteRestoresBrowserUntilNoteIsOpenedAgain() throws {
         continueAfterFailure = false
         let app = makeApp()
@@ -211,7 +322,23 @@ final class RecentNotesUITests: XCTestCase {
     }
 
     private func recentButtons(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "notebook-recent-"))
+        app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND NOT identifier BEGINSWITH %@",
+            "notebook-recent-", "notebook-recent-pin-"
+        ))
+    }
+
+    private func createRecentNote(in app: XCUIApplication, source: String) {
+        let newNote = app.buttons["notebook-new-item"].firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        waitUntilEnabled(newNote)
+        activate(newNote)
+        commitDefaultTitle(in: app)
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        activate(editor)
+        editor.typeText(source)
+        showSidebar(app)
     }
 
     private func showSidebar(_ app: XCUIApplication) {
@@ -250,6 +377,7 @@ final class RecentNotesUITests: XCTestCase {
     private func commitDefaultTitle(in app: XCUIApplication) {
         let titleField = app.textFields["title-field"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
+        activate(titleField)
         #if os(macOS)
         titleField.typeKey(.return, modifierFlags: [])
         #else

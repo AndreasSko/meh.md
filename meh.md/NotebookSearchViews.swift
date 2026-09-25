@@ -1,4 +1,5 @@
 import NoteCore
+import Observation
 import SwiftUI
 
 struct NotebookSearchResults: View {
@@ -189,6 +190,67 @@ private struct NotebookSearchFocusKey: FocusedValueKey {
     typealias Value = NotebookSearchState
 }
 
+@MainActor
+@Observable
+final class NotebookRecentCommandState {
+    @ObservationIgnored private let replica: NotebookReplica
+    var focusedNoteID: UUID?
+    var selectedNoteID: UUID?
+    var errorMessage: String?
+
+    init(replica: NotebookReplica) {
+        self.replica = replica
+    }
+
+    var commandTitle: LocalizedStringKey {
+        guard let targetNoteID, replica.isPinnedInRecents(targetNoteID) else {
+            return "Pin in Recents"
+        }
+        return "Unpin from Recents"
+    }
+
+    var isAvailable: Bool {
+        guard let targetNoteID else { return false }
+        return replica.isPinnedInRecents(targetNoteID)
+            || replica.canPinInRecents(targetNoteID)
+    }
+
+    func togglePin() {
+        guard let targetNoteID else { return }
+        let pinned = replica.isPinnedInRecents(targetNoteID)
+        guard pinned || replica.canPinInRecents(targetNoteID) else { return }
+        Task { @MainActor in
+            do {
+                try await replica.setPinnedInRecents(!pinned, for: targetNoteID)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private var targetNoteID: UUID? {
+        let recentIDs = Set(replica.recentNotes.map(\.id))
+        if let focusedNoteID, recentIDs.contains(focusedNoteID) {
+            return focusedNoteID
+        }
+        if let selectedNoteID, recentIDs.contains(selectedNoteID) {
+            return selectedNoteID
+        }
+        return nil
+    }
+}
+
+private struct NotebookRecentCommandsKey: FocusedValueKey {
+    typealias Value = NotebookRecentCommandState
+}
+
+extension FocusedValues {
+    var notebookRecentCommands: NotebookRecentCommandState? {
+        get { self[NotebookRecentCommandsKey.self] }
+        set { self[NotebookRecentCommandsKey.self] = newValue }
+    }
+}
+
 extension FocusedValues {
     var notebookSearch: NotebookSearchState? {
         get { self[NotebookSearchFocusKey.self] }
@@ -209,6 +271,20 @@ struct NotebookSearchCommands: Commands {
             Button("Find in Note…") { search?.findRequest += 1 }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(search?.canFind != true || search?.showingQuickOpen == true)
+        }
+    }
+}
+
+struct NotebookRecentCommands: Commands {
+    @FocusedValue(\.notebookRecentCommands) private var recents
+
+    var body: some Commands {
+        CommandMenu("Recents") {
+            Button(recents?.commandTitle ?? "Pin in Recents") {
+                recents?.togglePin()
+            }
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+            .disabled(recents?.isAvailable != true)
         }
     }
 }

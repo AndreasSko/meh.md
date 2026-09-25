@@ -12,7 +12,7 @@ final class NotebookNavigationStateTests: XCTestCase {
         let state = fixture.makeState()
         let session = try await fixture.replica.openNote(note)
         state.installSelection(note, session: session, recordActivity: true)
-        state.recordEdited(note)
+        try await fixture.replica.recordRecentActivity(for: note)
         state.setPosition(Data([1, 2, 3]), for: note)
 
         let withOpenNote = fixture.makeState()
@@ -61,8 +61,8 @@ final class NotebookNavigationStateTests: XCTestCase {
         let state = fixture.makeState()
         let session = try await fixture.replica.openNote(alpha)
         state.installSelection(alpha, session: session, recordActivity: true)
-        state.recordEdited(alpha)
-        state.recordEdited(beta)
+        try await fixture.replica.recordRecentActivity(for: alpha)
+        try await fixture.replica.recordRecentActivity(for: beta)
         state.setPosition(Data([4, 5, 6]), for: alpha)
 
         try await fixture.replica.sortChildren(parentID: nil, by: .nameDescending)
@@ -84,7 +84,6 @@ final class NotebookNavigationStateTests: XCTestCase {
         state.installSelection(selected, session: session, recordActivity: true)
 
         try await fixture.replica.rename(sibling, to: "Renamed.md")
-        state.recordRenamed(sibling)
 
         XCTAssertEqual(state.recentNoteIDs, [sibling])
         XCTAssertEqual(state.selectedID, selected)
@@ -98,8 +97,8 @@ final class NotebookNavigationStateTests: XCTestCase {
         let second = try await fixture.replica.createNote(name: "Second.md")
         let unread = try await fixture.replica.createNote(name: "Unread.md")
         let state = fixture.makeState()
-        state.recordEdited(first)
-        state.recordEdited(second)
+        try await fixture.replica.recordRecentActivity(for: first)
+        try await fixture.replica.recordRecentActivity(for: second)
 
         state.recordOpened(first)
         XCTAssertEqual(state.recentNoteIDs, [second, first])
@@ -109,7 +108,7 @@ final class NotebookNavigationStateTests: XCTestCase {
         XCTAssertEqual(relaunched.lastNoteID, unread)
         XCTAssertEqual(relaunched.recentNoteIDs, [second, first])
 
-        state.recordEdited(first)
+        try await fixture.replica.recordRecentActivity(for: first)
         XCTAssertEqual(state.recentNoteIDs, [first, second])
     }
 
@@ -121,11 +120,11 @@ final class NotebookNavigationStateTests: XCTestCase {
         }
         let state = fixture.makeState()
 
-        for id in ids { state.recordEdited(id) }
-        state.recordEdited(ids[1])
+        for id in ids { try await fixture.replica.recordRecentActivity(for: id) }
+        try await fixture.replica.recordRecentActivity(for: ids[1])
 
         XCTAssertEqual(state.recentNoteIDs, [ids[1], ids[5], ids[4], ids[3], ids[2]])
-        XCTAssertEqual(state.lastNoteID, ids[1])
+        XCTAssertNil(state.lastNoteID)
         XCTAssertNil(state.selectedID)
     }
 
@@ -136,7 +135,7 @@ final class NotebookNavigationStateTests: XCTestCase {
         let state = fixture.makeState()
         let session = try await fixture.replica.openNote(note)
         state.installSelection(note, session: session, recordActivity: true)
-        state.recordEdited(note)
+        try await fixture.replica.recordRecentActivity(for: note)
         state.setFolderExpanded(folder, isExpanded: true)
         state.setPosition(Data([1, 2]), for: note)
         await state.loadRecentSessions()
@@ -175,7 +174,7 @@ final class NotebookNavigationStateTests: XCTestCase {
         let note = try await fixture.replica.createNote(name: "One.md")
         let folder = try await fixture.replica.createFolder(name: "Folder")
         let state = fixture.makeState()
-        state.recordEdited(note)
+        try await fixture.replica.recordRecentActivity(for: note)
         state.isRecentsExpanded = false
         state.isTreeExpanded = false
         state.isTrashExpanded = true
@@ -183,7 +182,7 @@ final class NotebookNavigationStateTests: XCTestCase {
         state.setPosition(Data([3]), for: note)
 
         let relaunched = fixture.makeState()
-        XCTAssertEqual(relaunched.lastNoteID, note)
+        XCTAssertNil(relaunched.lastNoteID)
         XCTAssertNil(relaunched.selectedID)
         XCTAssertEqual(relaunched.recentNoteIDs, [note])
         XCTAssertFalse(relaunched.isRecentsExpanded)
@@ -201,20 +200,20 @@ final class NotebookNavigationStateTests: XCTestCase {
         store.set(Data([0, 1, 2]), forKey: key)
         let corrupted = fixture.makeState()
         XCTAssertNil(corrupted.lastNoteID)
-        XCTAssertTrue(corrupted.recentNoteIDs.isEmpty)
+        XCTAssertEqual(corrupted.recentNoteIDs, [note])
     }
 
-    func testCatalogRefreshDoesNotChangeRecencyWithoutExplicitActivity() async throws {
+    func testRenameActivityUpdatesSynchronizedRecency() async throws {
         let fixture = try await Fixture()
         let first = try await fixture.replica.createNote(name: "First.md")
         let second = try await fixture.replica.createNote(name: "Second.md")
         let state = fixture.makeState()
-        state.recordEdited(first)
+        try await fixture.replica.recordRecentActivity(for: first)
 
         try await fixture.replica.rename(second, to: "Remote rename.md")
         state.refreshAvailability()
 
-        XCTAssertEqual(state.recentNoteIDs, [first])
+        XCTAssertEqual(state.recentNoteIDs, [second, first])
     }
 
     func testUnavailableRestoreCandidateKeepsActiveSelection() async throws {
@@ -266,7 +265,7 @@ final class NotebookNavigationStateTests: XCTestCase {
             ))
         }
         let state = fixture.makeState()
-        for id in ids { state.recordEdited(id) }
+        for id in ids { try await fixture.replica.recordRecentActivity(for: id) }
         let expectedOrder = state.recentNoteIDs
         await state.loadRecentSessions()
         XCTAssertEqual(Set(state.recentSessions.keys), Set(ids))

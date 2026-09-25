@@ -2,13 +2,11 @@ import Foundation
 import NoteCore
 import Observation
 
-/// Scene-owned navigation and activity preferences. This state is intentionally
-/// local to the device and is never written to the notebook catalog or sync.
+/// Scene-owned navigation preferences. Recents activity and pins live in the
+/// shared catalog; this state keeps only navigation and preview sessions local.
 @MainActor
 @Observable
 final class NotebookNavigationState {
-    static let maximumRecentNotes = 5
-
     private let replica: NotebookReplica
     @ObservationIgnored private let store: UserDefaults
     @ObservationIgnored private let storagePrefix = "meh.md.navigation."
@@ -21,7 +19,6 @@ final class NotebookNavigationState {
     private(set) var selectedSession: NoteSession?
     private(set) var lastNoteID: UUID?
     private(set) var restorationMessage: String?
-    private(set) var recentNoteIDs: [UUID] = []
     private(set) var recentSessions: [UUID: NoteSession] = [:]
     var isRecentsExpanded = true { didSet { persistIfReady() } }
     var isTreeExpanded = true { didSet { persistIfReady() } }
@@ -62,21 +59,8 @@ final class NotebookNavigationState {
         savePreferences()
     }
 
-    /// Records an explicit local edit. Remote updates must not call this API.
-    func recordEdited(_ id: UUID) {
-        guard lastNoteID != id || recentNoteIDs.first != id else { return }
-        guard recentEligibleNoteIDs.contains(id) else { return }
-        restorationMessage = nil
-        lastNoteID = id
-        promoteRecent(id)
-    }
-
-    /// A local rename is activity, but it does not select a sidebar sibling or
-    /// change which note is restored as the last editor.
-    func recordRenamed(_ id: UUID) {
-        guard recentNoteIDs.first != id, recentEligibleNoteIDs.contains(id) else { return }
-        promoteRecent(id)
-    }
+    /// The shared catalog owns recent ordering; this scene only reads it.
+    var recentNoteIDs: [UUID] { replica.recentNotes.map(\.id) }
 
     /// Installs a note the scene has already flushed and opened successfully.
     /// Trash notes may remain active, but are never remembered in Recents.
@@ -140,7 +124,7 @@ final class NotebookNavigationState {
         selectedSession = session
     }
 
-    /// Opens at most five current Recents sessions without recording activity.
+    /// Opens displayed Recents sessions without recording activity.
     func loadRecentSessions() async {
         recentLoadGeneration += 1
         let generation = recentLoadGeneration
@@ -196,31 +180,20 @@ final class NotebookNavigationState {
         notebookID.map { storagePrefix + $0.uuidString }
     }
 
-    private func promoteRecent(_ id: UUID) {
-        recentNoteIDs.removeAll { $0 == id }
-        recentNoteIDs.insert(id, at: 0)
-        if recentNoteIDs.count > Self.maximumRecentNotes {
-            recentNoteIDs.removeLast(recentNoteIDs.count - Self.maximumRecentNotes)
-        }
-        savePreferences()
-    }
-
     private func pruneUnavailable() {
         let recentEligibleNotes = recentEligibleNoteIDs
         let selectableNotes = selectableNoteIDs
         let folders = availableFolderIDs
-        let oldRecents = recentNoteIDs
         let oldLastNote = lastNoteID
         let oldFolders = expandedFolderIDs
         let oldPositions = positions
-        recentNoteIDs.removeAll { !recentEligibleNotes.contains($0) }
         expandedFolderIDs.formIntersection(folders)
         positions = positions.filter { selectableNotes.contains($0.key) }
         recentSessions = recentSessions.filter { recentNoteIDs.contains($0.key) }
         if lastNoteID.map({ !recentEligibleNotes.contains($0) }) == true {
             lastNoteID = nil
         }
-        if oldRecents != recentNoteIDs || oldLastNote != lastNoteID
+        if oldLastNote != lastNoteID
             || oldFolders != expandedFolderIDs || oldPositions != positions
         {
             savePreferences()
@@ -234,7 +207,6 @@ final class NotebookNavigationState {
         selectedSession = nil
         lastNoteID = nil
         restorationMessage = nil
-        recentNoteIDs = []
         recentSessions = [:]
         isRecentsExpanded = true
         isTreeExpanded = true
@@ -251,10 +223,6 @@ final class NotebookNavigationState {
             return
         }
         lastNoteID = preferences.lastNoteID
-        var seen: Set<UUID> = []
-        recentNoteIDs = Array(preferences.recentNoteIDs.filter {
-            seen.insert($0).inserted
-        }.prefix(Self.maximumRecentNotes))
         isRecentsExpanded = preferences.isRecentsExpanded
         isTreeExpanded = preferences.isTreeExpanded
         isTrashExpanded = preferences.isTrashExpanded ?? false
@@ -270,7 +238,6 @@ final class NotebookNavigationState {
         guard let storageKey else { return }
         let preferences = StoredPreferences(
             lastNoteID: lastNoteID,
-            recentNoteIDs: recentNoteIDs,
             isRecentsExpanded: isRecentsExpanded,
             isTreeExpanded: isTreeExpanded,
             isTrashExpanded: isTrashExpanded,
@@ -284,10 +251,29 @@ final class NotebookNavigationState {
 
 private struct StoredPreferences: Codable {
     let lastNoteID: UUID?
-    let recentNoteIDs: [UUID]
+    // Kept solely so existing local navigation preferences continue to decode.
+    // Synchronized Recents deliberately do not read or write this value.
+    let recentNoteIDs: [UUID]?
     let isRecentsExpanded: Bool
     let isTreeExpanded: Bool
     let isTrashExpanded: Bool?
     let expandedFolderIDs: [UUID]
     let positions: [UUID: Data]
+
+    init(
+        lastNoteID: UUID?,
+        isRecentsExpanded: Bool,
+        isTreeExpanded: Bool,
+        isTrashExpanded: Bool?,
+        expandedFolderIDs: [UUID],
+        positions: [UUID: Data]
+    ) {
+        self.lastNoteID = lastNoteID
+        recentNoteIDs = nil
+        self.isRecentsExpanded = isRecentsExpanded
+        self.isTreeExpanded = isTreeExpanded
+        self.isTrashExpanded = isTrashExpanded
+        self.expandedFolderIDs = expandedFolderIDs
+        self.positions = positions
+    }
 }

@@ -54,6 +54,7 @@ struct NotebookSectionToggle: View {
 struct NotebookRecentRow: View {
     let title: String
     let preview: String
+    let isPinned: Bool
     let isCurrent: Bool
     let showsDivider: Bool
 
@@ -61,10 +62,20 @@ struct NotebookRecentRow: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if isPinned {
+                            Spacer(minLength: 4)
+                            Image(systemName: "pin.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Text(preview)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -86,7 +97,45 @@ struct NotebookRecentRow: View {
         .padding(.horizontal, 14)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityValue(isCurrent ? "Current note" : "")
+        .accessibilityValue(
+            [isPinned ? "Pinned" : nil, isCurrent ? "Current note" : nil]
+                .compactMap { $0 }.joined(separator: ", ")
+        )
+    }
+}
+
+enum NotebookRecentCardPosition {
+    case only
+    case first
+    case middle
+    case last
+}
+
+struct NotebookRecentCardBackground: View {
+    let position: NotebookRecentCardPosition
+
+    var body: some View {
+        UnevenRoundedRectangle(
+            topLeadingRadius: topRadius,
+            bottomLeadingRadius: bottomRadius,
+            bottomTrailingRadius: bottomRadius,
+            topTrailingRadius: topRadius
+        )
+        .fill(NotebookSidebarPalette.recents)
+    }
+
+    private var topRadius: CGFloat {
+        switch position {
+        case .only, .first: 16
+        case .middle, .last: 0
+        }
+    }
+
+    private var bottomRadius: CGFloat {
+        switch position {
+        case .only, .last: 16
+        case .first, .middle: 0
+        }
     }
 }
 

@@ -25,7 +25,10 @@ import NoteCore
             NotebookApplicationView(workspace: workspace)
             #endif
         }
-        .commands { NotebookSearchCommands() }
+        .commands {
+            NotebookSearchCommands()
+            NotebookRecentCommands()
+        }
         #else
         WindowGroup {
             #if DEBUG
@@ -38,7 +41,10 @@ import NoteCore
             NotebookApplicationView(workspace: workspace)
             #endif
         }
-        .commands { NotebookSearchCommands() }
+        .commands {
+            NotebookSearchCommands()
+            NotebookRecentCommands()
+        }
         #endif
     }
 }
