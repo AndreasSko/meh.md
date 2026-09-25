@@ -429,7 +429,9 @@ struct NotebookView: View {
             #endif
         }
         .sheet(isPresented: $showingSettings) {
-            NotebookSettingsView(replica: replica, onImport: importMarkdown,
+            NotebookSettingsView(replica: replica,
+                                 workspace: workspace ?? NotebookWorkspace.shared,
+                                 onImport: importMarkdown,
                                  beforeExport: flushEditor)
         }
         .confirmationDialog(

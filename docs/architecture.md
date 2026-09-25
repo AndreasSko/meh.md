@@ -70,9 +70,11 @@ Trashed notes are omitted. Earlier single-note copies remain where they were
 created but are no longer maintained. The
 [copy contract](markdown-copy-contract.md) defines publication and recovery.
 
-Managed copies are not independent backups. In particular, uninstalling an
-iOS or iPadOS app can remove its Documents directory. Explicit offline export
-and restore remain follow-up work in the [roadmap](plan.md).
+Managed copies are not independent backups. Dated Markdown backups are also
+kept in Documents with a local schedule and retention limit; see the
+[backup contract](markdown-backups.md). Uninstalling an iOS or iPadOS app can
+remove both folders. A separate restore workflow remains follow-up work in
+the [roadmap](plan.md).
 
 Trash retains recoverable content. Confirmed permanent deletion records
 durable identity markers before retryable local and remote cleanup. These

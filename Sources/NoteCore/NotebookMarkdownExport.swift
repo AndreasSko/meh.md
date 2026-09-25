@@ -7,7 +7,10 @@ public enum NotebookMarkdownExport {
         selectedIDs: Set<UUID>
     ) throws -> FileWrapper {
         let active = placements.filter { !$0.isInTrash }
-        let children = Dictionary(grouping: active, by: \.parentID)
+        var children = Dictionary(grouping: active, by: \.parentID)
+        for parent in children.keys {
+            children[parent]!.sort { $0.item.id.uuidString < $1.item.id.uuidString }
+        }
         let snapshots = Dictionary(grouping: notes, by: \.noteID)
         func build(_ parent: UUID?, inherited: Bool) throws -> FileWrapper {
             var files: [String: FileWrapper] = [:]

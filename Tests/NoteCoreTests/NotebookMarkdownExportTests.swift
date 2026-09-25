@@ -26,4 +26,22 @@ final class NotebookMarkdownExportTests: XCTestCase {
             placements: catalog.placements(), notes: [], selectedIDs: [folder]
         ))
     }
+
+    func testCollisionWinnerMatchesCurrentMarkdownCopyOrder() throws {
+        let catalog = try NotebookCatalogDocument()
+        let smaller = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+        let larger = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000002"))
+        let first = try NoteDocument(noteID: smaller, text: "Smaller")
+        let second = try NoteDocument(noteID: larger, text: "Larger")
+        try catalog.add(id: smaller, kind: .note, name: "Draft.md")
+        try catalog.add(id: larger, kind: .note, name: "Draft")
+        let wrapper = try NotebookMarkdownExport.makeWrapper(
+            placements: catalog.placements().reversed(),
+            notes: [first.snapshot(), second.snapshot()],
+            selectedIDs: [smaller, larger]
+        )
+        let files = try XCTUnwrap(wrapper.fileWrappers)
+        XCTAssertEqual(files["Draft.md"]?.regularFileContents, Data("Smaller".utf8))
+        XCTAssertEqual(files.count, 2)
+    }
 }
