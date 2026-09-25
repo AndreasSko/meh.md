@@ -8,6 +8,11 @@ Just a few things to note:
   From `/Applications/Xcode.app/Contents/Applications/DeviceHub.app`, run
   `Contents/MacOS/DeviceHub`.
 * Bump the app version for every new PR; use a patch bump for bug fixes.
+* Include the PR template's release-notes markers in every PR description.
+  Write concise tester-facing plain text, or exactly `None` for no visible
+  change. Do not leave placeholders or include implementation details.
+  See `.github/testflight/RELEASE_NOTES.md`. These notes go to TestFlight;
+  write them when preparing the PR, not with another AI call during release.
 * For visible UI changes, include concise before/after screenshots in the PR.
   Default to iPhone; add other platforms only for meaningful differences.
   Use matching content and state, fictional data, and actual app captures.
