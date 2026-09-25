@@ -1462,14 +1462,32 @@ enum MarkdownPresentation {
         for run: MarkdownFontRun,
         bodyFont: PlatformFont
     ) -> PlatformFont {
-        let size = bodyFont.pointSize * headingScale(for: run.headingLevel)
-        var font = run.traits.contains(.monospaced)
+        styledFont(
+            traits: run.traits, headingLevel: run.headingLevel,
+            bodyFont: bodyFont
+        )
+    }
+
+    static func headingFont(
+        level: Int,
+        bodyFont: PlatformFont
+    ) -> PlatformFont {
+        styledFont(traits: .bold, headingLevel: level, bodyFont: bodyFont)
+    }
+
+    private static func styledFont(
+        traits: MarkdownFontTraits,
+        headingLevel: Int?,
+        bodyFont: PlatformFont
+    ) -> PlatformFont {
+        let size = bodyFont.pointSize * headingScale(for: headingLevel)
+        var font = traits.contains(.monospaced)
             ? codeFont(pointSize: size)
             : fontWithSize(bodyFont, size: size)
-        if run.traits.contains(.bold) {
+        if traits.contains(.bold) {
             font = strongFont(font)
         }
-        if run.traits.contains(.italic) {
+        if traits.contains(.italic) {
             font = emphasisFont(font)
         }
         return font

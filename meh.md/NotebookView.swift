@@ -50,6 +50,7 @@ struct NotebookView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var busy = false
     @State private var editorNavigation = MarkdownEditorNavigation()
+    @State private var bodyFocusRequest = 0
     @State private var errorMessage: String?
     @State private var unrecordedEdit = false
     @State private var editingID: UUID?
@@ -59,6 +60,8 @@ struct NotebookView: View {
     @State private var detailEditingID: UUID?
     @State private var detailOriginalName = ""
     @State private var detailProposedTitle = ""
+    @State private var detailTitleHeight: CGFloat = 32
+    @State private var selectGeneratedTitle = false
     @FocusState private var focusedTitleID: UUID?
     @State private var movingIDs: [UUID] = []
     @State private var movingFromTrash = false
@@ -170,13 +173,19 @@ struct NotebookView: View {
             Group {
                 if let session, let selectedID {
                     VStack(spacing: 0) {
-                        if let placement = selectedPlacement {
+                        if !session.isEditingEnabled,
+                           let placement = selectedPlacement {
                             detailTitle(for: placement)
-                            Divider()
                         }
                         NotebookNoteEditor(
                             session: session, navigation: editorNavigation,
                             isInTrash: selectedPlacement?.isInTrash == true,
+                            extendsUnderTopControls: true,
+                            title: selectedPlacement.map {
+                                AnyView(detailTitle(for: $0))
+                            },
+                            titleHeight: detailTitleHeight,
+                            focusRequest: bodyFocusRequest,
                             hasUnrecordedEdit: $unrecordedEdit,
                             onPersist: {
                                 workspace?.contentDidSave(trigger: "note persisted")
@@ -199,6 +208,11 @@ struct NotebookView: View {
                     }
                     .id(selectedID)
                     .navigationTitle("")
+                    #if os(macOS)
+                    .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+                    #else
+                    .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+                    #endif
                     .task(id: EditorAttachmentID(
                         noteID: selectedID, isEditingEnabled: session.isEditingEnabled
                     )) {
@@ -465,7 +479,7 @@ struct NotebookView: View {
 
     @ViewBuilder
     private func detailTitle(for placement: NotebookPlacement) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
             if detailEditingID == placement.item.id {
                 TextField(
                     "Note title",
@@ -473,7 +487,15 @@ struct NotebookView: View {
                         get: { detailProposedTitle },
                         set: { value in
                             if value.contains(where: { $0.isNewline }) {
-                                detailProposedTitle = value.filter { !$0.isNewline }
+                                // Return can replace a fully selected title
+                                // with only a newline. Keep the title when
+                                // that newline is a submit action.
+                                if !(value.allSatisfy(\.isNewline)
+                                    && !detailProposedTitle.isEmpty) {
+                                    detailProposedTitle = value.filter {
+                                        !$0.isNewline
+                                    }
+                                }
                                 submitDetailTitle()
                             } else {
                                 detailProposedTitle = value
@@ -483,14 +505,37 @@ struct NotebookView: View {
                     axis: .vertical
                 )
                 .textFieldStyle(.plain)
-                .font(.title2.weight(.semibold))
+                .font(editorTitleFont)
                 .lineLimit(1...4)
                 .focused($focusedTitleID, equals: placement.item.id)
                 .disabled(busy)
                 .submitLabel(.done)
                 .onSubmit { submitDetailTitle() }
+                .onKeyPress(.tab) {
+                    submitDetailTitle()
+                    return .handled
+                }
                 .onChange(of: busy, initial: true) { _, isBusy in
-                    if !isBusy { focusedTitleID = placement.item.id }
+                    if !isBusy, detailEditingID == placement.item.id {
+                        focusedTitleID = placement.item.id
+                        if selectGeneratedTitle {
+                            selectGeneratedTitle = false
+                            Task { @MainActor in
+                                await Task.yield()
+                                #if os(macOS)
+                                NSApp.sendAction(
+                                    #selector(NSText.selectAll(_:)),
+                                    to: nil, from: nil
+                                )
+                                #else
+                                UIApplication.shared.sendAction(
+                                    #selector(UIResponder.selectAll(_:)),
+                                    to: nil, from: nil, for: nil
+                                )
+                                #endif
+                            }
+                        }
+                    }
                 }
                 .notebookEscapeAction { cancelDetailTitle() }
                 .accessibilityIdentifier("title-field")
@@ -499,20 +544,33 @@ struct NotebookView: View {
                     beginDetailRenaming(placement)
                 } label: {
                     Text(NotebookNoteName.title(from: placement.displayName))
-                        .font(.title2.weight(.semibold))
+                        .font(editorTitleFont)
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(busy)
                 .accessibilityIdentifier("note-title")
             }
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            if abs(detailTitleHeight - height) > 0.5 {
+                detailTitleHeight = height
+            }
+        }
+    }
+
+    private var editorTitleFont: Font {
+        let bodyFont = MarkdownPresentation.bodyFont(
+            for: editorFontFamily,
+            pointSize: MarkdownPresentation.normalizedFontSize(editorFontSize)
+        )
+        return Font(MarkdownPresentation.headingFont(level: 1, bodyFont: bodyFont))
     }
 
     private var recentsSection: some View {
@@ -983,6 +1041,8 @@ struct NotebookView: View {
                 detailEditingID = id
                 detailOriginalName = name
                 detailProposedTitle = NotebookNoteName.title(from: name)
+                detailTitleHeight = 32
+                selectGeneratedTitle = true
             case .folder:
                 let id = try await replica.createFolder(
                     name: "Untitled Folder", parentID: parentID)
@@ -1027,10 +1087,8 @@ struct NotebookView: View {
         guard detailEditingID != nil else { return }
         perform {
             try await commitDetailTitleIfNeeded()
-            if focusBody {
-                editorNavigation.resumeEditing?()
-                editorNavigation.focusEditor?()
-            }
+        } onSuccess: {
+            if focusBody { bodyFocusRequest &+= 1 }
         }
     }
 
@@ -1585,16 +1643,17 @@ struct NotebookView: View {
         if revealDetail { preferredCompactColumn = .detail }
     }
 
-    private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
+    private func perform(
+        _ operation: @escaping @MainActor () async throws -> Void,
+        onSuccess: @escaping @MainActor () -> Void = {}
+    ) {
         guard !busy else { return }
         busy = true
         Task { @MainActor in
-            defer {
-                editorNavigation.resumeEditing?()
-                busy = false
-            }
+            var succeeded = false
             do {
                 try await operation()
+                succeeded = true
             } catch {
                 errorMessage = error.localizedDescription
                 if let editingID {
@@ -1603,6 +1662,9 @@ struct NotebookView: View {
                     Task { @MainActor in focusedTitleID = detailEditingID }
                 }
             }
+            editorNavigation.resumeEditing?()
+            busy = false
+            if succeeded { onSuccess() }
         }
     }
 }

@@ -229,6 +229,7 @@ final class MarkdownEditorScrollView: NSScrollView {
         textView.updateScrollPastEndPadding(
             viewportHeight: contentView.bounds.height
         )
+        textView.layoutMarkdownTitle()
         textView.markdownDidLayout?()
     }
 }
@@ -238,12 +239,71 @@ final class MarkdownTextView: NSTextView {
     var markdownDidBeginEditing: (() -> Void)?
     var markdownDidLayout: (() -> Void)?
     private let markdownTopInset: CGFloat = 20
+    private var markdownTitleHeight: CGFloat = 0
+    private var markdownTitleHost: NSHostingView<AnyView>?
+    private var markdownTitle: AnyView?
+    private var markdownTitleWidth: CGFloat = 0
+
+    private var markdownTitleExtent: CGFloat {
+        markdownTitleHost == nil ? 0 : markdownTitleHeight + 12
+    }
+
+    func updateMarkdownTitle(_ title: AnyView?, height: CGFloat) {
+        markdownTitle = title
+        if let title {
+            if let markdownTitleHost {
+                markdownTitleHost.rootView = AnyView(
+                    title.frame(width: max(0, bounds.width - 52))
+                )
+            } else {
+                let host = NSHostingView(rootView: AnyView(
+                    title.frame(width: max(0, bounds.width - 52))
+                ))
+                addSubview(host)
+                markdownTitleHost = host
+            }
+        } else {
+            markdownTitleHost?.removeFromSuperview()
+            markdownTitleHost = nil
+        }
+        markdownTitleWidth = max(0, bounds.width - 52)
+        markdownTitleHeight = max(0, height)
+        layoutMarkdownTitle()
+        updateScrollPastEndPadding(
+            viewportHeight: enclosingScrollView?.contentView.bounds.height ?? 0
+        )
+    }
+
+    func layoutMarkdownTitle() {
+        guard let markdownTitleHost, let markdownTitle else { return }
+        let width = max(0, bounds.width - 52)
+        if abs(markdownTitleWidth - width) > 0.5 {
+            markdownTitleWidth = width
+            markdownTitleHost.rootView = AnyView(
+                markdownTitle.frame(width: width)
+            )
+        }
+        markdownTitleHost.frame = NSRect(
+            x: 26, y: markdownTopInset,
+            width: width, height: markdownTitleHeight
+        )
+        guard width > 0 else { return }
+        let measured = markdownTitleHost.fittingSize.height
+        if measured.isFinite, measured > 0,
+           abs(markdownTitleHeight - measured) > 0.5 {
+            markdownTitleHeight = measured
+            markdownTitleHost.frame.size.height = measured
+            updateScrollPastEndPadding(
+                viewportHeight: enclosingScrollView?.contentView.bounds.height ?? 0
+            )
+        }
+    }
 
     override var textContainerOrigin: NSPoint {
         // NSTextView sizes with symmetric insets. Keep the text at its normal
         // top position so the additional sizing space stays below the note.
         var origin = super.textContainerOrigin
-        origin.y = markdownTopInset
+        origin.y = markdownTopInset + markdownTitleExtent
         return origin
     }
 
@@ -252,6 +312,7 @@ final class MarkdownTextView: NSTextView {
             for: viewportHeight
         )
         let verticalInset = max(markdownTopInset, bottom / 2)
+            + markdownTitleExtent / 2
         guard textContainerInset.height != verticalInset else { return }
         let heightChange = 2 * (verticalInset - textContainerInset.height)
         textContainerInset.height = verticalInset
@@ -354,6 +415,9 @@ struct MarkdownEditor: NSViewRepresentable {
     var onEditError: ((Error) -> Void)?
     var navigation: MarkdownEditorNavigation?
     var onBeginEditing: () -> Void
+    var title: AnyView?
+    var titleHeight: CGFloat
+    var focusRequest: Int
     var fontSize: Double
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
@@ -365,6 +429,9 @@ struct MarkdownEditor: NSViewRepresentable {
         onEditError: ((Error) -> Void)? = nil,
         navigation: MarkdownEditorNavigation? = nil,
         onBeginEditing: @escaping () -> Void = {},
+        title: AnyView? = nil,
+        titleHeight: CGFloat = 0,
+        focusRequest: Int = 0,
         fontSize: Double = 17,
         fontFamily: EditorFontFamily = .system,
         mode: MarkdownEditorMode = .source
@@ -375,6 +442,9 @@ struct MarkdownEditor: NSViewRepresentable {
         self.onEditError = onEditError
         self.navigation = navigation
         self.onBeginEditing = onBeginEditing
+        self.title = title
+        self.titleHeight = titleHeight
+        self.focusRequest = focusRequest
         self.fontSize = fontSize
         self.fontFamily = fontFamily
         self.mode = mode
@@ -419,6 +489,7 @@ struct MarkdownEditor: NSViewRepresentable {
         context.coordinator.observeUndoAndRedo(for: textView)
 
         context.coordinator.attachNavigation(to: textView)
+        textView.updateMarkdownTitle(title, height: titleHeight)
         return scrollView
     }
 
@@ -427,6 +498,12 @@ struct MarkdownEditor: NSViewRepresentable {
             return
         }
         context.coordinator.update(parent: self, textView: textView)
+        (textView as? MarkdownTextView)?.updateMarkdownTitle(
+            title, height: titleHeight
+        )
+        context.coordinator.consumeFocusRequest(
+            focusRequest, in: textView
+        )
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -447,9 +524,11 @@ struct MarkdownEditor: NSViewRepresentable {
         private var pendingSearchMatch: NSRange?
         private var destinationHighlightRange: NSRange?
         private var destinationCenterGeometry: CGSize?
+        private var handledFocusRequest: Int
 
         init(parent: MarkdownEditor) {
             self.parent = parent
+            handledFocusRequest = parent.focusRequest
             displayedText = parent.text
             displayedMode = parent.mode
             displayedFontFamily = parent.fontFamily
@@ -457,6 +536,16 @@ struct MarkdownEditor: NSViewRepresentable {
             displayedFontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
             )
+        }
+
+        func consumeFocusRequest(_ request: Int, in textView: NSTextView) {
+            guard request != handledFocusRequest else { return }
+            handledFocusRequest = request
+            // The host has received the nonediting title in this update.
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView, textView.isEditable else { return }
+                textView.window?.makeFirstResponder(textView)
+            }
         }
 
         deinit {
@@ -1061,10 +1150,58 @@ final class MarkdownTextView: UITextView {
         let bottom = 18 + MarkdownEditorScrollPadding.bottom(
             for: bounds.height
         )
-        if textContainerInset.bottom != bottom {
-            textContainerInset.bottom = bottom
+        var insets = textContainerInset
+        let titleExtent = markdownState.titleHost == nil
+            ? 0 : markdownState.titleHeight + 12
+        if insets.top != 18 + titleExtent || insets.bottom != bottom {
+            insets.top = 18 + titleExtent
+            insets.bottom = bottom
+            textContainerInset = insets
         }
+        layoutMarkdownTitle()
         markdownState.didLayout?()
+    }
+
+    func updateMarkdownTitle(_ title: AnyView?, height: CGFloat) {
+        if let title {
+            if let host = markdownState.titleHost {
+                host.rootView = title
+            } else {
+                let host = UIHostingController(rootView: title)
+                host.view.backgroundColor = .clear
+                addSubview(host.view)
+                markdownState.titleHost = host
+            }
+        } else {
+            markdownState.titleHost?.view.removeFromSuperview()
+            markdownState.titleHost = nil
+        }
+        markdownState.titleHeight = max(0, height)
+        measureMarkdownTitle()
+        setNeedsLayout()
+    }
+
+    private func layoutMarkdownTitle() {
+        guard let host = markdownState.titleHost else { return }
+        measureMarkdownTitle()
+        host.view.frame = CGRect(
+            x: 20, y: 18,
+            width: max(0, bounds.width - 40),
+            height: markdownState.titleHeight
+        )
+    }
+
+    private func measureMarkdownTitle() {
+        guard let host = markdownState.titleHost else { return }
+        let width = max(0, bounds.width - 40)
+        guard width > 0 else { return }
+        let measured = host.sizeThatFits(
+            in: CGSize(width: width, height: .greatestFiniteMagnitude)
+        ).height
+        if measured.isFinite, measured > 0,
+           abs(markdownState.titleHeight - measured) > 0.5 {
+            markdownState.titleHeight = measured
+        }
     }
 
     private var markdownState: MarkdownTextViewState {
@@ -1215,6 +1352,8 @@ private final class MarkdownTextViewState: NSObject {
     var didLayout: (() -> Void)?
     let syntaxCache = MarkdownSyntaxCache()
     var layoutDelegate: MarkdownLayoutManagerDelegate?
+    var titleHost: UIHostingController<AnyView>?
+    var titleHeight: CGFloat = 0
 }
 
 private final class MarkdownLayoutManagerDelegate:
@@ -1331,6 +1470,9 @@ struct MarkdownEditor: UIViewRepresentable {
     var onEditError: ((Error) -> Void)?
     var navigation: MarkdownEditorNavigation?
     var onBeginEditing: () -> Void
+    var title: AnyView?
+    var titleHeight: CGFloat
+    var focusRequest: Int
     var fontSize: Double
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
@@ -1342,6 +1484,9 @@ struct MarkdownEditor: UIViewRepresentable {
         onEditError: ((Error) -> Void)? = nil,
         navigation: MarkdownEditorNavigation? = nil,
         onBeginEditing: @escaping () -> Void = {},
+        title: AnyView? = nil,
+        titleHeight: CGFloat = 0,
+        focusRequest: Int = 0,
         fontSize: Double = 17,
         fontFamily: EditorFontFamily = .system,
         mode: MarkdownEditorMode = .source
@@ -1352,6 +1497,9 @@ struct MarkdownEditor: UIViewRepresentable {
         self.onEditError = onEditError
         self.navigation = navigation
         self.onBeginEditing = onBeginEditing
+        self.title = title
+        self.titleHeight = titleHeight
+        self.focusRequest = focusRequest
         self.fontSize = fontSize
         self.fontFamily = fontFamily
         self.mode = mode
@@ -1373,6 +1521,8 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.keyboardDismissMode = UIDevice.current.userInterfaceIdiom == .pad
             ? .none : .interactive
         textView.alwaysBounceVertical = true
+        textView.topEdgeEffect.isHidden =
+            UIDevice.current.userInterfaceIdiom == .pad
         textView.text = text
         textView.allowsEditingTextAttributes = false
         textView.font = MarkdownPresentation.bodyFont(
@@ -1397,11 +1547,18 @@ struct MarkdownEditor: UIViewRepresentable {
         )
 
         context.coordinator.attachNavigation(to: textView)
+        textView.updateMarkdownTitle(title, height: titleHeight)
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.update(parent: self, textView: textView)
+        (textView as? MarkdownTextView)?.updateMarkdownTitle(
+            title, height: titleHeight
+        )
+        context.coordinator.consumeFocusRequest(
+            focusRequest, in: textView
+        )
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
@@ -1412,6 +1569,7 @@ struct MarkdownEditor: UIViewRepresentable {
         private var hasUncommittedText = false
         private var isUpdating = false
         private var displayedFontSize: CGFloat
+        private var handledFocusRequest: Int
         private var displayedFontFamily: EditorFontFamily
         private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
@@ -1435,6 +1593,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         init(parent: MarkdownEditor) {
             self.parent = parent
+            handledFocusRequest = parent.focusRequest
             displayedText = parent.text
             displayedMode = parent.mode
             displayedFontFamily = parent.fontFamily
@@ -1442,6 +1601,16 @@ struct MarkdownEditor: UIViewRepresentable {
             displayedFontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
             )
+        }
+
+        func consumeFocusRequest(_ request: Int, in textView: UITextView) {
+            guard request != handledFocusRequest else { return }
+            handledFocusRequest = request
+            // Wait for the hosting controller to remove the title text field.
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView, textView.isEditable else { return }
+                _ = textView.becomeFirstResponder()
+            }
         }
 
         func attachNavigation(to textView: MarkdownTextView) {
