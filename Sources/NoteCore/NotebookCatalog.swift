@@ -76,6 +76,22 @@ private struct NotebookLegacyMigrationReceipt: Codable {
 /// Derived repairs never write back during merge, which would make outcomes
 /// depend on the sequence in which remote records happened to arrive.
 final class NotebookCatalogDocument {
+    /// Flat root registers avoid conflicting creation of an optional map on
+    /// two devices upgrading the same catalog independently.
+    private enum RecentField: String { case pin, activity }
+    private struct RecentAction {
+        let verb: String
+        let sequence: UInt64
+        let id: UUID
+        var token: String { "\(verb):\(sequence):\(id.uuidString)" }
+    }
+    struct RecentState {
+        let pinned: Bool
+        let pinOrder: UInt64?
+        let pinActionID: UUID?
+        let activityOrder: UInt64?
+        let activityActionID: UUID?
+    }
     private let document: Document
     private let itemsObject: ObjId
     private typealias ItemEntry = (
@@ -132,7 +148,125 @@ final class NotebookCatalogDocument {
         self.itemsObject = items
         self.notebookID = notebookID
         _ = try readItems()
+        _ = try recentStates()
         _ = try legacyMigration()
+    }
+
+    private func recentKey(_ field: RecentField, _ id: UUID) -> String {
+        "recent.\(field.rawValue).\(id.uuidString)"
+    }
+
+    private func recentActions(_ field: RecentField, _ id: UUID) throws -> [RecentAction] {
+        try document.getAll(obj: .ROOT, key: recentKey(field, id)).map { value in
+            guard case .Scalar(.String(let token)) = value,
+                let action = Self.parseRecentAction(token, field: field)
+            else { throw NotebookCatalogError.invalidDocument }
+            return action
+        }
+    }
+
+    private static func parseRecentAction(
+        _ token: String, field: RecentField
+    ) -> RecentAction? {
+        let parts = token.split(separator: ":")
+        guard parts.count == 3,
+            let sequence = UInt64(parts[1]),
+            let id = UUID(uuidString: String(parts[2])),
+            id.uuidString == parts[2],
+            (field == .pin && (parts[0] == "pin" || parts[0] == "unpin")
+                || field == .activity && (parts[0] == "edit" || parts[0] == "clear"))
+        else { return nil }
+        return RecentAction(verb: String(parts[0]), sequence: sequence, id: id)
+    }
+
+    func recentStates() throws -> [UUID: RecentState] {
+        let prefix = "recent."
+        let keys = document.keys(obj: .ROOT).filter { $0.hasPrefix(prefix) }
+        var ids: Set<UUID> = []
+        for key in keys {
+            let parts = key.split(separator: ".")
+            guard parts.count == 3,
+                ["pin", "activity"].contains(parts[1]),
+                let id = UUID(uuidString: String(parts[2])),
+                id.uuidString == parts[2]
+            else { throw NotebookCatalogError.invalidDocument }
+            ids.insert(id)
+        }
+        var result: [UUID: RecentState] = [:]
+        for id in ids {
+            let pins = try recentActions(.pin, id)
+            let activities = try recentActions(.activity, id)
+            // A conflict exists only for concurrent writes. An observed later
+            // write replaces its predecessor in Automerge's register.
+            let winningPin = pins.contains { $0.verb == "unpin" } ? nil : pins.max {
+                ($0.sequence, $0.id.uuidString) < ($1.sequence, $1.id.uuidString)
+            }
+            let winningActivity = activities.contains { $0.verb == "clear" }
+                ? nil : activities.max {
+                    ($0.sequence, $0.id.uuidString) < ($1.sequence, $1.id.uuidString)
+                }
+            result[id] = RecentState(
+                pinned: winningPin != nil,
+                pinOrder: winningPin?.sequence,
+                pinActionID: winningPin?.id,
+                activityOrder: winningActivity?.sequence,
+                activityActionID: winningActivity?.id
+            )
+        }
+        return result
+    }
+
+    private func nextRecentSequence(_ field: RecentField) throws -> UInt64 {
+        let prefix = "recent.\(field.rawValue)."
+        var highest: UInt64 = 0
+        for key in document.keys(obj: .ROOT) where key.hasPrefix(prefix) {
+            guard let id = UUID(uuidString: String(key.dropFirst(prefix.count))) else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            for action in try recentActions(field, id) {
+                highest = max(highest, action.sequence)
+            }
+        }
+        guard highest < UInt64.max else { throw NotebookCatalogError.invalidDocument }
+        return highest + 1
+    }
+
+    func setPinnedInRecents(_ pinned: Bool, for id: UUID) throws {
+        let action = RecentAction(
+            verb: pinned ? "pin" : "unpin",
+            sequence: try nextRecentSequence(.pin), id: UUID()
+        )
+        try document.put(obj: .ROOT, key: recentKey(.pin, id), value: .String(action.token))
+    }
+
+    func recordRecentActivity(for id: UUID) throws {
+        let action = RecentAction(
+            verb: "edit", sequence: try nextRecentSequence(.activity), id: UUID()
+        )
+        try document.put(obj: .ROOT, key: recentKey(.activity, id), value: .String(action.token))
+    }
+
+    func clearRecents(for ids: Set<UUID>) throws {
+        guard !ids.isEmpty else { return }
+        var pinSequence = try nextRecentSequence(.pin)
+        var activitySequence = try nextRecentSequence(.activity)
+        guard UInt64(ids.count - 1) <= UInt64.max - pinSequence,
+            UInt64(ids.count - 1) <= UInt64.max - activitySequence
+        else { throw NotebookCatalogError.invalidDocument }
+        for (index, id) in ids.sorted(by: { $0.uuidString < $1.uuidString }).enumerated() {
+            let pin = RecentAction(
+                verb: "unpin", sequence: pinSequence, id: UUID()
+            )
+            let activity = RecentAction(
+                verb: "clear", sequence: activitySequence, id: UUID()
+            )
+            try document.put(obj: .ROOT, key: recentKey(.pin, id), value: .String(pin.token))
+            try document.put(obj: .ROOT, key: recentKey(.activity, id), value: .String(activity.token))
+            if index < ids.count - 1 {
+                pinSequence += 1
+                activitySequence += 1
+            }
+        }
     }
 
     func legacyMigration() throws -> NotebookLegacyMigration {
