@@ -14,9 +14,17 @@ struct NotebookApplicationView: View {
                 ContentUnavailableView {
                     Label("Notebook unavailable", systemImage: "exclamationmark.triangle")
                 } description: {
-                    Text(message)
+                    if let failure = workspace.syncFailure {
+                        Text(failure.message)
+                        if let hint = failure.actionHint { Text(hint) }
+                    } else {
+                        Text(message)
+                    }
                 } actions: {
-                    Button("Retry") { Task { await workspace.start() } }
+                    Button("Retry") {
+                        Task { await workspace.start(manualRetry: true) }
+                    }
+                    .disabled(!workspace.canRetrySync)
                     if let action = workspace.recoveryAction {
                         Text(action.details + " Restoring may lose newer changes.")
                         Button(action.title) {

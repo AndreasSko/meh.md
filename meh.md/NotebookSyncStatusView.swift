@@ -107,19 +107,39 @@ struct NotebookSyncDetailsView: View {
                     Text("Last activity: \(progress.lastProgressAt.formatted(date: .omitted, time: .standard))")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if let error = workspace.syncSetupError { Text(error).font(.caption) }
+                if let failure = workspace.syncFailure {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(failure.title).font(.headline)
+                        Text(failure.message)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let hint = failure.actionHint {
+                            Text(hint)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.callout)
+                    .accessibilityIdentifier("sync-failure-explanation")
+                } else if let error = workspace.syncSetupError {
+                    Text(error).font(.caption)
+                }
                 if let error = workspace.notificationRegistrationError {
                     Text(error).font(.caption)
                 }
-                if case .failed(let error) = workspace.sync?.status {
+                if workspace.syncFailure == nil,
+                   case .failed(let error) = workspace.sync?.status {
                     Text(error).font(.caption)
                 }
                 Text("Progress counts saved revisions acknowledged by the sync service. Other devices receive them when they synchronize.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Sync Event Log") { showingEventLog = true }
                     .accessibilityIdentifier("notebook-sync-event-log")
-                Button("Sync Now") { Task { await workspace.refresh(manual: true) } }
-                    .disabled(workspace.isRefreshing || !workspace.usesSync)
+                Button(workspace.syncHalt?.isRecoverable == true
+                       ? "Retry Sync" : "Sync Now") {
+                    Task { await workspace.refresh(manual: true) }
+                }
+                    .disabled(workspace.isRefreshing || !workspace.usesSync
+                              || !workspace.canRetrySync)
                     .accessibilityIdentifier("sync-now")
             }
             .padding(20)
