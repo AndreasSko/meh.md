@@ -82,6 +82,29 @@ final class RemoteEditorTests: XCTestCase {
         XCTAssertTrue(model.bindingWrites.isEmpty)
     }
 
+    func testRemoteTableReplacementRefreshesPreviewWithoutWritingBack() throws {
+        let source = "| Name | Time |\n| --- | --- |\n| Walk | 09:00 |\n\nOutside"
+        let model = EditorModel(text: source, revision: revision(0))
+        model.mode = .livePreview
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+        moveInsertionPointToEnd(of: textView)
+        let remote = source.replacingOccurrences(of: "09:00", with: "10:30")
+        model.receiveRemote(text: remote, revision: revision(9))
+        mounted.flushUpdates()
+        MarkdownPresentation.refresh(textView, mode: .livePreview)
+        XCTAssertEqual(nativeText(in: textView), remote)
+        XCTAssertTrue(model.requests.isEmpty)
+        XCTAssertTrue(model.bindingWrites.isEmpty)
+        let cache = MarkdownPresentation.syntaxCache(for: textView)
+        XCTAssertEqual(cache.tableLayout?.rows.last?.cells.last?.string, "10:30")
+        insert("!", in: textView)
+        mounted.flushUpdates()
+        XCTAssertEqual(model.requests.map(\.revision), [revision(9)])
+        XCTAssertEqual(model.text, remote + "!")
+    }
+
     func testCommandAfterRemoteUpdateUsesFreshRevisionInLivePreview() throws {
         let model = EditorModel(text: "* Moon", revision: revision(0))
         model.mode = .livePreview
@@ -102,6 +125,202 @@ final class RemoteEditorTests: XCTestCase {
         textView.undoManager?.undo()
         XCTAssertEqual(nativeText(in: textView), "* Remote Moon")
     }
+
+    func testTableRowCommandCommitsLiteralMarkdownAndUndoesOnce() throws {
+        let source = "| Name | Time |\n| --- | --- |\n| Walk | 09:00 |\n\nOutside"
+        let model = EditorModel(text: source, revision: revision(0))
+        model.mode = .livePreview
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+
+        let cell = (source as NSString).range(of: "Walk")
+        setSelection(NSRange(location: cell.location + 1, length: 0),
+                     in: textView)
+        model.navigation.performCommand?(.tableRowBelow)
+        mounted.flushUpdates()
+
+        let expected = "| Name | Time |\n| --- | --- |\n"
+            + "| Walk | 09:00 |\n|  |  |\n\nOutside"
+        XCTAssertEqual(nativeText(in: textView), expected)
+        XCTAssertEqual(model.text, expected)
+        XCTAssertEqual(model.requests.map(\.revision), [revision(0)])
+        XCTAssertEqual(model.requests.map(\.text), [expected])
+        XCTAssertTrue(model.bindingWrites.isEmpty)
+
+        let undo = try XCTUnwrap(textView.undoManager)
+        XCTAssertTrue(undo.canUndo)
+        undo.undo()
+        mounted.flushUpdates()
+        XCTAssertEqual(nativeText(in: textView), source)
+        XCTAssertEqual(model.text, source)
+        undo.redo()
+        mounted.flushUpdates()
+        XCTAssertEqual(nativeText(in: textView), expected)
+        XCTAssertEqual(model.text, expected)
+    }
+
+    func testTableCommandAfterRemoteReplacementUsesFreshSourceAndRevision()
+        throws {
+        let source = "| Name | Time |\n| --- | --- |\n| Walk | 09:00 |\n\nOutside"
+        let model = EditorModel(text: source, revision: revision(0))
+        model.mode = .livePreview
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+
+        let remote = "Intro\n\n| Name | Time |\n| --- | --- |\n"
+            + "| Walk | 10:30 |\n\nRemote outside"
+        model.receiveRemote(text: remote, revision: revision(9))
+        mounted.flushUpdates()
+        let cell = (remote as NSString).range(of: "Walk")
+        setSelection(NSRange(location: cell.location + 1, length: 0),
+                     in: textView)
+        model.navigation.performCommand?(.tableRowBelow)
+        mounted.flushUpdates()
+
+        XCTAssertEqual(model.requests.map(\.revision), [revision(9)])
+        XCTAssertEqual(model.requests.count, 1)
+        XCTAssertTrue(model.text.hasPrefix("Intro\n\n"))
+        XCTAssertTrue(model.text.contains("| Walk | 10:30 |\n|  |  |"))
+        XCTAssertTrue(model.text.hasSuffix("\n\nRemote outside"))
+        XCTAssertEqual(nativeText(in: textView), model.text)
+        XCTAssertTrue(model.bindingWrites.isEmpty)
+    }
+
+    func testTableCellNavigationDoesNotCommitUntilItAddsARow() throws {
+        let source = "| Name | Time |\n| --- | --- |\n| Walk | 09:00 |"
+        let model = EditorModel(text: source, revision: revision(0))
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+
+        let first = (source as NSString).range(of: "Walk")
+        let last = (source as NSString).range(of: "09:00")
+        setSelection(NSRange(location: first.location + 1, length: 0),
+                     in: textView)
+        model.navigation.performCommand?(.tableNextCell)
+        XCTAssertEqual(selectedRange(in: textView),
+                       last)
+        XCTAssertEqual(nativeText(in: textView), source)
+        XCTAssertTrue(model.requests.isEmpty)
+        XCTAssertFalse(textView.undoManager?.canUndo == true)
+
+        model.navigation.performCommand?(.tableNextCell)
+        mounted.flushUpdates()
+        XCTAssertEqual(model.requests.map(\.revision), [revision(0)])
+        XCTAssertEqual(model.requests.count, 1)
+        XCTAssertTrue(model.text.hasSuffix("\n|  |  |\n"))
+        XCTAssertEqual(nativeText(in: textView), model.text)
+        XCTAssertTrue(textView.undoManager?.canUndo == true)
+    }
+
+    func testPreparedTableDeletionCancelsAfterRemoteReplacement() throws {
+        let source = "| Name | Time |\n| --- | --- |\n| Walk | 09:00 |"
+        let model = EditorModel(text: source, revision: revision(0))
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+
+        let cell = (source as NSString).range(of: "Walk")
+        setSelection(NSRange(location: cell.location + 1, length: 0),
+                     in: textView)
+        let confirm = try XCTUnwrap(
+            model.navigation.prepareCommand?(.tableDeleteRow)
+        )
+        let remote = "| Name | Time |\n| --- | --- |\n| Ride | 10:30 |"
+        model.receiveRemote(text: remote, revision: revision(9))
+        mounted.flushUpdates()
+        confirm()
+
+        XCTAssertEqual(nativeText(in: textView), remote)
+        XCTAssertEqual(model.text, remote)
+        XCTAssertTrue(model.requests.isEmpty)
+        XCTAssertFalse(textView.undoManager?.canUndo == true)
+    }
+
+    func testPreparedTableDeletionCancelsAfterSelectionMoves() throws {
+        let source = "| Name | Time |\n| --- | --- |\n| Walk | 09:00 |"
+        let model = EditorModel(text: source, revision: revision(0))
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+
+        let first = (source as NSString).range(of: "Walk")
+        let second = (source as NSString).range(of: "09:00")
+        setSelection(NSRange(location: first.location, length: 0),
+                     in: textView)
+        let confirm = try XCTUnwrap(
+            model.navigation.prepareCommand?(.tableDeleteRow)
+        )
+        setSelection(NSRange(location: second.location, length: 0),
+                     in: textView)
+        confirm()
+
+        XCTAssertEqual(nativeText(in: textView), source)
+        XCTAssertEqual(model.text, source)
+        XCTAssertTrue(model.requests.isEmpty)
+        XCTAssertFalse(textView.undoManager?.canUndo == true)
+    }
+
+    func testTableCommandAvailabilityTracksCaretLocation() throws {
+        let source = "| Name | Time |\n| --- | --- |\n| Walk | 09:00 |\n\nOutside"
+        let model = EditorModel(text: source, revision: revision(0))
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+
+        let cell = (source as NSString).range(of: "Walk")
+        setSelection(NSRange(location: cell.location, length: 0),
+                     in: textView)
+        mounted.flushUpdates()
+        let inside = model.navigation.tableCommands.available
+        XCTAssertTrue(inside.contains(.tableRowBelow))
+        XCTAssertTrue(inside.contains(.tableDeleteRow))
+        XCTAssertTrue(inside.contains(.tableColumnAfter))
+        XCTAssertFalse(inside.contains(.insertTable))
+
+        moveInsertionPointToEnd(of: textView)
+        mounted.flushUpdates()
+        let outside = model.navigation.tableCommands.available
+        XCTAssertTrue(outside.contains(.insertTable))
+        XCTAssertFalse(outside.contains(.tableDeleteRow))
+        XCTAssertFalse(outside.contains(.tableColumnAfter))
+    }
+
+#if os(macOS)
+    func testNativeTabNavigatesTableAndIndentsProse() throws {
+        let source = "| Name | Time |\n| --- | --- |\n| Walk | 09:00 |\n\nOutside"
+        let model = EditorModel(text: source, revision: revision(0))
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+
+        let first = (source as NSString).range(of: "Walk")
+        let second = (source as NSString).range(of: "09:00")
+        textView.setSelectedRange(NSRange(location: first.location, length: 0))
+        textView.insertTab(nil)
+        XCTAssertEqual(textView.selectedRange(),
+                       second)
+        textView.insertBacktab(nil)
+        XCTAssertEqual(textView.selectedRange(),
+                       first)
+        XCTAssertEqual(model.text, source)
+        XCTAssertTrue(model.requests.isEmpty)
+        XCTAssertFalse(textView.undoManager?.canUndo == true)
+
+        let outside = (source as NSString).range(of: "Outside")
+        textView.setSelectedRange(NSRange(location: outside.location,
+                                         length: 0))
+        textView.insertTab(nil)
+        mounted.flushUpdates()
+        XCTAssertEqual(model.text, source.replacingOccurrences(
+            of: "\nOutside", with: "\n  Outside"
+        ))
+        XCTAssertEqual(model.requests.map(\.revision), [revision(0)])
+        XCTAssertTrue(textView.undoManager?.canUndo == true)
+    }
+#endif
 
     func testRemoteUpdateBetweenLocalEditsUsesDisplayedRevision() throws {
         let model = EditorModel(text: "hello", revision: revision(0))

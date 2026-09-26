@@ -18,15 +18,21 @@ struct MarkdownLivePreviewSnapshot: Equatable {
     let mode: MarkdownEditorMode
     let selection: NSRange
     let isEditing: Bool
+    let tableWidth: CGFloat
+    let fontSize: CGFloat
 
     init(
         mode: MarkdownEditorMode,
         selection: NSRange,
-        isEditing: Bool = true
+        isEditing: Bool = true,
+        tableWidth: CGFloat = .greatestFiniteMagnitude,
+        fontSize: CGFloat = 17
     ) {
         self.mode = mode
         self.selection = selection
         self.isEditing = isEditing
+        self.tableWidth = tableWidth
+        self.fontSize = fontSize
     }
 }
 
@@ -51,12 +57,23 @@ enum MarkdownLivePreview {
         _ textView: MarkdownNativeTextView,
         mode: MarkdownEditorMode,
         selection: NSRange,
-        isEditing: Bool
+        isEditing: Bool,
+        fontSize: CGFloat = 17
     ) {
+#if os(macOS)
+        let container = textView.textContainer
+        let width = (container?.size.width ?? 0)
+            - 2 * (container?.lineFragmentPadding ?? 0)
+#else
+        let width = textView.textContainer.size.width
+            - 2 * textView.textContainer.lineFragmentPadding
+#endif
         state(for: textView).snapshot = MarkdownLivePreviewSnapshot(
             mode: mode,
             selection: selection,
-            isEditing: isEditing
+            isEditing: isEditing,
+            tableWidth: width,
+            fontSize: fontSize
         )
     }
 
@@ -107,9 +124,21 @@ enum MarkdownLivePreview {
                 break
             }
         }
-        let activeRange = snapshot.isEditing
+        var activeRange = snapshot.isEditing
             ? activeParagraphRange(in: source, selection: snapshot.selection)
             : nil
+        // A table is one editing unit. Revealing only the current paragraph
+        // would leave a mixture of source rows and rendered rows.
+        for table in result.tables {
+            if let active = activeRange, intersects(table.range, active) {
+                activeRange = NSUnionRange(active, table.range)
+            } else if canRender(table, snapshot: snapshot) {
+                collapsed.append(table.range)
+            } else {
+                // Unsupported tables remain source so no content is hidden.
+                collapsed.removeAll { intersects($0, table.range) }
+            }
+        }
         func concealed(_ candidates: [NSRange]) -> [NSRange] {
             let bounded = candidates.filter { candidate in
                 candidate.location >= 0 && candidate.length > 0
@@ -122,6 +151,16 @@ enum MarkdownLivePreview {
             collapsed: concealed(collapsed),
             transparent: concealed(transparent)
         )
+    }
+
+    static func canRender(
+        _ table: MarkdownTable,
+        snapshot: MarkdownLivePreviewSnapshot
+    ) -> Bool {
+        snapshot.mode == .livePreview
+            && table.rows.allSatisfy { $0.cells.count <= table.alignments.count }
+            && snapshot.tableWidth.isFinite
+            && snapshot.tableWidth > 0
     }
 
     static func conceals(
@@ -192,7 +231,7 @@ enum MarkdownLivePreview {
         return state
     }
 
-    private static func markerRanges(
+    static func markerRanges(
         for span: MarkdownStyleSpan,
         in source: NSString
     ) -> [NSRange] {
