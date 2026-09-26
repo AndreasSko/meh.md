@@ -34,6 +34,7 @@ and the evidence collected along the way.
   and the isolated Debug workspace.
 - [Markdown import](notebook-import-contract.md): source-preserving import.
 - [Markdown copies](markdown-copy-contract.md): portable, one-way output.
+- [Markdown backups](markdown-backups.md): local schedule and retention.
 - [Local durability](durability-contract.md): per-note save and recovery rules.
 - [Notebook sync](notebook-sync-contract.md): bootstrap and durable
   replication.

@@ -7,6 +7,32 @@ import Observation
 import UIKit
 #endif
 
+enum NotebookBackupFrequency: String, CaseIterable, Identifiable {
+    case off, daily, weekly, monthly
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off: "Off"
+        case .daily: "Daily"
+        case .weekly: "Weekly"
+        case .monthly: "Monthly"
+        }
+    }
+
+    func nextDate(after date: Date, calendar: Calendar = .current) -> Date? {
+        let component: Calendar.Component
+        switch self {
+        case .off: return nil
+        case .daily: component = .day
+        case .weekly: component = .weekOfYear
+        case .monthly: component = .month
+        }
+        return calendar.date(byAdding: component, value: 1, to: date)
+    }
+}
+
 @MainActor
 @Observable
 final class NotebookWorkspace {
@@ -47,6 +73,11 @@ final class NotebookWorkspace {
     private(set) var syncHalt: CloudKitSyncHaltStatus?
     private(set) var copyError: String?
     private(set) var copiesURL: URL?
+    private(set) var backupError: String?
+    private(set) var lastBackup: NotebookMarkdownBackup?
+    private(set) var isBackingUp = false
+    var backupFrequency: NotebookBackupFrequency = .daily
+    var backupRetentionCount = 14
     private(set) var isLoading = false
     private(set) var isRefreshing = false
     private(set) var isSyncing = false
@@ -66,6 +97,9 @@ final class NotebookWorkspace {
         (@MainActor (String?) async throws -> any SyncTransport)?
     @ObservationIgnored private(set) var transportGeneration = UUID()
     private var publisher: NotebookMarkdownPublisher?
+    private var backupStore: NotebookMarkdownBackupStore?
+    @ObservationIgnored private var backupTimer: Task<Void, Never>?
+    @ObservationIgnored private var backupRetryNotBefore: Date?
     @ObservationIgnored private var scheduledRefresh: Task<Void, Never>?
     @ObservationIgnored private var syncSchedule = NotebookSyncSchedule()
     @ObservationIgnored private let syncClock = ContinuousClock()
@@ -89,6 +123,14 @@ final class NotebookWorkspace {
     private var needsAnotherCopyPublication = false
 
     var isPreview: Bool { if case .preview = mode { true } else { false } }
+    var backupDirectory: URL { documentsDirectory.appending(path: "Backups") }
+    var nextBackupDate: Date? {
+        guard backupFrequency != .off else { return nil }
+        let due = lastBackup.flatMap {
+            backupFrequency.nextDate(after: $0.createdAt)
+        } ?? Date()
+        return max(due, backupRetryNotBefore ?? due)
+    }
     var catalogRecoveryAvailable: Bool {
         recoveryAction?.kind == .catalog
     }
@@ -118,6 +160,8 @@ final class NotebookWorkspace {
     }
 
     init(preview: Bool = false) {
+        backupFrequency = Self.savedBackupFrequency
+        backupRetentionCount = Self.savedBackupRetentionCount
         let environment = ProcessInfo.processInfo.environment
         automaticSync = environment["MEH_SYNC_AUTOMATIC"] != "0"
         var mode: Mode = preview ? .preview : .local
@@ -189,6 +233,118 @@ final class NotebookWorkspace {
         self.transportFactory = transportFactory
     }
 
+    private static let backupFrequencyKey = "meh.md.backupFrequency"
+    private static let backupRetentionKey = "meh.md.backupRetentionCount"
+
+    private static var savedBackupFrequency: NotebookBackupFrequency {
+        guard let raw = UserDefaults.standard.string(forKey: backupFrequencyKey),
+              let saved = NotebookBackupFrequency(rawValue: raw) else { return .daily }
+        return saved
+    }
+
+    private static var savedBackupRetentionCount: Int {
+        let saved = UserDefaults.standard.integer(forKey: backupRetentionKey)
+        return saved == 0 ? 14 : min(max(saved, 1), 365)
+    }
+
+    func setBackupFrequency(_ frequency: NotebookBackupFrequency) {
+        backupFrequency = frequency
+        UserDefaults.standard.set(frequency.rawValue, forKey: Self.backupFrequencyKey)
+        armBackupTimer()
+        #if os(iOS)
+        NotebookBackupBackgroundScheduler.scheduleNext()
+        #endif
+        if frequency != .off { Task { await runDueBackup() } }
+    }
+
+    func setBackupRetentionCount(_ count: Int) {
+        backupRetentionCount = min(max(count, 1), 365)
+        UserDefaults.standard.set(backupRetentionCount, forKey: Self.backupRetentionKey)
+        Task { await enforceBackupRetention() }
+    }
+
+    func reloadBackupInfo() async {
+        do {
+            let store = backupStore ?? NotebookMarkdownBackupStore(directory: backupDirectory)
+            backupStore = store
+            let notebookID = replica?.catalogSnapshot?.notebookID
+            lastBackup = try await store.listBackups().first {
+                $0.notebookID == notebookID
+            }
+        } catch { backupError = error.localizedDescription }
+    }
+
+    private func enforceBackupRetention() async {
+        guard let notebookID = replica?.catalogSnapshot?.notebookID else { return }
+        do {
+            let store = backupStore ?? NotebookMarkdownBackupStore(directory: backupDirectory)
+            backupStore = store
+            try await store.enforceRetention(
+                notebookID: notebookID, keeping: backupRetentionCount
+            )
+            await reloadBackupInfo()
+        } catch { backupError = error.localizedDescription }
+    }
+
+    func backupNow(beforeBackup: (() async throws -> Void)? = nil) async throws {
+        guard !isBackingUp else { return }
+        isBackingUp = true
+        defer { isBackingUp = false }
+        do {
+            try Task.checkCancellation()
+            try await beforeBackup?()
+            guard let replica else { throw NotebookReplicaError.catalogUnavailable }
+            try await replica.flushOpenNotes()
+            guard let catalog = replica.catalogSnapshot else {
+                throw NotebookReplicaError.catalogUnavailable
+            }
+            let placements = replica.placements
+            let notes = try await replica.persistedNoteSnapshots()
+            try Task.checkCancellation()
+            let store = backupStore ?? NotebookMarkdownBackupStore(directory: backupDirectory)
+            backupStore = store
+            lastBackup = try await store.createBackup(
+                catalog: catalog, placements: placements, notes: notes,
+                retentionCount: backupRetentionCount
+            )
+            backupError = nil
+            backupRetryNotBefore = nil
+            armBackupTimer()
+            #if os(iOS)
+            NotebookBackupBackgroundScheduler.scheduleNext()
+            #endif
+        } catch {
+            backupError = error.localizedDescription
+            backupRetryNotBefore = Date().addingTimeInterval(60 * 60)
+            armBackupTimer()
+            #if os(iOS)
+            NotebookBackupBackgroundScheduler.scheduleNext()
+            #endif
+            throw error
+        }
+    }
+
+    func runDueBackup() async {
+        guard backupFrequency != .off, !Task.isCancelled else { return }
+        if replica == nil { await start() }
+        guard replica?.catalogSnapshot != nil, !isBackingUp else { return }
+        await reloadBackupInfo()
+        guard let due = nextBackupDate, !Task.isCancelled else { return }
+        guard due <= Date() else { armBackupTimer(); return }
+        do { try await backupNow() } catch { /* Settings shows the failure. */ }
+    }
+
+    private func armBackupTimer() {
+        backupTimer?.cancel()
+        guard let due = nextBackupDate else { return }
+        backupTimer = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(max(1, due.timeIntervalSinceNow))) }
+            catch { return }
+            guard let self, !Task.isCancelled else { return }
+            await runDueBackup()
+        }
+    }
+
     func start(manualRetry: Bool = false) async {
         guard !isLoading else { return }
         isLoading = true
@@ -228,8 +384,12 @@ final class NotebookWorkspace {
                 // any network request, so offline reopening remains useful.
                 replica = loaded
             }
+            // A local backup can succeed even when the following cloud
+            // exchange is delayed or unavailable.
+            await runDueBackup()
             startConnectivityMonitoring()
             await refresh(whileLoading: true, manual: manualRetry, trigger: "startup")
+            await runDueBackup()
         } catch {
             setRecoveryAction(for: error)
             errorMessage = error.localizedDescription

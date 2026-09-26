@@ -38,9 +38,22 @@ struct NotebookApplicationView: View {
                 ProgressView("Opening notebook…")
             }
         }
-        .task { await workspace.start() }
+        .task {
+            await workspace.start()
+            #if os(iOS)
+            NotebookBackupBackgroundScheduler.scheduleNext()
+            #endif
+        }
         .onChange(of: scenePhase, initial: true) { _, newPhase in
             workspace.sceneActivityChanged(isActive: newPhase == .active)
+            if newPhase == .active {
+                Task {
+                    await workspace.runDueBackup()
+                    #if os(iOS)
+                    NotebookBackupBackgroundScheduler.scheduleNext()
+                    #endif
+                }
+            }
         }
         .task(id: scenePhase) {
             // The loopback development service has no push channel. Only

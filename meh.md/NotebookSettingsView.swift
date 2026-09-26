@@ -1,9 +1,13 @@
 import NoteCore
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 
 struct NotebookSettingsView: View {
     let replica: NotebookReplica
+    let workspace: NotebookWorkspace
     let onImport: (NotebookImportPlan?) async throws -> Void
     let beforeExport: () async throws -> Void
     @Environment(\.dismiss) private var dismiss
@@ -27,13 +31,59 @@ struct NotebookSettingsView: View {
                     if preparing { ProgressView("Preparing Markdown…") }
                 }
                 .disabled(preparing || saving)
+                Section {
+                    Picker("Frequency", selection: Binding(
+                        get: { workspace.backupFrequency },
+                        set: { workspace.setBackupFrequency($0) }
+                    )) {
+                        ForEach(NotebookBackupFrequency.allCases) { frequency in
+                            Text(frequency.title).tag(frequency)
+                        }
+                    }
+                    Stepper(value: Binding(
+                        get: { workspace.backupRetentionCount },
+                        set: { workspace.setBackupRetentionCount($0) }
+                    ), in: 1...365) {
+                        Text("Keep latest \(workspace.backupRetentionCount)")
+                    }
+                    Button { backUpNow() } label: {
+                        HStack {
+                            Text(workspace.isBackingUp ? "Backing Up…" : "Back Up Now")
+                            Spacer()
+                            if workspace.isBackingUp {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                    }
+                    .disabled(workspace.isBackingUp || preparing || saving)
+                    .accessibilityIdentifier("notebook-backup-now")
+                    if let lastBackup = workspace.lastBackup {
+                        LabeledContent("Last backup",
+                            value: lastBackup.createdAt.formatted(
+                                date: .abbreviated, time: .shortened
+                            ))
+                    }
+                    if let backupError = workspace.backupError {
+                        Text(backupError).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Automatic Backups")
+                } footer: {
+                    #if os(macOS)
+                    Text("In Finder, use Go to Folder to open \(workspace.backupDirectory.deletingLastPathComponent().path). Current notes are in Notebook Copies/Markdown; backups are in Backups. Trash is not included.")
+                    #else
+                    let device = UIDevice.current.userInterfaceIdiom == .pad
+                        ? "On My iPad" : "On My iPhone"
+                    Text("In Files, open \(device) › meh.md. Current notes are in Notebook Copies/Markdown; backups are in Backups. Trash is not included.")
+                    #endif
+                }
                 Section("Local Storage") {
                     Button("Reset All Local Data…", role: .destructive) {
                         confirmingReset = true
                     }
                     .foregroundStyle(.red)
                     .disabled(preparing || saving || resetScheduled)
-                    Text("Removes local notes, settings, and sync data on the next launch. Unsynced changes will be lost. iCloud data is kept.")
+                    Text("Removes local notes, settings, and sync data on the next launch. Unsynced changes will be lost. iCloud data and backups are kept.")
                         .font(.footnote)
                 }
             }
@@ -59,7 +109,7 @@ struct NotebookSettingsView: View {
                 resetScheduled = true
             }
         } message: {
-            Text("This cannot be undone. All local notes, including unsynced changes, settings, and sync history will be removed when you reopen the app. Export anything you need first. Notes already in iCloud remain there and will download again.")
+            Text("This cannot be undone. All local notes, including unsynced changes, settings, and sync history will be removed when you reopen the app. Local backups and notes already in iCloud are kept.")
         }
         .alert("Reset Scheduled", isPresented: $resetScheduled) {
             #if os(macOS)
@@ -99,6 +149,13 @@ struct NotebookSettingsView: View {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+        .task { await workspace.reloadBackupInfo() }
+    }
+
+    private func backUpNow() {
+        Task { @MainActor in
+            try? await workspace.backupNow(beforeBackup: beforeExport)
         }
     }
 

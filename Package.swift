@@ -44,6 +44,7 @@ let package = Package(
                 "EditorWritingControls.swift",
                 "MarkdownPresentation.swift", "MarkdownSyntax.swift", "MyApp.swift",
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
+                "NotebookBackupBackgroundScheduler.swift",
                 "NotebookSettingsView.swift",
                 "NotebookImportView.swift", "NotebookNoteEditor.swift",
                 "NotebookTrashView.swift", "NotebookMoveSheet.swift",
@@ -89,7 +90,8 @@ let package = Package(
                 "icon.icon", "Info-iCloud.plist", "Info.plist", "macOS.entitlements",
                 "PrivacyInfo.xcprivacy",
                 "iOS.entitlements", "CloudKitSmokeCheck.swift",
-                "NotebookAppDelegate.swift", "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",
+                "NotebookAppDelegate.swift", "NotebookBackupBackgroundScheduler.swift",
+                "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",
             ],
             sources: [
                 "MarkdownEditor.swift",
