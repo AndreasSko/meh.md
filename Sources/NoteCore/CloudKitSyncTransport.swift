@@ -344,17 +344,22 @@ actor CloudKitTransportStateStore {
     private let fileURL: URL
     private let protocolVersion: Int
     private var state: CloudKitTransportState
+    private var isRetired = false
+    nonisolated let writeHealth = CloudKitWriteHealth()
+    private let writeState: @Sendable (Data, URL) throws -> Void
 
     init(
         directory: URL,
         accountRecordName: String,
         zoneName: String,
-        protocolVersion: Int = 1
+        protocolVersion: Int = 1,
+        writeState: (@Sendable (Data, URL) throws -> Void)? = nil
     ) throws {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true
         )
         self.protocolVersion = protocolVersion
+        self.writeState = writeState ?? SyncFileIO.replace
         fileURL = directory.appendingPathComponent("cloudkit-sync-state.json")
         if FileManager.default.fileExists(atPath: fileURL.path) {
             do {
@@ -381,28 +386,39 @@ actor CloudKitTransportStateStore {
                 zoneName: zoneName,
                 protocolVersion: protocolVersion
             )
-            try Self.write(state, to: fileURL)
+            try self.writeState(JSONEncoder().encode(state), fileURL)
         }
     }
 
     func snapshot() -> CloudKitTransportState { state }
 
+    /// Revokes writes on this instance before a replacement opens the same
+    /// state file. An update already executing in this actor finishes first.
+    func retire() { isRetired = true }
+
     func update<Result: Sendable>(
         _ body: (inout CloudKitTransportState) throws -> Result
     ) throws -> Result {
+        if let writeFailure = writeHealth.failure { throw writeFailure }
+        guard !isRetired else { throw CloudKitRetiredTransportError() }
         var next = state
         let result = try body(&next)
         try next.validate(expectedProtocolVersion: protocolVersion)
-        try Self.write(next, to: fileURL)
+        let data = try JSONEncoder().encode(next)
+        do {
+            try writeState(data, fileURL)
+        } catch {
+            let failure = CloudKitStateWriteFailure(
+                underlyingError: error
+            )
+            writeHealth.latch(failure)
+            isRetired = true
+            throw failure
+        }
         state = next
         return result
     }
 
-    private static func write(
-        _ state: CloudKitTransportState, to destination: URL
-    ) throws {
-        try SyncFileIO.replace(JSONEncoder().encode(state), at: destination)
-    }
 }
 
 actor CloudKitEventCommitter {
@@ -699,7 +715,11 @@ struct CloudKitAssetStaging {
 
     mutating func retain(_ record: SyncRecord) throws -> URL {
         let url = directory.appendingPathComponent(record.id)
-        try record.snapshot.data.write(to: url, options: .atomic)
+        do {
+            try record.snapshot.data.write(to: url, options: .atomic)
+        } catch {
+            throw CloudKitStateWriteFailure(underlyingError: error)
+        }
         users[url, default: 0] += 1
         return url
     }
@@ -982,7 +1002,7 @@ struct CloudKitAvailabilityCooldownStore {
 }
 
 @available(macOS 14.0, iOS 17.0, *)
-public final actor CloudKitSyncTransport: SyncTransport {
+public final actor CloudKitSyncTransport: HaltableSyncTransport {
     public nonisolated let scope: String
     public nonisolated let activity: AsyncStream<CloudKitSyncActivity>
 
@@ -1002,10 +1022,14 @@ public final actor CloudKitSyncTransport: SyncTransport {
     private var engineAssetLeases: [String: [URL]] = [:]
     private var availabilityCooldown: CloudKitAvailabilityCooldownStore
     private var engine: CKSyncEngine!
+    private var retiredEngineID: ObjectIdentifier?
     private var awaitedUploadIDs = Set<String>()
     private var acknowledgedIDs = Set<String>()
     private var failedUploads: [String: Error] = [:]
     private var delegateFailure: Error?
+    private var lastReportedFailure: Error?
+    private var isRetired = false
+    private var unexpectedDeletionObserved = false
     private var retryThrottle = CloudKitRetryThrottle()
     private var publishInProgress = false
     private var publishWaiters: [CheckedContinuation<Void, Never>] = []
@@ -1037,14 +1061,18 @@ public final actor CloudKitSyncTransport: SyncTransport {
     public static func makeNotebook(
         containerIdentifier: String,
         stateDirectory: URL,
-        automaticallySync: Bool = false
+        automaticallySync: Bool = false,
+        expectedScope: String? = nil,
+        expectedNotebookID: UUID? = nil
     ) async throws -> CloudKitSyncTransport {
         try await make(
             containerIdentifier: containerIdentifier,
             stateDirectory: stateDirectory,
             zoneName: CloudKitTransportMode.notebook.zoneName,
             mode: .notebook,
-            automaticallySync: automaticallySync
+            automaticallySync: automaticallySync,
+            expectedScope: expectedScope,
+            expectedNotebookID: expectedNotebookID
         )
     }
 
@@ -1053,7 +1081,9 @@ public final actor CloudKitSyncTransport: SyncTransport {
         stateDirectory: URL,
         zoneName: String,
         mode: CloudKitTransportMode,
-        automaticallySync: Bool
+        automaticallySync: Bool,
+        expectedScope: String? = nil,
+        expectedNotebookID: UUID? = nil
     ) async throws -> CloudKitSyncTransport {
         try mode.validate(zoneName: zoneName)
         var availabilityCooldown = try CloudKitAvailabilityCooldownStore(
@@ -1078,12 +1108,35 @@ public final actor CloudKitSyncTransport: SyncTransport {
             try availabilityCooldown.observe(error)
             throw error
         }
+        if let expectedScope {
+            let actualScope = "\(containerIdentifier)/private/"
+                + "\(userRecordID.recordName)/\(zoneName)"
+            guard actualScope == expectedScope else {
+                throw SyncError.scopeChanged
+            }
+            let stateURL = stateDirectory.appendingPathComponent(
+                "cloudkit-sync-state.json"
+            )
+            guard FileManager.default.fileExists(atPath: stateURL.path) else {
+                throw CloudKitSyncTransportError.corruptState
+            }
+        }
         let store = try CloudKitTransportStateStore(
             directory: stateDirectory,
             accountRecordName: userRecordID.recordName,
             zoneName: zoneName,
             protocolVersion: mode.protocolVersion
         )
+        if let expectedNotebookID {
+            let state = await store.snapshot()
+            guard state.inbox.allSatisfy({
+                $0.notebookID == expectedNotebookID
+            }), state.outbox.values.allSatisfy({
+                $0.notebookID == expectedNotebookID
+            }) else {
+                throw SyncError.scopeChanged
+            }
+        }
         let transport = CloudKitSyncTransport(
             containerIdentifier: containerIdentifier,
             container: container,
@@ -1123,6 +1176,7 @@ public final actor CloudKitSyncTransport: SyncTransport {
         self.activityChannel = activityChannel
         activity = activityChannel.stream
         assetDirectory = stateDirectory.appendingPathComponent("assets")
+            .appendingPathComponent(UUID().uuidString)
         assetStaging = CloudKitAssetStaging(directory: assetDirectory)
         self.availabilityCooldown = availabilityCooldown
         self.automaticallySync = automaticallySync
@@ -1130,10 +1184,18 @@ public final actor CloudKitSyncTransport: SyncTransport {
     }
 
     private func initialize() async throws {
+        let assetRoot = assetDirectory.deletingLastPathComponent()
+        try FileManager.default.createDirectory(
+            at: assetRoot, withIntermediateDirectories: true
+        )
+        CloudKitAssetGenerationCleanup.prunePreviousProcessGenerations(
+            in: assetRoot
+        )
         try FileManager.default.createDirectory(
             at: assetDirectory, withIntermediateDirectories: true
         )
         let saved = await store.snapshot()
+        unexpectedDeletionObserved = saved.hasUnexpectedDeletion
         let deadline = [saved.retryNotBefore, availabilityCooldown.notBefore]
             .compactMap { $0 }.max()
         retryThrottle = CloudKitRetryThrottle(notBefore: deadline)
@@ -1160,6 +1222,24 @@ public final actor CloudKitSyncTransport: SyncTransport {
         )
         configuration.automaticallySync = automaticallySync
         engine = CKSyncEngine(configuration)
+        let queuedSaves = Set(
+            engine.state.pendingRecordZoneChanges.compactMap { change in
+                if case let .saveRecord(id) = change {
+                    return id.recordName
+                }
+                return nil
+            }
+        )
+        let missingSaves = saved.outbox.keys.filter {
+            !queuedSaves.contains($0)
+        }.map { name in
+            CKSyncEngine.PendingRecordZoneChange.saveRecord(
+                CKRecord.ID(recordName: name, zoneID: zoneID)
+            )
+        }
+        if !missingSaves.isEmpty {
+            engine.state.add(pendingRecordZoneChanges: missingSaves)
+        }
     }
 
     public func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
@@ -1182,7 +1262,8 @@ public final actor CloudKitSyncTransport: SyncTransport {
             var uploadCompleted = false
             defer {
                 assetStaging.release(
-                    assetURL, uploadCompleted: uploadCompleted
+                    assetURL,
+                    uploadCompleted: uploadCompleted || isRetired
                 )
             }
             let cloudRecord = try makeCloudRecord(
@@ -1243,6 +1324,7 @@ public final actor CloudKitSyncTransport: SyncTransport {
         try await store.update { state in
             for record in records { state.outbox[record.id] = record }
         }
+        try assertActive()
 
         var stagedAssets: [String: URL] = [:]
         var completedIDs = Set<String>()
@@ -1251,15 +1333,18 @@ public final actor CloudKitSyncTransport: SyncTransport {
                 assetStaging.release(
                     assetURL,
                     uploadCompleted: completedIDs.contains(id)
+                        || isRetired
                 )
             }
         }
         for record in records {
             if stagedAssets[record.id] == nil {
+                try assertActive()
                 stagedAssets[record.id] = try assetStaging.retain(record)
             }
         }
 
+        try assertActive()
         let batch = CloudKitUploadBatch(records: records, zoneID: zoneID)
         let ids = batch.ids
         let recordIDs = batch.recordIDs
@@ -1324,6 +1409,7 @@ public final actor CloudKitSyncTransport: SyncTransport {
             }
         }
         let state = await store.snapshot()
+        try assertActive()
         try state.validateRemoteDeletions()
         return try state.page(after: cursor, limit: Self.pageSize)
     }
@@ -1391,6 +1477,7 @@ public final actor CloudKitSyncTransport: SyncTransport {
                 CKRecord.ID(recordName: $0, zoneID: zoneID)
             )
         }
+        try assertActive()
         engine.state.remove(pendingRecordZoneChanges: changes)
         try assetStaging.purge(recordIDs: pendingIDs)
 
@@ -1445,6 +1532,58 @@ public final actor CloudKitSyncTransport: SyncTransport {
             .max()
     }
 
+    public func haltStatus() async -> CloudKitSyncHaltStatus? {
+        if let failure = store.writeHealth.failure { latchFailure(failure) }
+        if let delegateFailure {
+            return CloudKitSyncHaltStatus(error: delegateFailure)
+        }
+        if isRetired {
+            return CloudKitSyncHaltStatus(
+                reason: .retired,
+                underlyingError: CloudKitRetiredTransportError(),
+                isRecoverable: false
+            )
+        }
+        let hasUnexpectedDeletion = await store.snapshot().hasUnexpectedDeletion
+        if let failure = store.writeHealth.failure { latchFailure(failure) }
+        if let delegateFailure {
+            return CloudKitSyncHaltStatus(error: delegateFailure)
+        }
+        if hasUnexpectedDeletion {
+            return CloudKitSyncHaltStatus(
+                error: CloudKitSyncTransportError.unexpectedDeletion
+            )
+        }
+        return nil
+    }
+
+    public func lastFailure() -> (any Error)? {
+        lastReportedFailure
+    }
+
+    /// The durable write fence is installed before a new instance may open
+    /// this state directory. Cancellation is advisory: CK may still deliver
+    /// callbacks, all of which are ignored by this retired instance.
+    public func retire() async {
+        guard !isRetired else {
+            await store.retire()
+            return
+        }
+        let oldEngine = engine
+        retiredEngineID = oldEngine.map(ObjectIdentifier.init)
+        isRetired = true
+        await store.retire()
+        engine = nil
+        activityChannel.finish()
+        let waiters = publishWaiters
+        publishWaiters.removeAll()
+        publishInProgress = false
+        for waiter in waiters { waiter.resume() }
+        if let oldEngine {
+            Task.detached { await oldEngine.cancelOperations() }
+        }
+    }
+
     private func acquirePublishLease() async {
         if !publishInProgress {
             publishInProgress = true
@@ -1464,13 +1603,23 @@ public final actor CloudKitSyncTransport: SyncTransport {
     }
 
     private func verifyAccount() async throws {
-        guard try await cloudRequest({
-                  try await container.accountStatus()
-              }) == .available,
-              try await cloudRequest({
-                  try await container.userRecordID()
-              })
-                == expectedUserRecordID else {
+        let status = try await cloudRequest {
+            try await container.accountStatus()
+        }
+        switch status {
+        case .available:
+            break
+        case .noAccount:
+            latchFailure(SyncError.scopeChanged)
+            throw SyncError.scopeChanged
+        default:
+            throw CloudKitSyncTransportError.accountUnavailable
+        }
+        let currentUser = try await cloudRequest {
+            try await container.userRecordID()
+        }
+        guard currentUser == expectedUserRecordID else {
+            latchFailure(SyncError.scopeChanged)
             throw SyncError.scopeChanged
         }
     }
@@ -1478,13 +1627,20 @@ public final actor CloudKitSyncTransport: SyncTransport {
     private func cloudRequest<T>(
         _ operation: () async throws -> T
     ) async throws -> T {
+        try assertActive()
         if let delegateFailure { throw delegateFailure }
         try await waitForRetryWindow()
         // Actor state can change while a cooldown suspends this request.
+        try assertActive()
         if let delegateFailure { throw delegateFailure }
         do {
-            return try await operation()
+            let result = try await operation()
+            try assertActive()
+            if let delegateFailure { throw delegateFailure }
+            return result
         } catch {
+            try assertActive()
+            if let delegateFailure { throw delegateFailure }
             await observeRetryAfter(error)
             throw error
         }
@@ -1497,25 +1653,58 @@ public final actor CloudKitSyncTransport: SyncTransport {
     }
 
     private func observeRetryAfter(_ error: Error) async {
+        guard !isRetired else { return }
         let delay = CloudKitRetryMetadata.seconds(in: error)
         guard retryThrottle.observe(retryAfter: delay, now: Date()) else {
             return
         }
         let deadline = retryThrottle.notBefore
         do {
-            try availabilityCooldown.merge(notBefore: deadline)
+            do {
+                try availabilityCooldown.merge(notBefore: deadline)
+            } catch {
+                throw CloudKitStateWriteFailure(underlyingError: error)
+            }
             try await store.update { $0.retryNotBefore = deadline }
         } catch {
             // Do not continue advancing CKSyncEngine state if the cooldown
             // cannot be made durable for a restart.
-            delegateFailure = error
+            latchFailure(error)
         }
     }
 
     private func assertHealthy() async throws {
+        try assertActive()
         if let delegateFailure { throw delegateFailure }
-        guard !(await store.snapshot().hasUnexpectedDeletion) else {
-            throw CloudKitSyncTransportError.unexpectedDeletion
+        let hasUnexpectedDeletion = await store.snapshot().hasUnexpectedDeletion
+        try assertActive()
+        if let delegateFailure { throw delegateFailure }
+        guard !hasUnexpectedDeletion else {
+            let error = CloudKitSyncTransportError.unexpectedDeletion
+            latchFailure(error)
+            throw error
+        }
+    }
+
+    private func assertActive() throws {
+        guard !isRetired else { throw CloudKitRetiredTransportError() }
+        if let failure = store.writeHealth.failure {
+            latchFailure(failure)
+            throw failure
+        }
+    }
+
+    private func latchFailure(_ error: any Error) {
+        if error as? SyncError == .scopeChanged {
+            delegateFailure = error
+        } else if delegateFailure == nil {
+            delegateFailure = error
+        } else {
+            return
+        }
+        lastReportedFailure = error
+        if let engine {
+            Task.detached { await engine.cancelOperations() }
         }
     }
 
@@ -1577,6 +1766,11 @@ public final actor CloudKitSyncTransport: SyncTransport {
         pending: [CKSyncEngine.PendingRecordZoneChange],
         outbox: [String: SyncRecord]
     ) throws -> [String: CKRecord] {
+        try assertActive()
+        if let delegateFailure { throw delegateFailure }
+        guard !unexpectedDeletionObserved else {
+            throw CloudKitSyncTransportError.unexpectedDeletion
+        }
         var records: [String: CKRecord] = [:]
         do {
             for change in pending {
@@ -1629,6 +1823,57 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
     public func handleEvent(
         _ event: CKSyncEngine.Event, syncEngine: CKSyncEngine
     ) async {
+        if isRetired {
+            if retiredEngineID == ObjectIdentifier(syncEngine),
+               case let .sentRecordZoneChanges(changes) = event {
+                // CK may report a completed operation after cancellation.
+                // Its asset paths belong only to this transport generation.
+                for record in changes.savedRecords {
+                    releaseEngineAssetLease(
+                        for: record.recordID.recordName,
+                        uploadCompleted: true
+                    )
+                }
+                for failure in changes.failedRecordSaves {
+                    releaseEngineAssetLease(
+                        for: failure.record.recordID.recordName,
+                        uploadCompleted: true
+                    )
+                }
+            }
+            return
+        }
+        guard syncEngine === engine else { return }
+        if delegateFailure != nil {
+            if case .accountChange = event {
+                // Account transitions remain authoritative after a storage
+                // failure and may make reconstruction unsafe.
+            } else if case .sentRecordZoneChanges = event,
+                  delegateFailure as? SyncError != .scopeChanged,
+                  await eventCommitter.failure == nil,
+                  !(await store.snapshot().hasUnexpectedDeletion),
+                  delegateFailure as? SyncError != .scopeChanged,
+                  !isRetired, syncEngine === engine {
+                // An upload completed before the failure may still be
+                // acknowledged if the committer remains healthy.
+            } else {
+                if case let .sentRecordZoneChanges(changes) = event {
+                    for record in changes.savedRecords {
+                        releaseEngineAssetLease(
+                            for: record.recordID.recordName,
+                            uploadCompleted: true
+                        )
+                    }
+                    for failure in changes.failedRecordSaves {
+                        releaseEngineAssetLease(
+                            for: failure.record.recordID.recordName,
+                            uploadCompleted: true
+                        )
+                    }
+                }
+                return
+            }
+        }
         var activities: [CloudKitSyncActivity] = []
         defer { yieldAfterDelegateReturns(activities) }
         do {
@@ -1669,13 +1914,17 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                     for id in savedIDs {
                         releaseEngineAssetLease(
                             for: id,
-                            uploadCompleted: durablyCommittedIDs.contains(id)
+                            uploadCompleted: isRetired
+                                || delegateFailure != nil
+                                || durablyCommittedIDs.contains(id)
                         )
                     }
                     for id in failedIDs {
                         releaseEngineAssetLease(
                             for: id,
-                            uploadCompleted: durablyCommittedIDs.contains(id)
+                            uploadCompleted: isRetired
+                                || delegateFailure != nil
+                                || durablyCommittedIDs.contains(id)
                         )
                     }
                 }
@@ -1747,6 +1996,7 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                                 activityTracker.recordAcknowledgements(1)
                             }
                         } catch {
+                            lastReportedFailure = error
                             if awaitedUploadIDs.contains(id) {
                                 failedUploads[id] = error
                             }
@@ -1760,6 +2010,7 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                         if awaitedUploadIDs.contains(id) {
                             failedUploads[id] = error
                         }
+                        lastReportedFailure = failure.error
                         activities.append(.failed(
                             error.localizedDescription
                         ))
@@ -1771,14 +2022,18 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                     where currentUser == expectedUserRecordID:
                     break
                 case .signIn, .signOut, .switchAccounts:
-                    delegateFailure = SyncError.scopeChanged
+                    latchFailure(SyncError.scopeChanged)
                 @unknown default:
-                    delegateFailure = SyncError.scopeChanged
+                    latchFailure(SyncError.scopeChanged)
                 }
                 activities.append(.accountChanged)
             case let .fetchedDatabaseChanges(changes):
                 if changes.deletions.contains(where: { $0.zoneID == zoneID }) {
+                    unexpectedDeletionObserved = true
+                    latchFailure(CloudKitSyncTransportError.unexpectedDeletion)
                     try await store.update { $0.hasUnexpectedDeletion = true }
+                    lastReportedFailure =
+                        CloudKitSyncTransportError.unexpectedDeletion
                     activities.append(.failed(
                         CloudKitSyncTransportError.unexpectedDeletion
                             .localizedDescription
@@ -1788,6 +2043,7 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                 if completion.zoneID == zoneID, let error = completion.error {
                     await observeRetryAfter(error)
                     if let delegateFailure { throw delegateFailure }
+                    lastReportedFailure = error
                     activities.append(.failed(error.localizedDescription))
                 }
             case let .didFetchChanges(completion):
@@ -1807,6 +2063,7 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                 {
                     // A peer's permanent marker may arrive in a later fetch.
                     // Surface this pass without poisoning future delegate work.
+                    lastReportedFailure = error
                     activities.append(.failed(error.localizedDescription))
                 }
             case let .didSendChanges(completion):
@@ -1819,7 +2076,9 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                 break
             }
         } catch {
-            delegateFailure = error
+            guard !isRetired else { return }
+            latchFailure(error)
+            lastReportedFailure = error
             activities.append(.failed(error.localizedDescription))
             if case let .sentRecordZoneChanges(changes) = event {
                 for record in changes.savedRecords {
@@ -1839,28 +2098,69 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
         let pending = syncEngine.state.pendingRecordZoneChanges.filter {
             context.options.scope.contains($0)
         }
-        let outbox = await store.snapshot().outbox
-        let records: [String: CKRecord]
         do {
-            records = try prepareEngineBatchRecords(
-                pending: pending,
-                outbox: outbox
+            let prepared = try await CloudKitOutgoingBatchPreparer.assemble(
+                allowed: { await self.canOfferOutgoingBatch(syncEngine) },
+                readOutbox: { await self.store.snapshot().outbox },
+                stage: { outbox in
+                    guard await self.canOfferOutgoingBatch(syncEngine)
+                        else { return [:] }
+                    return try await self.prepareEngineBatchRecords(
+                        pending: pending,
+                        outbox: outbox
+                    )
+                },
+                construct: { records in
+                    await CKSyncEngine.RecordZoneChangeBatch(
+                        pendingChanges: pending
+                    ) { recordID in
+                        records[recordID.recordName]
+                    }
+                },
+                release: { ids in
+                    await self.releaseOutgoingBatchLeases(ids)
+                }
             )
+            guard let prepared else { return nil }
+            guard !isRetired, delegateFailure == nil,
+                  store.writeHealth.failure == nil,
+                  !unexpectedDeletionObserved,
+                  syncEngine === engine else {
+                releaseOutgoingBatchLeases(prepared.leasedIDs)
+                return nil
+            }
+            return prepared.batch
         } catch {
-            delegateFailure = error
+            guard !isRetired else { return nil }
+            latchFailure(error)
+            lastReportedFailure = error
             yieldAfterDelegateReturns([.failed(error.localizedDescription)])
             return nil
         }
-        let batch = await CKSyncEngine.RecordZoneChangeBatch(
-            pendingChanges: pending
-        ) { recordID in
-            records[recordID.recordName]
+    }
+
+    private func canOfferOutgoingBatch(_ syncEngine: CKSyncEngine)
+        async -> Bool
+    {
+        if let failure = store.writeHealth.failure { latchFailure(failure) }
+        guard !isRetired, delegateFailure == nil,
+              !unexpectedDeletionObserved,
+              syncEngine === engine else { return false }
+        let unexpectedDeletion = await store.snapshot().hasUnexpectedDeletion
+        if let failure = store.writeHealth.failure { latchFailure(failure) }
+        guard !isRetired, delegateFailure == nil,
+              !unexpectedDeletionObserved,
+              syncEngine === engine else { return false }
+        if unexpectedDeletion {
+            latchFailure(CloudKitSyncTransportError.unexpectedDeletion)
+            return false
         }
-        if batch == nil {
-            for id in records.keys {
-                releaseEngineAssetLease(for: id, uploadCompleted: false)
-            }
+        return true
+    }
+
+    private func releaseOutgoingBatchLeases(_ ids: Set<String>) {
+        for id in ids {
+            releaseEngineAssetLease(for: id, uploadCompleted: false)
         }
-        return batch
     }
 }

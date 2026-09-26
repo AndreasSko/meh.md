@@ -76,6 +76,18 @@ final class NotebookSyncEventLogTests: XCTestCase {
         XCTAssertFalse(codes.joined().contains(identifier.uuidString))
     }
 
+    func testStorageFailureKeepsDiagnosticCauseWithoutFilePaths() {
+        let secret = "/private/user/secret-note.md"
+        let error = CloudKitStateWriteFailure(underlyingError: NSError(
+            domain: NSPOSIXErrorDomain, code: Int(ENOSPC),
+            userInfo: [NSFilePathErrorKey: secret]
+        ))
+        let code = NotebookSyncEventLog.errorCode(error)
+        XCTAssertTrue(code.hasPrefix("CloudKitStateWriteFailure."))
+        XCTAssertTrue(code.hasSuffix(".\(ENOSPC)"))
+        XCTAssertFalse(code.contains(secret))
+    }
+
     private func directory() -> URL {
         let root = FileManager.default.temporaryDirectory.appending(
             path: "NotebookSyncEventLogTests-\(UUID().uuidString)"
