@@ -135,8 +135,7 @@ enum MarkdownLivePreview {
             } else if canRender(table, snapshot: snapshot) {
                 collapsed.append(table.range)
             } else {
-                // Very wide tables remain readable/editable source instead of
-                // squeezing columns into a few pixels or clipping cell text.
+                // Unsupported tables remain source so no content is hidden.
                 collapsed.removeAll { intersects($0, table.range) }
             }
         }
@@ -161,8 +160,7 @@ enum MarkdownLivePreview {
         snapshot.mode == .livePreview
             && table.rows.allSatisfy { $0.cells.count <= table.alignments.count }
             && snapshot.tableWidth.isFinite
-            && snapshot.tableWidth / CGFloat(max(1, table.alignments.count))
-                >= max(52, snapshot.fontSize * 3)
+            && snapshot.tableWidth > 0
     }
 
     static func conceals(

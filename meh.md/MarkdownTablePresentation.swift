@@ -10,11 +10,15 @@ import UIKit
 /// selection, copy, find, undo, and persistence continue to use Markdown ranges.
 struct MarkdownTableLayout {
     struct Row {
+        let tableRange: NSRange
         let range: NSRange
         let cells: [NSAttributedString]
+        let columnWidths: [CGFloat]
         let height: CGFloat
         let isHeader: Bool
         let isLast: Bool
+
+        var contentWidth: CGFloat { columnWidths.reduce(0, +) }
     }
 
     let rows: [Row]
@@ -34,15 +38,14 @@ struct MarkdownTableLayout {
         let padding = max(7, bodyFont.pointSize * 0.45)
         var rows: [Row] = []
         var delimiters: [NSRange] = []
+        let viewportWidth = width.isFinite ? max(1, width) : 1
         for table in result.tables where hiddenRanges.contains(where: {
             $0.location <= table.range.location
                 && NSMaxRange($0) >= NSMaxRange(table.range)
         }) {
-            let columnWidth = width / CGFloat(table.alignments.count)
-            let textWidth = max(1, columnWidth - 2 * padding)
             let sourceRows = [table.header] + table.rows
-            for (index, row) in sourceRows.enumerated() {
-                let cells = table.alignments.enumerated().map { column, alignment in
+            let styledRows: [[NSAttributedString]] = sourceRows.enumerated().map { index, row in
+                table.alignments.enumerated().map { column, alignment in
                     let range = column < row.cells.count ? row.cells[column]
                         : NSRange(location: row.range.location, length: 0)
                     var spans: [MarkdownStyleSpan] = []
@@ -53,16 +56,29 @@ struct MarkdownTableLayout {
                         isHeader: index == 0
                     )
                 }
-                let textHeight = cells.map {
-                    $0.boundingRect(
+            }
+            let columnWidths = widths(
+                for: styledRows, viewportWidth: viewportWidth,
+                fontSize: bodyFont.pointSize, padding: padding
+            )
+            let contentWidth = columnWidths.reduce(0, +)
+            let overflows = contentWidth > viewportWidth + 0.5
+            for (index, row) in sourceRows.enumerated() {
+                let cells = styledRows[index]
+                let textHeight = cells.enumerated().map { column, cell in
+                    let textWidth = max(1, columnWidths[column] - 2 * padding)
+                    return cell.boundingRect(
                         with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
                         options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil
                     ).height
                 }.max() ?? 0
                 rows.append(Row(
+                    tableRange: table.range,
                     range: row.range,
                     cells: cells,
-                    height: ceil(max(bodyFont.pointSize * 1.3, textHeight)) + 2 * padding,
+                    columnWidths: columnWidths,
+                    height: ceil(max(bodyFont.pointSize * 1.3, textHeight))
+                        + 2 * padding + ((overflows && index == sourceRows.count - 1) ? 8 : 0),
                     isHeader: index == 0,
                     isLast: index == sourceRows.count - 1
                 ))
@@ -70,8 +86,51 @@ struct MarkdownTableLayout {
             delimiters.append(table.delimiterRange)
         }
         return MarkdownTableLayout(
-            rows: rows, delimiters: delimiters, width: width, padding: padding
+            rows: rows, delimiters: delimiters, width: viewportWidth, padding: padding
         )
+    }
+
+    /// Widths are shared by every row in a table. Short values keep compact
+    /// columns; prose gets the remaining space, with a cap so it still wraps.
+    private static func widths(
+        for rows: [[NSAttributedString]], viewportWidth: CGFloat,
+        fontSize: CGFloat, padding: CGFloat
+    ) -> [CGFloat] {
+        guard let columnCount = rows.first?.count, columnCount > 0 else { return [] }
+        let shortMinimum = max(52, fontSize * 3)
+        let longMinimum = max(96, fontSize * 6)
+        let maximum = max(240, fontSize * 14)
+        let preferred = (0..<columnCount).map { column -> CGFloat in
+            let intrinsic = rows.reduce(CGFloat.zero) { current, row in
+                let measured = row[column].boundingRect(
+                    with: CGSize(width: CGFloat(10_000), height: CGFloat.greatestFiniteMagnitude),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil
+                ).width
+                return max(current, measured.isFinite ? measured : 0)
+            }
+            return min(maximum, max(shortMinimum, ceil(intrinsic) + 2 * padding))
+        }
+        let minimum = preferred.map { value in
+            value > shortMinimum * 2 ? min(value, longMinimum) : shortMinimum
+        }
+        let minimumTotal = minimum.reduce(0, +)
+        let preferredTotal = preferred.reduce(0, +)
+        // Once scrolling is necessary, keep readable preferred widths rather
+        // than making long cells tall and cramped at their minimum widths.
+        if minimumTotal >= viewportWidth { return preferred }
+        if preferredTotal > viewportWidth {
+            let available = viewportWidth - minimumTotal
+            let flexibility = preferredTotal - minimumTotal
+            return zip(minimum, preferred).map { pair -> CGFloat in
+                let share = (pair.1 - pair.0) / flexibility
+                return pair.0 + available * share
+            }
+        }
+        return preferred
+    }
+
+    func contentWidth(for tableRange: NSRange) -> CGFloat? {
+        rows.first(where: { $0.tableRange == tableRange })?.contentWidth
     }
 
     private static func cellText(
@@ -199,7 +258,8 @@ struct MarkdownTableLayout {
         layoutManager: NSTextLayoutManager,
         origin: CGPoint,
         lineFragmentPadding: CGFloat,
-        context: CGContext
+        context: CGContext,
+        horizontalOffsets: [NSRange: CGFloat] = [:]
     ) {
         guard let manager = layoutManager.textContentManager else { return }
         let location = manager.offset(
@@ -214,6 +274,7 @@ struct MarkdownTableLayout {
         )
         context.saveGState()
         defer { context.restoreGState() }
+        context.clip(to: rect)
 #if os(macOS)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
@@ -226,16 +287,27 @@ struct MarkdownTableLayout {
         let border = UIColor.separator
         let fill = UIColor.secondarySystemBackground
 #endif
+        let contentWidth = row.contentWidth
+        let maximumOffset = contentWidth > width + 0.5 ? contentWidth - width : 0
+        let indicatorHeight: CGFloat = row.isLast && maximumOffset > 0 ? 8 : 0
+        let requestedOffset = horizontalOffsets[row.tableRange] ?? 0
+        let offset = requestedOffset.isFinite
+            ? min(max(0, requestedOffset), maximumOffset) : 0
+        let contentRect = CGRect(
+            x: rect.minX - offset, y: rect.minY,
+            width: contentWidth, height: rect.height
+        )
         if row.isHeader {
             context.setFillColor(fill.cgColor)
-            context.fill(rect)
+            context.fill(contentRect)
         }
         context.setStrokeColor(border.cgColor)
         context.setLineWidth(0.5)
-        context.stroke(rect.insetBy(dx: 0.25, dy: 0.25))
-        let columnWidth = width / CGFloat(row.cells.count)
+        context.stroke(contentRect.insetBy(dx: 0.25, dy: 0.25))
+        var columnX = contentRect.minX
         for (index, cell) in row.cells.enumerated() {
-            let x = rect.minX + CGFloat(index) * columnWidth
+            let x = columnX
+            let columnWidth = row.columnWidths[index]
             if index > 0 {
                 context.move(to: CGPoint(x: x, y: rect.minY))
                 context.addLine(to: CGPoint(x: x, y: rect.maxY))
@@ -243,11 +315,27 @@ struct MarkdownTableLayout {
             }
             let cellRect = CGRect(x: x + padding, y: rect.minY + padding,
                                   width: columnWidth - 2 * padding,
-                                  height: row.height - 2 * padding)
+                                  height: row.height - 2 * padding - indicatorHeight)
             context.saveGState()
             context.clip(to: cellRect)
             cell.draw(with: cellRect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
             context.restoreGState()
+            columnX += columnWidth
+        }
+        if row.isLast && maximumOffset > 0 {
+            let track = CGRect(
+                x: rect.minX + 3, y: rect.maxY - 6,
+                width: max(1, rect.width - 6), height: 3
+            )
+            context.setFillColor(border.withAlphaComponent(0.3).cgColor)
+            context.fill(track)
+            let thumbWidth = min(track.width,
+                                 max(22, track.width * min(1, width / contentWidth)))
+            let thumbX = track.minX + (track.width - thumbWidth)
+                * (offset / maximumOffset)
+            context.setFillColor(border.withAlphaComponent(0.8).cgColor)
+            context.fill(CGRect(x: thumbX, y: track.minY,
+                                width: thumbWidth, height: track.height))
         }
     }
 }

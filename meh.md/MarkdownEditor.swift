@@ -415,6 +415,11 @@ final class MarkdownTextView: NSTextView {
         return super.performKeyEquivalent(with: event)
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        if scrollMarkdownTable(with: event) { return }
+        super.scrollWheel(with: event)
+    }
+
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         MarkdownPresentation.drawBlockBackgrounds(in: self, dirtyRect: rect)

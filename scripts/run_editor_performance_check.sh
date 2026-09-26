@@ -83,7 +83,7 @@ for name in "${files[@]}"; do
   fi
 done
 # Table support is absent in historical comparison revisions.
-for name in MarkdownTablePresentation MarkdownTableEditing; do
+for name in MarkdownTablePresentation MarkdownTableEditing MarkdownTableScrolling; do
   if [[ "$revision" == working-tree ]]; then
     cp "$repo_root/meh.md/$name.swift" "$check_root/sources/$name.swift"
   elif git -C "$repo_root" cat-file -e "$revision:meh.md/$name.swift" 2>/dev/null; then

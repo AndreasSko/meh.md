@@ -20,11 +20,21 @@ extra user content. Invalid or incomplete tables remain editable Markdown.
 
 ## Layout and editing
 
-Columns share the available editor width and cell text wraps. Row height is
-measured from the formatted cell contents at the selected editor font size.
-If columns would be narrower than 52 points or three font-size units, the
-whole table stays source. There is no horizontal table scrolling in this
-version. Large fonts and narrow columns can wrap individual long words.
+Column widths follow their formatted contents. Short values use compact
+columns, while longer text gets more room and wraps at a bounded width.
+Row height follows the tallest cell at the selected editor font size.
+
+When columns cannot fit comfortably, the table keeps readable widths and
+scrolls horizontally within the editor. Swipe sideways over a rendered row
+on iPhone/iPad, or scroll horizontally over it with a Mac trackpad or
+Shift-scroll wheel. A small indicator beneath the last row shows the
+horizontal position. The rest of the note keeps its usual width and vertical
+scrolling. Tapping a table still reveals the whole table's Markdown source.
+
+Horizontal positions are temporary view state, independent for each table.
+They are clamped when the editor resizes, retained across unrelated prose
+edits, and reset when the table's contents change. Source mode, selection,
+undo history, saved Markdown, and sync do not include these positions.
 
 The native text buffer retains every source character. Preview changes only
 layout attributes and draws the cell content over the reserved row space.
@@ -69,8 +79,9 @@ Each content-changing command uses the native undo and sync edit path.
 ## Correctness checks
 
 The native editor tests cover parser ranges, cell-local inline syntax,
-incremental invalidation, whole-table source reveal, narrow/uneven fallback,
-wrapping, alignment, font/width changes, byte preservation, undo, and remote
+incremental invalidation, whole-table source reveal, uneven-row fallback,
+adaptive widths, horizontal offsets, wrapping, alignment, font/width changes,
+byte preservation, undo, and remote
 replacement. Visual checks use fictional content in an isolated app preview
 notebook and a disposable native-editor harness. The iPhone app test taps
 into a table and verifies that typing still edits the original Markdown.

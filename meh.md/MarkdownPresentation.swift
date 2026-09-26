@@ -275,7 +275,8 @@ enum MarkdownPresentation {
                         fragment: fragment, layoutManager: layoutManager,
                         origin: textView.textContainerOrigin,
                         lineFragmentPadding: textContainer.lineFragmentPadding,
-                        context: context
+                        context: context,
+                        horizontalOffsets: syntaxCache.tableHorizontalOffsets
                     )
                 }
                 return true
@@ -315,6 +316,7 @@ enum MarkdownPresentation {
         markdownTextView.installMarkdownLayoutManagerDelegate(
             on: layoutManager
         )
+        markdownTextView.installMarkdownTableScrolling()
 
         MarkdownLivePreview.update(
             textView,
@@ -504,7 +506,8 @@ enum MarkdownPresentation {
             fragment: fragment, layoutManager: layoutManager,
             origin: drawingOffset,
             lineFragmentPadding: textView.textContainer.lineFragmentPadding,
-            context: context
+            context: context,
+            horizontalOffsets: syntaxCache.tableHorizontalOffsets
         )
         for decoration in decorations {
             let rect = decoration.rect.offsetBy(
@@ -1867,6 +1870,18 @@ struct MarkdownRenderingPresentation {
 
 final class MarkdownSyntaxCache: NSObject {
     private(set) var tableLayout: MarkdownTableLayout?
+    private(set) var tableHorizontalOffsets: [NSRange: CGFloat] = [:]
+
+    @discardableResult
+    func setTableHorizontalOffset(_ offset: CGFloat, for range: NSRange) -> Bool {
+        guard offset.isFinite, let layout = tableLayout,
+              let contentWidth = layout.contentWidth(for: range) else { return false }
+        let clamped = min(max(0, offset), max(0, contentWidth - layout.width))
+        guard tableHorizontalOffsets[range, default: 0] != clamped else { return false }
+        tableHorizontalOffsets[range] = clamped
+        return true
+    }
+
     private var tableTexts: [String] = []
     private var parsedTables: [MarkdownTable] = []
     private var tableHiddenRanges: [NSRange] = []
@@ -1911,6 +1926,15 @@ final class MarkdownSyntaxCache: NSObject {
                 ranges.append(table.range)
             }
         }
+        var retainedOffsets: [NSRange: CGFloat] = [:]
+        for (index, table) in tables.enumerated() {
+            if index < parsedTables.count,
+               tableTexts[index].utf8.elementsEqual(texts[index].utf8) {
+                retainedOffsets[table.range] = tableHorizontalOffsets[
+                    parsedTables[index].range, default: 0
+                ]
+            }
+        }
         parsedTables = tables
         tableTexts = texts
         tableWidth = width
@@ -1920,6 +1944,11 @@ final class MarkdownSyntaxCache: NSObject {
             text: text, result: presentation.result,
             hiddenRanges: tableHiddenRanges, bodyFont: bodyFont, width: width
         )
+        tableHorizontalOffsets = retainedOffsets
+        // A wider viewport can make the previous offset exceed the new limit.
+        for (range, offset) in retainedOffsets {
+            _ = setTableHorizontalOffset(offset, for: range)
+        }
         guard let first = ranges.first else { return nil }
         let affected = ranges.dropFirst().reduce(first, NSUnionRange)
         return NSIntersectionRange(affected, NSRange(location: 0, length: text.utf16.count))

@@ -57,7 +57,7 @@ final class MarkdownTablePresentationTests: XCTestCase {
         }
     }
 
-    func testTooNarrowTableKeepsLiteralSourceVisible() throws {
+    func testNarrowTableRemainsRenderedForHorizontalScrolling() throws {
         let source = table + "\nOutside"
         let parsed = MarkdownSyntax.parse(source)
         let tableRange = try XCTUnwrap(parsed.tables.first?.range)
@@ -69,8 +69,8 @@ final class MarkdownTablePresentationTests: XCTestCase {
                 tableWidth: 90
             )
         )
-        XCTAssertTrue(hidden.allSatisfy {
-            NSIntersectionRange($0, tableRange).length == 0
+        XCTAssertTrue(hidden.contains {
+            $0.location <= tableRange.location && NSMaxRange($0) >= NSMaxRange(tableRange)
         })
     }
 
