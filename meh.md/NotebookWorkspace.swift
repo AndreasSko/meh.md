@@ -43,6 +43,8 @@ final class NotebookWorkspace {
     private(set) var sync: NotebookSyncCoordinator?
     private(set) var errorMessage: String?
     private(set) var syncSetupError: String?
+    private(set) var syncFailure: SyncFailurePresentation?
+    private(set) var syncHalt: CloudKitSyncHaltStatus?
     private(set) var copyError: String?
     private(set) var copiesURL: URL?
     private(set) var isLoading = false
@@ -60,6 +62,9 @@ final class NotebookWorkspace {
     let directory: URL
     private let documentsDirectory: URL
     private var notebookTransport: (any SyncTransport)?
+    @ObservationIgnored private var transportFactory:
+        (@MainActor (String?) async throws -> any SyncTransport)?
+    @ObservationIgnored private(set) var transportGeneration = UUID()
     private var publisher: NotebookMarkdownPublisher?
     @ObservationIgnored private var scheduledRefresh: Task<Void, Never>?
     @ObservationIgnored private var syncSchedule = NotebookSyncSchedule()
@@ -92,6 +97,11 @@ final class NotebookWorkspace {
         case .cloud, .development: true
         default: false
         }
+    }
+    var canRetrySync: Bool {
+        if syncFailure?.retryDisposition == .unavailable { return false }
+        if let syncHalt { return syncHalt.isRecoverable }
+        return true
     }
     var label: String {
         switch mode {
@@ -169,15 +179,17 @@ final class NotebookWorkspace {
     /// Deterministic app-model tests use the same scheduler with an isolated
     /// replica and transport, without a signed app or CloudKit account.
     init(directory: URL, documentsDirectory: URL, transport: any SyncTransport,
-         automaticSync: Bool, mode: Mode? = nil) {
+         automaticSync: Bool, mode: Mode? = nil,
+         transportFactory: (@MainActor (String?) async throws -> any SyncTransport)? = nil) {
         self.directory = directory
         self.documentsDirectory = documentsDirectory
         self.automaticSync = automaticSync
         self.mode = mode ?? .development(URL(string: "http://127.0.0.1")!, "model-test")
         notebookTransport = transport
+        self.transportFactory = transportFactory
     }
 
-    func start() async {
+    func start(manualRetry: Bool = false) async {
         guard !isLoading else { return }
         isLoading = true
 
@@ -217,7 +229,7 @@ final class NotebookWorkspace {
                 replica = loaded
             }
             startConnectivityMonitoring()
-            await refresh(whileLoading: true, trigger: "startup")
+            await refresh(whileLoading: true, manual: manualRetry, trigger: "startup")
         } catch {
             setRecoveryAction(for: error)
             errorMessage = error.localizedDescription
@@ -401,7 +413,7 @@ final class NotebookWorkspace {
             var hasBinding = false
             do {
                 syncEventLog.record("notebook transport preparing")
-                try await prepareNotebookTransport()
+                try await prepareNotebookTransport(recoverIfHalted: manual)
                 syncEventLog.record("notebook transport ready")
                 guard let notebookTransport else {
                     throw SyncError.unavailable(
@@ -433,16 +445,22 @@ final class NotebookWorkspace {
                 if !hasBinding { errorMessage = error.localizedDescription }
             }
             await updateRetryDeadline()
+            syncHalt = await (notebookTransport as? any HaltableSyncTransport)?.haltStatus()
             if let failure {
-                plannedRetryDate = retryPolicy.retryDate(
-                    for: failure, now: Date(), serverNotBefore: syncRetryNotBefore)
+                plannedRetryDate = syncHalt == nil ? retryPolicy.retryDate(
+                    for: failure, now: Date(), serverNotBefore: syncRetryNotBefore) : nil
                 if let deadline = plannedRetryDate {
                     syncRetryNotBefore = deadline
                     if automaticSync, isForeground {
                         scheduleRefresh(trigger: "scheduled retry", notBefore: deadline)
                     }
                 }
+                syncFailure = SyncFailurePresentation(
+                    error: failure,
+                    retryWillOccurAutomatically: automaticSync && plannedRetryDate != nil
+                )
             } else {
+                syncFailure = nil
                 retryPolicy.reset()
                 if automaticSync, sync?.status == .pending { needsAnotherRefresh = true }
             }
@@ -527,30 +545,64 @@ final class NotebookWorkspace {
         syncRetryNotBefore = deadline
     }
 
-    private func prepareNotebookTransport() async throws {
-        guard notebookTransport == nil else { return }
+    private func prepareNotebookTransport(recoverIfHalted: Bool) async throws {
+        var expectedScope: String?
+        if let existing = notebookTransport {
+            guard let haltable = existing as? any HaltableSyncTransport,
+                  let halt = await haltable.haltStatus() else { return }
+            syncHalt = halt
+            guard recoverIfHalted, halt.isRecoverable else {
+                throw halt.underlyingError
+            }
+            // refresh owns the exchange throughout retirement and replacement.
+            // Invalidate hints before suspending; old callbacks cannot start a
+            // pass against the replacement coordinator.
+            transportGeneration = UUID()
+            cloudActivityTask?.cancel()
+            cloudActivityTask = nil
+            await haltable.retire()
+            sync = nil
+            expectedScope = existing.scope
+            syncEventLog.record("rebuilding halted cloud transport")
+            // Retain the retired instance until creation succeeds, so another
+            // manual attempt retains both the halt reason and expected scope.
+        }
         let transport: any SyncTransport
-        switch mode {
-        case .cloud:
-            transport = try await CloudKitSyncTransport.makeNotebook(
-                containerIdentifier: "iCloud.de.andreas-sk.meh-md",
-                stateDirectory: directory.appending(path: "CloudKit"),
-                automaticallySync: automaticSync
-            )
-        case .development(let endpoint, let name):
-            transport = LocalSyncTransport(
-                baseURL: endpoint,
-                workspace: name,
-                protocolVersion: 2
-            )
-        default: return
+        if let transportFactory {
+            transport = try await transportFactory(expectedScope)
+        } else {
+            switch mode {
+            case .cloud:
+                transport = try await CloudKitSyncTransport.makeNotebook(
+                    containerIdentifier: "iCloud.de.andreas-sk.meh-md",
+                    stateDirectory: directory.appending(path: "CloudKit"),
+                    automaticallySync: automaticSync,
+                    expectedScope: expectedScope,
+                    expectedNotebookID: expectedScope == nil
+                        ? nil : replica?.catalogSnapshot?.notebookID
+                )
+            case .development(let endpoint, let name):
+                transport = LocalSyncTransport(
+                    baseURL: endpoint,
+                    workspace: name,
+                    protocolVersion: 2
+                )
+            default: return
+            }
+        }
+        if let expectedScope, transport.scope != expectedScope {
+            await (transport as? any HaltableSyncTransport)?.retire()
+            throw SyncError.scopeChanged
         }
         notebookTransport = unavailableWhenRequested(transport)
+        syncHalt = nil
+        let generation = transportGeneration
         if automaticSync, let cloud = notebookTransport as? CloudKitSyncTransport {
             cloudActivityTask = Task { @MainActor [weak self] in
                 for await activity in cloud.activity {
-                    guard !Task.isCancelled, let self else { return }
-                    await self.receiveCloudActivity(activity)
+                    guard !Task.isCancelled, let self,
+                          self.transportGeneration == generation else { return }
+                    await self.receiveCloudActivity(activity, generation: generation)
                 }
             }
         }
@@ -558,7 +610,10 @@ final class NotebookWorkspace {
 
     private(set) var searchScopeGeneration = 0
 
-    func receiveCloudActivity(_ activity: CloudKitSyncActivity) async {
+    func receiveCloudActivity(
+        _ activity: CloudKitSyncActivity, generation: UUID? = nil
+    ) async {
+        if let generation, generation != transportGeneration { return }
         switch activity {
         case .remoteChanges(let records, let deletions, let reason):
             syncEventLog.record("cloud \(reason.rawValue) changes delivered", counts: [
@@ -572,6 +627,19 @@ final class NotebookWorkspace {
         case .failed(let message):
             syncEventLog.record("cloud automatic operation failed")
             syncSetupError = message
+            let source = notebookTransport
+            let halt = await (source as? any HaltableSyncTransport)?.haltStatus()
+            let failure = await (source as? CloudKitSyncTransport)?.lastFailure()
+            if let generation, generation != transportGeneration { return }
+            syncHalt = halt
+            if let failure = halt?.underlyingError ?? failure {
+                syncFailure = SyncFailurePresentation(
+                    error: failure,
+                    // A failed activity does not schedule an app retry. Do
+                    // not infer an engine retry from an arbitrary error code.
+                    retryWillOccurAutomatically: false
+                )
+            }
             await updateRetryDeadline()
             // The engine owns retrying its scheduled failures. Echoing a
             // failed fetch into another exchange can loop permanently.

@@ -60,6 +60,10 @@ public final class NotebookSyncEventLog {
     }
 
     public static func errorCode(_ error: any Error) -> String {
+        if let error = error as? CloudKitStateWriteFailure {
+            return "CloudKitStateWriteFailure."
+                + errorCode(error.underlyingError)
+        }
         if let error = error as? CKError {
             return "CKError.\(error.code.rawValue)"
         }

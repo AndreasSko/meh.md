@@ -42,6 +42,8 @@ final class CloudKitSyncActivityChannel: Sendable {
         buffer.yield(activities)
     }
 
+    func finish() { buffer.finish() }
+
     deinit { buffer.finish() }
 }
 
