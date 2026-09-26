@@ -1,6 +1,6 @@
 import Foundation
 
-enum MarkdownEditingCommand: CaseIterable {
+enum MarkdownEditingCommand: CaseIterable, Hashable {
     case continueLine
     case indent
     case outdent
@@ -12,6 +12,18 @@ enum MarkdownEditingCommand: CaseIterable {
     case link
     case inlineCode
     case codeBlock
+    case insertTable
+    case tableRowAbove
+    case tableRowBelow
+    case tableColumnBefore
+    case tableColumnAfter
+    case tableDeleteRow
+    case tableDeleteColumn
+    case tableAlignLeft
+    case tableAlignCenter
+    case tableAlignRight
+    case tableNextCell
+    case tablePreviousCell
 }
 
 struct MarkdownEditingChange: Equatable {
@@ -21,6 +33,16 @@ struct MarkdownEditingChange: Equatable {
 }
 
 enum MarkdownEditingRules {
+    static func tableSafeSelection(_ range: NSRange,
+                                   in source: NSString) -> NSRange {
+        safeSelection(range, in: source)
+    }
+
+    static func tableContentLine(containing location: Int,
+                                 in source: NSString) -> NSRange {
+        contentLine(containing: location, in: source)
+    }
+
     static func change(
         for command: MarkdownEditingCommand,
         text: String,
@@ -76,6 +98,13 @@ enum MarkdownEditingRules {
             return inlineCodeChange(in: source, selection: selection)
         case .codeBlock:
             return codeBlockChange(in: source, selection: selection)
+        case .insertTable, .tableRowAbove, .tableRowBelow,
+             .tableColumnBefore, .tableColumnAfter, .tableDeleteRow,
+             .tableDeleteColumn, .tableAlignLeft, .tableAlignCenter,
+             .tableAlignRight, .tableNextCell, .tablePreviousCell:
+            return MarkdownTableEditing.change(
+                for: command, text: text, selection: selection
+            )
         }
     }
 

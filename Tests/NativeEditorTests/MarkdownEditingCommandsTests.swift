@@ -11,7 +11,12 @@ final class MarkdownEditingCommandsTests: XCTestCase {
             [
                 .continueLine, .indent, .outdent, .bold, .italic,
                 .strikethrough, .highlight, .heading, .link,
-                .inlineCode, .codeBlock,
+                .inlineCode, .codeBlock, .insertTable,
+                .tableRowAbove, .tableRowBelow,
+                .tableColumnBefore, .tableColumnAfter,
+                .tableDeleteRow, .tableDeleteColumn,
+                .tableAlignLeft, .tableAlignCenter, .tableAlignRight,
+                .tableNextCell, .tablePreviousCell,
             ]
         )
     }

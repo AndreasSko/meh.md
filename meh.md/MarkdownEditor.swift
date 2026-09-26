@@ -15,6 +15,8 @@ final class MarkdownEditorNavigation {
     var focusEditor: (() -> Void)?
     var captureHasEditingFocus: (() -> Bool)?
     var performCommand: ((MarkdownEditingCommand) -> Void)?
+    var prepareCommand: ((MarkdownEditingCommand) -> (() -> Void)?)?
+    let tableCommands = MarkdownTableCommandState()
     var showFind: (() -> Void)?
     var revealSearchMatch: ((NSRange) -> Void)?
     var searchLandingPosition: MarkdownEditorPosition?
@@ -386,10 +388,12 @@ final class MarkdownTextView: NSTextView {
     }
 
     override func insertTab(_ sender: Any?) {
+        if performMarkdownCommand(.tableNextCell) { return }
         if !performMarkdownCommand(.indent) { super.insertTab(sender) }
     }
 
     override func insertBacktab(_ sender: Any?) {
+        if performMarkdownCommand(.tablePreviousCell) { return }
         if !performMarkdownCommand(.outdent) { super.insertBacktab(sender) }
     }
 
@@ -579,6 +583,11 @@ struct MarkdownEditor: NSViewRepresentable {
             }
         }
 
+        private func refreshTableCommands(in textView: NSTextView) {
+            guard let textView = textView as? MarkdownTextView else { return }
+            parent.navigation?.tableCommands.scheduleRefresh(from: textView)
+        }
+
         func attachNavigation(to textView: MarkdownTextView) {
             installDestinationHighlightRendering(in: textView)
             textView.markdownDidBeginEditing = { [weak self] in
@@ -589,6 +598,10 @@ struct MarkdownEditor: NSViewRepresentable {
             textView.markdownDidLayout = { [weak self, weak textView] in
                 guard let self, let textView else { return }
                 self.centerDestinationIfGeometryChanged(in: textView)
+            }
+            refreshTableCommands(in: textView)
+            parent.navigation?.prepareCommand = { [weak textView] command in
+                textView?.preparedMarkdownCommand(command)
             }
             let navigation = parent.navigation
             parent.navigation?.prepareToLeave = { [weak self, weak textView] in
@@ -709,6 +722,7 @@ struct MarkdownEditor: NSViewRepresentable {
                   let textView = notification.object as? NSTextView else {
                 return
             }
+            refreshTableCommands(in: textView)
             if parent.mode == .livePreview {
                 schedulePresentationRefresh(for: textView)
             }
@@ -1015,6 +1029,7 @@ struct MarkdownEditor: NSViewRepresentable {
         }
 
         private func synchronizeBinding(from textView: NSTextView) {
+            refreshTableCommands(in: textView)
             guard !isUpdating, !textView.hasMarkedText() else { return }
             guard let storage = textView.textStorage else { return }
             let nativeText = MarkdownPresentation.syntaxCache(for: textView)
@@ -1109,6 +1124,7 @@ struct MarkdownEditor: NSViewRepresentable {
             }
 
             textView.setSelectedRange(selection)
+            refreshTableCommands(in: textView)
             displayedText = newText
             displayedRevision = revision
             hasUncommittedText = false
@@ -1294,6 +1310,7 @@ final class MarkdownTextView: UITextView {
 
     override func insertText(_ text: String) {
         if !markdownState.isApplyingCommand, !markdownState.isPasting {
+            if text == "\t", performMarkdownCommand(.tableNextCell) { return }
             let command: MarkdownEditingCommand? = text == "\n"
                 ? .continueLine : (text == "\t" ? .indent : nil)
             if let command, performMarkdownCommand(command) { return }
@@ -1325,9 +1342,14 @@ final class MarkdownTextView: UITextView {
     }
 
     @objc private func indentMarkdown() {
+        if performMarkdownCommand(.tableNextCell) { return }
         if !performMarkdownCommand(.indent) { insertText("\t") }
     }
-    @objc private func outdentMarkdown() { _ = performMarkdownCommand(.outdent) }
+    @objc private func outdentMarkdown() {
+        if !performMarkdownCommand(.tablePreviousCell) {
+            _ = performMarkdownCommand(.outdent)
+        }
+    }
     @objc private func boldMarkdown() { _ = performMarkdownCommand(.bold) }
     @objc private func italicMarkdown() { _ = performMarkdownCommand(.italic) }
     @objc private func linkMarkdown() { _ = performMarkdownCommand(.link) }
@@ -1625,11 +1647,20 @@ struct MarkdownEditor: UIViewRepresentable {
             }
         }
 
+        private func refreshTableCommands(in textView: UITextView) {
+            guard let textView = textView as? MarkdownTextView else { return }
+            parent.navigation?.tableCommands.scheduleRefresh(from: textView)
+        }
+
         func attachNavigation(to textView: MarkdownTextView) {
             installDestinationHighlightRendering(in: textView)
             textView.markdownDidLayout = { [weak self, weak textView] in
                 guard let self, let textView else { return }
                 self.centerDestinationIfGeometryChanged(in: textView)
+            }
+            refreshTableCommands(in: textView)
+            parent.navigation?.prepareCommand = { [weak textView] command in
+                textView?.preparedMarkdownCommand(command)
             }
             let navigation = parent.navigation
             parent.navigation?.prepareToLeave = { [weak self, weak textView] in
@@ -1740,6 +1771,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         func textViewDidChangeSelection(_ textView: UITextView) {
             guard !isUpdating else { return }
+            refreshTableCommands(in: textView)
             if parent.mode == .livePreview {
                 schedulePresentationRefresh(for: textView)
             }
@@ -1749,6 +1781,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             guard !isUpdating, textView.markedTextRange == nil else { return }
+            refreshTableCommands(in: textView)
             clearDestinationHighlight(in: textView)
             defer {
                 schedulePendingSearchMatchReveal(in: textView)
@@ -2168,6 +2201,7 @@ struct MarkdownEditor: UIViewRepresentable {
             textView.textStorage.replaceCharacters(in: oldRange, with: newText)
 
             textView.selectedRange = selection
+            refreshTableCommands(in: textView)
             displayedText = newText
             displayedRevision = revision
             hasUncommittedText = false

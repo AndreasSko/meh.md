@@ -82,6 +82,15 @@ for name in "${files[@]}"; do
       > "$check_root/sources/$name.swift"
   fi
 done
+# Table support is absent in historical comparison revisions.
+for name in MarkdownTablePresentation MarkdownTableEditing; do
+  if [[ "$revision" == working-tree ]]; then
+    cp "$repo_root/meh.md/$name.swift" "$check_root/sources/$name.swift"
+  elif git -C "$repo_root" cat-file -e "$revision:meh.md/$name.swift" 2>/dev/null; then
+    git -C "$repo_root" show "$revision:meh.md/$name.swift" \
+      > "$check_root/sources/$name.swift"
+  fi
+done
 cp "$repo_root/Tools/EditorQuoteCheck/Info.plist" "$check_app/Info.plist"
 extra_arguments=("$repo_root/Tools/EditorQuoteCheck/EditorQuoteCheck.swift")
 if [[ "$scenario" == large-note ]]; then

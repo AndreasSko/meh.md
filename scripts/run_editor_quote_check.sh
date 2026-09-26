@@ -70,6 +70,7 @@ xcrun swiftc -parse-as-library -swift-version 6 \
   "$repo_root/meh.md/MarkdownTablePresentation.swift" \
   "$repo_root/meh.md/MarkdownEditor.swift" \
   "$repo_root/meh.md/MarkdownEditingCommands.swift" \
+  "$repo_root/meh.md/MarkdownTableEditing.swift" \
   "$repo_root/meh.md/MarkdownLivePreview.swift" \
   "$repo_root/meh.md/EditorWritingControls.swift" \
   "$repo_root/Tools/EditorQuoteCheck/EditorQuoteCheck.swift" \
