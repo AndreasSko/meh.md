@@ -46,12 +46,14 @@ struct NotebookView: View {
         MarkdownEditorMode.livePreview.rawValue
     @State private var deletionSelection: NotebookDeletionSelection?
     @State private var navigationState: NotebookNavigationState
+    @State private var recentCommands: NotebookRecentCommandState
     @State private var restoredNavigation = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var busy = false
     @State private var editorNavigation = MarkdownEditorNavigation()
     @State private var bodyFocusRequest = 0
     @State private var errorMessage: String?
+    @State private var recentActivityFailureIDs = Set<UUID>()
     @State private var unrecordedEdit = false
     @State private var editingID: UUID?
     @State private var originalName = ""
@@ -68,6 +70,7 @@ struct NotebookView: View {
     @State private var browserSelection = NotebookBrowserSelection()
     @State private var selectingItems = false
     @FocusState private var browserFocused: Bool
+    @FocusState private var focusedRecentID: UUID?
     @State private var movingNotebookID: UUID?
     @State private var browserUndo: NotebookBrowserUndo?
     @State private var browserRedo: NotebookBrowserUndo?
@@ -81,6 +84,7 @@ struct NotebookView: View {
         self.replica = replica
         self.workspace = workspace
         _navigationState = State(initialValue: NotebookNavigationState(replica: replica))
+        _recentCommands = State(initialValue: NotebookRecentCommandState(replica: replica))
     }
 
     private var selectedID: UUID? { navigationState.selectedID }
@@ -193,7 +197,18 @@ struct NotebookView: View {
                             onLocalEdit: {
                                 searchDestinationID = nil
                                 searchLandingPosition = nil
-                                navigationState.recordEdited(selectedID)
+                                if !replica.isLatestRecentActivity(selectedID) {
+                                    Task { @MainActor in
+                                        do {
+                                            try await replica.recordRecentActivity(for: selectedID)
+                                            recentActivityFailureIDs.remove(selectedID)
+                                        } catch {
+                                            guard recentActivityFailureIDs.insert(selectedID).inserted
+                                            else { return }
+                                            errorMessage = error.localizedDescription
+                                        }
+                                    }
+                                }
                                 workspace?.noteDidEdit()
                             },
                             onBeginEditing: {
@@ -314,6 +329,19 @@ struct NotebookView: View {
             notebookDetail
         }
         .focusedSceneValue(\.notebookSearch, search)
+        .focusedSceneValue(\.notebookRecentCommands, recentCommands)
+        .onChange(of: focusedRecentID) { _, id in
+            recentCommands.focusedNoteID = id
+        }
+        .onChange(of: selectedID) { _, id in
+            recentCommands.selectedNoteID = id
+        }
+        .onChange(of: recentCommands.errorMessage) { _, message in
+            if let message {
+                errorMessage = message
+                recentCommands.errorMessage = nil
+            }
+        }
         .task(id: searchTaskID) {
             // Warm once in the background; don't rescan on every editor
             // keystroke while search is closed.
@@ -576,34 +604,45 @@ struct NotebookView: View {
     private var recentsSection: some View {
         Section {
             if navigationState.isRecentsExpanded {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(recentPlacements, id: \.item.id) { placement in
-                        Button {
-                            perform {
-                                try await selectNote(placement.item.id)
-                                reveal(placement.item.id)
-                            }
-                        } label: {
-                            NotebookRecentRow(
-                                title: NotebookNoteName.title(from: placement.displayName),
-                                preview: recentPreview(for: placement.item.id),
-                                isCurrent: showsCurrentNote && selectedID == placement.item.id,
-                                showsDivider: placement.item.id != recentPlacements.last?.item.id
+                if recentPlacements.isEmpty {
+                    Text("Notes you edit or rename appear here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(14)
+                        .background(NotebookRecentCardBackground(position: .only))
+                } else {
+                    #if os(iOS)
+                    NotebookRecentUIKitList(
+                        items: recentPlacements.map {
+                            NotebookRecentUIKitItem(
+                                id: $0.item.id,
+                                title: NotebookNoteName.title(from: $0.displayName),
+                                preview: recentPreview(for: $0.item.id),
+                                isCurrent: showsCurrentNote && selectedID == $0.item.id,
+                                isPinned: replica.isPinnedInRecents($0.item.id),
+                                canPin: replica.canPinInRecents($0.item.id)
                             )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("notebook-recent-" + placement.item.id.uuidString)
-                        .contextMenu { actions(for: placement, allowsCreation: false) }
+                        },
+                        rowContent: { id in
+                            if let index = recentPlacements.firstIndex(where: {
+                                $0.item.id == id
+                            }) {
+                                recentRow(recentPlacements[index], index: index,
+                                          count: recentPlacements.count)
+                            }
+                        },
+                        onTogglePin: { id in
+                            setRecentPinned(!replica.isPinnedInRecents(id), for: id)
+                        },
+                        contextMenu: recentUIKitMenu
+                    )
+                    #else
+                    ForEach(Array(recentPlacements.enumerated()), id: \.element.item.id) {
+                        index, placement in
+                        recentRow(placement, index: index, count: recentPlacements.count)
                     }
-                    if recentPlacements.isEmpty {
-                        Text("Notes you edit or rename appear here.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(14)
-                    }
+                    #endif
                 }
-                .background(NotebookSidebarPalette.recents,
-                            in: RoundedRectangle(cornerRadius: 16))
             }
         } header: {
             NotebookSectionToggle(
@@ -627,6 +666,119 @@ struct NotebookView: View {
     private var recentPlacements: [NotebookPlacement] {
         navigationState.recentNoteIDs.compactMap { id in
             replica.placements.first { $0.item.id == id }
+        }
+    }
+
+    @ViewBuilder
+    private func recentRow(
+        _ placement: NotebookPlacement,
+        index: Int,
+        count: Int
+    ) -> some View {
+        let row = Button {
+            perform {
+                try await selectNote(placement.item.id)
+                reveal(placement.item.id)
+            }
+        } label: {
+            NotebookRecentRow(
+                title: NotebookNoteName.title(from: placement.displayName),
+                preview: recentPreview(for: placement.item.id),
+                isPinned: replica.isPinnedInRecents(placement.item.id),
+                isCurrent: showsCurrentNote && selectedID == placement.item.id,
+                showsDivider: index < count - 1
+            )
+        }
+        .buttonStyle(.plain)
+        .focused($focusedRecentID, equals: placement.item.id)
+        .accessibilityIdentifier("notebook-recent-" + placement.item.id.uuidString)
+        .notebookRecentPinAccessibilityAction(
+            isPinned: replica.isPinnedInRecents(placement.item.id),
+            isAvailable: replica.canPinInRecents(placement.item.id)
+        ) {
+            setRecentPinned(!replica.isPinnedInRecents(placement.item.id),
+                            for: placement.item.id)
+        }
+        .background(NotebookRecentCardBackground(
+            position: recentCardPosition(index: index, count: count)
+        ))
+
+        #if os(iOS)
+        row
+        #else
+        row.contextMenu {
+            actions(for: placement, allowsCreation: false)
+            recentPinButton(for: placement.item.id)
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    private func recentUIKitMenu(for id: UUID) -> UIMenu {
+        guard let placement = recentPlacements.first(where: { $0.item.id == id })
+        else { return UIMenu(children: []) }
+        var menuActions: [UIMenuElement] = [
+            UIAction(title: String(localized: "Rename…")) { _ in
+                beginRenaming(placement)
+            },
+            UIAction(title: String(localized: "Move…")) { _ in
+                beginMoving([id], fromTrash: false)
+            },
+            UIAction(title: String(localized: "Move to Trash"),
+                     attributes: .destructive) { _ in
+                changeTrash(placement, trashed: true)
+            }
+        ]
+        if !isPhoneLayout {
+            let pinned = replica.isPinnedInRecents(id)
+            let title = pinned ? String(localized: "Unpin from Recents")
+                : String(localized: "Pin in Recents")
+            menuActions.append(UIAction(
+                title: title,
+                attributes: !pinned && !replica.canPinInRecents(id) ? .disabled : []
+            ) { _ in
+                setRecentPinned(!pinned, for: id)
+            })
+        }
+        return UIMenu(children: menuActions)
+    }
+    #endif
+
+    private func recentCardPosition(
+        index: Int,
+        count: Int
+    ) -> NotebookRecentCardPosition {
+        if count == 1 { return .only }
+        if index == 0 { return .first }
+        return index == count - 1 ? .last : .middle
+    }
+
+    @ViewBuilder
+    private func recentPinButton(for id: UUID, swipeIcon: Bool = false) -> some View {
+        let pinned = replica.isPinnedInRecents(id)
+        let title: LocalizedStringKey = pinned
+            ? "Unpin from Recents" : "Pin in Recents"
+        Button {
+            setRecentPinned(!pinned, for: id)
+        } label: {
+            if swipeIcon {
+                Image(systemName: pinned ? "pin.slash" : "pin.fill")
+            } else {
+                Text(title)
+            }
+        }
+        .accessibilityLabel(Text(title))
+        .disabled(!pinned && !replica.canPinInRecents(id))
+        .accessibilityIdentifier("notebook-recent-pin-" + id.uuidString)
+    }
+
+    private func setRecentPinned(_ pinned: Bool, for id: UUID) {
+        Task { @MainActor in
+            do {
+                try await replica.setPinnedInRecents(pinned, for: id)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -1101,7 +1253,6 @@ struct NotebookView: View {
         let changed = replica.placements.first { $0.item.id == id }?.item.name != filename
         if changed {
             try await replica.rename(id, to: filename)
-            navigationState.recordRenamed(id)
         }
         detailEditingID = nil
         focusedTitleID = nil
@@ -1132,7 +1283,6 @@ struct NotebookView: View {
             ) : proposedName
         if placement?.item.name != name {
             try await replica.rename(id, to: name)
-            if placement?.item.kind == .note { navigationState.recordRenamed(id) }
         }
         editingID = nil
         focusedNameID = nil
@@ -1677,6 +1827,23 @@ private enum NotebookNavigationError: LocalizedError {
 }
 
 extension View {
+    @ViewBuilder
+    fileprivate func notebookRecentPinAccessibilityAction(
+        isPinned: Bool,
+        isAvailable: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        if isPinned || isAvailable {
+            accessibilityAction(
+                named: Text(isPinned ? "Unpin from Recents" : "Pin in Recents")
+            ) {
+                action()
+            }
+        } else {
+            self
+        }
+    }
+
     @ViewBuilder
     fileprivate func notebookSelectNameOnFocus() -> some View {
         #if os(iOS)

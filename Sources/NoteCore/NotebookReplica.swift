@@ -5,6 +5,7 @@ public enum NotebookReplicaError: Error, Equatable, LocalizedError {
     case notJoined, busy, catalogNeedsRecovery, catalogUnavailable
     case noteUnavailable(UUID)
     case permanentlyDeleted(UUID)
+    case pinLimitReached
 
     public var errorDescription: String? {
         switch self {
@@ -20,8 +21,15 @@ public enum NotebookReplicaError: Error, Equatable, LocalizedError {
             "This note is unavailable."
         case .permanentlyDeleted:
             "This note was permanently deleted."
+        case .pinLimitReached:
+            "Unpin a note before pinning another."
         }
     }
+}
+
+public struct NotebookRecentNote: Equatable, Sendable, Identifiable {
+    public let id: UUID
+    public let isPinned: Bool
 }
 
 public enum NotebookDeletionError: Error, Equatable, LocalizedError {
@@ -72,10 +80,13 @@ public final class NotebookReplica {
     public let directory: URL
     public private(set) var catalogSnapshot: NotebookCatalogSnapshot?
     public private(set) var placements: [NotebookPlacement] = []
+    public private(set) var recentNotes: [NotebookRecentNote] = []
+    public private(set) var pinnedRecentCount = 0
     public private(set) var hasPendingImport: Bool
     public private(set) var deletionCleanupErrorMessage: String?
     private var searchBodyGeneration: UInt64 = 0
     @ObservationIgnored private var catalog: NotebookCatalogDocument?
+    @ObservationIgnored private var latestRecentActivityID: UUID?
     @ObservationIgnored private let storage: NotebookCatalogStorage
     @ObservationIgnored private let importStorage: NotebookImportStorage
     @ObservationIgnored private let deletionStorage: NotebookDeletionStorage
@@ -88,7 +99,7 @@ public final class NotebookReplica {
     @ObservationIgnored private var writeWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored var importFaultInjector: ((NotebookImportStage) throws -> Void)?
     @ObservationIgnored var deletionFaultInjector: ((NotebookDeletionStage) throws -> Void)?
-    @ObservationIgnored var catalogWriteSuspension: (@MainActor () async -> Void)?
+    @ObservationIgnored var catalogWriteSuspension: (@MainActor () async throws -> Void)?
 
     /// A cheap invalidation token for derived search state. Reading it also
     /// observes live editor revisions, so unsaved local typing invalidates a
@@ -273,7 +284,74 @@ public final class NotebookReplica {
         try ensureAlive(id)
         let next = try catalog!.fork()
         try next.rename(id, to: name)
+        if placements.contains(where: {
+            $0.item.id == id && $0.item.kind == .note && !$0.isInTrash
+        }) {
+            try next.recordRecentActivity(for: id)
+        }
         try await saveCatalog(next)
+    }
+
+    public var canPinInRecents: Bool { pinnedRecentCount < 5 }
+
+    public func isLatestRecentActivity(_ id: UUID) -> Bool {
+        latestRecentActivityID == id
+    }
+
+    public func isPinnedInRecents(_ id: UUID) -> Bool {
+        recentNotes.contains { $0.id == id && $0.isPinned }
+    }
+
+    public func canPinInRecents(_ id: UUID) -> Bool {
+        canPinInRecents && placements.contains {
+            $0.item.id == id && $0.item.kind == .note &&
+                !$0.isInTrash && !$0.item.isPermanentlyDeleted
+        }
+    }
+
+    public func setPinnedInRecents(_ pinned: Bool, for id: UUID) async throws {
+        try await withQueuedCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            guard self.placements.contains(where: {
+                $0.item.id == id && $0.item.kind == .note &&
+                    !$0.isInTrash && !$0.item.isPermanentlyDeleted
+            }) else { throw NotebookReplicaError.noteUnavailable(id) }
+            let wasPinned = self.isPinnedInRecents(id)
+            guard wasPinned != pinned else { return }
+            if pinned && !self.canPinInRecents {
+                throw NotebookReplicaError.pinLimitReached
+            }
+            let next = try catalog.fork()
+            try next.setPinnedInRecents(pinned, for: id)
+            let previousRecentNotes = self.recentNotes
+            let previousPinnedCount = self.pinnedRecentCount
+            let previousActivityID = self.latestRecentActivityID
+            try self.updateRecentProjection(from: next, placements: self.placements)
+            do {
+                try await self.persistCatalog(next)
+            } catch {
+                self.recentNotes = previousRecentNotes
+                self.pinnedRecentCount = previousPinnedCount
+                self.latestRecentActivityID = previousActivityID
+                throw error
+            }
+        }
+    }
+
+    /// Call on a local text edit. Repeated keystrokes in the newest note do
+    /// not create catalog writes; opening a note alone has no effect.
+    public func recordRecentActivity(for id: UUID) async throws {
+        try await withQueuedCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            guard self.placements.contains(where: {
+                $0.item.id == id && $0.item.kind == .note &&
+                    !$0.isInTrash && !$0.item.isPermanentlyDeleted
+            }) else { throw NotebookReplicaError.noteUnavailable(id) }
+            if self.latestRecentActivityID == id { return }
+            let next = try catalog.fork()
+            try next.recordRecentActivity(for: id)
+            try await self.persistCatalog(next)
+        }
     }
 
     public func move(_ id: UUID, to parentID: UUID?) async throws {
@@ -389,6 +467,14 @@ public final class NotebookReplica {
         try ensureAlive(id)
         let next = try catalog!.fork()
         try next.setTrashed(id, trashed)
+        if trashed {
+            let former = Set(placements.filter { !$0.isInTrash && $0.item.kind == .note }
+                .map { $0.item.id })
+            let now = Set(try next.placements().filter {
+                !$0.isInTrash && $0.item.kind == .note
+            }.map { $0.item.id })
+            try next.clearRecents(for: former.subtracting(now))
+        }
         try await saveCatalog(next)
     }
 
@@ -417,6 +503,13 @@ public final class NotebookReplica {
             }
             let next = try catalog.fork()
             let undo = try next.trashItems(ids)
+            let former = Set(self.placements.filter {
+                !$0.isInTrash && $0.item.kind == .note
+            }.map { $0.item.id })
+            let now = Set(try next.placements().filter {
+                !$0.isInTrash && $0.item.kind == .note
+            }.map { $0.item.id })
+            try next.clearRecents(for: former.subtracting(now))
             try await self.persistCatalog(next)
             return undo
         }
@@ -467,6 +560,13 @@ public final class NotebookReplica {
             }
             let next = try catalog.fork()
             let redo = try next.undoBrowserChange(receipt)
+            let former = Set(self.placements.filter {
+                !$0.isInTrash && $0.item.kind == .note
+            }.map { $0.item.id })
+            let now = Set(try next.placements().filter {
+                !$0.isInTrash && $0.item.kind == .note
+            }.map { $0.item.id })
+            try next.clearRecents(for: former.subtracting(now))
             try await self.persistCatalog(next)
             return redo
         }
@@ -728,6 +828,15 @@ public final class NotebookReplica {
         if let catalog {
             let next = try catalog.fork()
             try next.merge(NotebookCatalogDocument(snapshot: snapshot))
+            let former = Set(placements.filter {
+                !$0.isInTrash && $0.item.kind == .note
+                    && !$0.item.isPermanentlyDeleted
+            }.map { $0.item.id })
+            let now = Set(try next.placements().filter {
+                !$0.isInTrash && $0.item.kind == .note
+                    && !$0.item.isPermanentlyDeleted
+            }.map { $0.item.id })
+            try next.clearRecents(for: former.subtracting(now))
             try await saveCatalog(next)
         } else {
             try await saveCatalog(NotebookCatalogDocument(snapshot: snapshot))
@@ -1084,8 +1193,18 @@ public final class NotebookReplica {
         return try await operation()
     }
 
+    private func withQueuedCatalogWrite<T>(
+        _ operation: () async throws -> T
+    ) async throws -> T {
+        while true {
+            await waitForWrites()
+            do { return try await withCatalogWrite(operation) }
+            catch NotebookReplicaError.busy { continue }
+        }
+    }
+
     private func persistCatalog(_ next: NotebookCatalogDocument) async throws {
-        await catalogWriteSuspension?()
+        try await catalogWriteSuspension?()
         let represented = Set(try next.items().map(\.id))
         let alreadyDeleted = Set(try next.items().filter(\.isPermanentlyDeleted).map(\.id))
         let missing = rememberedDeletions.intersection(represented).subtracting(alreadyDeleted)
@@ -1108,8 +1227,47 @@ public final class NotebookReplica {
         catalog = document
         catalogSnapshot = snapshot
         placements = nextPlacements
+        try updateRecentProjection(from: document, placements: nextPlacements)
         searchBodyGeneration &+= 1
         for id in try deletedIDs { sessions[id]?.markPermanentlyDeleted() }
+    }
+
+    private func updateRecentProjection(
+        from document: NotebookCatalogDocument,
+        placements: [NotebookPlacement]
+    ) throws {
+        let states = try document.recentStates()
+        let active = Set(placements.filter {
+            $0.item.kind == .note && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+        }.map { $0.item.id })
+        let pinned = active.compactMap { id -> (UUID, NotebookCatalogDocument.RecentState)? in
+            guard let state = states[id], state.pinned else { return nil }
+            return (id, state)
+        }.sorted {
+            ($0.1.pinOrder ?? 0, $0.1.pinActionID?.uuidString ?? "", $0.0.uuidString)
+                < ($1.1.pinOrder ?? 0, $1.1.pinActionID?.uuidString ?? "", $1.0.uuidString)
+        }
+        let ordinary = active.compactMap { id -> (UUID, NotebookCatalogDocument.RecentState)? in
+            guard let state = states[id], !state.pinned,
+                state.activityOrder != nil else { return nil }
+            return (id, state)
+        }.sorted {
+            ($0.1.activityOrder ?? 0, $0.1.activityActionID?.uuidString ?? "", $0.0.uuidString)
+                > ($1.1.activityOrder ?? 0, $1.1.activityActionID?.uuidString ?? "", $1.0.uuidString)
+        }
+        latestRecentActivityID = active.compactMap {
+            id -> (UUID, NotebookCatalogDocument.RecentState)? in
+            guard let state = states[id], state.activityOrder != nil else { return nil }
+            return (id, state)
+        }.max {
+            ($0.1.activityOrder ?? 0, $0.1.activityActionID?.uuidString ?? "", $0.0.uuidString)
+                < ($1.1.activityOrder ?? 0, $1.1.activityActionID?.uuidString ?? "", $1.0.uuidString)
+        }?.0
+        pinnedRecentCount = pinned.count
+        recentNotes = pinned.map { NotebookRecentNote(id: $0.0, isPinned: true) }
+            + ordinary.prefix(max(0, 5 - pinned.count)).map {
+                NotebookRecentNote(id: $0.0, isPinned: false)
+            }
     }
 
     private func applyRememberedDeletions() {
