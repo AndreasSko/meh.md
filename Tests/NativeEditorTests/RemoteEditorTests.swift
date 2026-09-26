@@ -82,6 +82,29 @@ final class RemoteEditorTests: XCTestCase {
         XCTAssertTrue(model.bindingWrites.isEmpty)
     }
 
+    func testRemoteTableReplacementRefreshesPreviewWithoutWritingBack() throws {
+        let source = "| Name | Time |\n| --- | --- |\n| Walk | 09:00 |\n\nOutside"
+        let model = EditorModel(text: source, revision: revision(0))
+        model.mode = .livePreview
+        let mounted = mount(model)
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+        moveInsertionPointToEnd(of: textView)
+        let remote = source.replacingOccurrences(of: "09:00", with: "10:30")
+        model.receiveRemote(text: remote, revision: revision(9))
+        mounted.flushUpdates()
+        MarkdownPresentation.refresh(textView, mode: .livePreview)
+        XCTAssertEqual(nativeText(in: textView), remote)
+        XCTAssertTrue(model.requests.isEmpty)
+        XCTAssertTrue(model.bindingWrites.isEmpty)
+        let cache = MarkdownPresentation.syntaxCache(for: textView)
+        XCTAssertEqual(cache.tableLayout?.rows.last?.cells.last?.string, "10:30")
+        insert("!", in: textView)
+        mounted.flushUpdates()
+        XCTAssertEqual(model.requests.map(\.revision), [revision(9)])
+        XCTAssertEqual(model.text, remote + "!")
+    }
+
     func testCommandAfterRemoteUpdateUsesFreshRevisionInLivePreview() throws {
         let model = EditorModel(text: "* Moon", revision: revision(0))
         model.mode = .livePreview

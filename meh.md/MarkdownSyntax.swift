@@ -47,6 +47,26 @@ struct MarkdownParagraphRun: Equatable {
     let contentPrefixRange: NSRange
 }
 
+enum MarkdownTableAlignment: Equatable {
+    case left
+    case center
+    case right
+}
+
+struct MarkdownTableRow: Equatable {
+    let range: NSRange
+    /// Trimmed UTF-16 ranges into the original Markdown source.
+    let cells: [NSRange]
+}
+
+struct MarkdownTable: Equatable {
+    let range: NSRange
+    let header: MarkdownTableRow
+    let delimiterRange: NSRange
+    let rows: [MarkdownTableRow]
+    let alignments: [MarkdownTableAlignment]
+}
+
 struct MarkdownSyntaxResult: Equatable {
     let spans: [MarkdownStyleSpan]
     let fontRuns: [MarkdownFontRun]
@@ -55,6 +75,7 @@ struct MarkdownSyntaxResult: Equatable {
     // visible spans, these account for unmatched delimiters as well.
     let restartOffsets: [Int]
     let canRestartAtEnd: Bool
+    var tables: [MarkdownTable] = []
 }
 
 struct MarkdownSyntaxIncrementalResult: Equatable {
@@ -79,6 +100,10 @@ enum MarkdownSyntax {
         }
 
         let lines = lineRanges(in: source)
+        let tables = tableRanges(in: source, lines: lines, fenced: fenced)
+        let tableLines = tables.flatMap { table in
+            [table.header.range, table.delimiterRange] + table.rows.map(\.range)
+        }
         var paragraphRuns = codeBlockParagraphs(
             in: fenced,
             lines: lines,
@@ -87,6 +112,7 @@ enum MarkdownSyntax {
         appendLineSpans(
             in: source,
             excluding: codeRanges,
+            tableLines: tableLines,
             spans: &spans,
             paragraphRuns: &paragraphRuns
         )
@@ -95,7 +121,8 @@ enum MarkdownSyntax {
             in: source,
             excluding: codeRanges,
             blockBoundaries: emphasisBlockBoundaries(
-                in: source, lines: lines, spans: spans, fenced: fenced
+                in: source, lines: lines, spans: spans, fenced: fenced,
+                tableLines: tableLines
             ),
             spans: &spans
         )
@@ -113,6 +140,24 @@ enum MarkdownSyntax {
             excluding: codeRanges,
             spans: &spans
         )
+        // Parse inline syntax independently in each source cell. Global
+        // matches can otherwise cross a pipe or style the delimiter row.
+        spans.removeAll { span in
+            tableLines.contains { overlaps(span.range, $0) }
+        }
+        for table in tables {
+            for row in [table.header] + table.rows {
+                for cell in row.cells where cell.length > 0 {
+                    let local = inlineSpans(in: source.substring(with: cell))
+                    spans.append(contentsOf: local.map { span in
+                        MarkdownStyleSpan(
+                            range: offset(span.range, by: cell.location),
+                            role: span.role
+                        )
+                    })
+                }
+            }
+        }
         spans.sort { left, right in
             if left.range.location == right.range.location {
                 return left.range.length > right.range.length
@@ -124,13 +169,34 @@ enum MarkdownSyntax {
         if canRestartAtEnd, restartOffsets.last != source.length {
             restartOffsets.append(source.length)
         }
-        return MarkdownSyntaxResult(
+        var result = MarkdownSyntaxResult(
             spans: spans,
             fontRuns: fontRuns(for: spans),
             paragraphRuns: paragraphRuns,
             restartOffsets: restartOffsets,
             canRestartAtEnd: canRestartAtEnd
         )
+        result.tables = tables
+        return result
+    }
+
+    private static func inlineSpans(in text: String) -> [MarkdownStyleSpan] {
+        let source = text as NSString
+        let code = inlineCodeRanges(in: source, excluding: [])
+        var spans = code.map { MarkdownStyleSpan(range: $0, role: .code) }
+        appendLinkSpans(in: source, excluding: code, spans: &spans)
+        _ = appendEmphasisSpans(
+            in: source, excluding: code, blockBoundaries: [], spans: &spans
+        )
+        appendPairedSpans(
+            in: source, marker: ASCII.equals, role: .highlight,
+            excluding: code, spans: &spans
+        )
+        appendPairedSpans(
+            in: source, marker: ASCII.tilde, role: .strikethrough,
+            excluding: code, spans: &spans
+        )
+        return spans
     }
 
     static func spans(in text: String) -> [MarkdownStyleSpan] {
@@ -167,6 +233,12 @@ enum MarkdownSyntax {
             location: editedRange.location,
             length: previousEditedLength
         )
+        // A new table can form when an edit changes either of two neighboring
+        // lines, so inspect the edit and one line on each side in both versions.
+        if hasNearbyPipe(around: editedRange, in: source)
+            || hasNearbyPipe(around: previousEditedRange, in: previousSource) {
+            return nil
+        }
         let oldAffected = syntaxLineRange(
             containing: previousEditedRange, in: previousSource
         )
@@ -195,6 +267,9 @@ enum MarkdownSyntax {
             guard newEnd - start <= 65_536 else { return nil }
             let region = NSRange(location: start, length: newEnd - start)
             let local = parse(source.substring(with: region))
+            // A distant fence edit can expose a table within this region.
+            // Tables are not spliced into incremental results yet.
+            guard local.tables.isEmpty else { return nil }
             if local.canRestartAtEnd || oldEnd == previousSource.length {
                 replacement = (
                     NSRange(location: start, length: oldEnd - start),
@@ -210,6 +285,16 @@ enum MarkdownSyntax {
         let line = replacement.new
         let local = replacement.syntax
         let delta = changeInLength
+        // A blank line after a pipe-free body row is a table boundary. Treat
+        // touching either edge like overlap so edits can grow or shrink it.
+        guard !previousResult.tables.contains(where: { table in
+            table.range.location <= NSMaxRange(previousLine)
+                && NSMaxRange(table.range) >= previousLine.location
+        }) else { return nil }
+        let tables = previousResult.tables.map { table in
+            table.range.location > NSMaxRange(previousLine)
+                ? offset(table, by: delta) : table
+        }
         var spans = previousResult.spans.compactMap { span in
             splice(
                 span,
@@ -249,8 +334,7 @@ enum MarkdownSyntax {
         })
         paragraphs.sort(by: paragraphOrdering)
 
-        return MarkdownSyntaxIncrementalResult(
-            result: MarkdownSyntaxResult(
+        var result = MarkdownSyntaxResult(
                 spans: spans,
                 fontRuns: fontRuns,
                 paragraphRuns: paragraphs,
@@ -261,7 +345,10 @@ enum MarkdownSyntax {
                     }.map { $0 + delta },
                 canRestartAtEnd: NSMaxRange(previousLine) == previousSource.length
                     ? local.canRestartAtEnd : previousResult.canRestartAtEnd
-            ),
+            )
+        result.tables = tables
+        return MarkdownSyntaxIncrementalResult(
+            result: result,
             invalidatedRange: line
         )
     }
@@ -286,6 +373,30 @@ enum MarkdownSyntax {
         return NSRange(location: start, length: end - start)
     }
 
+    private static func hasNearbyPipe(
+        around range: NSRange,
+        in source: NSString
+    ) -> Bool {
+        let affected = syntaxLineRange(containing: range, in: source)
+        var start = affected.location
+        var end = NSMaxRange(affected)
+        if start > 0 {
+            start = syntaxLineRange(
+                containing: NSRange(location: start - 1, length: 0),
+                in: source
+            ).location
+        }
+        if end < source.length {
+            end = NSMaxRange(syntaxLineRange(
+                containing: NSRange(location: end, length: 0),
+                in: source
+            ))
+        }
+        return source.substring(with: NSRange(
+            location: start, length: end - start
+        )).contains("|")
+    }
+
     private static func overlaps(_ left: NSRange, _ right: NSRange) -> Bool {
         left.location < NSMaxRange(right)
             && right.location < NSMaxRange(left)
@@ -293,6 +404,29 @@ enum MarkdownSyntax {
 
     private static func offset(_ range: NSRange, by delta: Int) -> NSRange {
         NSRange(location: range.location + delta, length: range.length)
+    }
+
+    private static func offset(
+        _ row: MarkdownTableRow,
+        by delta: Int
+    ) -> MarkdownTableRow {
+        MarkdownTableRow(
+            range: offset(row.range, by: delta),
+            cells: row.cells.map { offset($0, by: delta) }
+        )
+    }
+
+    private static func offset(
+        _ table: MarkdownTable,
+        by delta: Int
+    ) -> MarkdownTable {
+        MarkdownTable(
+            range: offset(table.range, by: delta),
+            header: offset(table.header, by: delta),
+            delimiterRange: offset(table.delimiterRange, by: delta),
+            rows: table.rows.map { offset($0, by: delta) },
+            alignments: table.alignments
+        )
     }
 
     private static func splice(
@@ -440,10 +574,14 @@ enum MarkdownSyntax {
     private static func appendLineSpans(
         in source: NSString,
         excluding codeRanges: [NSRange],
+        tableLines: [NSRange],
         spans: inout [MarkdownStyleSpan],
         paragraphRuns: inout [MarkdownParagraphRun]
     ) {
         for line in lineRanges(in: source) {
+            if tableLines.contains(where: { $0.location == line.location }) {
+                continue
+            }
             let contentEnd = contentEnd(for: line, in: source)
             guard !isContained(line.location, in: codeRanges) else {
                 continue
@@ -721,9 +859,14 @@ enum MarkdownSyntax {
         in source: NSString,
         lines: [NSRange],
         spans: [MarkdownStyleSpan],
-        fenced: [NSRange]
+        fenced: [NSRange],
+        tableLines: [NSRange]
     ) -> Set<Int> {
         var boundaries = Set(fenced.flatMap { [$0.location, NSMaxRange($0)] })
+        for line in tableLines {
+            boundaries.insert(line.location)
+            boundaries.insert(NSMaxRange(line))
+        }
         for line in lines {
             let end = contentEnd(for: line, in: source)
             if skipHorizontalWhitespace(from: line.location, before: end,
@@ -964,6 +1107,264 @@ enum MarkdownSyntax {
             ))
         }
         return paragraphs
+    }
+
+    /// Recognizes top-level pipe tables. Container-nested tables remain raw
+    /// Markdown until the editor has a container-aware block parser.
+    private static func tableRanges(
+        in source: NSString,
+        lines: [NSRange],
+        fenced: [NSRange]
+    ) -> [MarkdownTable] {
+        guard lines.count >= 2 else { return [] }
+        var tables: [MarkdownTable] = []
+        var index = 0
+        while index + 1 < lines.count {
+            let headerLine = lines[index]
+            let delimiterLine = lines[index + 1]
+            guard isTopLevelTableLine(headerLine, in: source),
+                  !isNestedListContinuation(
+                      at: index, lines: lines, source: source
+                  ),
+                  tableContentStart(delimiterLine, in: source) != nil,
+                  !isContained(headerLine.location, in: fenced),
+                  !isContained(delimiterLine.location, in: fenced),
+                  let headerCells = tableCells(in: headerLine, source: source),
+                  let delimiterCells = tableCells(
+                      in: delimiterLine, source: source
+                  ),
+                  headerCells.cells.count == delimiterCells.cells.count,
+                  headerCells.hasPipe || delimiterCells.hasPipe,
+                  let alignments = delimiterAlignments(
+                      delimiterCells.cells, in: source
+                  ) else {
+                index += 1
+                continue
+            }
+
+            let header = MarkdownTableRow(
+                range: completeLineRange(headerLine, in: source),
+                cells: headerCells.cells
+            )
+            let delimiterRange = completeLineRange(delimiterLine, in: source)
+            var rows: [MarkdownTableRow] = []
+            index += 2
+            while index < lines.count {
+                let line = lines[index]
+                guard isTopLevelTableLine(line, in: source),
+                      !isContained(line.location, in: fenced),
+                      let body = tableCells(in: line, source: source),
+                      !body.cells.isEmpty else {
+                    break
+                }
+                rows.append(MarkdownTableRow(
+                    range: completeLineRange(line, in: source),
+                    cells: body.cells
+                ))
+                index += 1
+            }
+            let end = rows.last.map { NSMaxRange($0.range) }
+                ?? NSMaxRange(delimiterRange)
+            tables.append(MarkdownTable(
+                range: NSRange(
+                    location: header.range.location,
+                    length: end - header.range.location
+                ),
+                header: header,
+                delimiterRange: delimiterRange,
+                rows: rows,
+                alignments: alignments
+            ))
+        }
+        return tables
+    }
+
+    private static func isTopLevelTableLine(
+        _ line: NSRange,
+        in source: NSString
+    ) -> Bool {
+        let end = contentEnd(for: line, in: source)
+        guard let location = tableContentStart(line, in: source),
+              source.character(at: location) != ASCII.greaterThan,
+              listMarker(at: location, lineEnd: end, in: source) == nil,
+              !isHeadingLine(line, in: source),
+              !isThematicBreakLine(line, in: source) else {
+            return false
+        }
+        return true
+    }
+
+    private static func tableContentStart(
+        _ line: NSRange, in source: NSString
+    ) -> Int? {
+        let end = contentEnd(for: line, in: source)
+        var location = line.location
+        while location < end, source.character(at: location) == ASCII.space {
+            location += 1
+        }
+        guard location - line.location <= 3, location < end,
+              source.character(at: location) != ASCII.tab else { return nil }
+        return location
+    }
+
+    private static func isHeadingLine(
+        _ line: NSRange,
+        in source: NSString
+    ) -> Bool {
+        let end = contentEnd(for: line, in: source)
+        let location = skipHorizontalWhitespace(
+            from: line.location, before: end, in: source
+        )
+        guard location < end,
+              source.character(at: location) == ASCII.hash else {
+            return false
+        }
+        let count = repeatedLength(of: ASCII.hash, at: location, in: source)
+        let after = location + count
+        return count <= 6 && (after == end
+            || isHorizontalWhitespace(source.character(at: after)))
+    }
+
+    private static func isThematicBreakLine(
+        _ line: NSRange,
+        in source: NSString
+    ) -> Bool {
+        let end = contentEnd(for: line, in: source)
+        let start = skipHorizontalWhitespace(
+            from: line.location, before: end, in: source
+        )
+        guard start < end else { return false }
+        let marker = source.character(at: start)
+        guard marker == ASCII.hyphen || marker == ASCII.asterisk
+                || marker == ASCII.underscore else {
+            return false
+        }
+        var count = 0
+        for location in start..<end {
+            let character = source.character(at: location)
+            if character == marker {
+                count += 1
+            } else if !isHorizontalWhitespace(character) {
+                return false
+            }
+        }
+        return count >= 3
+    }
+
+    private static func isNestedListContinuation(
+        at index: Int,
+        lines: [NSRange],
+        source: NSString
+    ) -> Bool {
+        let candidate = lines[index]
+        let candidateIndent = skipHorizontalWhitespace(
+            from: candidate.location,
+            before: contentEnd(for: candidate, in: source),
+            in: source
+        ) - candidate.location
+        guard candidateIndent > 0, index > 0 else { return false }
+        for priorIndex in stride(from: index - 1, through: 0, by: -1) {
+            let prior = lines[priorIndex]
+            let end = contentEnd(for: prior, in: source)
+            let content = skipHorizontalWhitespace(
+                from: prior.location, before: end, in: source
+            )
+            if content == end { return false }
+            let indent = content - prior.location
+            if indent < candidateIndent {
+                return listMarker(
+                    at: content, lineEnd: end, in: source
+                ) != nil
+            }
+        }
+        return false
+    }
+
+    private static func tableCells(
+        in line: NSRange,
+        source: NSString
+    ) -> (cells: [NSRange], hasPipe: Bool)? {
+        let end = contentEnd(for: line, in: source)
+        var start = skipHorizontalWhitespace(
+            from: line.location, before: end, in: source
+        )
+        var contentEnd = end
+        while contentEnd > start,
+              isHorizontalWhitespace(source.character(at: contentEnd - 1)) {
+            contentEnd -= 1
+        }
+        guard start < contentEnd else { return nil }
+
+        var separators: [Int] = []
+        for location in start..<contentEnd
+        where source.character(at: location) == 124
+            && !isEscaped(location, in: source) {
+            separators.append(location)
+        }
+        let hasPipe = !separators.isEmpty
+        if separators.first == start {
+            start += 1
+            separators.removeFirst()
+        }
+        if separators.last == contentEnd - 1 {
+            contentEnd -= 1
+            separators.removeLast()
+        }
+        var cells: [NSRange] = []
+        var cellStart = start
+        for separator in separators + [contentEnd] {
+            var left = cellStart
+            var right = separator
+            while left < right,
+                  isHorizontalWhitespace(source.character(at: left)) {
+                left += 1
+            }
+            while right > left,
+                  isHorizontalWhitespace(source.character(at: right - 1)) {
+                right -= 1
+            }
+            cells.append(NSRange(location: left, length: right - left))
+            cellStart = separator + 1
+        }
+        return (cells, hasPipe)
+    }
+
+    private static func delimiterAlignments(
+        _ cells: [NSRange],
+        in source: NSString
+    ) -> [MarkdownTableAlignment]? {
+        var result: [MarkdownTableAlignment] = []
+        for cell in cells {
+            let value = source.substring(with: cell)
+            let left = value.hasPrefix(":")
+            let right = value.hasSuffix(":")
+            let dashes = value.trimmingCharacters(in: CharacterSet(
+                charactersIn: ":"
+            ))
+            guard !dashes.isEmpty,
+                  dashes.allSatisfy({ $0 == "-" }),
+                  value.filter({ $0 == ":" }).count ==
+                    (left ? 1 : 0) + (right ? 1 : 0) else {
+                return nil
+            }
+            result.append(left && right ? .center : right ? .right : .left)
+        }
+        return result
+    }
+
+    private static func completeLineRange(
+        _ line: NSRange,
+        in source: NSString
+    ) -> NSRange {
+        let end = NSMaxRange(line)
+        return NSRange(
+            location: line.location,
+            length: line.length + (end < source.length ? 1 : 0)
+        )
+    }
+
+    private static func isHorizontalWhitespace(_ character: unichar) -> Bool {
+        character == ASCII.space || character == ASCII.tab
     }
 
     private static func lineRanges(in source: NSString) -> [NSRange] {

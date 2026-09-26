@@ -67,6 +67,7 @@ xcrun swiftc -parse-as-library -swift-version 6 \
   -target "$(uname -m)-apple-ios27.0-simulator" \
   "$repo_root/meh.md/MarkdownSyntax.swift" \
   "$repo_root/meh.md/MarkdownPresentation.swift" \
+  "$repo_root/meh.md/MarkdownTablePresentation.swift" \
   "$repo_root/meh.md/MarkdownEditor.swift" \
   "$repo_root/meh.md/MarkdownEditingCommands.swift" \
   "$repo_root/meh.md/MarkdownLivePreview.swift" \

@@ -42,7 +42,7 @@ let package = Package(
                 "MarkdownEditor.swift", "EditorTextSizeControl.swift",
                 "MarkdownEditingCommands.swift", "MarkdownLivePreview.swift",
                 "EditorWritingControls.swift",
-                "MarkdownPresentation.swift", "MarkdownSyntax.swift", "MyApp.swift",
+                "MarkdownPresentation.swift", "MarkdownTablePresentation.swift", "MarkdownSyntax.swift", "MyApp.swift",
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
                 "NotebookBackupBackgroundScheduler.swift",
                 "NotebookSettingsView.swift",
@@ -100,6 +100,7 @@ let package = Package(
                 "MarkdownLivePreview.swift",
                 "EditorWritingControls.swift",
                 "MarkdownPresentation.swift",
+                "MarkdownTablePresentation.swift",
                 "MarkdownSyntax.swift",
             ],
             swiftSettings: [.defaultIsolation(MainActor.self)]

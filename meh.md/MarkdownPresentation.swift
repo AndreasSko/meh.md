@@ -95,7 +95,8 @@ enum MarkdownPresentation {
             textView,
             mode: mode,
             selection: textView.selectedRange(),
-            isEditing: textView.window?.firstResponder === textView
+            isEditing: textView.window?.firstResponder === textView,
+            fontSize: normalizedFontSize(fontSize)
         )
         let syntaxCache = syntaxCache(for: textView)
         if let textStorage = textView.textStorage {
@@ -138,7 +139,8 @@ enum MarkdownPresentation {
             textView,
             mode: mode,
             selection: selection,
-            isEditing: textView.window?.firstResponder === textView
+            isEditing: textView.window?.firstResponder === textView,
+            fontSize: normalizedFontSize(fontSize)
         )
         guard !textView.hasMarkedText(),
               let textStorage = textView.textStorage else { return }
@@ -156,9 +158,21 @@ enum MarkdownPresentation {
             pointSize: normalizedFontSize(fontSize)
         )
         let previewRanges = presentation.previewRanges
-        let layoutRange = syntaxCache.layoutRange(
+        var layoutRange = syntaxCache.layoutRange(
             for: presentation, text: text, bodyFont: bodyFont
         )
+        let tableWidth = snapshot.tableWidth
+        if let tableRange = syntaxCache.prepareTables(
+            text: text, presentation: presentation,
+            bodyFont: bodyFont, width: tableWidth
+        ) {
+            layoutRange = layoutRange.length == 0 ? tableRange
+                : NSUnionRange(layoutRange, tableRange)
+        }
+        syntaxCache.tableRefresh = { [weak textView] in
+            guard let textView else { return }
+            refresh(textView, fontSize: fontSize, fontFamily: fontFamily, mode: mode)
+        }
         syntaxCache.isApplyingLayoutAttributes = true
         applyLayoutAttributes(
             to: textStorage,
@@ -168,7 +182,8 @@ enum MarkdownPresentation {
             hiddenRanges: previewRanges.collapsed,
             transparentRanges: previewRanges.transparent,
             undoManager: textView.undoManager,
-            range: layoutRange
+            range: layoutRange,
+            tableLayout: syntaxCache.tableLayout
         )
         syntaxCache.isApplyingLayoutAttributes = false
         if textView.selectedRange() != selection {
@@ -245,6 +260,27 @@ enum MarkdownPresentation {
             dirtyRect: dirtyRect,
             context: context
         )
+        if let tableLayout = syntaxCache.tableLayout,
+           let manager = layoutManager.textContentManager,
+           let start = manager.location(manager.documentRange.location,
+                                        offsetBy: visibleRange.location) {
+            layoutManager.enumerateTextLayoutFragments(from: start) { fragment in
+                let frame = fragment.layoutFragmentFrame.offsetBy(
+                    dx: textView.textContainerOrigin.x,
+                    dy: textView.textContainerOrigin.y
+                )
+                if frame.minY > dirtyRect.maxY { return false }
+                if frame.intersects(dirtyRect) {
+                    tableLayout.draw(
+                        fragment: fragment, layoutManager: layoutManager,
+                        origin: textView.textContainerOrigin,
+                        lineFragmentPadding: textContainer.lineFragmentPadding,
+                        context: context
+                    )
+                }
+                return true
+            }
+        }
         drawListBullets(
             listBulletDecorations(
                 text: text,
@@ -284,7 +320,8 @@ enum MarkdownPresentation {
             textView,
             mode: mode,
             selection: textView.selectedRange,
-            isEditing: textView.isFirstResponder
+            isEditing: textView.isFirstResponder,
+            fontSize: normalizedFontSize(fontSize)
         )
         let syntaxCache = syntaxCache(for: textView)
         syntaxCache.observeCharacterEdits(in: textView.textStorage)
@@ -325,7 +362,8 @@ enum MarkdownPresentation {
             textView,
             mode: mode,
             selection: selection,
-            isEditing: textView.isFirstResponder
+            isEditing: textView.isFirstResponder,
+            fontSize: normalizedFontSize(fontSize)
         )
         guard textView.markedTextRange == nil else { return }
 
@@ -342,9 +380,21 @@ enum MarkdownPresentation {
             pointSize: normalizedFontSize(fontSize)
         )
         let previewRanges = presentation.previewRanges
-        let layoutRange = syntaxCache.layoutRange(
+        var layoutRange = syntaxCache.layoutRange(
             for: presentation, text: text, bodyFont: bodyFont
         )
+        let tableWidth = snapshot.tableWidth
+        if let tableRange = syntaxCache.prepareTables(
+            text: text, presentation: presentation,
+            bodyFont: bodyFont, width: tableWidth
+        ) {
+            layoutRange = layoutRange.length == 0 ? tableRange
+                : NSUnionRange(layoutRange, tableRange)
+        }
+        syntaxCache.tableRefresh = { [weak textView] in
+            guard let textView else { return }
+            refresh(textView, fontSize: fontSize, fontFamily: fontFamily, mode: mode)
+        }
         syntaxCache.isApplyingLayoutAttributes = true
         applyLayoutAttributes(
             to: textView.textStorage,
@@ -354,7 +404,8 @@ enum MarkdownPresentation {
             hiddenRanges: previewRanges.collapsed,
             transparentRanges: previewRanges.transparent,
             undoManager: textView.undoManager,
-            range: layoutRange
+            range: layoutRange,
+            tableLayout: syntaxCache.tableLayout
         )
         syntaxCache.isApplyingLayoutAttributes = false
         if textView.selectedRange != selection {
@@ -449,6 +500,12 @@ enum MarkdownPresentation {
             dy: point.y
         )
         context.clip(to: surfaceBounds)
+        syntaxCache.tableLayout?.draw(
+            fragment: fragment, layoutManager: layoutManager,
+            origin: drawingOffset,
+            lineFragmentPadding: textView.textContainer.lineFragmentPadding,
+            context: context
+        )
         for decoration in decorations {
             let rect = decoration.rect.offsetBy(
                 dx: drawingOffset.x,
@@ -714,7 +771,8 @@ enum MarkdownPresentation {
         hiddenRanges: [NSRange],
         transparentRanges: [NSRange],
         undoManager: UndoManager?,
-        range: NSRange
+        range: NSRange,
+        tableLayout: MarkdownTableLayout?
     ) {
         let fullRange = NSRange(location: 0, length: range.length)
         func local(_ source: NSRange) -> NSRange? {
@@ -804,6 +862,7 @@ enum MarkdownPresentation {
                 range: range
             )
         }
+        tableLayout?.apply(to: desired, sourceRange: range)
         var changes: [AttributeChange] = []
         for key in [
             NSAttributedString.Key.font,
@@ -1458,7 +1517,7 @@ enum MarkdownPresentation {
         return width
     }
 
-    private static func layoutFont(
+    static func layoutFont(
         for run: MarkdownFontRun,
         bodyFont: PlatformFont
     ) -> PlatformFont {
@@ -1807,6 +1866,76 @@ struct MarkdownRenderingPresentation {
 }
 
 final class MarkdownSyntaxCache: NSObject {
+    private(set) var tableLayout: MarkdownTableLayout?
+    private var tableTexts: [String] = []
+    private var parsedTables: [MarkdownTable] = []
+    private var tableHiddenRanges: [NSRange] = []
+    private var tableFont: PlatformFont?
+    private var tableWidth: CGFloat = 0
+    var tableRefresh: (() -> Void)?
+    private var tableRefreshScheduled = false
+
+    func prepareTables(
+        text: String, presentation: MarkdownRenderingPresentation,
+        bodyFont: PlatformFont, width: CGFloat
+    ) -> NSRange? {
+        guard !presentation.result.tables.isEmpty || tableLayout != nil else {
+            return nil
+        }
+        let hidden = presentation.result.tables.compactMap { table in
+            presentation.previewRanges.collapsed.contains {
+                $0.location <= table.range.location
+                    && NSMaxRange($0) >= NSMaxRange(table.range)
+            } ? table.range : nil
+        }
+        let source = text as NSString
+        let tables = presentation.result.tables
+        let texts = tables.map { source.substring(with: $0.range) }
+        let sameText = texts.count == tableTexts.count
+            && zip(texts, tableTexts).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
+        let geometryChanged = tableWidth != width || tableFont?.isEqual(bodyFont) != true
+        guard geometryChanged || tableHiddenRanges != hidden
+            || parsedTables != tables || !sameText else { return nil }
+        var ranges: [NSRange] = []
+        for (index, table) in parsedTables.enumerated() {
+            if geometryChanged || index >= tables.count || table != tables[index]
+                || !tableTexts[index].utf8.elementsEqual(texts[index].utf8)
+                || tableHiddenRanges.contains(table.range) != hidden.contains(table.range) {
+                ranges.append(table.range)
+            }
+        }
+        for (index, table) in tables.enumerated() {
+            if geometryChanged || index >= parsedTables.count || table != parsedTables[index]
+                || !texts[index].utf8.elementsEqual(tableTexts[index].utf8)
+                || tableHiddenRanges.contains(table.range) != hidden.contains(table.range) {
+                ranges.append(table.range)
+            }
+        }
+        parsedTables = tables
+        tableTexts = texts
+        tableWidth = width
+        tableFont = bodyFont
+        tableHiddenRanges = hidden
+        tableLayout = presentation.result.tables.isEmpty ? nil : MarkdownTableLayout.make(
+            text: text, result: presentation.result,
+            hiddenRanges: tableHiddenRanges, bodyFont: bodyFont, width: width
+        )
+        guard let first = ranges.first else { return nil }
+        let affected = ranges.dropFirst().reduce(first, NSUnionRange)
+        return NSIntersectionRange(affected, NSRange(location: 0, length: text.utf16.count))
+    }
+
+    func refreshTablesAfterResize(width: CGFloat) {
+        guard tableLayout != nil, abs(tableWidth - width) > 0.5,
+              !isApplyingLayoutAttributes, !tableRefreshScheduled else { return }
+        tableRefreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.tableRefreshScheduled = false
+            self.tableRefresh?()
+        }
+    }
+
     private struct GroupGeometryKey: Hashable {
         let location: Int
         let length: Int

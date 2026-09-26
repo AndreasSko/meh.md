@@ -323,6 +323,15 @@ final class MarkdownTextView: NSTextView {
         ))
     }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if let container = textContainer {
+            markdownSyntaxCache.refreshTablesAfterResize(
+                width: container.size.width - 2 * container.lineFragmentPadding
+            )
+        }
+    }
+
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         if accepted { markdownDidBeginEditing?() }
@@ -1159,6 +1168,9 @@ final class MarkdownTextView: UITextView {
             textContainerInset = insets
         }
         layoutMarkdownTitle()
+        markdownSyntaxCache.refreshTablesAfterResize(
+            width: textContainer.size.width - 2 * textContainer.lineFragmentPadding
+        )
         markdownState.didLayout?()
     }
 
