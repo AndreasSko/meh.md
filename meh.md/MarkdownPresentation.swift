@@ -198,6 +198,7 @@ enum MarkdownPresentation {
             invalidatedRange: layoutRange
         )
         textView.needsDisplay = true
+        (textView as? MarkdownTextView)?.updateMarkdownTableScrollOverlays()
     }
 
     static func syntaxCache(
@@ -276,7 +277,8 @@ enum MarkdownPresentation {
                         origin: textView.textContainerOrigin,
                         lineFragmentPadding: textContainer.lineFragmentPadding,
                         context: context,
-                        horizontalOffsets: syntaxCache.tableHorizontalOffsets
+                        horizontalOffsets: (textView as? MarkdownTextView)?.markdownTableDrawingOffsets
+                            ?? syntaxCache.tableHorizontalOffsets
                     )
                 }
                 return true
@@ -422,6 +424,7 @@ enum MarkdownPresentation {
             invalidatedRange: layoutRange
         )
         textView.setNeedsDisplay()
+        (textView as? MarkdownTextView)?.updateMarkdownTableScrollOverlays()
     }
 
     static func syntaxCache(
@@ -507,7 +510,7 @@ enum MarkdownPresentation {
             origin: drawingOffset,
             lineFragmentPadding: textView.textContainer.lineFragmentPadding,
             context: context,
-            horizontalOffsets: syntaxCache.tableHorizontalOffsets
+            horizontalOffsets: textView.markdownTableDrawingOffsets
         )
         for decoration in decorations {
             let rect = decoration.rect.offsetBy(

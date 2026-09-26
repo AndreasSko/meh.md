@@ -120,6 +120,7 @@ private extension MarkdownEditingCommand {
 @MainActor
 final class MarkdownTableCommandState {
     var available: Set<MarkdownEditingCommand> = []
+    var currentAlignment: MarkdownTableAlignment?
     @ObservationIgnored private var refreshPending = false
 
     func scheduleRefresh(from textView: MarkdownTextView) {
@@ -131,6 +132,7 @@ final class MarkdownTableCommandState {
             guard let self else { return }
             self.refreshPending = false
             self.available = textView?.availableTableCommands ?? []
+            self.currentAlignment = textView?.currentTableAlignment
         }
     }
 }
@@ -164,6 +166,18 @@ extension MarkdownTextView {
         )
     }
 
+    var currentTableAlignment: MarkdownTableAlignment? {
+#if os(macOS)
+        guard isEditable, !hasMarkedText() else { return nil }
+#else
+        guard isEditable, markedTextRange == nil else { return nil }
+#endif
+        return MarkdownTableEditing.currentAlignment(
+            text: commandSource, selection: commandSelection,
+            syntax: markdownSyntaxCache.result(for: commandSource)
+        )
+    }
+
     /// Confirmation must not target a different cell after a remote update.
     func preparedMarkdownCommand(
         _ command: MarkdownEditingCommand
@@ -187,6 +201,14 @@ private struct TableCommandDefinition: Identifiable {
     var id: MarkdownEditingCommand { command }
     var isDestructive: Bool {
         command == .tableDeleteRow || command == .tableDeleteColumn
+    }
+    var alignment: MarkdownTableAlignment? {
+        switch command {
+        case .tableAlignLeft: .left
+        case .tableAlignCenter: .center
+        case .tableAlignRight: .right
+        default: nil
+        }
     }
 
     static let groups: [[Self]] = [
@@ -237,10 +259,15 @@ private struct EditorTableMenu: View {
                             Label {
                                 Text(item.title)
                             } icon: {
-                                Image(systemName: item.image)
+                                Image(systemName: item.alignment != nil
+                                      && item.alignment == navigation.tableCommands.currentAlignment
+                                      ? "checkmark" : item.image)
                             }
                         }
                         .disabled(!navigation.tableCommands.available.contains(item.command))
+                        .accessibilityAddTraits(item.alignment != nil
+                            && item.alignment == navigation.tableCommands.currentAlignment
+                            ? .isSelected : [])
                         .accessibilityIdentifier(item.command.accessibilityIdentifier)
                     }
                 }
@@ -408,16 +435,16 @@ private final class MarkdownKeyboardAccessoryView: UIView,
             for: indexPath
         ) as! MarkdownKeyboardButtonCell
         if indexPath.item == order.count {
-            let action = UIAction { [weak self, weak cell] _ in
-                guard let source = cell?.presentationSource else { return }
-                self?.presentOverflow(from: source)
-            }
             cell.configure(
                 title: "More Formatting",
                 systemImage: "ellipsis.circle",
                 accessibilityIdentifier: "editor-formatting",
-                action: action,
-                menu: nil,
+                action: nil,
+                menu: UIMenu(children: [
+                    UIDeferredMenuElement.uncached { [weak self] completion in
+                        completion(self?.formattingMenuElements() ?? [])
+                    },
+                ]),
                 accessibilityActions: []
             )
             return cell
@@ -547,8 +574,8 @@ private final class MarkdownKeyboardAccessoryView: UIView,
         }
     }
 
-    private func presentOverflow(from source: UIView) {
-        let commands: [(String, String, MarkdownEditingCommand)] = [
+    private func formattingMenuElements() -> [UIMenuElement] {
+        let commands: [(LocalizedStringResource, String, MarkdownEditingCommand)] = [
             ("Heading", "textformat.size.larger", .heading),
             ("Link", "link", .link),
             ("Strikethrough", "strikethrough", .strikethrough),
@@ -560,29 +587,101 @@ private final class MarkdownKeyboardAccessoryView: UIView,
             ),
             ("Code Block", "curlybraces.square", .codeBlock),
         ]
-        guard let textView,
-              let presenter = Self.owningViewController(for: textView) else {
-            return
+        let actions = commands.map { title, image, command in
+            UIAction(
+                title: String(localized: title),
+                image: UIImage(systemName: image),
+                identifier: UIAction.Identifier(command.accessibilityIdentifier)
+            ) { [weak textView] _ in
+                _ = textView?.performMarkdownCommand(command)
+            }
         }
-        let sourceRect = source.convert(source.bounds, to: presenter.view)
-        let availableHeight = sourceRect.minY
-            - presenter.view.safeAreaInsets.top - 16
-        let menu = MarkdownFormattingMenuViewController(
-            commands: commands,
-            textView: textView
+        return actions + [tableMenu()]
+    }
+
+    private func tableMenu() -> UIMenu {
+        let available = textView?.availableTableCommands ?? []
+        let alignment = textView?.currentTableAlignment
+        let groups: [(LocalizedStringResource, [TableCommandDefinition])] = [
+            ("Insert", TableCommandDefinition.groups[0]),
+            ("Row", TableCommandDefinition.groups[1]),
+            ("Column", TableCommandDefinition.groups[2]),
+            ("Alignment", TableCommandDefinition.groups[3]),
+            ("Cell", TableCommandDefinition.groups[4]),
+            ("Delete", TableCommandDefinition.groups[5]),
+        ]
+        let children: [UIMenuElement] = groups.compactMap { title, definitions in
+            let actions = definitions.filter { available.contains($0.command) }
+                .map { definition in
+                    tableAction(definition, alignment: alignment)
+                }
+            guard !actions.isEmpty else { return nil }
+            if definitions.first?.command == .insertTable {
+                return actions.first
+            }
+            return UIMenu(
+                title: String(localized: title),
+                children: actions
+            )
+        }
+        return UIMenu(
+            title: String(localized: "Table"),
+            image: UIImage(systemName: "tablecells"),
+            identifier: UIMenu.Identifier("editor-table-menu"),
+            children: children
         )
-        menu.maximumHeight = max(176, availableHeight)
-        menu.preferredContentSize = CGSize(
-            width: 300,
-            height: min(CGFloat(commands.count + 1) * 44, max(176, availableHeight))
+    }
+
+    private func tableAction(
+        _ definition: TableCommandDefinition,
+        alignment: MarkdownTableAlignment?
+    ) -> UIAction {
+        let isSelected = definition.alignment != nil
+            && definition.alignment == alignment
+        return UIAction(
+            title: String(localized: definition.title),
+            image: UIImage(systemName: definition.image),
+            identifier: UIAction.Identifier(
+                definition.command.accessibilityIdentifier
+            ),
+            attributes: definition.isDestructive ? .destructive : [],
+            state: isSelected ? .on : .off
+        ) { [weak textView] _ in
+            guard let textView,
+                  let action = textView.preparedMarkdownCommand(
+                    definition.command
+                  ) else { return }
+            if definition.isDestructive {
+                Self.confirmDeletion(
+                    definition, action: action, textView: textView
+                )
+            } else {
+                action()
+            }
+        }
+    }
+
+    private static func confirmDeletion(
+        _ definition: TableCommandDefinition,
+        action: @escaping () -> Void,
+        textView: MarkdownTextView
+    ) {
+        guard let presenter = owningViewController(for: textView) else { return }
+        let alert = UIAlertController(
+            title: String(localized: definition.title),
+            message: String(localized:
+                "The selected row or column and its contents will be removed."),
+            preferredStyle: .alert
         )
-        menu.modalPresentationStyle = .popover
-        guard let popover = menu.popoverPresentationController else { return }
-        popover.sourceView = presenter.view
-        popover.sourceRect = sourceRect
-        popover.permittedArrowDirections = .down
-        popover.delegate = menu
-        presenter.present(menu, animated: true)
+        alert.addAction(UIAlertAction(
+            title: String(localized: "Cancel"), style: .cancel
+        ) { [weak textView] _ in
+            textView?.becomeFirstResponder()
+        })
+        alert.addAction(UIAlertAction(
+            title: String(localized: "Delete"), style: .destructive
+        ) { _ in action() })
+        DispatchQueue.main.async { presenter.present(alert, animated: true) }
     }
 
     private func saveOrder() {
@@ -606,142 +705,6 @@ private final class MarkdownKeyboardAccessoryView: UIView,
     }
 }
 
-private final class MarkdownFormattingMenuViewController: UITableViewController,
-    UIPopoverPresentationControllerDelegate {
-    private let commands: [(String, String, MarkdownEditingCommand)]
-    private weak var textView: MarkdownTextView?
-    private var showsTableActions = false
-    private var tableCommands: [TableCommandDefinition] {
-        TableCommandDefinition.groups.flatMap { $0 }
-    }
-    private var availableTableActions: Set<MarkdownEditingCommand> = []
-    var maximumHeight: CGFloat = 400
-
-    init(
-        commands: [(String, String, MarkdownEditingCommand)],
-        textView: MarkdownTextView
-    ) {
-        self.commands = commands
-        self.textView = textView
-        super.init(style: .plain)
-    }
-
-    required init?(coder: NSCoder) {
-        return nil
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        availableTableActions = textView?.availableTableCommands ?? []
-        tableView.rowHeight = 44
-        tableView.separatorInset = UIEdgeInsets(top: 0, left: 48, bottom: 0, right: 0)
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Action")
-    }
-
-    override func tableView(
-        _ tableView: UITableView,
-        numberOfRowsInSection section: Int
-    ) -> Int {
-        showsTableActions ? tableCommands.count + 1 : commands.count + 1
-    }
-
-    override func tableView(
-        _ tableView: UITableView,
-        cellForRowAt indexPath: IndexPath
-    ) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(
-            withIdentifier: "Action",
-            for: indexPath
-        )
-        var content = cell.defaultContentConfiguration()
-        var enabled = true
-        if showsTableActions, indexPath.row > 0 {
-            let item = tableCommands[indexPath.row - 1]
-            content.text = String(localized: item.title)
-            content.image = UIImage(systemName: item.image)
-            enabled = availableTableActions.contains(item.command)
-            content.textProperties.color = enabled
-                ? (item.isDestructive ? .systemRed : .label) : .tertiaryLabel
-            content.imageProperties.tintColor = content.textProperties.color
-            cell.accessibilityIdentifier = item.command.accessibilityIdentifier
-        } else if showsTableActions {
-            content.text = String(localized: "Formatting")
-            content.image = UIImage(systemName: "chevron.left")
-            cell.accessibilityIdentifier = "editor-table-back"
-        } else if indexPath.row < commands.count {
-            let command = commands[indexPath.row]
-            content.text = command.0
-            content.image = UIImage(systemName: command.1)
-            cell.accessibilityIdentifier = command.2.accessibilityIdentifier
-        } else {
-            content.text = String(localized: "Table")
-            content.image = UIImage(systemName: "tablecells")
-            cell.accessibilityIdentifier = "editor-table-menu"
-        }
-        cell.contentConfiguration = content
-        cell.isUserInteractionEnabled = enabled
-        cell.isAccessibilityElement = true
-        cell.accessibilityLabel = content.text
-        cell.accessibilityTraits = enabled ? .button : [.button, .notEnabled]
-        return cell
-    }
-
-    override func tableView(
-        _ tableView: UITableView,
-        didSelectRowAt indexPath: IndexPath
-    ) {
-        tableView.deselectRow(at: indexPath, animated: true)
-        if showsTableActions, indexPath.row == 0 {
-            showsTableActions = false
-            reloadMenu()
-        } else if !showsTableActions, indexPath.row == commands.count {
-            showsTableActions = true
-            reloadMenu()
-        } else if showsTableActions {
-            let item = tableCommands[indexPath.row - 1]
-            guard let action = textView?.preparedMarkdownCommand(item.command) else { return }
-            if item.isDestructive {
-                let presenter = presentingViewController
-                let alert = UIAlertController(
-                    title: String(localized: item.title),
-                    message: String(localized: "The selected row or column and its contents will be removed."),
-                    preferredStyle: .alert
-                )
-                alert.addAction(UIAlertAction(
-                    title: String(localized: "Cancel"), style: .cancel
-                ) { [weak textView] _ in
-                    textView?.becomeFirstResponder()
-                })
-                alert.addAction(UIAlertAction(title: String(localized: "Delete"), style: .destructive) { _ in
-                    action()
-                })
-                dismiss(animated: true) { presenter?.present(alert, animated: true) }
-            } else {
-                dismiss(animated: true, completion: action)
-            }
-        } else {
-            let command = commands[indexPath.row].2
-            dismiss(animated: true) { [weak textView] in
-                _ = textView?.performMarkdownCommand(command)
-            }
-        }
-    }
-
-    private func reloadMenu() {
-        availableTableActions = textView?.availableTableCommands ?? []
-        tableView.reloadData()
-        tableView.setContentOffset(.zero, animated: false)
-        let count = showsTableActions ? tableCommands.count + 1 : commands.count + 1
-        preferredContentSize.height = min(CGFloat(count) * 44, maximumHeight)
-    }
-
-    func adaptivePresentationStyle(
-        for controller: UIPresentationController
-    ) -> UIModalPresentationStyle {
-        .none
-    }
-}
-
 private final class MarkdownKeyboardCollectionView: UICollectionView {
     override var canBecomeFirstResponder: Bool { false }
 }
@@ -751,8 +714,6 @@ private final class MarkdownKeyboardButtonCell: UICollectionViewCell {
 
     private let button = UIButton(type: .system)
     private var primaryAction: UIAction?
-
-    var presentationSource: UIView { button }
 
     override init(frame: CGRect) {
         super.init(frame: frame)

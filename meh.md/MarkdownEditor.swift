@@ -232,6 +232,7 @@ final class MarkdownEditorScrollView: NSScrollView {
             viewportHeight: contentView.bounds.height
         )
         textView.layoutMarkdownTitle()
+        textView.updateMarkdownTableScrollOverlays()
         textView.markdownDidLayout?()
     }
 }
@@ -415,9 +416,14 @@ final class MarkdownTextView: NSTextView {
         return super.performKeyEquivalent(with: event)
     }
 
-    override func scrollWheel(with event: NSEvent) {
-        if scrollMarkdownTable(with: event) { return }
-        super.scrollWheel(with: event)
+    override func accessibilityChildren() -> [Any]? {
+        var children = super.accessibilityChildren() ?? []
+        for overlay in markdownTableScrollOverlays where !children.contains(where: {
+            ($0 as AnyObject) === overlay
+        }) {
+            children.append(overlay)
+        }
+        return children
     }
 
     override func drawBackground(in rect: NSRect) {
@@ -1192,6 +1198,7 @@ final class MarkdownTextView: UITextView {
         markdownSyntaxCache.refreshTablesAfterResize(
             width: textContainer.size.width - 2 * textContainer.lineFragmentPadding
         )
+        updateMarkdownTableScrollOverlays()
         markdownState.didLayout?()
     }
 

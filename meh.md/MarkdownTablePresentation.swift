@@ -26,6 +26,14 @@ struct MarkdownTableLayout {
     let width: CGFloat
     let padding: CGFloat
 
+    static var scrollIndicatorHeight: CGFloat {
+#if os(macOS)
+        16
+#else
+        8
+#endif
+    }
+
     static func make(
         text: String,
         result: MarkdownSyntaxResult,
@@ -78,7 +86,7 @@ struct MarkdownTableLayout {
                     cells: cells,
                     columnWidths: columnWidths,
                     height: ceil(max(bodyFont.pointSize * 1.3, textHeight))
-                        + 2 * padding + ((overflows && index == sourceRows.count - 1) ? 8 : 0),
+                        + 2 * padding + ((overflows && index == sourceRows.count - 1) ? scrollIndicatorHeight : 0),
                     isHeader: index == 0,
                     isLast: index == sourceRows.count - 1
                 ))
@@ -289,10 +297,10 @@ struct MarkdownTableLayout {
 #endif
         let contentWidth = row.contentWidth
         let maximumOffset = contentWidth > width + 0.5 ? contentWidth - width : 0
-        let indicatorHeight: CGFloat = row.isLast && maximumOffset > 0 ? 8 : 0
+        let indicatorHeight: CGFloat = row.isLast && maximumOffset > 0 ? Self.scrollIndicatorHeight : 0
         let requestedOffset = horizontalOffsets[row.tableRange] ?? 0
         let offset = requestedOffset.isFinite
-            ? min(max(0, requestedOffset), maximumOffset) : 0
+            ? requestedOffset : 0
         let contentRect = CGRect(
             x: rect.minX - offset, y: rect.minY,
             width: contentWidth, height: rect.height
@@ -321,21 +329,6 @@ struct MarkdownTableLayout {
             cell.draw(with: cellRect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
             context.restoreGState()
             columnX += columnWidth
-        }
-        if row.isLast && maximumOffset > 0 {
-            let track = CGRect(
-                x: rect.minX + 3, y: rect.maxY - 6,
-                width: max(1, rect.width - 6), height: 3
-            )
-            context.setFillColor(border.withAlphaComponent(0.3).cgColor)
-            context.fill(track)
-            let thumbWidth = min(track.width,
-                                 max(22, track.width * min(1, width / contentWidth)))
-            let thumbX = track.minX + (track.width - thumbWidth)
-                * (offset / maximumOffset)
-            context.setFillColor(border.withAlphaComponent(0.8).cgColor)
-            context.fill(CGRect(x: thumbX, y: track.minY,
-                                width: thumbWidth, height: track.height))
         }
     }
 }

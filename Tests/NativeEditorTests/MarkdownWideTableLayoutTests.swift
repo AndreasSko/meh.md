@@ -63,7 +63,8 @@ final class MarkdownWideTableLayoutTests: XCTestCase {
         let wide = try layout(source, width: 700)
         let narrow = try layout(source, width: 110)
         XCTAssertEqual(narrow.rows[1].columnWidths, wide.rows[1].columnWidths)
-        XCTAssertEqual(narrow.rows[1].height, wide.rows[1].height + 8)
+        XCTAssertEqual(narrow.rows[1].height, wide.rows[1].height
+                       + MarkdownTableLayout.scrollIndicatorHeight)
         XCTAssertGreaterThan(try XCTUnwrap(narrow.contentWidth(
             for: narrow.rows[0].tableRange
         )), narrow.width)

@@ -130,11 +130,14 @@ final class MarkdownTableScrollingTests: XCTestCase {
         view.string = source
         view.setSelectedRange((source as NSString).range(of: "Outside"))
         MarkdownPresentation.configure(view, mode: .livePreview)
+        view.updateMarkdownTableScrollOverlays()
         XCTAssertNil(view.scrollableMarkdownTable(at: CGPoint(x: -10, y: 50)))
         XCTAssertNil(view.scrollableMarkdownTable(at: CGPoint(x: 500, y: 50)))
 
         MarkdownPresentation.refresh(view, mode: .source)
+        view.updateMarkdownTableScrollOverlays()
         XCTAssertNil(view.scrollableMarkdownTable(at: CGPoint(x: 50, y: 50)))
+        XCTAssertTrue(view.markdownTableScrollOverlays.isEmpty)
     }
 
     func testNativeHitTestingFindsOverflowRowButNotOrdinaryProse() throws {
@@ -144,6 +147,7 @@ final class MarkdownTableScrollingTests: XCTestCase {
         view.string = source
         view.setSelectedRange((source as NSString).range(of: "Outside"))
         MarkdownPresentation.configure(view, mode: .livePreview)
+        view.updateMarkdownTableScrollOverlays()
         let layout = try XCTUnwrap(view.markdownSyntaxCache.tableLayout)
         let firstRow = try XCTUnwrap(layout.rows.first)
         XCTAssertGreaterThan(firstRow.contentWidth, layout.width)
@@ -179,15 +183,19 @@ final class MarkdownTableScrollingTests: XCTestCase {
 
         view.textContainer?.containerSize = NSSize(width: 500, height: 400)
         MarkdownPresentation.refresh(view, mode: .livePreview)
+        view.updateMarkdownTableScrollOverlays()
         let wideLayout = try XCTUnwrap(view.markdownSyntaxCache.tableLayout)
         XCTAssertLessThanOrEqual(
             try XCTUnwrap(wideLayout.contentWidth(for: firstRow.tableRange)),
             wideLayout.width
         )
         XCTAssertNil(view.scrollableMarkdownTable(at: hit))
+        XCTAssertFalse(try XCTUnwrap(view.markdownTableScrollOverlays.first).hasHorizontalScroller)
+        XCTAssertEqual(view.markdownTableScrollOverlays.count, 1,
+                       "Nonoverflow tables still expose native table geometry")
     }
 
-    func testHorizontalWheelEventScrollsOnlyOverOverflowTable() throws {
+    func testNativeOverlayScrollsWithoutChangingSourceOrUndo() throws {
         let source = table + "\nOutside"
         let view = MarkdownTextView(frame: NSRect(x: 0, y: 0, width: 150, height: 400))
         view.textContainer?.containerSize = NSSize(width: 150, height: 400)
@@ -199,61 +207,124 @@ final class MarkdownTableScrollingTests: XCTestCase {
         )
         window.contentView = view
         MarkdownPresentation.configure(view, mode: .livePreview)
-        let row = try XCTUnwrap(view.markdownSyntaxCache.tableLayout?.rows.first)
-        let manager = try XCTUnwrap(view.textLayoutManager)
-        let content = try XCTUnwrap(manager.textContentManager)
-        manager.textViewportLayoutController.layoutViewport()
-        var rowY: CGFloat?
-        manager.enumerateTextLayoutFragments(
-            from: content.documentRange.location, options: [.ensuresLayout]
-        ) { fragment in
-            let location = content.offset(
-                from: content.documentRange.location,
-                to: fragment.rangeInElement.location
-            )
-            if location == row.range.location {
-                rowY = fragment.layoutFragmentFrame.minY + min(row.height / 2, 10)
-                return false
-            }
-            return true
-        }
-        let hit = CGPoint(
-            x: view.textContainerOrigin.x
-                + (view.textContainer?.lineFragmentPadding ?? 0) + 20,
-            y: view.textContainerOrigin.y + (try XCTUnwrap(rowY))
-        )
-        XCTAssertEqual(view.scrollableMarkdownTable(at: hit), row.tableRange)
-
-        func wheel(deltaX: Int32, deltaY: Int32) throws -> NSEvent {
-            let event = try XCTUnwrap(CGEvent(
-                scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
-                wheel1: deltaY, wheel2: deltaX, wheel3: 0
-            ))
-            event.location = view.convert(hit, to: nil)
-            let probe = try XCTUnwrap(NSEvent(cgEvent: event))
-            let desired = view.convert(hit, to: nil)
-            // A synthetic CGEvent has no target window. Normalize the screen
-            // coordinate so AppKit reports the desired window location.
-            event.location.y -= desired.y - probe.locationInWindow.y
-            return try XCTUnwrap(NSEvent(cgEvent: event))
-        }
-        let horizontal = try wheel(deltaX: -35, deltaY: 0)
-        XCTAssertEqual(view.convert(horizontal.locationInWindow, from: nil).x,
-                       hit.x, accuracy: 0.5)
-        XCTAssertEqual(view.convert(horizontal.locationInWindow, from: nil).y,
-                       hit.y, accuracy: 0.5)
-        XCTAssertTrue(view.scrollMarkdownTable(with: horizontal))
+        view.updateMarkdownTableScrollOverlays()
+        view.undoManager?.removeAllActions()
+        let overlay = try XCTUnwrap(view.markdownTableScrollOverlays.first)
+        XCTAssertTrue(overlay.hasHorizontalScroller)
+        XCTAssertFalse(overlay.hasVerticalScroller)
+        XCTAssertGreaterThan(try XCTUnwrap(overlay.documentView).frame.width,
+                             overlay.bounds.width)
+        XCTAssertTrue(overlay.scrollMarkdownTablePage(forward: true))
         XCTAssertGreaterThan(
-            view.markdownSyntaxCache.tableHorizontalOffsets[row.tableRange, default: 0],
+            view.markdownSyntaxCache.tableHorizontalOffsets[
+                overlay.tableRange, default: 0
+            ],
             0
         )
-        let offset = view.markdownSyntaxCache.tableHorizontalOffsets[row.tableRange]
-        XCTAssertFalse(view.scrollMarkdownTable(with: try wheel(
-            deltaX: 0, deltaY: -35
-        )))
-        XCTAssertEqual(view.markdownSyntaxCache.tableHorizontalOffsets[row.tableRange],
-                       offset)
+        XCTAssertEqual(view.markdownTableDrawingOffsets[overlay.tableRange],
+                       overlay.elasticHorizontalOffset)
         XCTAssertEqual(view.string, source)
+        XCTAssertEqual(view.selectedRange(),
+                       (source as NSString).range(of: "Outside"))
+        XCTAssertFalse(view.undoManager?.canUndo == true)
+
+        overlay.revealMarkdownTableCell(row: 1, column: 2)
+        XCTAssertEqual(view.selectedRange().location,
+                       (source as NSString).range(of: "Gamma").location)
+        XCTAssertEqual(view.string, source)
+        XCTAssertFalse(view.undoManager?.canUndo == true)
+        MarkdownPresentation.refresh(view, mode: .livePreview)
+        view.updateMarkdownTableScrollOverlays()
+        XCTAssertTrue(view.markdownTableScrollOverlays.isEmpty,
+                      "Selecting a cell reveals the editable Markdown table")
+    }
+
+    func testVerticalWheelOverTableRoutesToNoteScrollView() throws {
+        let source = table + "\nOutside\n" + String(repeating: "More\n", count: 40)
+        let view = MarkdownTextView(frame: NSRect(x: 0, y: 0, width: 150, height: 600))
+        view.textContainer?.containerSize = NSSize(width: 150, height: 600)
+        view.string = source
+        view.setSelectedRange((source as NSString).range(of: "Outside"))
+        let noteScroller = WheelRoutingSpy(frame: NSRect(
+            x: 0, y: 0, width: 150, height: 120
+        ))
+        noteScroller.documentView = view
+        MarkdownPresentation.configure(view, mode: .livePreview)
+        view.updateMarkdownTableScrollOverlays()
+        let overlay = try XCTUnwrap(view.markdownTableScrollOverlays.first)
+        let event = try XCTUnwrap(CGEvent(
+            scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+            wheel1: -35, wheel2: 0, wheel3: 0
+        ))
+        let wheel = try XCTUnwrap(NSEvent(cgEvent: event))
+        overlay.scrollWheel(with: wheel)
+        XCTAssertEqual(noteScroller.wheelEvents, 1)
+        XCTAssertEqual(view.markdownSyntaxCache.tableHorizontalOffsets[
+            overlay.tableRange, default: 0
+        ], 0)
+        XCTAssertEqual(view.string, source)
+    }
+
+    func testTapOnPaddedBlankCellRevealsSourceRow() throws {
+        let source = "| One | Two | Three | Four |\n"
+            + "| --- | --- | --- | --- |\n"
+            + "| Alpha | Beta |\n\nOutside"
+        let view = MarkdownTextView(frame: NSRect(x: 0, y: 0, width: 150, height: 400))
+        view.textContainer?.containerSize = NSSize(width: 150, height: 400)
+        view.string = source
+        view.setSelectedRange((source as NSString).range(of: "Outside"))
+        MarkdownPresentation.configure(view, mode: .livePreview)
+        view.updateMarkdownTableScrollOverlays()
+        let overlay = try XCTUnwrap(view.markdownTableScrollOverlays.first)
+        let rowStart = (source as NSString).range(of: "| Alpha").location
+        XCTAssertTrue(overlay.revealMarkdownTableCell(row: 1, column: 3))
+        XCTAssertEqual(view.selectedRange().location, rowStart)
+        XCTAssertEqual(view.string, source)
+    }
+
+    func testAccessibilityCellRevealScrollsNoteWithoutEditing() throws {
+        let source = String(repeating: "Intro\n", count: 30)
+            + "\n" + table + "\nOutside"
+        let view = MarkdownTextView(frame: NSRect(
+            x: 0, y: 0, width: 150, height: 1_200
+        ))
+        view.textContainer?.containerSize = NSSize(width: 150, height: 1_200)
+        view.string = source
+        let selection = (source as NSString).range(of: "Outside")
+        view.setSelectedRange(selection)
+        let noteScroller = NSScrollView(frame: NSRect(
+            x: 0, y: 0, width: 150, height: 110
+        ))
+        noteScroller.documentView = view
+        let window = NSWindow(contentRect: noteScroller.frame,
+                              styleMask: .borderless, backing: .buffered,
+                              defer: false)
+        window.contentView = noteScroller
+        MarkdownPresentation.configure(view, mode: .livePreview)
+        view.updateMarkdownTableScrollOverlays()
+        view.undoManager?.removeAllActions()
+        let overlay = try XCTUnwrap(view.markdownTableScrollOverlays.first)
+        let lastRow = try XCTUnwrap(overlay.rowFrames.last)
+        let cell = CGRect(x: 0, y: lastRow.minY,
+                          width: 20, height: lastRow.height)
+        let noteCellFrame = CGRect(
+            x: overlay.frame.minX, y: overlay.frame.minY + cell.minY,
+            width: overlay.bounds.width, height: cell.height
+        )
+        noteScroller.contentView.scroll(to: .zero)
+        noteScroller.reflectScrolledClipView(noteScroller.contentView)
+        XCTAssertFalse(noteScroller.contentView.bounds.intersects(noteCellFrame))
+        overlay.revealMarkdownTableCellFrame(cell)
+        XCTAssertTrue(noteScroller.contentView.bounds.intersects(noteCellFrame))
+        XCTAssertEqual(overlay.elasticHorizontalOffset, 0)
+        XCTAssertEqual(view.selectedRange(), selection)
+        XCTAssertEqual(view.string, source)
+        XCTAssertFalse(view.undoManager?.canUndo == true)
+
+        let matches = (view.accessibilityChildren() ?? []).filter {
+            ($0 as AnyObject) === overlay
+        }
+        XCTAssertEqual(matches.count, 1)
     }
 #endif
 
@@ -283,3 +354,10 @@ final class MarkdownTableScrollingTests: XCTestCase {
         )
     }
 }
+
+#if os(macOS)
+private final class WheelRoutingSpy: NSScrollView {
+    var wheelEvents = 0
+    override func scrollWheel(with event: NSEvent) { wheelEvents += 1 }
+}
+#endif

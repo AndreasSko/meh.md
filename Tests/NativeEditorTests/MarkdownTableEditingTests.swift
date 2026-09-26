@@ -10,6 +10,23 @@ final class MarkdownTableEditingTests: XCTestCase {
         + "| café | 🪐 |\n"
         + "| a\\|b | Earth |\n\nAfter"
 
+    func testCurrentAlignmentFollowsSelectedTableCell() {
+        let parsed = MarkdownSyntax.parse(source)
+        let left = (source as NSString).range(of: "café")
+        let right = (source as NSString).range(of: "🪐")
+        XCTAssertEqual(MarkdownTableEditing.currentAlignment(
+            text: source, selection: left, syntax: parsed
+        ), .left)
+        XCTAssertEqual(MarkdownTableEditing.currentAlignment(
+            text: source, selection: right, syntax: parsed
+        ), .right)
+        XCTAssertNil(MarkdownTableEditing.currentAlignment(
+            text: source,
+            selection: (source as NSString).range(of: "After"),
+            syntax: parsed
+        ))
+    }
+
     func testInsertTableKeepsSurroundingParagraphsAndSelectsHeader() throws {
         let text = "Before\nAfter"
         let change = try XCTUnwrap(MarkdownTableEditing.change(

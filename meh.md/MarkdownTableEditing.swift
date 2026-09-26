@@ -42,6 +42,22 @@ enum MarkdownTableEditing {
         return commands
     }
 
+    static func currentAlignment(
+        text: String,
+        selection: NSRange,
+        syntax: MarkdownSyntaxResult? = nil
+    ) -> MarkdownTableAlignment? {
+        let source = text as NSString
+        let safeSelection = MarkdownEditingRules.tableSafeSelection(
+            selection, in: source
+        )
+        let parsed = syntax ?? MarkdownSyntax.parse(text)
+        guard let position = position(
+            safeSelection, source: source, tables: parsed.tables
+        ) else { return nil }
+        return position.table.alignments[position.column]
+    }
+
     static func change(
         for command: MarkdownEditingCommand,
         text: String,
