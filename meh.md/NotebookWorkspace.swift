@@ -111,7 +111,9 @@ final class NotebookWorkspace {
     @ObservationIgnored private var previousConnectivity: NWPath.Status?
     @ObservationIgnored private var retryPolicy = NotebookSyncRetryPolicy()
     private var plannedRetryDate: Date?
-    private var isForeground = true
+    // A notification may launch the process without creating a UI scene.
+    private var isForeground = false
+    @ObservationIgnored private var activeSceneIDs = Set<UUID>()
     private(set) var notificationRegistrationError: String?
     #if os(iOS)
     private var backgroundExecution: UIBackgroundTaskIdentifier = .invalid
@@ -346,7 +348,7 @@ final class NotebookWorkspace {
     }
 
     func start(manualRetry: Bool = false) async {
-        guard !isLoading else { return }
+        guard !isLoading, replica == nil || manualRetry else { return }
         isLoading = true
 
         errorMessage = nil
@@ -472,11 +474,26 @@ final class NotebookWorkspace {
         }
     }
 
-    func sceneActivityChanged(isActive: Bool) {
-        let changed = isForeground != isActive
-        isForeground = isActive
-        guard automaticSync, changed else { return }
+    func sceneActivityChanged(id: UUID, isActive: Bool) {
         if isActive {
+            activeSceneIDs.insert(id)
+        } else {
+            activeSceneIDs.remove(id)
+        }
+        updateForegroundActivity()
+    }
+
+    func sceneDidClose(id: UUID) {
+        activeSceneIDs.remove(id)
+        updateForegroundActivity()
+    }
+
+    private func updateForegroundActivity() {
+        let newForeground = !activeSceneIDs.isEmpty
+        let changed = isForeground != newForeground
+        isForeground = newForeground
+        guard automaticSync, changed else { return }
+        if newForeground {
             requestAutomaticRefresh(trigger: "foreground activation")
         } else {
             // The engine owns background scheduling. App retry timers resume

@@ -35,7 +35,8 @@ commits retain the visible buffer.
 Each notebook view now owns its selection/session through a small scene-local
 navigation model. Recents, collapse state, last-note selection, and native
 positions are device-local preferences; see the [local navigation
-contract](notebook-local-navigation.md). Multiple windows remain separate work.
+contract](notebook-local-navigation.md). Windows share one notebook replica and
+keep their own navigation state.
 
 ## Document core and local storage
 

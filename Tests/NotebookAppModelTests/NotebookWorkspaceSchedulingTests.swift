@@ -9,6 +9,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
     func testSavedEditsCoalesceIntoOneAutomaticExchange() async throws {
         let transport = RecordingTransport(scope: "coalesced")
         let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
         await workspace.start()
         let baselineFetches = await transport.fetchCount
 
@@ -69,6 +70,8 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
     func testBackgroundFlushesOnceAndForegroundResumes() async throws {
         let transport = RecordingTransport(scope: "foreground")
         let workspace = makeWorkspace(transport: transport)
+        let sceneID = UUID()
+        workspace.sceneActivityChanged(id: sceneID, isActive: true)
         await workspace.start()
         let baselineFetches = await transport.fetchCount
 
@@ -77,26 +80,78 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         )
         workspace.noteDidEdit()
         workspace.contentDidSave()
-        workspace.sceneActivityChanged(isActive: false)
+        workspace.sceneActivityChanged(id: sceneID, isActive: false)
         try await waitUntil {
             await transport.fetchCount > baselineFetches
         }
         let backgroundFetches = await transport.fetchCount
 
-        workspace.sceneActivityChanged(isActive: false)
+        workspace.sceneActivityChanged(id: sceneID, isActive: false)
         try await Task.sleep(for: .milliseconds(250))
         let repeatedBackgroundFetches = await transport.fetchCount
         XCTAssertEqual(repeatedBackgroundFetches, backgroundFetches)
 
-        workspace.sceneActivityChanged(isActive: true)
+        workspace.sceneActivityChanged(id: sceneID, isActive: true)
         try await waitUntil(timeout: .seconds(12)) {
             await transport.fetchCount > backgroundFetches
+        }
+    }
+
+    func testOneInactiveSceneDoesNotBackgroundActiveScene() async throws {
+        let transport = RecordingTransport(scope: "multiple-scenes")
+        let workspace = makeWorkspace(transport: transport)
+        let firstScene = UUID()
+        let secondScene = UUID()
+        workspace.sceneActivityChanged(id: firstScene, isActive: true)
+        workspace.sceneActivityChanged(id: secondScene, isActive: true)
+        await workspace.start()
+        let baselineFetches = await transport.fetchCount
+
+        workspace.sceneActivityChanged(id: firstScene, isActive: false)
+        workspace.sceneDidClose(id: firstScene)
+        try await Task.sleep(for: .milliseconds(250))
+        let fetchesWhileActive = await transport.fetchCount
+        XCTAssertEqual(fetchesWhileActive, baselineFetches)
+
+        workspace.sceneDidClose(id: secondScene)
+        try await waitUntil {
+            await transport.fetchCount > baselineFetches
+        }
+    }
+
+    func testAdditionalWindowStartDoesNotRefreshAgain() async throws {
+        let transport = RecordingTransport(scope: "additional-window")
+        let workspace = makeWorkspace(transport: transport)
+        await workspace.start()
+        let baselineFetches = await transport.fetchCount
+
+        await workspace.start()
+
+        let fetches = await transport.fetchCount
+        XCTAssertEqual(fetches, baselineFetches)
+    }
+
+    func testBackgroundLaunchDefersScheduledWorkUntilSceneActivates() async throws {
+        let transport = RecordingTransport(scope: "background-launch")
+        let workspace = makeWorkspace(transport: transport)
+        await workspace.start()
+        let baselineFetches = await transport.fetchCount
+
+        workspace.contentDidSave()
+        try await Task.sleep(for: .seconds(1))
+        let backgroundFetches = await transport.fetchCount
+        XCTAssertEqual(backgroundFetches, baselineFetches)
+
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        try await waitUntil {
+            await transport.fetchCount > baselineFetches
         }
     }
 
     func testCloudFailureDoesNotEchoButRemoteChangesReconcile() async throws {
         let transport = RecordingTransport(scope: "cloud-activity")
         let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
         await workspace.start()
         let baselineOperations = await transport.operationCount
         let baselineFetches = await transport.fetchCount
@@ -123,6 +178,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
     func testTypingDefersSavesAndCloudEventsButManualSyncIsImmediate() async throws {
         let transport = RecordingTransport(scope: "typing")
         let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
         await workspace.start()
         let baseline = await transport.fetchCount
         workspace.noteDidEdit()
@@ -141,6 +197,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
     func testManualRequestDuringExchangeRunsImmediateFollowUp() async throws {
         let transport = RecordingTransport(scope: "in-flight")
         let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
         await workspace.start()
         let baseline = await transport.fetchCount
         await transport.pauseNextFetch()

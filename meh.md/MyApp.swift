@@ -1,6 +1,16 @@
 import SwiftUI
 import NoteCore
 
+struct NotebookWindowValue: Codable, Hashable {
+    let id: UUID
+    let noteID: UUID?
+
+    init(noteID: UUID? = nil) {
+        id = UUID()
+        self.noteID = noteID
+    }
+}
+
 @main struct MyApp: App {
     #if os(iOS)
     @UIApplicationDelegateAdaptor(NotebookAppDelegate.self)
@@ -13,38 +23,28 @@ import NoteCore
     @State private var workspace = NotebookWorkspace.shared
 
     var body: some Scene {
-        #if os(macOS)
-        Window("meh.md", id: "note") {
+        WindowGroup("meh.md", id: "notebook", for: NotebookWindowValue.self) { value in
             #if DEBUG
             if let launch = CloudKitSmokeLaunch.current {
                 CloudKitSmokeCheckView(launch: launch)
             } else {
-                NotebookApplicationView(workspace: workspace)
+                NotebookApplicationView(
+                    workspace: workspace,
+                    preferredNoteID: value.wrappedValue.noteID
+                )
             }
             #else
-            NotebookApplicationView(workspace: workspace)
+            NotebookApplicationView(
+                workspace: workspace,
+                preferredNoteID: value.wrappedValue.noteID
+            )
             #endif
+        } defaultValue: {
+            NotebookWindowValue()
         }
         .commands {
             NotebookSearchCommands()
             NotebookRecentCommands()
         }
-        #else
-        WindowGroup {
-            #if DEBUG
-            if let launch = CloudKitSmokeLaunch.current {
-                CloudKitSmokeCheckView(launch: launch)
-            } else {
-                NotebookApplicationView(workspace: workspace)
-            }
-            #else
-            NotebookApplicationView(workspace: workspace)
-            #endif
-        }
-        .commands {
-            NotebookSearchCommands()
-            NotebookRecentCommands()
-        }
-        #endif
     }
 }

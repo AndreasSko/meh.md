@@ -33,6 +33,8 @@ private struct NotebookSidebarRow: Identifiable {
 struct NotebookView: View {
     let replica: NotebookReplica
     var workspace: NotebookWorkspace? = nil
+    let sceneID: UUID
+    let preferredNoteID: UUID?
     @State private var search = NotebookSearchState()
     @FocusState private var searchFocused: Bool
     @State private var pendingSearchQuery: String?
@@ -54,6 +56,8 @@ struct NotebookView: View {
     @State private var recentCommands: NotebookRecentCommandState
     @State private var restoredNavigation = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
     @State private var busy = false
     @State private var editorNavigation = MarkdownEditorNavigation()
     @State private var bodyFocusRequest = 0
@@ -88,10 +92,19 @@ struct NotebookView: View {
         @State private var quickActionRequests = NotebookQuickActionRequests.shared
     #endif
 
-    init(replica: NotebookReplica, workspace: NotebookWorkspace? = nil) {
+    init(
+        replica: NotebookReplica,
+        workspace: NotebookWorkspace? = nil,
+        sceneID: UUID,
+        preferredNoteID: UUID? = nil
+    ) {
         self.replica = replica
         self.workspace = workspace
-        _navigationState = State(initialValue: NotebookNavigationState(replica: replica))
+        self.sceneID = sceneID
+        self.preferredNoteID = preferredNoteID
+        _navigationState = State(initialValue: NotebookNavigationState(
+            replica: replica, sceneID: sceneID
+        ))
         _recentCommands = State(initialValue: NotebookRecentCommandState(replica: replica))
     }
 
@@ -472,7 +485,7 @@ struct NotebookView: View {
             if replica.hasPendingImport { showingImport = true }
             guard !busy else { return }
             busy = true
-            await navigationState.restoreLastSelection()
+            await navigationState.restoreLastSelection(preferredNoteID: preferredNoteID)
             if selectedID != nil { preferredCompactColumn = .detail }
             busy = false
             #if os(iOS)
@@ -749,6 +762,11 @@ struct NotebookView: View {
                 showInFiles(id)
             }
         ]
+        if supportsMultipleWindows {
+            menuActions.insert(UIAction(title: String(localized: "Open in New Window")) { _ in
+                openWindow(id: "notebook", value: NotebookWindowValue(noteID: id))
+            }, at: 0)
+        }
         let pinned = replica.isPinnedInRecents(id)
         let title = pinned ? String(localized: "Unpin from Recents")
             : String(localized: "Pin in Recents")
@@ -1153,6 +1171,16 @@ struct NotebookView: View {
     ) -> some View {
         if allowsCreation, !placement.isInTrash {
             creationActions(parentID: creationParent(for: placement))
+            Divider()
+        }
+        if placement.item.kind == .note, !placement.isInTrash,
+           supportsMultipleWindows {
+            Button("Open in New Window") {
+                openWindow(
+                    id: "notebook",
+                    value: NotebookWindowValue(noteID: placement.item.id)
+                )
+            }
             Divider()
         }
         if allowsRename { Button("Rename…") { beginRenaming(placement) } }
@@ -1744,6 +1772,12 @@ struct NotebookView: View {
 
     private var applicationMenu: some View {
         Menu {
+            if supportsMultipleWindows {
+                Button("New Window") {
+                    openWindow(id: "notebook", value: NotebookWindowValue())
+                }
+                Divider()
+            }
             Button("Select Items") {
                 selectingItems = true
                 navigationState.isTreeExpanded = true

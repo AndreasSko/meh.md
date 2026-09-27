@@ -9,11 +9,13 @@ import Observation
 final class NotebookNavigationState {
     private let replica: NotebookReplica
     @ObservationIgnored private let store: UserDefaults
+    @ObservationIgnored private let sceneID: UUID?
     @ObservationIgnored private let storagePrefix = "meh.md.navigation."
     @ObservationIgnored private var notebookID: UUID?
     @ObservationIgnored private var selectionLoadGeneration = 0
     @ObservationIgnored private var recentLoadGeneration = 0
     @ObservationIgnored private var isLoadingPreferences = false
+    @ObservationIgnored private var hasStoredPreferences = false
 
     private(set) var selectedID: UUID?
     private(set) var selectedSession: NoteSession?
@@ -27,9 +29,12 @@ final class NotebookNavigationState {
 
     private var positions: [UUID: Data] = [:]
 
-    init(replica: NotebookReplica, store: UserDefaults = .standard) {
+    /// Pass a stable scene ID (for example, from SceneStorage) for each window.
+    /// Omitting it retains the legacy notebook-wide preference behavior.
+    init(replica: NotebookReplica, store: UserDefaults = .standard, sceneID: UUID? = nil) {
         self.replica = replica
         self.store = store
+        self.sceneID = sceneID
         notebookID = replica.catalogSnapshot?.notebookID
         loadPreferences()
         pruneUnavailable()
@@ -95,8 +100,22 @@ final class NotebookNavigationState {
         savePreferences()
     }
 
-    /// Restores the last active note after startup without changing Recents.
-    func restoreLastSelection() async {
+    /// Restores this window's saved note, or opens a requested note for a new
+    /// window that has no saved selection yet.
+    func restoreLastSelection(preferredNoteID: UUID? = nil) async {
+        let startingGeneration = selectionLoadGeneration
+        if !hasStoredPreferences,
+           let preferredNoteID,
+           recentEligibleNoteIDs.contains(preferredNoteID),
+           let session = try? await replica.openNote(preferredNoteID, allowingRecovery: true),
+           session.currentSnapshot?.noteID == nil
+                || session.currentSnapshot?.noteID == preferredNoteID
+        {
+            guard startingGeneration == selectionLoadGeneration else { return }
+            _ = installSelection(preferredNoteID, session: session, recordActivity: true)
+            return
+        }
+        guard startingGeneration == selectionLoadGeneration else { return }
         guard let id = lastNoteID else { return }
         guard recentEligibleNoteIDs.contains(id) else {
             lastNoteID = nil
@@ -177,7 +196,21 @@ final class NotebookNavigationState {
     }
 
     private var storageKey: String? {
-        notebookID.map { storagePrefix + $0.uuidString }
+        notebookID.map { notebookID in
+            let notebookKey = storagePrefix + notebookID.uuidString
+            return sceneID.map { notebookKey + ".scene." + $0.uuidString } ?? notebookKey
+        }
+    }
+
+    private func migrateLegacyPreferencesIfNeeded() {
+        guard let notebookID, let sceneID, let storageKey,
+              store.data(forKey: storageKey) == nil else { return }
+        let legacyKey = storagePrefix + notebookID.uuidString
+        let claimKey = legacyKey + ".migratedScene"
+        guard store.string(forKey: claimKey) == nil,
+              let legacyData = store.data(forKey: legacyKey) else { return }
+        store.set(legacyData, forKey: storageKey)
+        store.set(sceneID.uuidString, forKey: claimKey)
     }
 
     private func pruneUnavailable() {
@@ -187,7 +220,10 @@ final class NotebookNavigationState {
         let oldLastNote = lastNoteID
         let oldFolders = expandedFolderIDs
         let oldPositions = positions
+        let wasLoadingPreferences = isLoadingPreferences
+        isLoadingPreferences = true
         expandedFolderIDs.formIntersection(folders)
+        isLoadingPreferences = wasLoadingPreferences
         positions = positions.filter { selectableNotes.contains($0.key) }
         recentSessions = recentSessions.filter { recentNoteIDs.contains($0.key) }
         if lastNoteID.map({ !recentEligibleNotes.contains($0) }) == true {
@@ -201,8 +237,10 @@ final class NotebookNavigationState {
     }
 
     private func loadPreferences() {
+        migrateLegacyPreferencesIfNeeded()
         isLoadingPreferences = true
         defer { isLoadingPreferences = false }
+        hasStoredPreferences = false
         selectedID = nil
         selectedSession = nil
         lastNoteID = nil
@@ -222,6 +260,7 @@ final class NotebookNavigationState {
             store.removeObject(forKey: storageKey)
             return
         }
+        hasStoredPreferences = true
         lastNoteID = preferences.lastNoteID
         isRecentsExpanded = preferences.isRecentsExpanded
         isTreeExpanded = preferences.isTreeExpanded
@@ -246,6 +285,7 @@ final class NotebookNavigationState {
         )
         guard let data = try? JSONEncoder().encode(preferences) else { return }
         store.set(data, forKey: storageKey)
+        hasStoredPreferences = true
     }
 }
 

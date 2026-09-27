@@ -6,6 +6,95 @@ import XCTest
 
 @MainActor
 final class NotebookNavigationStateTests: XCTestCase {
+    func testWindowsKeepIndependentSelectionsAndPositions() async throws {
+        let fixture = try await Fixture()
+        let first = try await fixture.replica.createNote(name: "First.md")
+        let second = try await fixture.replica.createNote(name: "Second.md")
+        let firstScene = UUID()
+        let secondScene = UUID()
+        let firstState = fixture.makeState(sceneID: firstScene)
+        let secondState = fixture.makeState(sceneID: secondScene)
+        firstState.recordOpened(first)
+        firstState.setPosition(Data([1]), for: first)
+        secondState.recordOpened(second)
+        secondState.setPosition(Data([2]), for: second)
+
+        let restoredFirst = fixture.makeState(sceneID: firstScene)
+        let restoredSecond = fixture.makeState(sceneID: secondScene)
+        await restoredFirst.restoreLastSelection()
+        await restoredSecond.restoreLastSelection()
+        XCTAssertEqual(restoredFirst.selectedID, first)
+        XCTAssertEqual(restoredSecond.selectedID, second)
+        XCTAssertEqual(restoredFirst.position(for: first), Data([1]))
+        XCTAssertNil(restoredSecond.position(for: first))
+        XCTAssertEqual(restoredSecond.position(for: second), Data([2]))
+    }
+
+    func testFirstSceneMigratesLegacySelectionOnlyOnce() async throws {
+        let fixture = try await Fixture()
+        let note = try await fixture.replica.createNote(name: "Legacy.md")
+        fixture.makeState().recordOpened(note)
+
+        let firstScene = UUID()
+        let restored = fixture.makeState(sceneID: firstScene)
+        let newWindow = fixture.makeState(sceneID: UUID())
+        XCTAssertEqual(restored.lastNoteID, note)
+        XCTAssertNil(newWindow.lastNoteID)
+        await restored.restoreLastSelection()
+        XCTAssertEqual(restored.selectedID, note)
+        XCTAssertEqual(fixture.makeState(sceneID: firstScene).lastNoteID, note)
+    }
+
+    func testRequestedNoteOpensOnlyBeforeSceneHasSavedSelection() async throws {
+        let fixture = try await Fixture()
+        let saved = try await fixture.replica.createNote(name: "Saved.md")
+        let requested = try await fixture.replica.createNote(name: "Requested.md")
+        let scene = UUID()
+        let state = fixture.makeState(sceneID: scene)
+        await state.restoreLastSelection(preferredNoteID: requested)
+        XCTAssertEqual(state.selectedID, requested)
+        XCTAssertEqual(state.lastNoteID, requested)
+
+        let relaunched = fixture.makeState(sceneID: scene)
+        relaunched.recordOpened(saved)
+        await relaunched.restoreLastSelection(preferredNoteID: requested)
+        XCTAssertEqual(relaunched.selectedID, saved)
+        XCTAssertEqual(relaunched.lastNoteID, saved)
+
+        try await fixture.replica.setTrashed(requested, true)
+        let freshWindow = fixture.makeState(sceneID: UUID())
+        await freshWindow.restoreLastSelection(preferredNoteID: requested)
+        XCTAssertNil(freshWindow.selectedID)
+    }
+
+    func testClosedWindowDoesNotReopenRequestedNoteOnRelaunch() async throws {
+        let fixture = try await Fixture()
+        let note = try await fixture.replica.createNote(name: "Opened.md")
+        let sceneID = UUID()
+        let window = fixture.makeState(sceneID: sceneID)
+        await window.restoreLastSelection(preferredNoteID: note)
+        XCTAssertEqual(window.selectedID, note)
+
+        window.clearSelection()
+        let relaunched = fixture.makeState(sceneID: sceneID)
+        await relaunched.restoreLastSelection(preferredNoteID: note)
+        XCTAssertNil(relaunched.lastNoteID)
+        XCTAssertNil(relaunched.selectedID)
+    }
+
+    func testCorruptScenePreferencesAllowRequestedNote() async throws {
+        let fixture = try await Fixture()
+        let note = try await fixture.replica.createNote(name: "Requested.md")
+        let sceneID = UUID()
+        let notebookID = try XCTUnwrap(fixture.replica.catalogSnapshot).notebookID
+        let key = "meh.md.navigation.\(notebookID.uuidString).scene.\(sceneID.uuidString)"
+        fixture.store.set(Data([0, 1, 2]), forKey: key)
+
+        let state = fixture.makeState(sceneID: sceneID)
+        await state.restoreLastSelection(preferredNoteID: note)
+        XCTAssertEqual(state.selectedID, note)
+    }
+
     func testLeavingNotePreventsRestoreAndReopeningEnablesIt() async throws {
         let fixture = try await Fixture()
         let note = try await fixture.replica.createNote(name: "Moon.md")
@@ -321,7 +410,7 @@ private final class Fixture {
         }
     }
 
-    func makeState() -> NotebookNavigationState {
-        NotebookNavigationState(replica: replica, store: store)
+    func makeState(sceneID: UUID? = nil) -> NotebookNavigationState {
+        NotebookNavigationState(replica: replica, store: store, sceneID: sceneID)
     }
 }
