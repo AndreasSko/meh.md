@@ -48,6 +48,7 @@ let package = Package(
                 "EditorWritingControls.swift",
                 "MarkdownPresentation.swift", "MarkdownTablePresentation.swift", "MarkdownSyntax.swift", "MyApp.swift",
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
+                "NotebookQuickActionRequests.swift",
                 "NotebookBackupBackgroundScheduler.swift",
                 "NotebookSettingsView.swift",
                 "NotebookImportView.swift", "NotebookNoteEditor.swift",
@@ -95,6 +96,7 @@ let package = Package(
                 "PrivacyInfo.xcprivacy",
                 "iOS.entitlements", "CloudKitSmokeCheck.swift",
                 "NotebookAppDelegate.swift", "NotebookBackupBackgroundScheduler.swift",
+                "NotebookQuickActionRequests.swift",
                 "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",
             ],
             sources: [

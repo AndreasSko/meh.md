@@ -61,6 +61,76 @@ final class RecentNotesUITests: XCTestCase {
     }
 
     #if os(iOS)
+    func testRecentOpenKeepsFolderCollapsedUntilShowInFiles() throws {
+        try XCTSkipIf(
+            UIDevice.current.userInterfaceIdiom != .phone,
+            "This test verifies compact sidebar navigation."
+        )
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+
+        let appMenu = app.buttons["notebook-app-menu"]
+        XCTAssertTrue(appMenu.waitForExistence(timeout: 15))
+        appMenu.tap()
+        app.buttons["New Folder"].tap()
+        let folderName = app.textFields["Name"]
+        XCTAssertTrue(folderName.waitForExistence(timeout: 5))
+        folderName.typeText("\n")
+
+        let folder = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "notebook-sidebar-folder-")
+        ).firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 5))
+        let folderID = folder.identifier.replacingOccurrences(
+            of: "notebook-sidebar-folder-", with: ""
+        )
+        let disclosure = app.descendants(matching: .any)[
+            "notebook-disclosure-" + folderID
+        ]
+        app.staticTexts["notebook-sidebar-title-" + folderID]
+            .press(forDuration: 1.0)
+        app.buttons.matching(NSPredicate(
+            format: "label == %@ AND identifier != %@",
+            "New Note", "notebook-new-item"
+        )).firstMatch.tap()
+        commitDefaultTitle(in: app)
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        activate(editor)
+        editor.typeText("Fictional observatory in the folder")
+
+        showSidebar(app)
+        XCTAssertEqual(disclosure.value as? String, "Expanded")
+        disclosure.tap()
+        XCTAssertEqual(disclosure.value as? String, "Collapsed")
+        let note = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "notebook-sidebar-note-")
+        ).firstMatch
+        XCTAssertFalse(note.exists)
+
+        let recent = recentButtons(app).firstMatch
+        XCTAssertTrue(recent.waitForExistence(timeout: 5))
+        recent.tap()
+        XCTAssertTrue(waitUntilHittable(editor))
+        showSidebar(app)
+        XCTAssertEqual(disclosure.value as? String, "Collapsed")
+        XCTAssertFalse(note.exists)
+
+        recent.tap()
+        XCTAssertTrue(waitUntilHittable(editor))
+        app.buttons["notebook-note-actions"].tap()
+        app.buttons["Show in Files"].tap()
+        XCTAssertEqual(disclosure.value as? String, "Expanded")
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        let highlighted = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Revealed in Files"),
+            object: note
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [highlighted], timeout: 5), .completed)
+        capture(app, name: "Revealed fictional note highlighted in Files")
+    }
+
     func testIPhoneTrailingSwipePinsAndUnpinsWithoutOpeningRecent() throws {
         try XCTSkipIf(
             UIDevice.current.userInterfaceIdiom != .phone,

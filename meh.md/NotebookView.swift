@@ -13,6 +13,11 @@ private struct EditorAttachmentID: Hashable {
     let isEditingEnabled: Bool
 }
 
+private struct NotebookFileReveal: Equatable {
+    let id: UUID
+    let token = UUID()
+}
+
 private struct NotebookSidebarRow: Identifiable {
     let id: UUID
     let parentID: UUID?
@@ -75,9 +80,12 @@ struct NotebookView: View {
     @State private var browserUndo: NotebookBrowserUndo?
     @State private var browserRedo: NotebookBrowserUndo?
     @State private var destination: UUID?
+    @State private var fileRevealRequest: NotebookFileReveal?
+    @State private var highlightedFileID: UUID?
     @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
     #if os(iOS)
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+        @State private var quickActionRequests = NotebookQuickActionRequests.shared
     #endif
 
     init(replica: NotebookReplica, workspace: NotebookWorkspace? = nil) {
@@ -294,7 +302,7 @@ struct NotebookView: View {
                                     Divider()
                                     actions(
                                         for: placement, allowsCreation: false,
-                                        allowsRename: false
+                                        allowsRename: false, allowsShowInFiles: true
                                     )
                                 } label: {
                                     Label("Note Actions", systemImage: "ellipsis.circle")
@@ -398,6 +406,14 @@ struct NotebookView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { rememberEditorPosition() }
         }
+        #if os(iOS)
+        .onChange(of: quickActionRequests.pendingNewNotes, initial: true) { _, _ in
+            handlePendingNewNoteAction()
+        }
+        .onChange(of: busy) { _, isBusy in
+            if !isBusy { handlePendingNewNoteAction() }
+        }
+        #endif
         .onDisappear { rememberEditorPosition() }
         .onReceive(NotificationCenter.default.publisher(for: applicationWillTerminate)) { _ in
             rememberEditorPosition()
@@ -459,6 +475,9 @@ struct NotebookView: View {
             await navigationState.restoreLastSelection()
             if selectedID != nil { preferredCompactColumn = .detail }
             busy = false
+            #if os(iOS)
+            handlePendingNewNoteAction()
+            #endif
         }
         .task(id: navigationState.recentNoteIDs) {
             await navigationState.loadRecentSessions()
@@ -611,6 +630,7 @@ struct NotebookView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .background(NotebookRecentCardBackground(position: .only))
                 } else {
                     #if os(iOS)
@@ -680,7 +700,6 @@ struct NotebookView: View {
         let row = Button {
             perform {
                 try await selectNote(placement.item.id)
-                reveal(placement.item.id)
             }
         } label: {
             NotebookRecentRow(
@@ -709,8 +728,8 @@ struct NotebookView: View {
         row
         #else
         row.contextMenu {
-            actions(for: placement, allowsCreation: false)
-            recentPinButton(for: placement.item.id)
+            actions(for: placement, allowsCreation: false,
+                    allowsShowInFiles: true)
         }
         #endif
     }
@@ -726,22 +745,25 @@ struct NotebookView: View {
             UIAction(title: String(localized: "Move…")) { _ in
                 beginMoving([id], fromTrash: false)
             },
-            UIAction(title: String(localized: "Move to Trash"),
-                     attributes: .destructive) { _ in
-                changeTrash(placement, trashed: true)
+            UIAction(title: String(localized: "Show in Files")) { _ in
+                showInFiles(id)
             }
         ]
-        if !isPhoneLayout {
-            let pinned = replica.isPinnedInRecents(id)
-            let title = pinned ? String(localized: "Unpin from Recents")
-                : String(localized: "Pin in Recents")
-            menuActions.append(UIAction(
-                title: title,
-                attributes: !pinned && !replica.canPinInRecents(id) ? .disabled : []
-            ) { _ in
-                setRecentPinned(!pinned, for: id)
-            })
-        }
+        let pinned = replica.isPinnedInRecents(id)
+        let title = pinned ? String(localized: "Unpin from Recents")
+            : String(localized: "Pin in Recents")
+        menuActions.append(UIAction(
+            title: title,
+            attributes: !pinned && !replica.canPinInRecents(id) ? .disabled : []
+        ) { _ in
+            setRecentPinned(!pinned, for: id)
+        })
+        menuActions.append(UIAction(
+            title: String(localized: "Move to Trash"),
+            attributes: .destructive
+        ) { _ in
+            changeTrash(placement, trashed: true)
+        })
         return UIMenu(children: menuActions)
     }
     #endif
@@ -807,6 +829,7 @@ struct NotebookView: View {
         ForEach(visibleActiveRows) { row in
             browserRow(row)
                 .tag(row.id)
+                .id(row.id)
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
                 .listRowInsets(sidebarSectionInsets)
@@ -1034,7 +1057,23 @@ struct NotebookView: View {
             .padding(.leading, CGFloat(row.depth) * 16)
             .frame(minHeight: sidebarRowHeight)
             .contentShape(Rectangle())
+            .background {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.accentColor.opacity(
+                        highlightedFileID == row.id ? 0.16 : 0
+                    ))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.accentColor.opacity(
+                        highlightedFileID == row.id ? 0.65 : 0
+                    ), lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
             .accessibilityElement(children: .contain)
+            .accessibilityValue(
+                highlightedFileID == row.id ? "Revealed in Files" : ""
+            )
             .accessibilityIdentifier(
                 (placement.item.kind == .note
                     ? "notebook-sidebar-note-" : "notebook-sidebar-folder-") + row.id.uuidString)
@@ -1108,7 +1147,7 @@ struct NotebookView: View {
     @ViewBuilder
     private func actions(
         for placement: NotebookPlacement, allowsCreation: Bool = true,
-        allowsRename: Bool = true
+        allowsRename: Bool = true, allowsShowInFiles: Bool = false
     ) -> some View {
         if allowsCreation, !placement.isInTrash {
             creationActions(parentID: creationParent(for: placement))
@@ -1117,6 +1156,13 @@ struct NotebookView: View {
         if allowsRename { Button("Rename…") { beginRenaming(placement) } }
         Button("Move…") {
             beginMoving([placement.item.id], fromTrash: placement.isInTrash)
+        }
+        if !placement.isInTrash, placement.item.kind == .note {
+            if allowsShowInFiles {
+                Button("Show in Files") { showInFiles(placement.item.id) }
+                    .accessibilityIdentifier("notebook-show-in-files")
+            }
+            recentPinButton(for: placement.item.id)
         }
         if placement.isInTrash {
             if placement.item.isTrashed {
@@ -1204,6 +1250,14 @@ struct NotebookView: View {
             }
         }
     }
+
+    #if os(iOS)
+    private func handlePendingNewNoteAction() {
+        guard restoredNavigation, !busy, quickActionRequests.takeNewNote()
+        else { return }
+        createItem(kind: .note, parentID: nil)
+    }
+    #endif
 
     private func beginRenaming(_ placement: NotebookPlacement) {
         perform {
@@ -1372,6 +1426,14 @@ struct NotebookView: View {
         }
     }
 
+    private func showInFiles(_ id: UUID) {
+        search.isPresented = false
+        navigationState.isTreeExpanded = true
+        reveal(id)
+        preferredCompactColumn = .sidebar
+        fileRevealRequest = NotebookFileReveal(id: id)
+    }
+
     private func commitMove(to parentID: UUID?) async throws {
         guard !busy else { throw NotebookReplicaError.busy }
         let ids = movingIDs
@@ -1529,6 +1591,12 @@ struct NotebookView: View {
     }
 
     private var libraryBrowser: some View {
+        ScrollViewReader { scrollProxy in
+            libraryList(scrollProxy: scrollProxy)
+        }
+    }
+
+    private func libraryList(scrollProxy: ScrollViewProxy) -> some View {
         List(selection: nativeBrowserSelection) {
             recentsSection
             Section {
@@ -1608,13 +1676,29 @@ struct NotebookView: View {
                 browserSelection.clear()
             }
         }
+        .task(id: fileRevealRequest) {
+            guard let request = fileRevealRequest else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            withAnimation { scrollProxy.scrollTo(request.id, anchor: .center) }
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.2)) {
+                highlightedFileID = request.id
+            }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.4)) {
+                highlightedFileID = nil
+            }
+            fileRevealRequest = nil
+        }
         #if os(iOS)
         .environment(\.editMode, Binding(
             get: { selectingItems ? .active : .inactive },
             set: { selectingItems = $0.isEditing }
         ))
         #endif
-
     }
 
     private var libraryNewNote: some View {
