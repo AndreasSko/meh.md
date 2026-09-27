@@ -122,6 +122,9 @@ struct NotebookView: View {
     @State private var linkChoiceFragment: String?
     @State private var missingLink: NotebookLinkOccurrence?
     @Environment(\.openURL) private var openURL
+    #if os(macOS)
+    @State private var menu = NotebookMenuState()
+    #endif
     @FocusState private var searchFocused: Bool
     @State private var pendingSearchQuery: String?
     @State private var searchDestinationID: UUID?
@@ -220,6 +223,17 @@ struct NotebookView: View {
         get { navigationState.expandedFolderIDs }
         nonmutating set { navigationState.expandedFolderIDs = newValue }
     }
+    #if os(macOS)
+    private var menuAvailable: Bool {
+        !busy && !search.showingQuickOpen && !showingSettings
+            && !showingTrash && !showingImport && !showingTextSize
+            && movingIDs.isEmpty && deletionSelection == nil
+            && errorMessage == nil && sharedImportID == nil
+            && !showingBacklinks && linkInsertion == nil
+            && linkChoices.isEmpty && missingLink == nil
+            && workspace?.isResetPending != true
+    }
+    #endif
     private var syncToolbarPlacement: ToolbarItemPlacement {
         #if os(macOS)
         .navigation
@@ -255,7 +269,7 @@ struct NotebookView: View {
                     && !browsingAllRecents {
                     NotebookSidebarControls(
                         busy: busy,
-                        showSettings: { showingSettings = true },
+                        showSettings: { openSettings() },
                         showTrash: { openTrash() }
                     )
                 }
@@ -695,6 +709,18 @@ struct NotebookView: View {
         }
         .onChange(of: browsingAllRecents) { _, expanded in
             recentCommands.isBrowsingAll = expanded
+        }
+        .focusedSceneValue(\.notebookMenu, menu)
+        .onChange(of: menuAvailable, initial: true) { _, available in
+            menu.isAvailable = available
+        }
+        .onChange(of: menu.newNoteRequest) { _, _ in
+            guard menuAvailable else { return }
+            createDefaultNote()
+        }
+        .onChange(of: menu.settingsRequest) { _, _ in
+            guard menuAvailable else { return }
+            openSettings()
         }
         #endif
         .task(id: searchTaskID) {
@@ -1596,7 +1622,8 @@ struct NotebookView: View {
                         .contentShape(Rectangle())
                         #if os(macOS)
                         .simultaneousGesture(TapGesture().onEnded {
-                            guard !selectingItems, !busy,
+                            guard placement.item.kind == .note,
+                                  !selectingItems, !busy,
                                   NSEvent.modifierFlags.intersection([.command, .shift]).isEmpty
                             else { return }
                             // List owns range/toggle selection. A plain click also
@@ -1650,9 +1677,13 @@ struct NotebookView: View {
     }
 
     private func activateSidebarRow(_ placement: NotebookPlacement) {
-        guard !busy, editingID == nil, !selectingItems else { return }
+        guard !busy, editingID == nil, !showsSelectionControls else { return }
+        if placement.item.kind == .folder {
+            toggleFolder(placement.item.id)
+            return
+        }
         perform {
-            if placement.item.kind == .note { try await selectNote(placement.item.id) }
+            try await selectNote(placement.item.id)
         }
     }
 
@@ -2508,7 +2539,7 @@ struct NotebookView: View {
             browserUndoActions
             Divider()
             if isPhoneLayout {
-                Button { showingSettings = true } label: {
+                Button { openSettings() } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
                 .accessibilityIdentifier("notebook-settings")
@@ -2535,6 +2566,15 @@ struct NotebookView: View {
         guard !busy, !search.showingQuickOpen else { return }
         searchFocused = false
         editorNavigation.showFind?()
+    }
+
+    private func openSettings() {
+        guard !showingSettings, !showingTrash, !showingImport,
+              !search.showingQuickOpen, movingIDs.isEmpty else { return }
+        perform {
+            try await flushEditor()
+            showingSettings = true
+        }
     }
 
     private func showQuickOpen() {
