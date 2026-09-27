@@ -105,6 +105,47 @@ For 100 notes with 30 revisions each, the median identical-update time fell
 from 22.59 ms after validation reuse to 0.0042 ms with write skipping. Its
 baseline was 392.16 ms. This measures an exactly identical engine-state
 payload; it does not establish how often CloudKit produces duplicate updates.
+The no-op measurement is near timer and actor-call overhead, so its useful
+guarantee is zero additional writes rather than a precise speedup multiplier.
+
+## Recorded release results: 2026-09-27
+
+All runs were sequential, before the broader tests and builds. Full samples,
+byte counts, environment, and source revisions are saved in the
+[machine-readable evidence](benchmarks/sync-state-2026-09-27.json). The harness
+commit is `5328785`, validation reuse is `d80405b`, and no-op writes are
+`e21097c`. The latter was measured on the default matrix; the larger cases
+below compare the baseline with validation reuse alone.
+
+Changed engine-state updates, including durable writes (seven-sample medians):
+
+| Notes | Revisions per note | Baseline ms | Reuse ms | Speedup |
+| ---: | ---: | ---: | ---: | ---: |
+| 10 | 10 | 12.93 | 1.10 | 11.8x |
+| 100 | 10 | 121.52 | 7.05 | 17.2x |
+| 100 | 30 | 393.02 | 23.25 | 16.9x |
+| 10 | 500 | 2,538.92 | 44.49 | 57.1x |
+| 1,000 | 5 | 672.83 | 31.81 | 21.2x |
+
+The largest fixtures contain 5,000 body snapshots plus one catalog snapshot.
+The deep-history file is about 8.3 MB, and the 1,000-note file about 3.9 MB.
+This demonstrates an avoidable per-operation local cost, not an equivalent
+reduction in total cross-device sync latency. JSON encoding and full-file
+writes remain; startup validation and network behavior are unchanged.
+
+Verification on the final implementation:
+
+- Full deterministic and loopback runner: 686 Swift tests passed, two expected
+  skips (opt-in benchmark and native insertion indicator), no failures.
+- All 16 Python local-service tests passed.
+- Unsigned Release builds passed for macOS and generic iOS Simulator.
+- Independent code review found no correctness blocker in validation reuse,
+  duplicate handling, retirement, or failed-write behavior.
+
+The benchmark can be rerun from the harness commit for a baseline, then from
+either optimization commit with the same parameters. Do not compare results
+while running builds or other CPU-intensive work. No CloudKit requests or
+physical-device acceptance checks were performed in this investigation.
 
 ## Scope and next layers
 
