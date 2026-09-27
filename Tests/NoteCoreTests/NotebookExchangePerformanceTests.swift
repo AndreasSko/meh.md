@@ -39,6 +39,7 @@ final class NotebookExchangePerformanceTests: XCTestCase {
             at: fixture, noteCount: noteCount, revisions: revisions
         )
         var samples: [String: [Double]] = [:]
+        var historyDecodes: [Int] = []
 
         for repetition in 0..<repetitions {
             let sourceURL = root.appending(path: "source-\(repetition)")
@@ -101,8 +102,29 @@ final class NotebookExchangePerformanceTests: XCTestCase {
             }
             XCTAssertTrue(contains)
 
+            // Separate file gathering from history membership work, including
+            // the cache behavior when a notebook exceeds its entry budget.
+            let checker = NotebookHistoryChecker()
+            _ = try await checker.containsHistory(
+                checkpoints, records: allRecords, deleted: []
+            )
+            let beforeDecodes = await checker.decodedSnapshotCount
+            let workerContains = try await measureThrowing(
+                "checkpoint_history_worker", into: &samples
+            ) {
+                try await checker.containsHistory(
+                    checkpoints, records: allRecords, deleted: []
+                )
+            }
+            XCTAssertTrue(workerContains)
+            let afterDecodes = await checker.decodedSnapshotCount
+            historyDecodes.append(afterDecodes - beforeDecodes)
+
             let catalog = try XCTUnwrap(source.catalogSnapshot)
             let seed = SyncRecord(catalog: catalog)
+            try await measureThrowing("validate_catalog_record", into: &samples) {
+                try seed.validate()
+            }
             try await measureThrowing("accept_seed_no_op", into: &samples) {
                 try await source.acceptSeed(seed)
             }
@@ -157,7 +179,7 @@ final class NotebookExchangePerformanceTests: XCTestCase {
         for phase in samples.keys.sorted() {
             let values = try XCTUnwrap(samples[phase])
             let sorted = values.sorted()
-            let result: [String: Any] = [
+            var result: [String: Any] = [
                 "benchmark": "notebook_local_exchange",
                 "fixture_version": 1,
                 "phase": phase,
@@ -171,6 +193,9 @@ final class NotebookExchangePerformanceTests: XCTestCase {
                 "median_ms": percentile(sorted, 0.5),
                 "p95_ms": percentile(sorted, 0.95),
             ]
+            if phase == "checkpoint_history_worker" {
+                result["decoded_snapshots"] = historyDecodes
+            }
             let data = try JSONSerialization.data(
                 withJSONObject: result, options: [.sortedKeys]
             )
