@@ -149,6 +149,10 @@ physical-device acceptance checks were performed in this investigation.
 
 ## Scope and next layers
 
+The follow-up [local exchange benchmark](notebook-exchange-performance.md)
+measures whole coordinator passes, repeated note reads, and Markdown
+publication with synthetic notebooks up to 1,000 notes.
+
 The local HTTP transport bypasses this CloudKit-specific state store. Therefore
 fast HTTP sync alone cannot clear this code path. After this isolated work,
 measure repeated notebook scans, local HTTP exchanges, editor application, and
