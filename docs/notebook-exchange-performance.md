@@ -22,9 +22,8 @@ there are no elapsed-time assertions in the correctness suite.
 
 Cases are `notes x body versions`, separated by commas without spaces. The
 defaults are `100x1,500x3,1000x5`. Up to six cases are accepted, with 1 to
-1,000
-notes and 1 to 500 versions, and at most 5,000 note versions per case. Each
-case runs three repetitions by default; the allowed range is one to five.
+1,000 notes and 1 to 500 versions, and at most 5,000 note versions per case.
+Each case runs three repetitions by default; the allowed range is one to five.
 
 Every case generates a fictional flat notebook with short text. Each note
 retains its edit history in one final Automerge snapshot. This differs from
@@ -48,11 +47,17 @@ Measured phases include:
 - A one-character source pass, destination pass, and their combined time.
 - Listed and unlisted record gathering, plus checkpoint-history checking.
 - Unchanged catalog-seed acceptance and cached catalog item access.
+- Standalone catalog validation and the warmed history worker, including
+  its decoded-snapshot count separately from record gathering.
 - First Markdown publication and publication after the one-character edit.
+- Changed publication preparation, stage writing, swap, commit, and cleanup.
 
 The Markdown phases receive already-gathered snapshots, so they exclude the
 extra record gathering performed by the app's publication flow. The combined
 character time covers coordinator calls, not the later Markdown publication.
+Changed publication stage timings run inside the publisher actor; their total
+excludes the initial actor scheduling hop. Preparation includes decoding,
+planning, ownership checks, and recording the pending generation.
 Transport validation and durable merges/saves are included in full exchanges;
 they are not separately timed or an additive breakdown of every suboperation.
 Measurements use warm filesystem caches. With three samples, nearest-rank p95
