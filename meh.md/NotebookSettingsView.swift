@@ -19,10 +19,30 @@ struct NotebookSettingsView: View {
     @State private var document: MarkdownExportDocument?
     @State private var exported = false
     @State private var errorMessage: String?
+    @State private var destinationError: String?
+    @State private var updatingDefaultDestination = false
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Picker("Destination", selection: Binding(
+                        get: { replica.defaultNewNoteParentID },
+                        set: { setDefaultNewNoteParentID($0) }
+                    )) {
+                        Text("Root").tag(UUID?.none)
+                        ForEach(activeFolders, id: \.item.id) { placement in
+                            Text(folderPath(for: placement))
+                                .tag(Optional(placement.item.id))
+                        }
+                    }
+                    .disabled(updatingDefaultDestination)
+                    .accessibilityIdentifier("notebook-new-note-destination")
+                } header: {
+                    Text("New Notes")
+                } footer: {
+                    Text("New notes are saved in this folder.")
+                }
                 Section("Markdown") {
                     Button("Import Markdown…") { importing = true }
                         .accessibilityIdentifier("notebook-import")
@@ -150,7 +170,50 @@ struct NotebookSettingsView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .alert("Couldn’t Change Destination", isPresented: Binding(
+            get: { destinationError != nil },
+            set: { if !$0 { destinationError = nil } }
+        )) {
+            Button("OK", role: .cancel) { destinationError = nil }
+        } message: {
+            Text(destinationError ?? "")
+        }
         .task { await workspace.reloadBackupInfo() }
+    }
+
+    private var activeFolders: [NotebookPlacement] {
+        replica.placements
+            .filter { $0.item.kind == .folder && !$0.isInTrash }
+            .sorted {
+                folderPath(for: $0).localizedStandardCompare(folderPath(for: $1))
+                    == .orderedAscending
+            }
+    }
+
+    private func folderPath(for placement: NotebookPlacement) -> String {
+        let byID = Dictionary(uniqueKeysWithValues: replica.placements.map {
+            ($0.item.id, $0)
+        })
+        var parts = [placement.displayName]
+        var parentID = placement.parentID
+        while let id = parentID, let parent = byID[id] {
+            parts.insert(parent.displayName, at: 0)
+            parentID = parent.parentID
+        }
+        return parts.joined(separator: " / ")
+    }
+
+    private func setDefaultNewNoteParentID(_ id: UUID?) {
+        guard !updatingDefaultDestination else { return }
+        updatingDefaultDestination = true
+        Task { @MainActor in
+            defer { updatingDefaultDestination = false }
+            do {
+                try await replica.setDefaultNewNoteParentID(id)
+            } catch {
+                destinationError = error.localizedDescription
+            }
+        }
     }
 
     private func backUpNow() {

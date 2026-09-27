@@ -8,6 +8,57 @@ final class NotebookCatalogTests: XCTestCase {
     private let low = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     private let high = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
 
+    func testDefaultNewNoteFolderSyncsAndFallsBackWhenUnavailable() throws {
+        let base = try NotebookCatalogDocument()
+        XCTAssertNil(try base.defaultNewNoteParentID())
+        let inbox = try base.add(kind: .folder, name: "Inbox")
+        let sibling = try base.fork()
+        try base.setDefaultNewNoteParentID(inbox)
+        try sibling.merge(base)
+        XCTAssertEqual(try sibling.defaultNewNoteParentID(), inbox)
+
+        try sibling.setTrashed(inbox, true)
+        XCTAssertNil(try sibling.defaultNewNoteParentID())
+        try sibling.setTrashed(inbox, false)
+        XCTAssertEqual(try sibling.defaultNewNoteParentID(), inbox)
+        try sibling.markPermanentlyDeleted([inbox])
+        XCTAssertNil(try sibling.defaultNewNoteParentID())
+        try sibling.setDefaultNewNoteParentID(nil)
+        XCTAssertNil(try NotebookCatalogDocument(snapshot: sibling.snapshot())
+            .defaultNewNoteParentID())
+    }
+
+    func testDefaultNewNoteFolderRejectsNonActiveTargets() throws {
+        let catalog = try NotebookCatalogDocument()
+        let note = try catalog.add(kind: .note, name: "Note.md")
+        let folder = try catalog.add(kind: .folder, name: "Inbox")
+        for id in [note, UUID()] {
+            XCTAssertThrowsError(try catalog.setDefaultNewNoteParentID(id)) {
+                XCTAssertEqual($0 as? NotebookCatalogError, .invalidParent)
+            }
+        }
+        try catalog.setTrashed(folder, true)
+        XCTAssertThrowsError(try catalog.setDefaultNewNoteParentID(folder)) {
+            XCTAssertEqual($0 as? NotebookCatalogError, .invalidParent)
+        }
+    }
+
+    func testOlderCatalogWriterPreservesNewDestinationRegister() throws {
+        let base = try NotebookCatalogDocument()
+        let inbox = try base.add(kind: .folder, name: "Inbox")
+        let olderWriter = try Document(base.snapshot().data)
+        let newerWriter = try base.fork()
+        try newerWriter.setDefaultNewNoteParentID(inbox)
+
+        // An older writer may change a different catalog field without
+        // knowing about newNoteParent. Automerge must retain that register.
+        try olderWriter.put(
+            obj: .ROOT, key: "olderWriterProbe", value: .String("updated"))
+        try olderWriter.merge(other: Document(newerWriter.snapshot().data))
+        let merged = try NotebookCatalogDocument(serializedData: olderWriter.save())
+        XCTAssertEqual(try merged.defaultNewNoteParentID(), inbox)
+    }
+
     func testRoundTripPreservesStableIDsAndHistory() throws {
         let catalog = try NotebookCatalogDocument()
         let folder = try catalog.add(kind: .folder, name: "Café")
