@@ -85,6 +85,27 @@ samples with 100 notes and 30 revisions each gave these medians:
 These are full durable updates, not just the validation subphase. Startup still
 fully validates history. Cloud transfer and end-to-end sync were not measured.
 
+The deeper case (10 notes, 500 revisions each) reduced changed engine-state
+updates from 2,538.92 ms to 44.49 ms, and one-character snapshot appends from
+2,540.24 ms to 46.13 ms. Full startup validation is intentionally unchanged.
+
+## Second optimization: skip unchanged state writes
+
+After running the update closure, an exactly equal state needs no additional
+validation, encoding, or disk write: that state is already durable. Writer
+retirement and latched write failures are checked first. Incoming duplicate
+records are still validated by the closure, so duplicate handling cannot hide
+malformed input. The closure's return value is preserved.
+
+This helps repeated engine-state callbacks and duplicate inbox bookkeeping.
+Its frequency in a real sync pass has not been measured. It does not skip any
+write that would change persisted state.
+
+For 100 notes with 30 revisions each, the median identical-update time fell
+from 22.59 ms after validation reuse to 0.0042 ms with write skipping. Its
+baseline was 392.16 ms. This measures an exactly identical engine-state
+payload; it does not establish how often CloudKit produces duplicate updates.
+
 ## Scope and next layers
 
 The local HTTP transport bypasses this CloudKit-specific state store. Therefore

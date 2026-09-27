@@ -418,6 +418,9 @@ actor CloudKitTransportStateStore {
         guard !isRetired else { throw CloudKitRetiredTransportError() }
         var next = state
         let result = try body(&next)
+        // The closure still validates incoming records, and retired/failed
+        // writers were rejected above. Identical state is already durable.
+        if next == state { return result }
         try next.validate(expectedProtocolVersion: protocolVersion, reusing: state)
         let data = try JSONEncoder().encode(next)
         do {
