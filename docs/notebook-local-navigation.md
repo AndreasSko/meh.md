@@ -19,7 +19,14 @@ its selected ID and session. The existing serialized navigation operation
 commits the native buffer and flushes the current session before installing a
 successfully opened replacement. Failed commits, saves, and unfinished native
 composition retain the current editor. This establishes a scene-local boundary;
-it does not enable multiple windows or define a multi-window preference policy.
+multiple windows use it to keep selections and reading positions independent.
+
+Each window keeps a stable scene ID in scene storage. Navigation preferences
+are keyed by notebook and scene. The first scene migrates the older
+notebook-wide preferences once. A new window opens a requested note if it has
+no saved selection; a restored window keeps its own last selection. The
+notebook replica, note sessions, and Recents activity remain shared. Workspace
+foreground handling considers all active windows before changing sync state.
 
 A restored note does not automatically take keyboard focus. New Note focuses
 its title; Return saves the title and focuses the body. Clicking the body also
@@ -59,5 +66,5 @@ and last-note restoration. Mac keyboard checks also exercise caret restoration
 through note switching and normal quit/relaunch.
 
 Simulator results do not establish physical iPhone/iPad or iCloud acceptance.
-Heading outlines, focus mode, pinned notes, and multi-window behavior remain
-outside this delivery.
+Heading outlines, focus mode, and pinned notes were outside the original
+navigation delivery.

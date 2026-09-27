@@ -67,6 +67,21 @@ final class NoteEditorCommitTests: XCTestCase {
         try await session.flush()
     }
 
+    func testTwoEditorsOfOneNotePreserveIndependentEdits() async throws {
+        let storage = EditorCommitStorage(try NoteDocument(text: "middle").snapshot())
+        let session = NoteSession(storage: storage)
+        await session.load()
+        let displayedInBoth = try XCTUnwrap(session.editorRevision)
+
+        try session.commitEditorText("left middle", basedOn: displayedInBoth)
+        try session.commitEditorText("middle right", basedOn: displayedInBoth)
+
+        XCTAssertEqual(session.text, "left middle right")
+        try await session.flush()
+        let saved = await storage.latest
+        XCTAssertEqual(try NoteDocument(snapshot: saved).text, session.text)
+    }
+
     func testForeignAndMalformedRevisionsDoNotChangeText() async throws {
         let snapshot = try NoteDocument(text: "original").snapshot()
         let a = NoteSession(storage: EditorCommitStorage(snapshot))

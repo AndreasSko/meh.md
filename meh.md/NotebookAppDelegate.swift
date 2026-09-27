@@ -29,9 +29,6 @@ final class NotebookAppDelegate: NSObject, UIApplicationDelegate {
         NotebookBackupBackgroundScheduler.register()
         NotebookBackupBackgroundScheduler.scheduleNext()
         guard RemoteNotificationLaunch.isEnabled else { return true }
-        NotebookWorkspace.shared.sceneActivityChanged(
-            isActive: application.applicationState != .background
-        )
         Task { await NotebookWorkspace.shared.start() }
         application.registerForRemoteNotifications()
         return true

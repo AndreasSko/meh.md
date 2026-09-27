@@ -3,12 +3,24 @@ import SwiftUI
 
 struct NotebookApplicationView: View {
     let workspace: NotebookWorkspace
+    let preferredNoteID: UUID?
     @Environment(\.scenePhase) private var scenePhase
+    @SceneStorage("notebook.sceneID") private var sceneIDString = UUID().uuidString
+    @State private var fallbackSceneID = UUID()
+
+    private var sceneID: UUID {
+        UUID(uuidString: sceneIDString) ?? fallbackSceneID
+    }
 
     var body: some View {
         Group {
             if let replica = workspace.replica, replica.catalogSnapshot != nil {
-                NotebookView(replica: replica, workspace: workspace)
+                NotebookView(
+                    replica: replica,
+                    workspace: workspace,
+                    sceneID: sceneID,
+                    preferredNoteID: preferredNoteID
+                )
                     .id(ObjectIdentifier(replica))
             } else if let message = workspace.errorMessage {
                 ContentUnavailableView {
@@ -39,13 +51,16 @@ struct NotebookApplicationView: View {
             }
         }
         .task {
+            if UUID(uuidString: sceneIDString) == nil {
+                sceneIDString = fallbackSceneID.uuidString
+            }
             await workspace.start()
             #if os(iOS)
             NotebookBackupBackgroundScheduler.scheduleNext()
             #endif
         }
         .onChange(of: scenePhase, initial: true) { _, newPhase in
-            workspace.sceneActivityChanged(isActive: newPhase == .active)
+            workspace.sceneActivityChanged(id: sceneID, isActive: newPhase == .active)
             if newPhase == .active {
                 Task {
                     await workspace.runDueBackup()
@@ -54,6 +69,9 @@ struct NotebookApplicationView: View {
                     #endif
                 }
             }
+        }
+        .onDisappear {
+            workspace.sceneDidClose(id: sceneID)
         }
         .task(id: scenePhase) {
             // The loopback development service has no push channel. Only
