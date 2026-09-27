@@ -93,6 +93,8 @@ public final class NotebookReplica {
     @ObservationIgnored private let importStorage: NotebookImportStorage
     @ObservationIgnored private let deletionStorage: NotebookDeletionStorage
     @ObservationIgnored private let historyChecker = NotebookHistoryChecker()
+    @ObservationIgnored private var recordReadCache:
+        [UUID: NoteFileStorage.ValidatedSnapshot] = [:]
     @ObservationIgnored private var sessions: [UUID: NoteSession] = [:]
     @ObservationIgnored private var sessionLoads: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var rememberedDeletions: Set<UUID> = []
@@ -945,12 +947,25 @@ public final class NotebookReplica {
         let deleted = try deletedIDs
         let listed = Set(try catalog.items().filter { $0.kind == .note }.map(\.id))
         var records: [SyncRecord] = []
+        var nextCache: [UUID: NoteFileStorage.ValidatedSnapshot] = [:]
+        var cachedBytes = 0
         for id in try storedNoteIDs().sorted(by: { $0.uuidString < $1.uuidString })
         where !deleted.contains(id) && (includeUnlisted || listed.contains(id)) {
-            switch await noteStorage(id).load() {
+            let loaded = await noteStorage(id).load(reusing: recordReadCache[id])
+            switch loaded.result {
             case .current(let snapshot):
                 guard snapshot.noteID == id else { throw SyncError.identityConflict }
                 records.append(SyncRecord(snapshot: snapshot, notebookID: catalog.notebookID))
+                // Keep one bounded set of successfully decoded current files.
+                // The next scan still reads bytes, even on a cache hit. Using
+                // a stable subset avoids LRU thrashing on larger notebooks.
+                let cost = snapshot.data.count + snapshot.heads.count * 128
+                if let validated = loaded.validated, nextCache.count < 1_024,
+                    cost <= 32 * 1_024 * 1_024 - cachedBytes
+                {
+                    nextCache[id] = validated
+                    cachedBytes += cost
+                }
             case .firstLaunch: continue
             case .recoveryRequired, .blocked: throw NotebookReplicaError.noteUnavailable(id)
             }
@@ -958,6 +973,7 @@ public final class NotebookReplica {
         // Bodies before metadata reduces missing-content intervals but the
         // receiver must remain correct for either arrival order.
         records.append(SyncRecord(catalog: catalogSnapshot!))
+        recordReadCache = nextCache
         return records
     }
 
@@ -1336,6 +1352,7 @@ public final class NotebookReplica {
         for id in rememberedDeletions {
             sessions[id] = nil
             sessionLoads[id] = nil
+            recordReadCache[id] = nil
         }
         try importStorage.scrub(
             deletedIDs: rememberedDeletions,
