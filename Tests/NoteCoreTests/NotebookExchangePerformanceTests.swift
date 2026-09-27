@@ -167,12 +167,13 @@ final class NotebookExchangePerformanceTests: XCTestCase {
             let changedRecords = try await source.records()
             let changedNotes = changedRecords.filter { $0.kind == .note }
                 .map(\.snapshot)
-            try await measureThrowing("markdown_publish_changed", into: &samples) {
-                try await publisher.publish(
-                    catalog: try XCTUnwrap(source.catalogSnapshot),
-                    placements: source.placements,
-                    notes: changedNotes
-                )
+            let publication = try await publisher.profiledPublish(
+                catalog: try XCTUnwrap(source.catalogSnapshot),
+                placements: source.placements,
+                notes: changedNotes
+            )
+            for (phase, milliseconds) in publication {
+                samples[phase, default: []].append(milliseconds)
             }
         }
 
@@ -324,6 +325,54 @@ final class NotebookExchangePerformanceTests: XCTestCase {
             path: "MehExchangeBenchmark-\(UUID().uuidString)"
         )
     }
+}
+
+// Benchmark-only instrumentation. The stage callback runs inside
+// the publisher actor, so no production API or publish behavior changes.
+private extension NotebookMarkdownPublisher {
+    func profiledPublish(
+        catalog: NotebookCatalogSnapshot,
+        placements: [NotebookPlacement],
+        notes: [NoteSnapshot]
+    ) throws -> [String: Double] {
+        let clock = ContinuousClock()
+        let started = clock.now
+        var marks: [(NotebookMarkdownPublishStage, ContinuousClock.Instant)] = []
+        try publish(
+            catalog: catalog,
+            placements: placements,
+            notes: notes,
+            afterStage: { marks.append(($0, clock.now)) }
+        )
+        let finished = clock.now
+        guard marks.count == 4,
+              case .pendingRecorded = marks[0].0,
+              case .stageBuilt = marks[1].0,
+              case .contentSwapped = marks[2].0,
+              case .manifestCommitted = marks[3].0 else {
+            throw MarkdownProfileError.missingStage
+        }
+        func milliseconds(
+            _ start: ContinuousClock.Instant,
+            _ end: ContinuousClock.Instant
+        ) -> Double {
+            let components = start.duration(to: end).components
+            return Double(components.seconds) * 1_000
+                + Double(components.attoseconds) / 1_000_000_000_000_000
+        }
+        return [
+            "markdown_publish_changed": milliseconds(started, finished),
+            "markdown_changed_prepare": milliseconds(started, marks[0].1),
+            "markdown_changed_stage_build": milliseconds(marks[0].1, marks[1].1),
+            "markdown_changed_swap": milliseconds(marks[1].1, marks[2].1),
+            "markdown_changed_commit": milliseconds(marks[2].1, marks[3].1),
+            "markdown_changed_cleanup": milliseconds(marks[3].1, finished),
+        ]
+    }
+}
+
+private enum MarkdownProfileError: Error {
+    case missingStage
 }
 
 private struct ExchangeConfiguration {
