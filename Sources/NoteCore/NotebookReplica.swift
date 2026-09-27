@@ -77,6 +77,12 @@ public struct NotebookDeletionSelection: Equatable, Sendable {
 @MainActor
 @Observable
 public final class NotebookReplica {
+    private struct AcceptedCatalog {
+        let record: SyncRecord
+        let installed: NotebookCatalogSnapshot
+        let deletedIDs: Set<UUID>
+    }
+
     public let directory: URL
     public private(set) var catalogSnapshot: NotebookCatalogSnapshot?
     public private(set) var placements: [NotebookPlacement] = []
@@ -93,6 +99,7 @@ public final class NotebookReplica {
     @ObservationIgnored private let importStorage: NotebookImportStorage
     @ObservationIgnored private let deletionStorage: NotebookDeletionStorage
     @ObservationIgnored private let historyChecker = NotebookHistoryChecker()
+    @ObservationIgnored private var acceptedCatalog: AcceptedCatalog?
     @ObservationIgnored private var recordReadCache:
         [UUID: NoteFileStorage.ValidatedSnapshot] = [:]
     @ObservationIgnored private var sessions: [UUID: NoteSession] = [:]
@@ -853,27 +860,69 @@ public final class NotebookReplica {
     }
 
     func acceptSeed(_ record: SyncRecord) async throws {
-        try record.validate()
-        guard let snapshot = record.catalogSnapshot else { throw SyncError.invalidRecord }
-        if let catalog {
-            let next = try catalog.fork()
-            try next.merge(NotebookCatalogDocument(snapshot: snapshot))
-            let former = Set(placements.filter {
-                !$0.isInTrash && $0.item.kind == .note
-                    && !$0.item.isPermanentlyDeleted
-            }.map { $0.item.id })
-            let now = Set(try next.placements().filter {
-                !$0.isInTrash && $0.item.kind == .note
-                    && !$0.item.isPermanentlyDeleted
-            }.map { $0.item.id })
-            try next.clearRecents(for: former.subtracting(now))
-            try await saveCatalog(next)
-        } else {
-            try await saveCatalog(NotebookCatalogDocument(snapshot: snapshot))
+        try await withCatalogWrite {
+            if try await self.canReuseAcceptedCatalog(record) { return }
+            // Failed validation or persistence cannot establish reusable trust.
+            self.acceptedCatalog = nil
+            try record.validate()
+            guard let snapshot = record.catalogSnapshot else { throw SyncError.invalidRecord }
+            if let catalog = self.catalog {
+                let next = try catalog.fork()
+                try next.merge(NotebookCatalogDocument(snapshot: snapshot))
+                let former = Set(self.placements.filter {
+                    !$0.isInTrash && $0.item.kind == .note
+                        && !$0.item.isPermanentlyDeleted
+                }.map { $0.item.id })
+                let now = Set(try next.placements().filter {
+                    !$0.isInTrash && $0.item.kind == .note
+                        && !$0.item.isPermanentlyDeleted
+                }.map { $0.item.id })
+                try next.clearRecents(for: former.subtracting(now))
+                try await self.persistCatalog(next)
+            } else {
+                try await self.persistCatalog(NotebookCatalogDocument(snapshot: snapshot))
+            }
+            if let installed = self.catalogSnapshot,
+                record.snapshot.data.count + installed.data.count <= 16 * 1_024 * 1_024
+            {
+                self.acceptedCatalog = AcceptedCatalog(
+                    record: record, installed: installed,
+                    deletedIDs: self.rememberedDeletions
+                )
+            }
         }
         let deleted = try deletedIDs
         await drainDeletedSessions(deleted)
         tryBestEffortDeletionCleanup()
+    }
+
+    /// Called only while the catalog write guard spans the storage await.
+    private func canReuseAcceptedCatalog(_ record: SyncRecord) async throws -> Bool {
+        let candidate = acceptedCatalog
+        var copiesMatch = false
+        if let candidate,
+            candidate.record == record,
+            candidate.installed == catalogSnapshot,
+            candidate.deletedIDs == rememberedDeletions
+        {
+            copiesMatch = await storage.matchesDurableCopies(of: candidate.installed)
+        }
+
+        guard let installed = catalogSnapshot else { return false }
+        // Refresh even when the disk copies or record differ: fallback must
+        // derive tombstones from the fresh ledger before persisting a catalog.
+        let durableDeletedIDs = try deletionStorage.load(notebookID: installed.notebookID)
+        let newlyDeleted = durableDeletedIDs.subtracting(rememberedDeletions)
+        if !newlyDeleted.isEmpty {
+            rememberedDeletions.formUnion(newlyDeleted)
+            applyRememberedDeletions()
+        }
+        guard let candidate, copiesMatch,
+            candidate.installed == catalogSnapshot,
+            candidate.deletedIDs == rememberedDeletions,
+            durableDeletedIDs == candidate.deletedIDs
+        else { return false }
+        return true
     }
 
     func apply(_ record: SyncRecord) async throws {
@@ -1264,6 +1313,8 @@ public final class NotebookReplica {
     }
 
     private func install(_ snapshot: NotebookCatalogSnapshot) throws {
+        // Any metadata change or recovery requires full acceptance again.
+        acceptedCatalog = nil
         let document = try NotebookCatalogDocument(snapshot: snapshot)
         let nextPlacements = try document.placements().filter {
             !rememberedDeletions.contains($0.item.id)

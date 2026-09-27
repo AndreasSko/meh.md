@@ -133,6 +133,16 @@ public actor NotebookCatalogStorage {
         try write(snapshot)
     }
 
+    /// Only a previously accepted snapshot can authorize skipping a write.
+    /// Read both copies: repeat saves also establish or repair the backup.
+    func matchesDurableCopies(of snapshot: NotebookCatalogSnapshot) -> Bool {
+        guard let current = try? Data(contentsOf: currentURL),
+            current == snapshot.data,
+            let previous = try? Data(contentsOf: previousURL)
+        else { return false }
+        return previous == snapshot.data
+    }
+
     public func recover(
         _ recovery: NotebookCatalogRecovery
     ) throws -> NotebookCatalogSnapshot {
