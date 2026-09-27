@@ -23,6 +23,15 @@ enum NoteRecoveryStage: Equatable {
 }
 
 public actor NoteFileStorage: NoteStorage {
+    /// Only this file can create proof that bytes were decoded successfully.
+    struct ValidatedSnapshot: Sendable {
+        let snapshot: NoteSnapshot
+
+        fileprivate init(_ snapshot: NoteSnapshot) {
+            self.snapshot = snapshot
+        }
+    }
+
     public nonisolated let currentURL: URL
     public nonisolated let previousURL: URL
 
@@ -34,7 +43,22 @@ public actor NoteFileStorage: NoteStorage {
     }
 
     public func load() -> NoteLoadResult {
-        let current = candidate(at: currentURL)
+        load(current: candidate(at: currentURL))
+    }
+
+    /// A scan still reads the file on every call. Reuse only decoding, never
+    /// presence or file metadata, so external replacement cannot hide changes.
+    func load(reusing previous: ValidatedSnapshot?) -> (
+        result: NoteLoadResult, validated: ValidatedSnapshot?
+    ) {
+        let current = candidate(at: currentURL, reusing: previous)
+        if case let .valid(snapshot) = current {
+            return (.current(snapshot), ValidatedSnapshot(snapshot))
+        }
+        return (load(current: current), nil)
+    }
+
+    private func load(current: Candidate) -> NoteLoadResult {
         switch current {
         case let .valid(snapshot):
             return .current(snapshot)
@@ -259,7 +283,9 @@ public actor NoteFileStorage: NoteStorage {
         }
     }
 
-    private func candidate(at url: URL) -> Candidate {
+    private func candidate(
+        at url: URL, reusing previous: ValidatedSnapshot? = nil
+    ) -> Candidate {
         var information = stat()
         let status = url.withUnsafeFileSystemRepresentation { path in
             lstat(path, &information)
@@ -270,6 +296,9 @@ public actor NoteFileStorage: NoteStorage {
         }
         guard let data = try? Data(contentsOf: url) else {
             return .unreadable(Self.identity(for: information))
+        }
+        if let previous, previous.snapshot.data == data {
+            return .valid(previous.snapshot)
         }
         do {
             let document = try NoteDocument(serializedData: data)
