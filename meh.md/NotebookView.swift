@@ -261,7 +261,7 @@ struct NotebookView: View {
                             if horizontalSizeClass == .compact {
                                 ToolbarItem {
                                     Button {
-                                        createItem(kind: .note, parentID: nil)
+                                        createDefaultNote()
                                     } label: {
                                         Label("New Note", systemImage: "plus")
                                     }
@@ -1028,7 +1028,9 @@ struct NotebookView: View {
                             : placement.displayName)
                             .accessibilityIdentifier("notebook-sidebar-title-" + row.id.uuidString)
                     } icon: {
-                        Image(systemName: placement.item.kind == .folder ? "folder" : "note.text")
+                        Image(systemName: placement.item.kind == .folder
+                            ? (replica.defaultNewNoteParentID == row.id ? "tray" : "folder")
+                            : "note.text")
                     }
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1176,6 +1178,19 @@ struct NotebookView: View {
             }
             .disabled(busy)
         } else {
+            if placement.item.kind == .folder {
+                let isDefault = replica.defaultNewNoteParentID == placement.item.id
+                Button {
+                    setDefaultNewNoteParentID(isDefault ? nil : placement.item.id)
+                } label: {
+                    Label(
+                        isDefault ? "Use Root for New Notes" : "Use for New Notes",
+                        systemImage: isDefault ? "folder" : "tray"
+                    )
+                }
+                .disabled(busy)
+                Divider()
+            }
             Button("Move to Trash", role: .destructive) {
                 changeTrash(placement, trashed: true)
             }
@@ -1223,20 +1238,28 @@ struct NotebookView: View {
         )
     }
 
-    private func createItem(kind: NotebookItemKind, parentID: UUID?) {
+    private func createItem(
+        kind: NotebookItemKind, parentID: UUID?,
+        usesDefaultDestination: Bool = false
+    ) {
         perform {
             try await flushEditor()
-            if let parentID { expandedIDs.insert(parentID) }
+            let destinationID = usesDefaultDestination
+                ? replica.defaultNewNoteParentID : parentID
+            if let destinationID { expandedIDs.insert(destinationID) }
             switch kind {
             case .note:
                 let siblingNames = replica.placements.compactMap { placement in
-                    placement.parentID == parentID && !placement.isInTrash
+                    placement.parentID == destinationID && !placement.isInTrash
                         ? placement.item.name : nil
                 }
                 let name = NotebookNoteName.defaultFilename(
                     existingNames: siblingNames
                 )
-                let id = try await replica.createNote(name: name, parentID: parentID)
+                let id = try await (usesDefaultDestination
+                    ? replica.createNoteInDefaultFolder(name: name)
+                    : replica.createNote(name: name, parentID: parentID))
+                reveal(id)
                 try await selectNote(id)
                 detailEditingID = id
                 detailOriginalName = name
@@ -1255,9 +1278,19 @@ struct NotebookView: View {
     private func handlePendingNewNoteAction() {
         guard restoredNavigation, !busy, quickActionRequests.takeNewNote()
         else { return }
-        createItem(kind: .note, parentID: nil)
+        createDefaultNote()
     }
     #endif
+
+    private func createDefaultNote() {
+        createItem(kind: .note, parentID: nil, usesDefaultDestination: true)
+    }
+
+    private func setDefaultNewNoteParentID(_ id: UUID?) {
+        perform {
+            try await replica.setDefaultNewNoteParentID(id)
+        }
+    }
 
     private func beginRenaming(_ placement: NotebookPlacement) {
         perform {
@@ -1702,7 +1735,7 @@ struct NotebookView: View {
     }
 
     private var libraryNewNote: some View {
-        Button { createItem(kind: .note, parentID: nil) } label: {
+        Button { createDefaultNote() } label: {
             Label("New Note", systemImage: "plus")
         }
         .disabled(busy)
