@@ -45,8 +45,8 @@ These are warm filesystem measurements, not cold disk or physical-device data.
 
 The JSON output includes every sample, median, nearest-rank p95, snapshot
 bytes, durable state-file bytes, and retained record counts. With seven
-samples,
-p95 is the maximum sample; it is descriptive, not a population estimate.
+samples, p95 is the maximum sample; it is descriptive rather than a
+population estimate.
 
 Measured phases:
 
@@ -60,6 +60,30 @@ Measured phases:
 Reopening verifies that the engine state and added snapshot survived. A small
 payload change still requires durable storage; no benchmark weakens the
 flush-before-acknowledgement contract.
+
+## First optimization: reuse exact validated records
+
+On an already-open store, unchanged inbox slots and outbox entries can reuse
+their previous successful validation. Equality checks the entire record,
+including snapshot bytes, heads, kind, and identity. Record IDs alone are
+insufficient: they do not bind claimed heads. New or changed records still
+decode and validate, and all deletion and protocol invariants still run.
+
+Only the last successfully persisted state supplies this trust. Opening a
+store still validates every record, and a failed write cannot advance the
+trusted state. This avoids adding a separate cache or changing the file format,
+cursor positions, snapshot retention, or durability ordering.
+
+On macOS 27 arm64, Xcode 27.0, Swift 6.4, release configuration, seven warm
+samples with 100 notes and 30 revisions each gave these medians:
+
+| Operation | Baseline | Reuse validation |
+| --- | ---: | ---: |
+| Changed engine state | 393.02 ms | 23.25 ms |
+| Append one character snapshot | 390.62 ms | 23.77 ms |
+
+These are full durable updates, not just the validation subphase. Startup still
+fully validates history. Cloud transfer and end-to-end sync were not measured.
 
 ## Scope and next layers
 
