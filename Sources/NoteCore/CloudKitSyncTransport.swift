@@ -273,17 +273,32 @@ struct CloudKitTransportState: Codable, Equatable {
     }
 
     func validate(expectedProtocolVersion: Int) throws {
+        try validate(expectedProtocolVersion: expectedProtocolVersion, reusing: nil)
+    }
+
+    /// Only the store's last successfully persisted state may supply trust.
+    /// Exact record equality includes bytes, heads, and identity; IDs alone
+    /// cannot establish that a record has already passed validation.
+    fileprivate func validate(
+        expectedProtocolVersion: Int,
+        reusing previous: CloudKitTransportState?
+    ) throws {
         guard protocolVersion == expectedProtocolVersion else {
             throw SyncError.scopeChanged
         }
-        for record in inbox {
-            try record.validate()
+        for (index, slot) in inboxSlots.enumerated() {
+            guard let record = slot else { continue }
+            let unchanged = previous.map {
+                $0.inboxSlots.indices.contains(index)
+                    && $0.inboxSlots[index] == record
+            } ?? false
+            if !unchanged { try record.validate() }
             guard record.protocolVersion == protocolVersion else {
                 throw SyncError.invalidRecord
             }
         }
         for (id, record) in outbox {
-            try record.validate()
+            if previous?.outbox[id] != record { try record.validate() }
             guard id == record.id,
                   record.protocolVersion == protocolVersion else {
                 throw SyncError.invalidRecord
@@ -403,7 +418,10 @@ actor CloudKitTransportStateStore {
         guard !isRetired else { throw CloudKitRetiredTransportError() }
         var next = state
         let result = try body(&next)
-        try next.validate(expectedProtocolVersion: protocolVersion)
+        // The closure still validates incoming records, and retired/failed
+        // writers were rejected above. Identical state is already durable.
+        if next == state { return result }
+        try next.validate(expectedProtocolVersion: protocolVersion, reusing: state)
         let data = try JSONEncoder().encode(next)
         do {
             try writeState(data, fileURL)
