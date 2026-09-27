@@ -82,12 +82,6 @@ struct NotebookRecentRow: View {
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                if isCurrent {
-                    Image(systemName: "circle.fill")
-                        .font(.system(size: 5))
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                }
             }
             .padding(.vertical, 12)
             if showsDivider {
