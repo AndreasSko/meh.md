@@ -108,13 +108,13 @@ public final class NotebookSyncCoordinator {
             throw SyncError.identityConflict
         }
         let seed = try await transport.bootstrap(proposing: bootstrapRecord)
-        try seed.validate()
         guard seed.protocolVersion == 2, seed.kind == .catalog,
             let notebookID = seed.notebookID
         else { throw SyncError.invalidRecord }
         if let expected = state.notebookID, expected != notebookID {
             throw SyncError.identityConflict
         }
+        // Acceptance validates the record or reuses an exact, durable match.
         try await replica.acceptSeed(seed)
         state.notebookID = notebookID
         try save(state)
