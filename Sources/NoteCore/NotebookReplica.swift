@@ -80,6 +80,8 @@ public final class NotebookReplica {
     public let directory: URL
     public private(set) var catalogSnapshot: NotebookCatalogSnapshot?
     public private(set) var placements: [NotebookPlacement] = []
+    /// The active destination for global New Note actions. `nil` means Root.
+    public private(set) var defaultNewNoteParentID: UUID?
     public private(set) var recentNotes: [NotebookRecentNote] = []
     public private(set) var pinnedRecentCount = 0
     public private(set) var hasPendingImport: Bool
@@ -196,6 +198,32 @@ public final class NotebookReplica {
             try await self.persistCatalog(next)
         }
         return note.noteID
+    }
+
+    public func createNoteInDefaultFolder(
+        name: String, text: String = ""
+    ) async throws -> UUID {
+        try await withQueuedCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            let note = try NoteDocument(text: text)
+            try next.add(
+                id: note.noteID, kind: .note, name: name,
+                parentID: catalog.defaultNewNoteParentID()
+            )
+            try await self.noteStorage(note.noteID).save(note.snapshot())
+            try await self.persistCatalog(next)
+            return note.noteID
+        }
+    }
+
+    public func setDefaultNewNoteParentID(_ id: UUID?) async throws {
+        try await withQueuedCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.setDefaultNewNoteParentID(id)
+            try await self.persistCatalog(next)
+        }
     }
 
     public func createFolder(name: String, parentID: UUID? = nil) async throws -> UUID {
@@ -1227,6 +1255,7 @@ public final class NotebookReplica {
         catalog = document
         catalogSnapshot = snapshot
         placements = nextPlacements
+        defaultNewNoteParentID = try document.defaultNewNoteParentID()
         try updateRecentProjection(from: document, placements: nextPlacements)
         searchBodyGeneration &+= 1
         for id in try deletedIDs { sessions[id]?.markPermanentlyDeleted() }

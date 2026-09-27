@@ -5,6 +5,75 @@ import XCTest
 
 @MainActor
 final class NotebookBrowserIntegrationTests: XCTestCase {
+    func testNewNotesUseSyncedDefaultAndRootAfterFolderTrash() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let rootNote = try await replica.createNoteInDefaultFolder(name: "First.md")
+        XCTAssertNil(replica.placements.first { $0.item.id == rootNote }?.parentID)
+
+        let inbox = try await replica.createFolder(name: "Inbox")
+        try await replica.setDefaultNewNoteParentID(inbox)
+        let inboxNote = try await replica.createNoteInDefaultFolder(name: "Second.md")
+        XCTAssertEqual(replica.placements.first { $0.item.id == inboxNote }?.parentID, inbox)
+
+        let reloaded = NotebookReplica(directory: root)
+        try await reloaded.load()
+        XCTAssertEqual(reloaded.defaultNewNoteParentID, inbox)
+        try await reloaded.setTrashed(inbox, true)
+        XCTAssertNil(reloaded.defaultNewNoteParentID)
+        let fallback = try await reloaded.createNoteInDefaultFolder(name: "Third.md")
+        XCTAssertNil(reloaded.placements.first { $0.item.id == fallback }?.parentID)
+    }
+
+    func testNewNoteWaitsForDestinationChangeBeforeChoosingFolder() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let inbox = try await replica.createFolder(name: "Inbox")
+        let writeEntered = expectation(description: "destination write entered")
+        var releaseWrite: CheckedContinuation<Void, Never>?
+        replica.catalogWriteSuspension = {
+            writeEntered.fulfill()
+            await withCheckedContinuation { releaseWrite = $0 }
+        }
+        let change = Task { try await replica.setDefaultNewNoteParentID(inbox) }
+        await fulfillment(of: [writeEntered], timeout: 1)
+        replica.catalogWriteSuspension = nil
+        let creation = Task {
+            try await replica.createNoteInDefaultFolder(name: "Later.md")
+        }
+        await Task.yield()
+        releaseWrite?.resume()
+        try await change.value
+        let note = try await creation.value
+        XCTAssertEqual(replica.placements.first { $0.item.id == note }?.parentID, inbox)
+    }
+
+    func testDefaultNewNoteFolderSyncsBetweenReplicas() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let left = NotebookReplica(directory: root.appending(path: "left"))
+        let right = NotebookReplica(directory: root.appending(path: "right"))
+        try await left.createLocalNotebook()
+        let inbox = try await left.createFolder(name: "Inbox")
+        try await right.load()
+        try await right.acceptSeed(SyncRecord(catalog: left.catalogSnapshot!))
+        XCTAssertNil(right.defaultNewNoteParentID)
+
+        try await left.setDefaultNewNoteParentID(inbox)
+        try await right.acceptSeed(SyncRecord(catalog: left.catalogSnapshot!))
+        XCTAssertEqual(right.defaultNewNoteParentID, inbox)
+        let note = try await right.createNoteInDefaultFolder(name: "From right.md")
+        XCTAssertEqual(right.placements.first { $0.item.id == note }?.parentID, inbox)
+
+        try await right.setDefaultNewNoteParentID(nil)
+        try await left.acceptSeed(SyncRecord(catalog: right.catalogSnapshot!))
+        XCTAssertNil(left.defaultNewNoteParentID)
+    }
+
     func testRenameWaitsForConcurrentCatalogWrite() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

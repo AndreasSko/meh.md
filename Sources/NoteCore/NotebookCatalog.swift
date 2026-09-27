@@ -148,12 +148,54 @@ final class NotebookCatalogDocument {
         self.itemsObject = items
         self.notebookID = notebookID
         _ = try readItems()
+        _ = try configuredNewNoteParentID()
         _ = try recentStates()
         _ = try legacyMigration()
     }
 
     private func recentKey(_ field: RecentField, _ id: UUID) -> String {
         "recent.\(field.rawValue).\(id.uuidString)"
+    }
+
+    /// A missing register is the Root default for catalogs created before
+    /// this preference existed. A stale folder ID stays stored so restoring
+    /// that folder can restore the user's choice.
+    private func configuredNewNoteParentID() throws -> UUID? {
+        let values = try document.getAll(obj: .ROOT, key: "newNoteParent")
+        for value in values {
+            switch value {
+            case .Scalar(.Null): break
+            case .Scalar(.String(let text)) where UUID(uuidString: text)?.uuidString == text:
+                break
+            default: throw NotebookCatalogError.invalidDocument
+            }
+        }
+        guard let winner = try document.get(obj: .ROOT, key: "newNoteParent") else {
+            return nil
+        }
+        if case .Scalar(.String(let text)) = winner { return UUID(uuidString: text) }
+        return nil
+    }
+
+    func defaultNewNoteParentID() throws -> UUID? {
+        guard let id = try configuredNewNoteParentID() else { return nil }
+        return try placements().contains {
+            $0.item.id == id && $0.item.kind == .folder &&
+                !$0.isInTrash && !$0.item.isPermanentlyDeleted
+        } ? id : nil
+    }
+
+    func setDefaultNewNoteParentID(_ id: UUID?) throws {
+        if let id {
+            guard try placements().contains(where: {
+                $0.item.id == id && $0.item.kind == .folder &&
+                    !$0.isInTrash && !$0.item.isPermanentlyDeleted
+            }) else { throw NotebookCatalogError.invalidParent }
+        }
+        try document.put(
+            obj: .ROOT, key: "newNoteParent",
+            value: id.map { .String($0.uuidString) } ?? .Null
+        )
     }
 
     private func recentActions(_ field: RecentField, _ id: UUID) throws -> [RecentAction] {
