@@ -11,6 +11,7 @@ import SwiftUI
 private struct EditorAttachmentID: Hashable {
     let noteID: UUID
     let isEditingEnabled: Bool
+    let isShowingHistory: Bool
 }
 
 private struct NotebookFileReveal: Equatable {
@@ -46,6 +47,9 @@ struct NotebookView: View {
     @State private var showingSettings = false
     @State private var showingTrash = false
     @State private var showingTextSize = false
+    @State private var historyBrowser: NoteHistoryBrowserState?
+    @State private var isLoadingHistory = false
+    @State private var historyLoadTask: Task<Void, Never>?
     @AppStorage("editor.fontSize") private var editorFontSize = 17.0
     @AppStorage("editor.fontFamily") private var editorFontFamilyRaw =
         EditorFontFamily.system.rawValue
@@ -202,6 +206,22 @@ struct NotebookView: View {
                            let placement = selectedPlacement {
                             detailTitle(for: placement)
                         }
+                        if let historyBrowser, historyBrowser.noteID == selectedID,
+                           let placement = selectedPlacement {
+                            NoteHistoryBrowserView(
+                                state: historyBrowser,
+                                session: session,
+                                title: NotebookNoteName.title(from: placement.displayName),
+                                fontSize: editorFontSize,
+                                fontFamily: editorFontFamily,
+                                mode: editorMode,
+                                onDone: closeHistory,
+                                onRestoreThisNote: restoreHistoryInPlace,
+                                onRestoreAsNewNote: restoreHistoryAsNewNote,
+                                onError: { errorMessage = $0.localizedDescription }
+                            )
+                            .id(ObjectIdentifier(historyBrowser))
+                        } else {
                         NotebookNoteEditor(
                             session: session, navigation: editorNavigation,
                             isInTrash: selectedPlacement?.isInTrash == true,
@@ -241,6 +261,16 @@ struct NotebookView: View {
                             fontFamily: editorFontFamily,
                             mode: editorMode
                         )
+                        }
+                    }
+                    .allowsHitTesting(!isLoadingHistory)
+                    .overlay {
+                        if isLoadingHistory {
+                            ProgressView("Loading History…")
+                                .padding(16)
+                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                                .accessibilityIdentifier("note-history-loading")
+                        }
                     }
                     .id(selectedID)
                     .navigationTitle("")
@@ -250,9 +280,10 @@ struct NotebookView: View {
                     .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
                     #endif
                     .task(id: EditorAttachmentID(
-                        noteID: selectedID, isEditingEnabled: session.isEditingEnabled
+                        noteID: selectedID, isEditingEnabled: session.isEditingEnabled,
+                        isShowingHistory: historyBrowser != nil
                     )) {
-                        guard session.isEditingEnabled else { return }
+                        guard session.isEditingEnabled, historyBrowser == nil else { return }
                         let incomingNavigation = editorNavigation
                         let state = navigationState
                         let position = state.position(for: selectedID).flatMap {
@@ -269,7 +300,7 @@ struct NotebookView: View {
                         }
                     }
                     .toolbar {
-                        if let placement = selectedPlacement {
+                        if let placement = selectedPlacement, historyBrowser == nil {
                             #if os(iOS)
                             if horizontalSizeClass == .compact {
                                 ToolbarItem {
@@ -297,6 +328,13 @@ struct NotebookView: View {
                                     Button("Find in Note…") { showFind() }
                                         .disabled(!session.isEditingEnabled)
                                         .accessibilityIdentifier("notebook-find")
+                                    Button {
+                                        openHistory()
+                                    } label: {
+                                        Label("Version History", systemImage: "clock.arrow.circlepath")
+                                    }
+                                    .disabled(!session.isEditingEnabled || busy)
+                                    .accessibilityIdentifier("notebook-version-history")
                                     Divider()
                                     EditorModeControl(
                                         mode: editorModeBinding,
@@ -355,6 +393,8 @@ struct NotebookView: View {
             recentCommands.focusedNoteID = id
         }
         .onChange(of: selectedID) { _, id in
+            historyLoadTask?.cancel()
+            if historyBrowser != nil { closeHistory() }
             recentCommands.selectedNoteID = id
         }
         .onChange(of: recentCommands.errorMessage) { _, message in
@@ -427,7 +467,10 @@ struct NotebookView: View {
             if !isBusy { handlePendingNewNoteAction() }
         }
         #endif
-        .onDisappear { rememberEditorPosition() }
+        .onDisappear {
+            historyLoadTask?.cancel()
+            rememberEditorPosition()
+        }
         .onReceive(NotificationCenter.default.publisher(for: applicationWillTerminate)) { _ in
             rememberEditorPosition()
         }
@@ -1900,6 +1943,158 @@ struct NotebookView: View {
         rememberEditorPosition()
     }
 
+    private func openHistory() {
+        guard historyBrowser == nil, !busy, let session, let selectedID else { return }
+        isLoadingHistory = true
+        busy = true
+        historyLoadTask = Task { @MainActor in
+            defer {
+                isLoadingHistory = false
+                busy = false
+                historyLoadTask = nil
+            }
+            do {
+                try await flushEditor()
+                guard var heads = session.currentSnapshot?.heads else {
+                    throw NotebookNavigationError.unavailableHistory
+                }
+                var currentText = session.text
+                let position = editorNavigation.capturePosition?()
+                var versions: [NoteHistoryVersion] = []
+                for attempt in 0...1 {
+                    versions = try await session.loadHistoryVersions()
+                    try Task.checkCancellation()
+                    guard self.selectedID == selectedID,
+                          self.session === session else { return }
+                    if session.currentSnapshot?.heads == heads { break }
+                    guard attempt == 0 else {
+                        throw NotebookNavigationError.changedDuringHistoryLoad
+                    }
+                    guard let updatedHeads = session.currentSnapshot?.heads else {
+                        throw NotebookNavigationError.unavailableHistory
+                    }
+                    heads = updatedHeads
+                    currentText = session.text
+                }
+                historyBrowser = NoteHistoryBrowserState(
+                    noteID: selectedID,
+                    versions: versions,
+                    expectedHeads: heads,
+                    originalPosition: position,
+                    text: currentText
+                )
+                editorNavigation.invalidate()
+            } catch is CancellationError {
+                editorNavigation.resumeEditing?()
+            } catch {
+                editorNavigation.resumeEditing?()
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func closeHistory() {
+        guard let historyBrowser else { return }
+        historyBrowser.navigation.invalidate()
+        self.historyBrowser = nil
+        editorNavigation = MarkdownEditorNavigation()
+    }
+
+    private func restoreHistoryInPlace() {
+        guard let historyBrowser,
+              let version = historyBrowser.selectedVersion,
+              let session else { return }
+        guard !busy else { return }
+        busy = true
+        Task { @MainActor in
+            do {
+                try await session.restoreHistoryVersion(
+                    version, expectedHeads: historyBrowser.expectedHeads
+                )
+                if self.historyBrowser === historyBrowser { closeHistory() }
+                workspace?.contentDidSave(trigger: "note restored")
+                workspace?.noteDidEdit()
+            } catch NoteHistoryError.currentChanged {
+                if self.historyBrowser === historyBrowser {
+                    do {
+                        isLoadingHistory = true
+                        defer { isLoadingHistory = false }
+                        guard var heads = session.currentSnapshot?.heads else {
+                            throw NotebookNavigationError.unavailableHistory
+                        }
+                        var currentText = session.text
+                        var versions: [NoteHistoryVersion] = []
+                        for attempt in 0...1 {
+                            versions = try await session.loadHistoryVersions()
+                            if session.currentSnapshot?.heads == heads { break }
+                            guard attempt == 0 else {
+                                throw NotebookNavigationError.changedDuringHistoryLoad
+                            }
+                            guard let updatedHeads = session.currentSnapshot?.heads else {
+                                throw NotebookNavigationError.unavailableHistory
+                            }
+                            heads = updatedHeads
+                            currentText = session.text
+                        }
+                        if self.historyBrowser === historyBrowser {
+                            historyBrowser.navigation.invalidate()
+                            self.historyBrowser = NoteHistoryBrowserState(
+                                noteID: historyBrowser.noteID,
+                                versions: versions,
+                                expectedHeads: heads,
+                                originalPosition: historyBrowser.originalPosition,
+                                text: currentText
+                            )
+                            errorMessage = String(localized:
+                                "This note changed while History was open. Review the current version before restoring.")
+                        }
+                    } catch {
+                        errorMessage = error.localizedDescription
+                    }
+                }
+            } catch {
+                if case .saveFailed = session.status,
+                   self.historyBrowser === historyBrowser {
+                    // The live text changed, but persistence failed. Show
+                    // that text and the editor's Retry action.
+                    closeHistory()
+                }
+                errorMessage = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+
+    private func restoreHistoryAsNewNote() {
+        guard let historyBrowser,
+              let version = historyBrowser.selectedVersion,
+              let session,
+              let placement = selectedPlacement else { return }
+        guard !busy else { return }
+        busy = true
+        Task { @MainActor in
+            do {
+                let text = try session.historicalText(for: version)
+                let title = NotebookNoteName.title(from: placement.displayName)
+                let siblings = replica.placements.compactMap { item in
+                    item.parentID == placement.parentID && !item.isInTrash
+                        ? item.item.name : nil
+                }
+                let name = NotebookNoteName.restoredFilename(
+                    for: title, existingNames: siblings
+                )
+                let id = try await replica.createNote(
+                    name: name, text: text, parentID: placement.parentID
+                )
+                if self.historyBrowser === historyBrowser { closeHistory() }
+                try await selectNote(id)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+
     private func rememberEditorPosition() {
         guard let selectedID,
               let position = editorNavigation.capturePosition?(),
@@ -1982,8 +2177,17 @@ struct NotebookView: View {
 
 private enum NotebookNavigationError: LocalizedError {
     case unrecordedEdit
+    case unavailableHistory
+    case changedDuringHistoryLoad
     var errorDescription: String? {
-        "Finish composing your text and resolve any edit error before leaving this note."
+        switch self {
+        case .unrecordedEdit:
+            "Finish composing your text and resolve any edit error before leaving this note."
+        case .unavailableHistory:
+            "Version History is unavailable until this note finishes opening."
+        case .changedDuringHistoryLoad:
+            "This note changed while History was loading. Open History again to review the latest text."
+        }
     }
 }
 

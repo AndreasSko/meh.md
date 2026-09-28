@@ -5,6 +5,121 @@ import XCTest
 
 @MainActor
 final class NoteSessionTests: XCTestCase {
+    func testHistoryBrowsingDoesNotSaveAndRestorePersistsNewHeads()
+        async throws
+    {
+        let source = try NoteDocument(text: "before")
+        _ = source.snapshot()
+        try source.replaceAll(with: "current")
+        let original = source.snapshot()
+        let storage = ControlledStorage(loadResult: .current(original))
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
+        await session.load()
+
+        let loadedVersions = try await session.loadHistoryVersions()
+        let version = try XCTUnwrap(loadedVersions.first)
+        XCTAssertEqual(try session.historicalText(for: version), "before")
+        XCTAssertEqual(session.currentSnapshot, original)
+        let beforeSaveCount = await storage.saveCount
+        XCTAssertEqual(beforeSaveCount, 0)
+
+        try await session.restoreHistoryVersion(
+            version, expectedHeads: original.heads
+        )
+
+        let saved = try XCTUnwrap(session.persistedSnapshot)
+        XCTAssertEqual(session.text, "before")
+        XCTAssertNotEqual(saved.heads, original.heads)
+        let afterSaveCount = await storage.saveCount
+        XCTAssertEqual(afterSaveCount, 1)
+        let reopened = try NoteDocument(snapshot: saved)
+        XCTAssertTrue(try reopened.historyVersions().contains {
+            try reopened.historicalText(for: $0) == "current"
+        })
+    }
+
+    func testRestoreRejectsAConcurrentLiveEditWithoutReplacingIt()
+        async throws
+    {
+        let source = try NoteDocument(text: "before")
+        _ = source.snapshot()
+        try source.replaceAll(with: "current")
+        let original = source.snapshot()
+        let storage = ControlledStorage(loadResult: .current(original))
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
+        await session.load()
+        let version = try XCTUnwrap(session.historyVersions().first)
+
+        try session.replaceAll(with: "new typing")
+        do {
+            try await session.restoreHistoryVersion(
+                version, expectedHeads: original.heads
+            )
+            XCTFail("A stale preview must not replace newer edits")
+        } catch NoteHistoryError.currentChanged {
+            XCTAssertEqual(session.text, "new typing")
+        }
+    }
+
+    func testRestoreSaveFailureKeepsEditAvailableForRetry() async throws {
+        let source = try NoteDocument(text: "before")
+        _ = source.snapshot()
+        try source.replaceAll(with: "current")
+        let original = source.snapshot()
+        let storage = ControlledStorage(loadResult: .current(original))
+        await storage.failNextSave()
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
+        await session.load()
+        let version = try XCTUnwrap(session.historyVersions().first)
+
+        do {
+            try await session.restoreHistoryVersion(
+                version, expectedHeads: original.heads
+            )
+            XCTFail("Save failure must be reported")
+        } catch SyncError.localSaveRequired {
+            XCTAssertEqual(session.text, "before")
+            XCTAssertNotEqual(session.currentSnapshot?.heads, original.heads)
+            XCTAssertEqual(session.persistedSnapshot, original)
+            if case .saveFailed = session.status {
+                // The editor now owns an unsaved restore and may retry it.
+            } else {
+                XCTFail("A failed restore save must remain visible")
+            }
+        }
+
+        session.retrySave()
+        await waitUntil { session.status == .saved }
+        try await session.flush()
+        XCTAssertEqual(session.persistedSnapshot?.heads,
+                       session.currentSnapshot?.heads)
+    }
+
+    func testRemoteEditDuringHistoryRejectsRestore() async throws {
+        let source = try NoteDocument(text: "before")
+        _ = source.snapshot()
+        try source.replaceAll(with: "current")
+        let original = source.snapshot()
+        let storage = ControlledStorage(loadResult: .current(original))
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
+        await session.load()
+        let version = try XCTUnwrap(session.historyVersions().first)
+        let remote = try NoteDocument(snapshot: original)
+        try remote.replaceAll(with: "remote edit")
+
+        try session.mergeRemote(remote.snapshot())
+        XCTAssertEqual(try session.historicalText(for: version), "before")
+
+        do {
+            try await session.restoreHistoryVersion(
+                version, expectedHeads: original.heads
+            )
+            XCTFail("A remote edit must invalidate the restore choice")
+        } catch NoteHistoryError.currentChanged {
+            XCTAssertEqual(session.text, "remote edit")
+        }
+    }
+
     func testSlowWriteDoesNotAcknowledgeOrOverwriteLaterTyping() async throws {
         let initial = try NoteDocument(text: "initial").snapshot()
         let storage = ControlledStorage(loadResult: .current(initial))

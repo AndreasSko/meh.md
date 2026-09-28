@@ -69,4 +69,17 @@ final class NotebookNoteNameTests: XCTestCase {
             "2026-09-14 3.md"
         )
     }
+
+    func testRestoredFilenameUsesCatalogCollisionRules() {
+        XCTAssertEqual(
+            NotebookNoteName.restoredFilename(
+                for: "Café",
+                existingNames: [
+                    "Cafe\u{301} (Restored).md",
+                    "CAFÉ (RESTORED) 2.MD"
+                ]
+            ),
+            "Café (Restored) 3.md"
+        )
+    }
 }
