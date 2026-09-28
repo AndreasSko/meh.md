@@ -54,6 +54,21 @@ enum NotebookNoteName {
         return candidate
     }
 
+    nonisolated static func restoredFilename(
+        for title: String,
+        existingNames: some Sequence<String>
+    ) -> String {
+        let reserved = Set(existingNames.map(collisionKey))
+        let stem = "\(title) (Restored)"
+        var attempt = 1
+        var candidate = stem + ".md"
+        while reserved.contains(collisionKey(candidate)) {
+            attempt += 1
+            candidate = "\(stem) \(attempt).md"
+        }
+        return candidate
+    }
+
     nonisolated private static func markdownExtension(in filename: String) -> String? {
         let lowercase = filename.lowercased(with: Locale(identifier: "en_US_POSIX"))
         if lowercase.hasSuffix(".markdown") { return String(filename.suffix(9)) }

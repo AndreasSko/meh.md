@@ -197,6 +197,60 @@ public final class NoteSession {
         queueSave()
     }
 
+    /// Read-only history queries never enter the save loop or record activity.
+    public func historyVersions() throws -> [NoteHistoryVersion] {
+        guard isEditingEnabled, let document else {
+            throw SyncError.localSaveRequired
+        }
+        return try document.historyVersions()
+    }
+
+    /// Build the full index from a frozen snapshot away from the UI actor.
+    /// The live session can continue receiving edits while History loads.
+    public func loadHistoryVersions() async throws -> [NoteHistoryVersion] {
+        guard isEditingEnabled, let document else {
+            throw SyncError.localSaveRequired
+        }
+        let snapshot = currentSnapshot ?? document.snapshot()
+        let task = Task.detached(priority: .userInitiated) {
+            let historical = try NoteDocument(snapshot: snapshot)
+            return try historical.historyVersions()
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    public func historicalText(
+        for version: NoteHistoryVersion
+    ) throws -> String {
+        guard isEditingEnabled, let document else {
+            throw SyncError.localSaveRequired
+        }
+        return try document.historicalText(for: version)
+    }
+
+    /// Appends selected body text as a new live edit, retaining all history.
+    /// The caller must commit editor text and capture current heads before
+    /// opening History. A newer local or remote edit rejects the replacement.
+    public func restoreHistoryVersion(
+        _ version: NoteHistoryVersion,
+        expectedHeads: Set<String>
+    ) async throws {
+        guard isEditingEnabled, let document else {
+            throw SyncError.localSaveRequired
+        }
+        guard document.heads == expectedHeads else {
+            throw NoteHistoryError.currentChanged
+        }
+        try document.restoreHistoryVersion(version)
+        text = try document.text
+        queueSave(immediately: true)
+        try await flush()
+    }
+
     public func retrySave() {
         guard isEditingEnabled, document != nil else { return }
         queueSave(immediately: true)

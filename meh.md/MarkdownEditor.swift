@@ -460,6 +460,7 @@ final class MarkdownTextView: NSTextView {
 
 struct MarkdownEditor: NSViewRepresentable {
     @Binding var text: String
+    var isReadOnly = false
     var editRevision: Data?
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
     var onEditError: ((Error) -> Void)?
@@ -474,6 +475,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
     init(
         text: Binding<String>,
+        isReadOnly: Bool = false,
         editRevision: Data? = nil,
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
         onEditError: ((Error) -> Void)? = nil,
@@ -487,6 +489,7 @@ struct MarkdownEditor: NSViewRepresentable {
         mode: MarkdownEditorMode = .source
     ) {
         _text = text
+        self.isReadOnly = isReadOnly
         self.editRevision = editRevision
         self.commitEdit = commitEdit
         self.onEditError = onEditError
@@ -515,6 +518,8 @@ struct MarkdownEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.string = text
         textView.isRichText = false
+        textView.isEditable = !isReadOnly
+        textView.isSelectable = true
         textView.allowsUndo = true
         textView.drawsBackground = false
         textView.font = MarkdownPresentation.bodyFont(
@@ -529,7 +534,9 @@ struct MarkdownEditor: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.usesFindBar = true
-        textView.setAccessibilityIdentifier("markdown-editor")
+        textView.setAccessibilityIdentifier(
+            isReadOnly ? "note-history-preview" : "markdown-editor"
+        )
         MarkdownPresentation.configure(
             textView,
             fontSize: fontSize,
@@ -697,6 +704,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
         func update(parent: MarkdownEditor, textView: NSTextView) {
             self.parent = parent
+            textView.isEditable = !parent.isReadOnly
             guard !textView.hasMarkedText() else { return }
 
             let fontSize = MarkdownPresentation.normalizedFontSize(
@@ -1601,6 +1609,7 @@ nonisolated private final class MarkdownTextLayoutFragment:
 
 struct MarkdownEditor: UIViewRepresentable {
     @Binding var text: String
+    var isReadOnly = false
     var editRevision: Data?
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
     var onEditError: ((Error) -> Void)?
@@ -1615,6 +1624,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
     init(
         text: Binding<String>,
+        isReadOnly: Bool = false,
         editRevision: Data? = nil,
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
         onEditError: ((Error) -> Void)? = nil,
@@ -1628,6 +1638,7 @@ struct MarkdownEditor: UIViewRepresentable {
         mode: MarkdownEditorMode = .source
     ) {
         _text = text
+        self.isReadOnly = isReadOnly
         self.editRevision = editRevision
         self.commitEdit = commitEdit
         self.onEditError = onEditError
@@ -1661,6 +1672,8 @@ struct MarkdownEditor: UIViewRepresentable {
             UIDevice.current.userInterfaceIdiom == .pad
         textView.text = text
         textView.allowsEditingTextAttributes = false
+        textView.isEditable = !isReadOnly
+        textView.isSelectable = true
         textView.font = MarkdownPresentation.bodyFont(
             for: fontFamily,
             pointSize: MarkdownPresentation.normalizedFontSize(fontSize)
@@ -1674,7 +1687,8 @@ struct MarkdownEditor: UIViewRepresentable {
             right: 16
         )
         textView.textContainer.lineFragmentPadding = 4
-        textView.accessibilityIdentifier = "markdown-editor"
+        textView.accessibilityIdentifier = isReadOnly
+            ? "note-history-preview" : "markdown-editor"
         MarkdownPresentation.configure(
             textView,
             fontSize: fontSize,
@@ -1823,6 +1837,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         func update(parent: MarkdownEditor, textView: UITextView) {
             self.parent = parent
+            textView.isEditable = !parent.isReadOnly
             guard textView.markedTextRange == nil else { return }
 
             let fontSize = MarkdownPresentation.normalizedFontSize(
