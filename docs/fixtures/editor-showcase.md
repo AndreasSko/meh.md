@@ -61,7 +61,7 @@ The view should remain comfortable in light and dark appearance.
 
 ###### A final detail
 
-Task markers stay literal until the later checkbox feature:
+Task markers remain literal in Source and become clickable in Live Preview:
 
 - [ ] Pack the fictional star chart.
 - [x] Invent a completely unrelated sample.

@@ -63,6 +63,12 @@ enum MarkdownPresentation {
         let rect: CGRect
     }
 
+    struct TaskCheckboxDecoration: Equatable {
+        let range: NSRange
+        let rect: CGRect
+        let checked: Bool
+    }
+
 #if os(macOS)
     static var editorBodyFont: PlatformFont {
         bodyFont(for: .system, pointSize: defaultFontSize)
@@ -181,6 +187,7 @@ enum MarkdownPresentation {
             bodyFont: bodyFont,
             hiddenRanges: previewRanges.collapsed,
             transparentRanges: previewRanges.transparent,
+            livePreview: mode == .livePreview,
             undoManager: textView.undoManager,
             range: layoutRange,
             tableLayout: syntaxCache.tableLayout
@@ -299,6 +306,21 @@ enum MarkdownPresentation {
             dirtyRect: dirtyRect,
             context: context
         )
+        drawTaskCheckboxes(
+            taskCheckboxDecorations(
+                text: text,
+                result: presentation.result,
+                layoutManager: layoutManager,
+                snapshot: MarkdownLivePreview.snapshot(for: textView),
+                visibleRange: visibleRange,
+                spanIndices: presentation.spanCandidateIndices(
+                    intersecting: visibleRange
+                )
+            ),
+            offset: textView.textContainerOrigin,
+            dirtyRect: dirtyRect,
+            context: context
+        )
     }
 #else
     static func configure(
@@ -319,6 +341,7 @@ enum MarkdownPresentation {
             on: layoutManager
         )
         markdownTextView.installMarkdownTableScrolling()
+        markdownTextView.installMarkdownTaskTap()
 
         MarkdownLivePreview.update(
             textView,
@@ -407,6 +430,7 @@ enum MarkdownPresentation {
             bodyFont: bodyFont,
             hiddenRanges: previewRanges.collapsed,
             transparentRanges: previewRanges.transparent,
+            livePreview: mode == .livePreview,
             undoManager: textView.undoManager,
             range: layoutRange,
             tableLayout: syntaxCache.tableLayout
@@ -478,9 +502,13 @@ enum MarkdownPresentation {
         )
         let text = textView.text ?? ""
         let syntaxCache = syntaxCache(for: textView)
-        guard let presentation = syntaxCache.currentPresentation else {
-            return
-        }
+        // An edit invalidates the presentation before the coordinator's
+        // deferred refresh. Keep decorations visible during that interval.
+        let presentation = presentationForDrawing(
+            in: textView.textStorage,
+            syntaxCache: syntaxCache,
+            snapshot: MarkdownLivePreview.snapshot(for: textView)
+        )
         let result = presentation.result
         let decorations = fragmentBlockDecorations(
             fragmentRange: fragmentRange,
@@ -521,6 +549,21 @@ enum MarkdownPresentation {
         }
         drawListBullets(
             listBulletDecorations(
+                text: text,
+                result: result,
+                layoutManager: layoutManager,
+                snapshot: MarkdownLivePreview.snapshot(for: textView),
+                visibleRange: fragmentRange,
+                spanIndices: presentation.spanCandidateIndices(
+                    intersecting: fragmentRange
+                )
+            ),
+            offset: drawingOffset,
+            dirtyRect: surfaceBounds,
+            context: context
+        )
+        drawTaskCheckboxes(
+            taskCheckboxDecorations(
                 text: text,
                 result: result,
                 layoutManager: layoutManager,
@@ -717,6 +760,10 @@ enum MarkdownPresentation {
         }
         var decorations: [ListBulletDecoration] = []
         let indices = spanIndices ?? result.spans.indices
+        let taskLines = Set(result.spans[indices].compactMap { span -> Int? in
+            guard case .taskMarker = span.role else { return nil }
+            return source.lineRange(for: span.range).location
+        })
         for span in result.spans[indices] {
             if let visibleRange,
                NSMaxRange(span.range) <= visibleRange.location {
@@ -727,6 +774,7 @@ enum MarkdownPresentation {
                 break
             }
             guard span.role == .listMarker, span.range.length == 1,
+                  !taskLines.contains(source.lineRange(for: span.range).location),
                   MarkdownLivePreview.conceals(
                       span.range,
                       in: source,
@@ -753,6 +801,170 @@ enum MarkdownPresentation {
         return decorations
     }
 
+    static func taskCheckboxDecorations(
+        text: String,
+        result: MarkdownSyntaxResult,
+        layoutManager: NSTextLayoutManager,
+        snapshot: MarkdownLivePreviewSnapshot,
+        visibleRange: NSRange? = nil,
+        spanIndices: Range<Int>? = nil
+    ) -> [TaskCheckboxDecoration] {
+        guard snapshot.mode == .livePreview,
+              let contentManager = layoutManager.textContentManager else {
+            return []
+        }
+        let source = text as NSString
+        if let storage = contentManager as? NSTextContentStorage,
+           storage.textStorage?.length != source.length { return [] }
+        let indices = spanIndices ?? result.spans.indices
+        return result.spans[indices].compactMap { span in
+            guard case let .taskMarker(checked) = span.role,
+                  NSMaxRange(span.range) <= source.length,
+                  visibleRange.map({ NSIntersectionRange($0, span.range).length > 0 })
+                    ?? true,
+                  let frame = textSegmentFrames(
+                      for: span.range,
+                      layoutManager: layoutManager,
+                      contentManager: contentManager
+                  ).first else { return nil }
+            let side = min(22, max(19, frame.height * 0.9))
+            return TaskCheckboxDecoration(
+                range: span.range,
+                rect: CGRect(
+                    x: frame.midX - side / 2,
+                    y: frame.midY - side / 2,
+                    width: side,
+                    height: side
+                ),
+                checked: checked
+            )
+        }
+    }
+
+    static func presentationForDrawing(
+        in textStorage: NSTextStorage,
+        syntaxCache: MarkdownSyntaxCache,
+        snapshot: MarkdownLivePreviewSnapshot
+    ) -> MarkdownRenderingPresentation {
+        syntaxCache.currentPresentation
+            ?? syntaxCache.presentation(in: textStorage, snapshot: snapshot)
+    }
+
+    static func taskCheckbox(
+        at point: CGPoint,
+        in textView: MarkdownTextView
+    ) -> TaskCheckboxDecoration? {
+        guard textView.isEditable,
+              let layoutManager = textView.textLayoutManager
+        else { return nil }
+#if os(macOS)
+        guard let textStorage = textView.textStorage else { return nil }
+#else
+        let textStorage = textView.textStorage
+#endif
+        let presentation = presentationForDrawing(
+            in: textStorage,
+            syntaxCache: textView.markdownSyntaxCache,
+            snapshot: MarkdownLivePreview.snapshot(for: textView)
+        )
+#if os(macOS)
+        let source = textView.string
+        let origin = textView.textContainerOrigin
+#else
+        let source = textView.text ?? ""
+        let origin = CGPoint(x: textView.textContainerInset.left,
+                             y: textView.textContainerInset.top)
+#endif
+        let containerPoint = CGPoint(x: point.x - origin.x,
+                                     y: point.y - origin.y)
+        guard let visibleRange = visibleRange(in: layoutManager) else {
+            return nil
+        }
+        let decorations = taskCheckboxDecorations(
+            text: source,
+            result: presentation.result,
+            layoutManager: layoutManager,
+            snapshot: MarkdownLivePreview.snapshot(for: textView),
+            visibleRange: visibleRange,
+            spanIndices: presentation.spanCandidateIndices(
+                intersecting: visibleRange
+            )
+        )
+#if os(macOS)
+        let targetSide: CGFloat = 31
+#else
+        let targetSide: CGFloat = 44
+#endif
+        return taskCheckboxHit(
+            at: containerPoint,
+            in: decorations,
+            minimumTargetSide: targetSide
+        )
+    }
+
+    static func taskCheckboxHit(
+        at point: CGPoint,
+        in decorations: [TaskCheckboxDecoration],
+        minimumTargetSide: CGFloat
+    ) -> TaskCheckboxDecoration? {
+        decorations.filter { checkbox in
+            let padding = max(
+                0, (minimumTargetSide - checkbox.rect.width) / 2
+            )
+            return checkbox.rect.insetBy(
+                dx: -padding, dy: -padding
+            ).contains(point)
+        }.min { left, right in
+            let leftX = left.rect.midX - point.x
+            let leftY = left.rect.midY - point.y
+            let rightX = right.rect.midX - point.x
+            let rightY = right.rect.midY - point.y
+            return leftX * leftX + leftY * leftY
+                < rightX * rightX + rightY * rightY
+        }
+    }
+
+    private static func drawTaskCheckboxes(
+        _ decorations: [TaskCheckboxDecoration],
+        offset: CGPoint,
+        dirtyRect: CGRect,
+        context: CGContext
+    ) {
+        for decoration in decorations {
+            let rect = decoration.rect.offsetBy(dx: offset.x, dy: offset.y)
+            guard rect.intersects(dirtyRect) else { continue }
+            let path = CGPath(
+                roundedRect: rect.insetBy(dx: 0.75, dy: 0.75),
+                cornerWidth: 3, cornerHeight: 3, transform: nil
+            )
+            context.saveGState()
+            context.setLineWidth(1.5)
+            context.setStrokeColor(
+                (decoration.checked ? PlatformColor.systemBlue : secondaryTextColor)
+                    .cgColor
+            )
+            context.addPath(path)
+            context.strokePath()
+            if decoration.checked {
+                context.setFillColor(PlatformColor.systemBlue.cgColor)
+                context.addPath(path)
+                context.fillPath()
+                context.setStrokeColor(PlatformColor.white.cgColor)
+                context.setLineWidth(1.7)
+                context.setLineCap(.round)
+                context.setLineJoin(.round)
+                context.move(to: CGPoint(x: rect.minX + rect.width * 0.22,
+                                         y: rect.midY))
+                context.addLine(to: CGPoint(x: rect.minX + rect.width * 0.43,
+                                            y: rect.maxY - rect.height * 0.25))
+                context.addLine(to: CGPoint(x: rect.maxX - rect.width * 0.2,
+                                            y: rect.minY + rect.height * 0.26))
+                context.strokePath()
+            }
+            context.restoreGState()
+        }
+    }
+
     private static func drawListBullets(
         _ decorations: [ListBulletDecoration],
         offset: CGPoint,
@@ -776,6 +988,7 @@ enum MarkdownPresentation {
         bodyFont: PlatformFont,
         hiddenRanges: [NSRange],
         transparentRanges: [NSRange],
+        livePreview: Bool,
         undoManager: UndoManager?,
         range: NSRange,
         tableLayout: MarkdownTableLayout?
@@ -822,12 +1035,30 @@ enum MarkdownPresentation {
                 desired.addAttribute(.obliqueness, value: 0.18, range: localRange)
             }
         }
+        if livePreview {
+            let markerFont = PlatformFont.monospacedSystemFont(
+                ofSize: bodyFont.pointSize, weight: .regular
+            )
+            for span in result.spans {
+                guard case .taskMarker = span.role,
+                      let localRange = local(span.range) else { continue }
+                desired.addAttribute(.font, value: markerFont, range: localRange)
+            }
+        }
+        let source = text as NSString
+        let taskParagraphs = livePreview
+            ? Set(result.spans.compactMap { span -> Int? in
+                guard case .taskMarker = span.role else { return nil }
+                return source.paragraphRange(for: span.range).location
+            })
+            : []
         for run in result.paragraphRuns {
             guard let localRange = local(run.range) else { continue }
             let style = paragraphStyle(
                 for: run,
-                text: text as NSString,
-                bodyFont: bodyFont
+                text: source,
+                bodyFont: bodyFont,
+                isTask: taskParagraphs.contains(run.range.location)
             )
             desired.addAttribute(
                 .paragraphStyle,
@@ -1413,7 +1644,7 @@ enum MarkdownPresentation {
             ]
         case .link:
             return [.foregroundColor: PlatformColor.systemBlue]
-        case .listMarker:
+        case .listMarker, .taskMarker:
             return [.foregroundColor: secondaryTextColor]
         case .blockquote:
             return [
@@ -1455,7 +1686,8 @@ enum MarkdownPresentation {
     private static func paragraphStyle(
         for run: MarkdownParagraphRun,
         text: NSString,
-        bodyFont: PlatformFont
+        bodyFont: PlatformFont,
+        isTask: Bool
     ) -> NSParagraphStyle {
         let style = bodyParagraphStyle(for: bodyFont)
         let em = bodyFont.pointSize
@@ -1471,7 +1703,7 @@ enum MarkdownPresentation {
                 font: bodyFont
             )
             style.firstLineHeadIndent = 0
-            style.paragraphSpacing = em * 0.2
+            style.paragraphSpacing = em * (isTask ? 0.55 : 0.2)
         case .indented:
             style.headIndent = prefixWidth(
                 for: run,

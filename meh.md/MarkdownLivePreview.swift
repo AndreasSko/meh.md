@@ -110,6 +110,11 @@ enum MarkdownLivePreview {
         let source = text as NSString
         var collapsed: [NSRange] = []
         var transparent: [NSRange] = []
+        var taskMarkers: [NSRange] = []
+        let taskLines = Set(result.spans.compactMap { span -> Int? in
+            guard case .taskMarker = span.role else { return nil }
+            return source.lineRange(for: span.range).location
+        })
         for span in result.spans {
             collapsed.append(contentsOf: markerRanges(for: span, in: source))
             switch span.role {
@@ -118,8 +123,16 @@ enum MarkdownLivePreview {
             case .listMarker where span.range.length == 1:
                 let marker = source.character(at: span.range.location)
                 if marker == 42 || marker == 43 || marker == 45 {
-                    transparent.append(span.range)
+                    if taskLines.contains(source.lineRange(for: span.range).location) {
+                        taskMarkers.append(span.range)
+                    } else {
+                        transparent.append(span.range)
+                    }
                 }
+            case .taskMarker:
+                // Keep the source width for caret geometry and a tap target.
+                // The checkbox stays interactive even in the active line.
+                taskMarkers.append(span.range)
             default:
                 break
             }
@@ -149,7 +162,7 @@ enum MarkdownLivePreview {
         }
         return MarkdownLivePreviewRanges(
             collapsed: concealed(collapsed),
-            transparent: concealed(transparent)
+            transparent: mergedRanges(concealed(transparent) + taskMarkers)
         )
     }
 
@@ -251,7 +264,7 @@ enum MarkdownLivePreview {
             return inlineCodeMarkerRanges(for: span.range, in: source)
         case .link:
             return linkMarkerRanges(for: span.range, in: source)
-        case .listMarker, .blockquote, .blockquoteMarker:
+        case .listMarker, .taskMarker, .blockquote, .blockquoteMarker:
             return []
         }
     }

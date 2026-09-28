@@ -12,6 +12,8 @@ enum MarkdownEditingCommand: CaseIterable, Hashable {
     case link
     case inlineCode
     case codeBlock
+    case taskList
+    case toggleTask
     case insertTable
     case tableRowAbove
     case tableRowBelow
@@ -46,7 +48,8 @@ enum MarkdownEditingRules {
     static func change(
         for command: MarkdownEditingCommand,
         text: String,
-        selection: NSRange
+        selection: NSRange,
+        syntaxResult: MarkdownSyntaxResult? = nil
     ) -> MarkdownEditingChange? {
         let source = text as NSString
         let selection = safeSelection(selection, in: source)
@@ -98,6 +101,24 @@ enum MarkdownEditingRules {
             return inlineCodeChange(in: source, selection: selection)
         case .codeBlock:
             return codeBlockChange(in: source, selection: selection)
+        case .taskList:
+            let line = contentLine(containing: selection.location, in: source)
+            return insertion(
+                "- [ ] ",
+                replacing: NSRange(location: line.location, length: 0)
+            )
+        case .toggleTask:
+            guard let change = toggleTask(
+                text: text,
+                at: selection.location,
+                syntaxResult: syntaxResult
+            )
+            else { return nil }
+            return MarkdownEditingChange(
+                range: change.range,
+                replacement: change.replacement,
+                selection: selection
+            )
         case .insertTable, .tableRowAbove, .tableRowBelow,
              .tableColumnBefore, .tableColumnAfter, .tableDeleteRow,
              .tableDeleteColumn, .tableAlignLeft, .tableAlignCenter,
@@ -135,7 +156,10 @@ enum MarkdownEditingRules {
            let innermost = prefix.containers.last {
             var indentation = prefix.indentation
             let remaining: String
-            if innermost.isList, !indentation.isEmpty {
+            if innermost.isTask {
+                remaining = prefix.containers.dropLast(2)
+                    .map(\.source).joined()
+            } else if innermost.isList, !indentation.isEmpty {
                 indentation = removingIndentLevel(from: indentation)
                 remaining = prefix.containers.map(\.source).joined()
             } else {
@@ -169,6 +193,32 @@ enum MarkdownEditingRules {
                 location: range.location + replacement.utf16.count,
                 length: 0
             )
+        )
+    }
+
+    static func toggleTask(
+        text: String,
+        at location: Int,
+        syntaxResult: MarkdownSyntaxResult? = nil
+    ) -> MarkdownEditingChange? {
+        let source = text as NSString
+        guard location >= 0, location <= source.length else { return nil }
+        let line = contentLine(containing: location, in: source)
+        let spans = syntaxResult?.spans ?? MarkdownSyntax.parse(text).spans
+        guard let span = spans.first(where: {
+            if case .taskMarker = $0.role {
+                return NSLocationInRange($0.range.location, line)
+            }
+            return false
+        }) else { return nil }
+        let checked: Bool
+        if case let .taskMarker(value) = span.role {
+            checked = value
+        } else { return nil }
+        return MarkdownEditingChange(
+            range: span.range,
+            replacement: checked ? "[ ]" : "[x]",
+            selection: NSRange(location: NSMaxRange(span.range), length: 0)
         )
     }
 
@@ -533,6 +583,7 @@ private extension MarkdownEditingRules {
             case bullet
             case ordered(number: String, delimiter: String, spacing: String)
             case quote
+            case task
         }
 
         let kind: Kind
@@ -542,7 +593,7 @@ private extension MarkdownEditingRules {
             switch kind {
             case .bullet, .ordered:
                 return true
-            case .quote:
+            case .quote, .task:
                 return false
             }
         }
@@ -552,10 +603,17 @@ private extension MarkdownEditingRules {
             return false
         }
 
+        var isTask: Bool {
+            if case .task = kind { return true }
+            return false
+        }
+
         var continuation: String {
             switch kind {
             case .bullet, .quote:
                 return source
+            case .task:
+                return "[ ] "
             case let .ordered(number, delimiter, spacing):
                 return incrementDecimal(number) + delimiter + spacing
             }
@@ -679,6 +737,27 @@ private extension MarkdownEditingRules {
 
         while location < end {
             let markerStart = location
+            if containers.last?.isList == true,
+               location + 3 <= end,
+               source.character(at: location) == 91,
+               source.character(at: location + 2) == 93,
+               [32, 88, 120].contains(source.character(at: location + 1)),
+               (location + 3 == end
+                   || isHorizontalWhitespace(source.character(at: location + 3))) {
+                location += 3
+                while location < end,
+                      isHorizontalWhitespace(source.character(at: location)) {
+                    location += 1
+                }
+                containers.append(Container(
+                    kind: .task,
+                    source: source.substring(with: NSRange(
+                        location: markerStart,
+                        length: location - markerStart
+                    ))
+                ))
+                break
+            }
             if source.character(at: location) == 62 {
                 location += 1
                 while location < end,

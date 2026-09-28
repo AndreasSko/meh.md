@@ -11,7 +11,7 @@ final class MarkdownEditingCommandsTests: XCTestCase {
             [
                 .continueLine, .indent, .outdent, .bold, .italic,
                 .strikethrough, .highlight, .heading, .link,
-                .inlineCode, .codeBlock, .insertTable,
+                .inlineCode, .codeBlock, .taskList, .toggleTask, .insertTable,
                 .tableRowAbove, .tableRowBelow,
                 .tableColumnBefore, .tableColumnAfter,
                 .tableDeleteRow, .tableDeleteColumn,
@@ -19,6 +19,40 @@ final class MarkdownEditingCommandsTests: XCTestCase {
                 .tableNextCell, .tablePreviousCell,
             ]
         )
+    }
+
+    func testTaskContinuationExitAndToggle() throws {
+        try assertChange(
+            .taskList,
+            text: "Bring a map",
+            selection: NSRange(location: 0, length: 11),
+            equals: "- [ ] Bring a map",
+            selected: NSRange(location: 6, length: 0)
+        )
+        let checked = "- [x] Done"
+        try assertChange(
+            .continueLine,
+            text: checked,
+            selection: caret(atEndOf: checked),
+            equals: checked + "\n- [ ] ",
+            selected: NSRange(location: 17, length: 0)
+        )
+        try assertChange(
+            .continueLine,
+            text: "1. [ ] ",
+            selection: caret(atEndOf: "1. [ ] "),
+            equals: "",
+            selected: NSRange(location: 0, length: 0)
+        )
+        let toggle = MarkdownEditingRules.toggleTask(text: checked, at: 3)
+        XCTAssertEqual(toggle?.range, NSRange(location: 2, length: 3))
+        XCTAssertEqual(toggle?.replacement, "[ ]")
+        let caret = NSRange(location: (checked as NSString).length, length: 0)
+        try assertChange(
+            .toggleTask, text: checked, selection: caret,
+            equals: "- [ ] Done", selected: caret
+        )
+        XCTAssertNil(MarkdownEditingRules.toggleTask(text: "`- [x]`", at: 4))
     }
 
     func testReturnContinuesIndentBulletsQuotesAndOrderedNumbers() throws {
