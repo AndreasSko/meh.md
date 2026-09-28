@@ -155,10 +155,17 @@ final class NoteDocument {
                let modifiedAt,
                !candidates.isEmpty,
                candidates[candidates.count - 1].date == nil {
-                // Use a timestamp only when the saved change introduced this
-                // text state. A later metadata-only change cannot relabel it.
-                // When a clock did not advance, keep the date unknown.
+                // Prefer the note's content date when it identifies this
+                // edit, including imported creation dates.
                 candidates[candidates.count - 1].date = modifiedAt
+            } else if textChanged,
+                      !candidates.isEmpty,
+                      candidates[candidates.count - 1].date == nil,
+                      change.timestamp.timeIntervalSince1970 != 0 {
+                // The content date is monotonic and can stay unchanged for
+                // rapid edits or a clock correction. Automerge still records
+                // when it committed each text change.
+                candidates[candidates.count - 1].date = change.timestamp
             }
             previousModifiedAt = modifiedAt
         }
@@ -262,12 +269,12 @@ final class NoteDocument {
     ) throws {
         let restoredText = try historicalText(for: version)
         guard !restoredText.utf8.elementsEqual((try text).utf8) else { return }
-        try replaceAll(with: restoredText, at: modificationDate)
-        // A restore is an intentional checkpoint even when it changes only
-        // one character. The message uses existing Automerge change metadata.
-        document.commitWith(
-            message: Self.restoreChangeMessage,
-            timestamp: modificationDate
+        // Commit the restore as one marked change so it remains a boundary
+        // even when only one character differs.
+        try replaceAll(
+            with: restoredText,
+            at: modificationDate,
+            changeMessage: Self.restoreChangeMessage
         )
     }
 
@@ -337,6 +344,9 @@ final class NoteDocument {
                 value: .Timestamp(modifiedAt)
             )
         }
+        document.commitWith(
+            timestamp: metadata.createdAt ?? metadata.modifiedAt ?? Date()
+        )
 
         self.document = document
         self.textObject = textObject
@@ -438,16 +448,19 @@ final class NoteDocument {
             value: replacement
         )
         try setModifiedAt(modifiedAt)
+        document.commitWith(timestamp: modificationDate)
     }
 
     func replaceAll(
         with text: String,
-        at modificationDate: Date = Date()
+        at modificationDate: Date = Date(),
+        changeMessage: String? = nil
     ) throws {
         guard !text.utf8.elementsEqual((try self.text).utf8) else { return }
         let modifiedAt = try nextModifiedAt(modificationDate)
         try document.updateText(obj: textObject, value: text)
         try setModifiedAt(modifiedAt)
+        document.commitWith(message: changeMessage, timestamp: modificationDate)
     }
 
     func snapshot() -> NoteSnapshot {
