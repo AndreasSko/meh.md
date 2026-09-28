@@ -864,6 +864,181 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         XCTAssertNil(scrubbed["legacyNote"])
     }
 
+    func testProposalCacheRevalidatesExternalReplacementAndRollback() async throws {
+        let transport = InMemorySyncTransport(scope: "proposal-cache")
+        let root = directory()
+        let replica = NotebookReplica(directory: root)
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport)
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+
+        let proposalURL = root.appending(path: "notebook-proposal.json")
+        let original = try Data(contentsOf: proposalURL)
+
+        var wrongScope = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: original) as? [String: Any])
+        wrongScope["scope"] = "another-scope"
+        try JSONSerialization.data(withJSONObject: wrongScope, options: [.sortedKeys])
+            .write(to: proposalURL, options: .atomic)
+        await coordinator.synchronize()
+        guard case .failed = coordinator.status else {
+            return XCTFail("An externally changed scope must be rejected")
+        }
+
+        try original.write(to: proposalURL, options: .atomic)
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+
+        var forgedHeads = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: original) as? [String: Any])
+        var record = try XCTUnwrap(forgedHeads["record"] as? [String: Any])
+        var snapshot = try XCTUnwrap(record["snapshot"] as? [String: Any])
+        snapshot["heads"] = ["forged-head"]
+        record["snapshot"] = snapshot
+        forgedHeads["record"] = record
+        try JSONSerialization.data(withJSONObject: forgedHeads, options: [.sortedKeys])
+            .write(to: proposalURL, options: .atomic)
+        await coordinator.synchronize()
+        guard case .failed = coordinator.status else {
+            return XCTFail("Externally changed snapshot heads must be validated")
+        }
+
+        try original.write(to: proposalURL, options: .atomic)
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+    }
+
+    func testProposalCacheRejectsRecordWithMismatchedNotebookIdentity() async throws {
+        let transport = InMemorySyncTransport(scope: "proposal-identity")
+        let root = directory()
+        let coordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: root), transport: transport)
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+
+        let proposalURL = root.appending(path: "notebook-proposal.json")
+        let original = try Data(contentsOf: proposalURL)
+        var proposal = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: original) as? [String: Any])
+        var record = try XCTUnwrap(proposal["record"] as? [String: Any])
+        var snapshot = try XCTUnwrap(record["snapshot"] as? [String: Any])
+        snapshot["noteID"] = UUID().uuidString
+        record["snapshot"] = snapshot
+        proposal["record"] = record
+        try JSONSerialization.data(withJSONObject: proposal, options: [.sortedKeys])
+            .write(to: proposalURL, options: .atomic)
+
+        await coordinator.synchronize()
+        guard case .failed = coordinator.status else {
+            return XCTFail("A catalog identity mismatch must be rejected")
+        }
+
+        try original.write(to: proposalURL, options: .atomic)
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+    }
+
+    func testProposalCacheDoesNotHideMissingOrUnreadableFile() async throws {
+        let transport = InMemorySyncTransport(scope: "proposal-file-state")
+        let root = directory()
+        let replica = NotebookReplica(directory: root)
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport)
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+
+        let proposalURL = root.appending(path: "notebook-proposal.json")
+        let original = try Data(contentsOf: proposalURL)
+        try FileManager.default.removeItem(at: proposalURL)
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: proposalURL.path))
+
+        try FileManager.default.removeItem(at: proposalURL)
+        try FileManager.default.createDirectory(
+            at: proposalURL, withIntermediateDirectories: false)
+        await coordinator.synchronize()
+        guard case .failed = coordinator.status else {
+            return XCTFail("An unreadable proposal path must fail closed")
+        }
+
+        try FileManager.default.removeItem(at: proposalURL)
+        try original.write(to: proposalURL, options: .atomic)
+        let reopened = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: root), transport: transport)
+        await reopened.synchronize()
+        assertExchanged(reopened.status)
+    }
+
+    func testFreshCoordinatorValidatesProposalFromDisk() async throws {
+        let transport = InMemorySyncTransport(scope: "proposal-cold-cache")
+        let root = directory()
+        let initial = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: root), transport: transport)
+        await initial.synchronize()
+        assertExchanged(initial.status)
+
+        let proposalURL = root.appending(path: "notebook-proposal.json")
+        let original = try Data(contentsOf: proposalURL)
+        var proposal = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: original) as? [String: Any])
+        var record = try XCTUnwrap(proposal["record"] as? [String: Any])
+        var snapshot = try XCTUnwrap(record["snapshot"] as? [String: Any])
+        snapshot["data"] = "not-base64!"
+        record["snapshot"] = snapshot
+        proposal["record"] = record
+        try JSONSerialization.data(withJSONObject: proposal, options: [.sortedKeys])
+            .write(to: proposalURL, options: .atomic)
+
+        let reopened = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: root), transport: transport)
+        await reopened.synchronize()
+        guard case .failed = reopened.status else {
+            return XCTFail("A fresh coordinator must validate proposal bytes")
+        }
+    }
+
+    func testFailedLegacyProposalRewriteDoesNotCacheUnwrittenBytes() async throws {
+        let transport = InMemorySyncTransport(scope: "proposal-rewrite-failure")
+        let root = directory()
+        let legacy = try NoteDocument(text: "legacy body")
+        let initial = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: root), transport: transport)
+        await initial.synchronize(legacyNote: legacy.snapshot())
+        assertExchanged(initial.status)
+
+        let proposalURL = root.appending(path: "notebook-proposal.json")
+        let original = try Data(contentsOf: proposalURL)
+        do {
+            try FileManager.default.setAttributes(
+                [.immutable: true], ofItemAtPath: proposalURL.path)
+        } catch {
+            throw XCTSkip("The test filesystem does not support immutable files")
+        }
+        defer {
+            try? FileManager.default.setAttributes(
+                [.immutable: false], ofItemAtPath: proposalURL.path)
+        }
+
+        let coordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: root), transport: transport)
+        await coordinator.synchronize()
+        guard case .failed = coordinator.status else {
+            return XCTFail("A failed legacy proposal rewrite must fail the pass")
+        }
+        XCTAssertEqual(try Data(contentsOf: proposalURL), original)
+
+        try FileManager.default.setAttributes(
+            [.immutable: false], ofItemAtPath: proposalURL.path)
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+        let cleaned = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: proposalURL))
+                as? [String: Any])
+        XCTAssertNil(cleaned["legacyNote"])
+    }
+
     private func directory() -> URL {
         let url = FileManager.default.temporaryDirectory.appending(
             path: "NotebookSyncCoordinatorTests-\(UUID().uuidString)"
