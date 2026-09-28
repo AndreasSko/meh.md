@@ -133,7 +133,7 @@ All raw fictional reports, environment details, and hashes are in the
 | Narrow page checkpoints | Defer; changes corruption and history detection. |
 | More seed-acceptance shortcuts | Settled acceptance is about 0.27 ms. |
 | Duplicate cached item access | Negligible against the measured costs. |
-| Markdown publication | Deferred as requested; about 493 ms total at 1,000. |
+| Markdown publication | Now 220 ms at 1,000; see the follow-up below. |
 | Shorter idle scheduling | Preserve the existing deliberate ten-second wait. |
 | Split state storage | Needs a storage migration and recovery design. |
 | Delta snapshot protocol | Broader wire/history/recovery redesign. |
@@ -166,7 +166,7 @@ These are contained changes, but testing cannot prove zero data-loss risk.
 The tests and isolated Development run are evidence for review, not a
 production rollout or a guarantee about Apple service timing.
 
-## Final regression validation
+## Validation before the Markdown follow-up
 
 The expanded local runner passed 756 Swift tests with zero failures and six
 expected skips: five opt-in performance tests and the native insertion
@@ -206,3 +206,15 @@ four phases used separate launches and are functional cross-host evidence,
 not a continuous edit-to-screen timing or a warm benchmark. No physical
 device was used in this final run. All phase reports are in the JSON evidence.
 The simulator remains signed in with its isolated lab installed.
+
+## Markdown publication follow-up
+
+The requested additional optimization is now included in this PR. Exact
+snapshot reuse avoids preparing unchanged note text and catalog placements
+again; staged files avoid redundant parent checks and duplicate flushes.
+Complete changed publication for 1,000 notes fell from 498 to 220 ms (56%).
+Atomic folder replacement, output ownership checks, and recovery remain.
+See [the publication report](markdown-publication-performance.md) for the
+per-change results and retained-memory budget. Final validation passed 767
+Swift tests (six expected skips), 35 Python tests, and both normal Release
+builds, with no failures.

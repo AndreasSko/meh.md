@@ -1,0 +1,3521 @@
+{
+  "date": "2026-09-28",
+  "scope": "Synthetic local Markdown publication only. No cloud or device data used. Release, sequential runs, warm filesystem, three samples per case. Snapshot gathering excluded. Actor IDs and byte counts vary between equivalent fixtures.",
+  "runs": {
+    "before": {
+      "environment": "bdb2def39e12075d8a6fdb43b95e15b56ee7144d\nProductName:\t\tmacOS\nProductVersion:\t\t27.0\nBuildVersion:\t\t26A428\narm64\nXcode 27.0\nBuild version 27A266a\nApple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.0.0\nMEH_EXCHANGE_BENCHMARK_CASES=100x1,1000x5,10x500\nMEH_EXCHANGE_BENCHMARK_REPETITIONS=3\n",
+      "log_sha256": "dec636bb8cc5e2bba99719f26a194b25756fa3ec866a58cef4c64a8b97158373",
+      "results": [
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 0.131375,
+          "note_count": 100,
+          "p95_ms": 0.142375,
+          "page_size": 100,
+          "phase": "accept_seed_no_op",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.131375,
+            0.142375,
+            0.094083
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 0.007375,
+          "note_count": 100,
+          "p95_ms": 0.008167,
+          "page_size": 100,
+          "phase": "catalog_items",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.008167,
+            0.007375,
+            0.007
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "decoded_snapshots": [
+            0,
+            0,
+            0
+          ],
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 0.209875,
+          "note_count": 100,
+          "p95_ms": 0.220167,
+          "page_size": 100,
+          "phase": "checkpoint_history_worker",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.209875,
+            0.220167,
+            0.199459
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 9.396542,
+          "note_count": 100,
+          "p95_ms": 10.262792,
+          "page_size": 100,
+          "phase": "contains_history",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            9.396542,
+            10.262792,
+            8.9335
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 271.411042,
+          "note_count": 100,
+          "p95_ms": 277.63,
+          "page_size": 100,
+          "phase": "initial_destination",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            271.411042,
+            277.63,
+            262.011917
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 237.26475,
+          "note_count": 100,
+          "p95_ms": 239.2095,
+          "page_size": 100,
+          "phase": "initial_source",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            237.26475,
+            239.2095,
+            235.879041
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 5.508,
+          "note_count": 100,
+          "p95_ms": 6.063125,
+          "page_size": 100,
+          "phase": "markdown_changed_cleanup",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            5.508,
+            6.063125,
+            5.43725
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 0.608709,
+          "note_count": 100,
+          "p95_ms": 0.718,
+          "page_size": 100,
+          "phase": "markdown_changed_commit",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.608709,
+            0.718,
+            0.48375
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 23.063167,
+          "note_count": 100,
+          "p95_ms": 23.132875,
+          "page_size": 100,
+          "phase": "markdown_changed_prepare",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            23.063167,
+            23.132875,
+            22.97
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 17.164084,
+          "note_count": 100,
+          "p95_ms": 18.084958,
+          "page_size": 100,
+          "phase": "markdown_changed_stage_build",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            15.806083,
+            18.084958,
+            17.164084
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 0.206958,
+          "note_count": 100,
+          "p95_ms": 0.255125,
+          "page_size": 100,
+          "phase": "markdown_changed_swap",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.203583,
+            0.255125,
+            0.206958
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 37.582542,
+          "note_count": 100,
+          "p95_ms": 41.7275,
+          "page_size": 100,
+          "phase": "markdown_publish",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            41.7275,
+            37.292,
+            37.582542
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 46.262042,
+          "note_count": 100,
+          "p95_ms": 48.254083,
+          "page_size": 100,
+          "phase": "markdown_publish_changed",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            45.189542,
+            48.254083,
+            46.262042
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 59.647583,
+          "note_count": 100,
+          "p95_ms": 59.833375,
+          "page_size": 100,
+          "phase": "no_op_destination",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            59.558167,
+            59.833375,
+            59.647583
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 61.598833,
+          "note_count": 100,
+          "p95_ms": 63.374208,
+          "page_size": 100,
+          "phase": "no_op_source",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            63.374208,
+            60.370833,
+            61.598833
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 60.543625,
+          "note_count": 100,
+          "p95_ms": 61.386875,
+          "page_size": 100,
+          "phase": "one_character_destination",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            59.188333,
+            61.386875,
+            60.543625
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 123.855583,
+          "note_count": 100,
+          "p95_ms": 125.396958,
+          "page_size": 100,
+          "phase": "one_character_round_trip",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            123.592916,
+            125.396958,
+            123.855583
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 64.005958,
+          "note_count": 100,
+          "p95_ms": 64.384625,
+          "page_size": 100,
+          "phase": "one_character_source",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            64.384625,
+            64.005958,
+            63.308666
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 9.887,
+          "note_count": 100,
+          "p95_ms": 10.66375,
+          "page_size": 100,
+          "phase": "records_listed",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            9.887,
+            10.66375,
+            9.401333
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 9.699625,
+          "note_count": 100,
+          "p95_ms": 10.0445,
+          "page_size": 100,
+          "phase": "records_unlisted",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            9.699625,
+            10.0445,
+            8.394
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31793,
+          "fixture_version": 1,
+          "median_ms": 10.83,
+          "note_count": 100,
+          "p95_ms": 10.854792,
+          "page_size": 100,
+          "phase": "validate_catalog_record",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            10.854792,
+            10.83,
+            10.345584
+          ],
+          "snapshot_bytes": 31793
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 0.301042,
+          "note_count": 1000,
+          "p95_ms": 0.348666,
+          "page_size": 100,
+          "phase": "accept_seed_no_op",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            0.259666,
+            0.348666,
+            0.301042
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 0.056292,
+          "note_count": 1000,
+          "p95_ms": 0.07625,
+          "page_size": 100,
+          "phase": "catalog_items",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            0.056292,
+            0.07625,
+            0.056125
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "decoded_snapshots": [
+            0,
+            0,
+            0
+          ],
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 1.908542,
+          "note_count": 1000,
+          "p95_ms": 2.056,
+          "page_size": 100,
+          "phase": "checkpoint_history_worker",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            1.896959,
+            1.908542,
+            2.056
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 106.835375,
+          "note_count": 1000,
+          "p95_ms": 106.934583,
+          "page_size": 100,
+          "phase": "contains_history",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            106.835375,
+            106.934583,
+            103.351958
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 4134.141292,
+          "note_count": 1000,
+          "p95_ms": 4402.913125,
+          "page_size": 100,
+          "phase": "initial_destination",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            4134.141292,
+            4402.913125,
+            4012.251625
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 3211.5085,
+          "note_count": 1000,
+          "p95_ms": 3418.992292,
+          "page_size": 100,
+          "phase": "initial_source",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            3211.5085,
+            3418.992292,
+            3205.454666
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 57.559417,
+          "note_count": 1000,
+          "p95_ms": 69.400458,
+          "page_size": 100,
+          "phase": "markdown_changed_cleanup",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            69.400458,
+            56.931083,
+            57.559417
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 2.344542,
+          "note_count": 1000,
+          "p95_ms": 2.658042,
+          "page_size": 100,
+          "phase": "markdown_changed_commit",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            2.658042,
+            2.344542,
+            2.266666
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 282.013917,
+          "note_count": 1000,
+          "p95_ms": 300.554834,
+          "page_size": 100,
+          "phase": "markdown_changed_prepare",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            300.554834,
+            282.013917,
+            280.975375
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 156.507417,
+          "note_count": 1000,
+          "p95_ms": 270.488958,
+          "page_size": 100,
+          "phase": "markdown_changed_stage_build",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            270.488958,
+            156.507417,
+            151.974
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 0.584666,
+          "note_count": 1000,
+          "p95_ms": 0.597,
+          "page_size": 100,
+          "phase": "markdown_changed_swap",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            0.597,
+            0.584666,
+            0.511959
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 439.405458,
+          "note_count": 1000,
+          "p95_ms": 451.507333,
+          "page_size": 100,
+          "phase": "markdown_publish",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            451.507333,
+            439.405458,
+            413.404584
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 498.381625,
+          "note_count": 1000,
+          "p95_ms": 643.699292,
+          "page_size": 100,
+          "phase": "markdown_publish_changed",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            643.699292,
+            498.381625,
+            493.287417
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 749.21925,
+          "note_count": 1000,
+          "p95_ms": 757.052792,
+          "page_size": 100,
+          "phase": "no_op_destination",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            757.052792,
+            740.949292,
+            749.21925
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 776.452584,
+          "note_count": 1000,
+          "p95_ms": 777.178334,
+          "page_size": 100,
+          "phase": "no_op_source",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            777.178334,
+            776.452584,
+            739.866542
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 757.392459,
+          "note_count": 1000,
+          "p95_ms": 879.018959,
+          "page_size": 100,
+          "phase": "one_character_destination",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            879.018959,
+            752.428834,
+            757.392459
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 1702.2136249999999,
+          "note_count": 1000,
+          "p95_ms": 1713.598833,
+          "page_size": 100,
+          "phase": "one_character_round_trip",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            1713.598833,
+            1702.2136249999999,
+            1512.484958
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 834.558,
+          "note_count": 1000,
+          "p95_ms": 949.779833,
+          "page_size": 100,
+          "phase": "one_character_source",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            834.558,
+            949.779833,
+            755.086375
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 105.090375,
+          "note_count": 1000,
+          "p95_ms": 114.989417,
+          "page_size": 100,
+          "phase": "records_listed",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            105.090375,
+            102.677458,
+            114.989417
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 103.775667,
+          "note_count": 1000,
+          "p95_ms": 104.688959,
+          "page_size": 100,
+          "phase": "records_unlisted",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            104.688959,
+            103.775667,
+            99.133542
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374314,
+          "fixture_version": 1,
+          "median_ms": 156.615084,
+          "note_count": 1000,
+          "p95_ms": 161.4795,
+          "page_size": 100,
+          "phase": "validate_catalog_record",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            156.615084,
+            161.4795,
+            155.866125
+          ],
+          "snapshot_bytes": 374314
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.073291,
+          "note_count": 10,
+          "p95_ms": 0.076333,
+          "page_size": 100,
+          "phase": "accept_seed_no_op",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.069541,
+            0.076333,
+            0.073291
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.002375,
+          "note_count": 10,
+          "p95_ms": 0.0025,
+          "page_size": 100,
+          "phase": "catalog_items",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.0025,
+            0.002375,
+            0.00225
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "decoded_snapshots": [
+            0,
+            0,
+            0
+          ],
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.044458,
+          "note_count": 10,
+          "p95_ms": 0.047875,
+          "page_size": 100,
+          "phase": "checkpoint_history_worker",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.033834,
+            0.047875,
+            0.044458
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.949208,
+          "note_count": 10,
+          "p95_ms": 0.989,
+          "page_size": 100,
+          "phase": "contains_history",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.949208,
+            0.989,
+            0.929417
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 40.818041,
+          "note_count": 10,
+          "p95_ms": 41.734458,
+          "page_size": 100,
+          "phase": "initial_destination",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            40.818041,
+            41.734458,
+            40.389333
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 33.96775,
+          "note_count": 10,
+          "p95_ms": 34.291583,
+          "page_size": 100,
+          "phase": "initial_source",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            33.96775,
+            34.291583,
+            33.419208
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.884458,
+          "note_count": 10,
+          "p95_ms": 1.022042,
+          "page_size": 100,
+          "phase": "markdown_changed_cleanup",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.884458,
+            0.8485,
+            1.022042
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.303542,
+          "note_count": 10,
+          "p95_ms": 0.305625,
+          "page_size": 100,
+          "phase": "markdown_changed_commit",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.305625,
+            0.284541,
+            0.303542
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 7.335292,
+          "note_count": 10,
+          "p95_ms": 7.338417,
+          "page_size": 100,
+          "phase": "markdown_changed_prepare",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            7.335292,
+            7.143083,
+            7.338417
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 1.727875,
+          "note_count": 10,
+          "p95_ms": 1.818416,
+          "page_size": 100,
+          "phase": "markdown_changed_stage_build",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.724916,
+            1.727875,
+            1.818416
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.165209,
+          "note_count": 10,
+          "p95_ms": 0.172084,
+          "page_size": 100,
+          "phase": "markdown_changed_swap",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.172084,
+            0.165209,
+            0.163625
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 9.435333,
+          "note_count": 10,
+          "p95_ms": 10.007291,
+          "page_size": 100,
+          "phase": "markdown_publish",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            10.007291,
+            9.435333,
+            9.065709
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 10.422375,
+          "note_count": 10,
+          "p95_ms": 10.646042,
+          "page_size": 100,
+          "phase": "markdown_publish_changed",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            10.422375,
+            10.169208,
+            10.646042
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 7.005208,
+          "note_count": 10,
+          "p95_ms": 7.192292,
+          "page_size": 100,
+          "phase": "no_op_destination",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            6.972291,
+            7.192292,
+            7.005208
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 7.626125,
+          "note_count": 10,
+          "p95_ms": 7.707833,
+          "page_size": 100,
+          "phase": "no_op_source",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            7.626125,
+            7.707833,
+            7.554125
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 13.942042,
+          "note_count": 10,
+          "p95_ms": 14.683041,
+          "page_size": 100,
+          "phase": "one_character_destination",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            14.683041,
+            13.942042,
+            13.503333
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 23.935166,
+          "note_count": 10,
+          "p95_ms": 26.488084,
+          "page_size": 100,
+          "phase": "one_character_round_trip",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            26.488084,
+            23.935166,
+            23.308291
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 9.990833,
+          "note_count": 10,
+          "p95_ms": 11.799166,
+          "page_size": 100,
+          "phase": "one_character_source",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            11.799166,
+            9.990833,
+            9.803083
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.922833,
+          "note_count": 10,
+          "p95_ms": 0.947791,
+          "page_size": 100,
+          "phase": "records_listed",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.908583,
+            0.947791,
+            0.922833
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.902166,
+          "note_count": 10,
+          "p95_ms": 0.975375,
+          "page_size": 100,
+          "phase": "records_unlisted",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.902166,
+            0.975375,
+            0.894792
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 1.044041,
+          "note_count": 10,
+          "p95_ms": 1.100417,
+          "page_size": 100,
+          "phase": "validate_catalog_record",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.100417,
+            1.043834,
+            1.044041
+          ],
+          "snapshot_bytes": 16379
+        }
+      ]
+    },
+    "cache": {
+      "environment": "bc055ef39ddcdc92596577e02c39d4f3254a2340\nProductName:\t\tmacOS\nProductVersion:\t\t27.0\nBuildVersion:\t\t26A428\narm64\nXcode 27.0\nBuild version 27A266a\nApple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.0.0\nMEH_EXCHANGE_BENCHMARK_CASES=100x1,1000x5,10x500\nMEH_EXCHANGE_BENCHMARK_REPETITIONS=3\n",
+      "log_sha256": "16d6e250ad9f8d22b257ae37b485ecdd14a75b162660a6ddc7f4526e8a24df09",
+      "results": [
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 0.107292,
+          "note_count": 100,
+          "p95_ms": 0.193875,
+          "page_size": 100,
+          "phase": "accept_seed_no_op",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.107292,
+            0.193875,
+            0.092917
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 0.006875,
+          "note_count": 100,
+          "p95_ms": 0.007042,
+          "page_size": 100,
+          "phase": "catalog_items",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.007042,
+            0.006833,
+            0.006875
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "decoded_snapshots": [
+            0,
+            0,
+            0
+          ],
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 0.199541,
+          "note_count": 100,
+          "p95_ms": 0.212666,
+          "page_size": 100,
+          "phase": "checkpoint_history_worker",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.195541,
+            0.212666,
+            0.199541
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 9.464292,
+          "note_count": 100,
+          "p95_ms": 10.141958,
+          "page_size": 100,
+          "phase": "contains_history",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            9.260291,
+            10.141958,
+            9.464292
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 271.670791,
+          "note_count": 100,
+          "p95_ms": 281.563375,
+          "page_size": 100,
+          "phase": "initial_destination",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            271.670791,
+            281.563375,
+            263.263625
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 224.597833,
+          "note_count": 100,
+          "p95_ms": 234.055458,
+          "page_size": 100,
+          "phase": "initial_source",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            224.597833,
+            221.920542,
+            234.055458
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 5.099709,
+          "note_count": 100,
+          "p95_ms": 5.407958,
+          "page_size": 100,
+          "phase": "markdown_changed_cleanup",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            5.407958,
+            5.099709,
+            4.967042
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 0.586166,
+          "note_count": 100,
+          "p95_ms": 0.590333,
+          "page_size": 100,
+          "phase": "markdown_changed_commit",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.590333,
+            0.586166,
+            0.52325
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 3.690917,
+          "note_count": 100,
+          "p95_ms": 3.714458,
+          "page_size": 100,
+          "phase": "markdown_changed_prepare",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            3.714458,
+            3.690917,
+            3.599875
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 16.34375,
+          "note_count": 100,
+          "p95_ms": 17.184833,
+          "page_size": 100,
+          "phase": "markdown_changed_stage_build",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            17.184833,
+            16.34375,
+            15.981292
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 0.210459,
+          "note_count": 100,
+          "p95_ms": 0.220375,
+          "page_size": 100,
+          "phase": "markdown_changed_swap",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.210459,
+            0.220375,
+            0.192458
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 37.538625,
+          "note_count": 100,
+          "p95_ms": 37.732583,
+          "page_size": 100,
+          "phase": "markdown_publish",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            37.538625,
+            36.379666,
+            37.732583
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 25.940917,
+          "note_count": 100,
+          "p95_ms": 27.108041,
+          "page_size": 100,
+          "phase": "markdown_publish_changed",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            27.108041,
+            25.940917,
+            25.263917
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 59.55825,
+          "note_count": 100,
+          "p95_ms": 63.626541,
+          "page_size": 100,
+          "phase": "no_op_destination",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            59.55825,
+            63.626541,
+            56.981458
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 60.064917,
+          "note_count": 100,
+          "p95_ms": 60.371875,
+          "page_size": 100,
+          "phase": "no_op_source",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            58.434042,
+            60.064917,
+            60.371875
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 59.249542,
+          "note_count": 100,
+          "p95_ms": 59.439291,
+          "page_size": 100,
+          "phase": "one_character_destination",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            59.249542,
+            59.439291,
+            58.973584
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 121.344458,
+          "note_count": 100,
+          "p95_ms": 122.264666,
+          "page_size": 100,
+          "phase": "one_character_round_trip",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            119.013417,
+            121.344458,
+            122.264666
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 61.902,
+          "note_count": 100,
+          "p95_ms": 63.287333,
+          "page_size": 100,
+          "phase": "one_character_source",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            59.747917,
+            61.902,
+            63.287333
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 10.316708,
+          "note_count": 100,
+          "p95_ms": 11.059042,
+          "page_size": 100,
+          "phase": "records_listed",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            10.316708,
+            11.059042,
+            9.588125
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 9.415042,
+          "note_count": 100,
+          "p95_ms": 10.065917,
+          "page_size": 100,
+          "phase": "records_unlisted",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            9.044583,
+            10.065917,
+            9.415042
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31792,
+          "fixture_version": 1,
+          "median_ms": 10.289667,
+          "note_count": 100,
+          "p95_ms": 10.779834,
+          "page_size": 100,
+          "phase": "validate_catalog_record",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            10.204875,
+            10.779834,
+            10.289667
+          ],
+          "snapshot_bytes": 31792
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 0.369875,
+          "note_count": 1000,
+          "p95_ms": 0.421292,
+          "page_size": 100,
+          "phase": "accept_seed_no_op",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            0.36125,
+            0.369875,
+            0.421292
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 0.089042,
+          "note_count": 1000,
+          "p95_ms": 0.12225,
+          "page_size": 100,
+          "phase": "catalog_items",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            0.12225,
+            0.089042,
+            0.067791
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "decoded_snapshots": [
+            0,
+            0,
+            0
+          ],
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 2.614458,
+          "note_count": 1000,
+          "p95_ms": 2.703666,
+          "page_size": 100,
+          "phase": "checkpoint_history_worker",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            2.703666,
+            2.614458,
+            1.860083
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 113.03875,
+          "note_count": 1000,
+          "p95_ms": 113.27575,
+          "page_size": 100,
+          "phase": "contains_history",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            113.27575,
+            113.03875,
+            102.354791
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 4092.5215,
+          "note_count": 1000,
+          "p95_ms": 4161.996042,
+          "page_size": 100,
+          "phase": "initial_destination",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            4161.996042,
+            4092.5215,
+            3898.037833
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 3353.139333,
+          "note_count": 1000,
+          "p95_ms": 3441.089875,
+          "page_size": 100,
+          "phase": "initial_source",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            3353.139333,
+            3441.089875,
+            3147.840542
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 58.357625,
+          "note_count": 1000,
+          "p95_ms": 72.045833,
+          "page_size": 100,
+          "phase": "markdown_changed_cleanup",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            72.045833,
+            54.788458,
+            58.357625
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 2.244042,
+          "note_count": 1000,
+          "p95_ms": 2.278542,
+          "page_size": 100,
+          "phase": "markdown_changed_commit",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            2.278542,
+            2.244042,
+            2.205666
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 31.536916,
+          "note_count": 1000,
+          "p95_ms": 32.310375,
+          "page_size": 100,
+          "phase": "markdown_changed_prepare",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            32.310375,
+            31.112083,
+            31.536916
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 153.036167,
+          "note_count": 1000,
+          "p95_ms": 179.739875,
+          "page_size": 100,
+          "phase": "markdown_changed_stage_build",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            179.739875,
+            150.83575,
+            153.036167
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 0.501042,
+          "note_count": 1000,
+          "p95_ms": 0.516833,
+          "page_size": 100,
+          "phase": "markdown_changed_swap",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            0.516833,
+            0.501042,
+            0.445917
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 426.0045,
+          "note_count": 1000,
+          "p95_ms": 432.660417,
+          "page_size": 100,
+          "phase": "markdown_publish",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            426.0045,
+            432.660417,
+            409.682083
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 245.582291,
+          "note_count": 1000,
+          "p95_ms": 286.891458,
+          "page_size": 100,
+          "phase": "markdown_publish_changed",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            286.891458,
+            239.481375,
+            245.582291
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 811.467583,
+          "note_count": 1000,
+          "p95_ms": 851.681875,
+          "page_size": 100,
+          "phase": "no_op_destination",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            811.467583,
+            851.681875,
+            733.053791
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 885.979917,
+          "note_count": 1000,
+          "p95_ms": 942.423708,
+          "page_size": 100,
+          "phase": "no_op_source",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            942.423708,
+            885.979917,
+            762.742917
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 779.8055,
+          "note_count": 1000,
+          "p95_ms": 796.8615,
+          "page_size": 100,
+          "phase": "one_character_destination",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            768.082959,
+            796.8615,
+            779.8055
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 1576.674333,
+          "note_count": 1000,
+          "p95_ms": 1578.784917,
+          "page_size": 100,
+          "phase": "one_character_round_trip",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            1540.300666,
+            1578.784917,
+            1576.674333
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 781.918042,
+          "note_count": 1000,
+          "p95_ms": 796.859541,
+          "page_size": 100,
+          "phase": "one_character_source",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            772.205333,
+            781.918042,
+            796.859541
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 115.435,
+          "note_count": 1000,
+          "p95_ms": 135.067958,
+          "page_size": 100,
+          "phase": "records_listed",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            115.435,
+            135.067958,
+            101.243625
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 113.245875,
+          "note_count": 1000,
+          "p95_ms": 115.868875,
+          "page_size": 100,
+          "phase": "records_unlisted",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            113.245875,
+            115.868875,
+            100.430458
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374216,
+          "fixture_version": 1,
+          "median_ms": 164.356667,
+          "note_count": 1000,
+          "p95_ms": 165.517,
+          "page_size": 100,
+          "phase": "validate_catalog_record",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            164.356667,
+            165.517,
+            155.929709
+          ],
+          "snapshot_bytes": 374216
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.082917,
+          "note_count": 10,
+          "p95_ms": 0.085583,
+          "page_size": 100,
+          "phase": "accept_seed_no_op",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.082917,
+            0.085583,
+            0.075625
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.002333,
+          "note_count": 10,
+          "p95_ms": 0.002334,
+          "page_size": 100,
+          "phase": "catalog_items",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.002334,
+            0.002333,
+            0.002292
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "decoded_snapshots": [
+            0,
+            0,
+            0
+          ],
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.047833,
+          "note_count": 10,
+          "p95_ms": 0.052375,
+          "page_size": 100,
+          "phase": "checkpoint_history_worker",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.052375,
+            0.043584,
+            0.047833
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.951959,
+          "note_count": 10,
+          "p95_ms": 1.147375,
+          "page_size": 100,
+          "phase": "contains_history",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.147375,
+            0.951959,
+            0.94
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 39.944709,
+          "note_count": 10,
+          "p95_ms": 44.852125,
+          "page_size": 100,
+          "phase": "initial_destination",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            39.888291,
+            44.852125,
+            39.944709
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 34.131208,
+          "note_count": 10,
+          "p95_ms": 35.866834,
+          "page_size": 100,
+          "phase": "initial_source",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            34.131208,
+            35.866834,
+            33.831541
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.957167,
+          "note_count": 10,
+          "p95_ms": 1.046083,
+          "page_size": 100,
+          "phase": "markdown_changed_cleanup",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.957167,
+            1.046083,
+            0.940167
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.294875,
+          "note_count": 10,
+          "p95_ms": 0.356,
+          "page_size": 100,
+          "phase": "markdown_changed_commit",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.356,
+            0.294875,
+            0.29025
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 1.353417,
+          "note_count": 10,
+          "p95_ms": 1.511125,
+          "page_size": 100,
+          "phase": "markdown_changed_prepare",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.511125,
+            1.353417,
+            1.345875
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 1.763375,
+          "note_count": 10,
+          "p95_ms": 2.030958,
+          "page_size": 100,
+          "phase": "markdown_changed_stage_build",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            2.030958,
+            1.763375,
+            1.642916
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.1695,
+          "note_count": 10,
+          "p95_ms": 0.183,
+          "page_size": 100,
+          "phase": "markdown_changed_swap",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.183,
+            0.1695,
+            0.161375
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 9.632083,
+          "note_count": 10,
+          "p95_ms": 10.41875,
+          "page_size": 100,
+          "phase": "markdown_publish",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            10.41875,
+            9.632083,
+            9.100958
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 4.62725,
+          "note_count": 10,
+          "p95_ms": 5.03825,
+          "page_size": 100,
+          "phase": "markdown_publish_changed",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            5.03825,
+            4.62725,
+            4.380583
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 7.347083,
+          "note_count": 10,
+          "p95_ms": 9.112625,
+          "page_size": 100,
+          "phase": "no_op_destination",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            9.112625,
+            7.347083,
+            6.975084
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 7.80425,
+          "note_count": 10,
+          "p95_ms": 9.644458,
+          "page_size": 100,
+          "phase": "no_op_source",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            9.644458,
+            7.80425,
+            7.210375
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 14.124792,
+          "note_count": 10,
+          "p95_ms": 15.37175,
+          "page_size": 100,
+          "phase": "one_character_destination",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            15.37175,
+            13.872917,
+            14.124792
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 24.010666,
+          "note_count": 10,
+          "p95_ms": 27.251083,
+          "page_size": 100,
+          "phase": "one_character_round_trip",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            27.251083,
+            24.010666,
+            23.92975
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 10.136,
+          "note_count": 10,
+          "p95_ms": 11.875625,
+          "page_size": 100,
+          "phase": "one_character_source",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            11.875625,
+            10.136,
+            9.803042
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.9465,
+          "note_count": 10,
+          "p95_ms": 1.249084,
+          "page_size": 100,
+          "phase": "records_listed",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.249084,
+            0.9465,
+            0.929667
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 0.917292,
+          "note_count": 10,
+          "p95_ms": 1.135208,
+          "page_size": 100,
+          "phase": "records_unlisted",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.135208,
+            0.914125,
+            0.917292
+          ],
+          "snapshot_bytes": 16379
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16379,
+          "fixture_version": 1,
+          "median_ms": 1.058375,
+          "note_count": 10,
+          "p95_ms": 1.149417,
+          "page_size": 100,
+          "phase": "validate_catalog_record",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.149417,
+            1.04425,
+            1.058375
+          ],
+          "snapshot_bytes": 16379
+        }
+      ]
+    },
+    "final": {
+      "environment": "01a5a6ab72b427b5a67c83de0094cf77ff2c4794\n?? docs/markdown-publication-performance.md\nProductName:\t\tmacOS\nProductVersion:\t\t27.0\nBuildVersion:\t\t26A428\narm64\nXcode 27.0\nBuild version 27A266a\nApple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.0.0\nMEH_EXCHANGE_BENCHMARK_CASES=100x1,1000x5,10x500\nMEH_EXCHANGE_BENCHMARK_REPETITIONS=3\n",
+      "log_sha256": "353ed9895300dc15273ee9a6ccf0c45f38fe4b570594e31e3201cbfb7b946e40",
+      "results": [
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 0.145042,
+          "note_count": 100,
+          "p95_ms": 0.219833,
+          "page_size": 100,
+          "phase": "accept_seed_no_op",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.139292,
+            0.219833,
+            0.145042
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 0.010042,
+          "note_count": 100,
+          "p95_ms": 0.011208,
+          "page_size": 100,
+          "phase": "catalog_items",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.011208,
+            0.008042,
+            0.010042
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "decoded_snapshots": [
+            0,
+            0,
+            0
+          ],
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 0.214416,
+          "note_count": 100,
+          "p95_ms": 0.260166,
+          "page_size": 100,
+          "phase": "checkpoint_history_worker",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.214416,
+            0.260166,
+            0.198833
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 11.308667,
+          "note_count": 100,
+          "p95_ms": 11.662542,
+          "page_size": 100,
+          "phase": "contains_history",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            11.308667,
+            11.662542,
+            9.626875
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 257.468667,
+          "note_count": 100,
+          "p95_ms": 263.489833,
+          "page_size": 100,
+          "phase": "initial_destination",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            263.489833,
+            253.240542,
+            257.468667
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 224.038375,
+          "note_count": 100,
+          "p95_ms": 241.521208,
+          "page_size": 100,
+          "phase": "initial_source",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            224.038375,
+            223.745208,
+            241.521208
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 5.639416,
+          "note_count": 100,
+          "p95_ms": 5.68875,
+          "page_size": 100,
+          "phase": "markdown_changed_cleanup",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            5.68875,
+            5.639416,
+            5.483042
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 0.587333,
+          "note_count": 100,
+          "p95_ms": 0.623,
+          "page_size": 100,
+          "phase": "markdown_changed_commit",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.623,
+            0.576584,
+            0.587333
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 3.830375,
+          "note_count": 100,
+          "p95_ms": 4.03825,
+          "page_size": 100,
+          "phase": "markdown_changed_prepare",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            3.830375,
+            3.828125,
+            4.03825
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 13.286709,
+          "note_count": 100,
+          "p95_ms": 14.761542,
+          "page_size": 100,
+          "phase": "markdown_changed_stage_build",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            13.215459,
+            13.286709,
+            14.761542
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 0.206958,
+          "note_count": 100,
+          "p95_ms": 0.21025,
+          "page_size": 100,
+          "phase": "markdown_changed_swap",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            0.206958,
+            0.202166,
+            0.21025
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 38.596167,
+          "note_count": 100,
+          "p95_ms": 38.706417,
+          "page_size": 100,
+          "phase": "markdown_publish",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            38.596167,
+            38.706417,
+            38.337708
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 23.564542,
+          "note_count": 100,
+          "p95_ms": 25.080417,
+          "page_size": 100,
+          "phase": "markdown_publish_changed",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            23.564542,
+            23.533,
+            25.080417
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 66.283791,
+          "note_count": 100,
+          "p95_ms": 67.37775,
+          "page_size": 100,
+          "phase": "no_op_destination",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            67.37775,
+            66.283791,
+            57.042833
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 62.716042,
+          "note_count": 100,
+          "p95_ms": 63.057208,
+          "page_size": 100,
+          "phase": "no_op_source",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            62.716042,
+            63.057208,
+            58.338167
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 62.247167,
+          "note_count": 100,
+          "p95_ms": 70.298458,
+          "page_size": 100,
+          "phase": "one_character_destination",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            62.247167,
+            59.004833,
+            70.298458
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 134.478666,
+          "note_count": 100,
+          "p95_ms": 143.310917,
+          "page_size": 100,
+          "phase": "one_character_round_trip",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            134.478666,
+            127.589834,
+            143.310917
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 72.220917,
+          "note_count": 100,
+          "p95_ms": 73.007459,
+          "page_size": 100,
+          "phase": "one_character_source",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            72.220917,
+            68.581833,
+            73.007459
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 10.417125,
+          "note_count": 100,
+          "p95_ms": 11.355042,
+          "page_size": 100,
+          "phase": "records_listed",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            11.355042,
+            10.417125,
+            9.42575
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 10.848375,
+          "note_count": 100,
+          "p95_ms": 11.594208,
+          "page_size": 100,
+          "phase": "records_unlisted",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            10.848375,
+            11.594208,
+            9.537167
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 31799,
+          "fixture_version": 1,
+          "median_ms": 10.81075,
+          "note_count": 100,
+          "p95_ms": 11.283584,
+          "page_size": 100,
+          "phase": "validate_catalog_record",
+          "repetitions": 3,
+          "revisions_per_note": 1,
+          "samples_ms": [
+            11.283584,
+            10.81075,
+            10.671041
+          ],
+          "snapshot_bytes": 31799
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 0.30825,
+          "note_count": 1000,
+          "p95_ms": 0.363333,
+          "page_size": 100,
+          "phase": "accept_seed_no_op",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            0.237959,
+            0.30825,
+            0.363333
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 0.065209,
+          "note_count": 1000,
+          "p95_ms": 0.075167,
+          "page_size": 100,
+          "phase": "catalog_items",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            0.05425,
+            0.075167,
+            0.065209
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "decoded_snapshots": [
+            0,
+            0,
+            0
+          ],
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 1.81875,
+          "note_count": 1000,
+          "p95_ms": 2.593125,
+          "page_size": 100,
+          "phase": "checkpoint_history_worker",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            1.811334,
+            1.81875,
+            2.593125
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 113.664083,
+          "note_count": 1000,
+          "p95_ms": 120.236584,
+          "page_size": 100,
+          "phase": "contains_history",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            113.664083,
+            120.236584,
+            103.409375
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 3844.6345,
+          "note_count": 1000,
+          "p95_ms": 4277.045375,
+          "page_size": 100,
+          "phase": "initial_destination",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            3797.752542,
+            3844.6345,
+            4277.045375
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 3110.552584,
+          "note_count": 1000,
+          "p95_ms": 3368.6695,
+          "page_size": 100,
+          "phase": "initial_source",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            3110.552584,
+            3081.488208,
+            3368.6695
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 55.208417,
+          "note_count": 1000,
+          "p95_ms": 55.467833,
+          "page_size": 100,
+          "phase": "markdown_changed_cleanup",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            55.208417,
+            54.151166,
+            55.467833
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 2.245542,
+          "note_count": 1000,
+          "p95_ms": 2.414584,
+          "page_size": 100,
+          "phase": "markdown_changed_commit",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            2.224583,
+            2.414584,
+            2.245542
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 31.467958,
+          "note_count": 1000,
+          "p95_ms": 34.190666,
+          "page_size": 100,
+          "phase": "markdown_changed_prepare",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            31.18375,
+            34.190666,
+            31.467958
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 130.983083,
+          "note_count": 1000,
+          "p95_ms": 154.660417,
+          "page_size": 100,
+          "phase": "markdown_changed_stage_build",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            130.983083,
+            154.660417,
+            127.594042
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 0.457833,
+          "note_count": 1000,
+          "p95_ms": 0.511958,
+          "page_size": 100,
+          "phase": "markdown_changed_swap",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            0.434375,
+            0.511958,
+            0.457833
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 403.862,
+          "note_count": 1000,
+          "p95_ms": 491.566875,
+          "page_size": 100,
+          "phase": "markdown_publish",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            385.001791,
+            491.566875,
+            403.862
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 220.034208,
+          "note_count": 1000,
+          "p95_ms": 245.928791,
+          "page_size": 100,
+          "phase": "markdown_publish_changed",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            220.034208,
+            245.928791,
+            217.233208
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 736.969292,
+          "note_count": 1000,
+          "p95_ms": 771.211209,
+          "page_size": 100,
+          "phase": "no_op_destination",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            697.148625,
+            771.211209,
+            736.969292
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 729.88975,
+          "note_count": 1000,
+          "p95_ms": 743.888458,
+          "page_size": 100,
+          "phase": "no_op_source",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            710.949708,
+            729.88975,
+            743.888458
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 740.487834,
+          "note_count": 1000,
+          "p95_ms": 764.48225,
+          "page_size": 100,
+          "phase": "one_character_destination",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            714.840875,
+            764.48225,
+            740.487834
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 1534.373791,
+          "note_count": 1000,
+          "p95_ms": 1550.20325,
+          "page_size": 100,
+          "phase": "one_character_round_trip",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            1473.873875,
+            1534.373791,
+            1550.20325
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 769.886625,
+          "note_count": 1000,
+          "p95_ms": 809.711542,
+          "page_size": 100,
+          "phase": "one_character_source",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            759.026542,
+            769.886625,
+            809.711542
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 110.504125,
+          "note_count": 1000,
+          "p95_ms": 112.917917,
+          "page_size": 100,
+          "phase": "records_listed",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            102.096875,
+            110.504125,
+            112.917917
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 106.6615,
+          "note_count": 1000,
+          "p95_ms": 110.886791,
+          "page_size": 100,
+          "phase": "records_unlisted",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            106.6615,
+            110.886791,
+            105.138
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 374230,
+          "fixture_version": 1,
+          "median_ms": 153.807583,
+          "note_count": 1000,
+          "p95_ms": 166.6725,
+          "page_size": 100,
+          "phase": "validate_catalog_record",
+          "repetitions": 3,
+          "revisions_per_note": 5,
+          "samples_ms": [
+            152.518916,
+            153.807583,
+            166.6725
+          ],
+          "snapshot_bytes": 374230
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 0.110292,
+          "note_count": 10,
+          "p95_ms": 0.134542,
+          "page_size": 100,
+          "phase": "accept_seed_no_op",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.087333,
+            0.110292,
+            0.134542
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 0.002334,
+          "note_count": 10,
+          "p95_ms": 0.003,
+          "page_size": 100,
+          "phase": "catalog_items",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.002292,
+            0.003,
+            0.002334
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "decoded_snapshots": [
+            0,
+            0,
+            0
+          ],
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 0.044208,
+          "note_count": 10,
+          "p95_ms": 0.068167,
+          "page_size": 100,
+          "phase": "checkpoint_history_worker",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.044208,
+            0.042417,
+            0.068167
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 0.959125,
+          "note_count": 10,
+          "p95_ms": 1.224917,
+          "page_size": 100,
+          "phase": "contains_history",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.94225,
+            0.959125,
+            1.224917
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 41.963917,
+          "note_count": 10,
+          "p95_ms": 43.778542,
+          "page_size": 100,
+          "phase": "initial_destination",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            41.963917,
+            40.9225,
+            43.778542
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 34.762833,
+          "note_count": 10,
+          "p95_ms": 38.6105,
+          "page_size": 100,
+          "phase": "initial_source",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            34.118583,
+            34.762833,
+            38.6105
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 0.962541,
+          "note_count": 10,
+          "p95_ms": 1.001458,
+          "page_size": 100,
+          "phase": "markdown_changed_cleanup",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.001458,
+            0.962541,
+            0.868208
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 0.302667,
+          "note_count": 10,
+          "p95_ms": 0.331542,
+          "page_size": 100,
+          "phase": "markdown_changed_commit",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.331542,
+            0.302667,
+            0.297292
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 1.428958,
+          "note_count": 10,
+          "p95_ms": 1.578166,
+          "page_size": 100,
+          "phase": "markdown_changed_prepare",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.274083,
+            1.578166,
+            1.428958
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 1.607584,
+          "note_count": 10,
+          "p95_ms": 1.62575,
+          "page_size": 100,
+          "phase": "markdown_changed_stage_build",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.62575,
+            1.607584,
+            1.512792
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 0.171958,
+          "note_count": 10,
+          "p95_ms": 0.18,
+          "page_size": 100,
+          "phase": "markdown_changed_swap",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.18,
+            0.171958,
+            0.165666
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 9.446209,
+          "note_count": 10,
+          "p95_ms": 9.810125,
+          "page_size": 100,
+          "phase": "markdown_publish",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            9.339417,
+            9.810125,
+            9.446209
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 4.412833,
+          "note_count": 10,
+          "p95_ms": 4.622916,
+          "page_size": 100,
+          "phase": "markdown_publish_changed",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            4.412833,
+            4.622916,
+            4.272916
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 7.566959,
+          "note_count": 10,
+          "p95_ms": 9.281417,
+          "page_size": 100,
+          "phase": "no_op_destination",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            7.566959,
+            7.103542,
+            9.281417
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 7.610666,
+          "note_count": 10,
+          "p95_ms": 8.78075,
+          "page_size": 100,
+          "phase": "no_op_source",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            7.289,
+            7.610666,
+            8.78075
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 14.53775,
+          "note_count": 10,
+          "p95_ms": 14.566709,
+          "page_size": 100,
+          "phase": "one_character_destination",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            13.607917,
+            14.566709,
+            14.53775
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 24.842334,
+          "note_count": 10,
+          "p95_ms": 35.615292,
+          "page_size": 100,
+          "phase": "one_character_round_trip",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            23.478334,
+            35.615292,
+            24.842334
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 10.302458,
+          "note_count": 10,
+          "p95_ms": 21.0435,
+          "page_size": 100,
+          "phase": "one_character_source",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            9.868208,
+            21.0435,
+            10.302458
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 0.91825,
+          "note_count": 10,
+          "p95_ms": 1.23975,
+          "page_size": 100,
+          "phase": "records_listed",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.917541,
+            0.91825,
+            1.23975
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 0.943167,
+          "note_count": 10,
+          "p95_ms": 1.234042,
+          "page_size": 100,
+          "phase": "records_unlisted",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            0.911917,
+            0.943167,
+            1.234042
+          ],
+          "snapshot_bytes": 16380
+        },
+        {
+          "benchmark": "notebook_local_exchange",
+          "fixture_on_disk_bytes": 16380,
+          "fixture_version": 1,
+          "median_ms": 1.074958,
+          "note_count": 10,
+          "p95_ms": 1.1005,
+          "page_size": 100,
+          "phase": "validate_catalog_record",
+          "repetitions": 3,
+          "revisions_per_note": 500,
+          "samples_ms": [
+            1.037792,
+            1.074958,
+            1.1005
+          ],
+          "snapshot_bytes": 16380
+        }
+      ]
+    }
+  },
+  "validation": {
+    "focused_log_sha256": "d507804fabb61fbfb1cd9f17b0ede565a7688c4caa043a20803d1c3960a19b9e",
+    "focused_tests": 32,
+    "failures": 0,
+    "skips": 0
+  },
+  "reproducible_equivalent_revisions": {
+    "bdb2def": "b9d45ca4120d6e696c6f6b7fed16b4d7fecd2deb",
+    "bc055ef": "e221c47dd96ac8614f858d9c043a961f5de2f2c9",
+    "01a5a6a": "7dc219a932f8c921f066419aa0deeffbcb119ef0"
+  },
+  "revision_note": "Review corrections to documentation and the lab runner were folded into their original commits. These equivalent revisions have identical Sources and exchange benchmark source to the measured revisions; original run metadata is retained.",
+  "release_builds": {
+    "mac": {
+      "status": "passed",
+      "log_sha256": "3c20252f1761f1b7a43512936c1bb0ca6252491d17e3fa3488360da1a455953e"
+    },
+    "ios": {
+      "status": "passed",
+      "log_sha256": "647f491f2ffef487f9a6eaac932c489acd5858e2593120a2cdee8cb0db4c3519"
+    }
+  },
+  "full_validation": {
+    "swift_tests": 767,
+    "expected_skips": 6,
+    "failures": 0,
+    "python_service_tests": 16,
+    "python_lab_guard_tests": 19,
+    "stress_seeds": [
+      7,
+      11,
+      23,
+      47,
+      97,
+      193,
+      389,
+      769
+    ],
+    "scale_counts": [
+      100,
+      500,
+      1000
+    ],
+    "log_sha256": {
+      "swift-test.log": "b8a39f7547bec1d0517cd5f3472399cd39c60fc19f15f20e2443917afc8b5d6c",
+      "python-test.log": "bc83d869f9d322e090543a6d83f411dbca07314515e96b4a1d149ee0c6d7d882",
+      "lab-guard-test.log": "8b5813a13de0affd72dd0253364bd78d028227ad5c6e224866c545653f625197"
+    }
+  },
+  "revision_at_collection": "7dc219a932f8c921f066419aa0deeffbcb119ef0"
+}
