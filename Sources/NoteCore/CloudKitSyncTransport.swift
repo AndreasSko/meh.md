@@ -595,6 +595,30 @@ enum CloudKitTransportMode: Equatable, Sendable {
     }
 }
 
+/// A separate CloudKit zone and local state for one fictional sync lab run.
+/// The caller supplies an identity, never an arbitrary CloudKit zone name.
+enum CloudKitNotebookLabScope {
+    private static let zonePrefix = "meh-md-notebook-lab-v2-"
+    private static let directoryPrefix = "notebook-lab-"
+
+    static func zoneName(runID: UUID) -> String {
+        zonePrefix + runID.uuidString.lowercased()
+    }
+
+    static func stateDirectory(base: URL, runID: UUID) -> URL {
+        base.appendingPathComponent(
+            directoryPrefix + runID.uuidString.lowercased(),
+            isDirectory: true
+        )
+    }
+
+    static func validate(zoneName: String, runID: UUID) throws {
+        guard zoneName == self.zoneName(runID: runID),
+            zoneName != CloudKitTransportMode.notebook.zoneName
+        else { throw SyncError.scopeChanged }
+    }
+}
+
 struct CloudKitRecordCodec: @unchecked Sendable {
     let mode: CloudKitTransportMode
     let zoneID: CKRecordZone.ID
@@ -1053,6 +1077,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private var publishWaiters: [CheckedContinuation<Void, Never>] = []
     private let activityChannel: CloudKitSyncActivityChannel
     private var activityTracker = CloudKitSyncActivityTracker()
+    #if DEBUG
+    private var labRequestTimingSamples: [String: [Double]]?
+    #endif
 
     public static func persistedRetryNotBefore(
         stateDirectory: URL
@@ -1094,6 +1121,30 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         )
     }
 
+    #if DEBUG
+    /// Opt-in, fictional-data CloudKit lab. The signed caller must be verified
+    /// as using the Development environment before invoking this factory.
+    /// Lab state is nested below the supplied base directory and never shares
+    /// the canonical notebook's CloudKit state file.
+    @_spi(SyncLab)
+    public static func makeIsolatedNotebookLab(
+        containerIdentifier: String,
+        stateDirectory: URL,
+        runID: UUID
+    ) async throws -> CloudKitSyncTransport {
+        try await make(
+            containerIdentifier: containerIdentifier,
+            stateDirectory: CloudKitNotebookLabScope.stateDirectory(
+                base: stateDirectory, runID: runID
+            ),
+            zoneName: CloudKitNotebookLabScope.zoneName(runID: runID),
+            mode: .notebook,
+            automaticallySync: false,
+            labRunID: runID
+        )
+    }
+    #endif
+
     private static func make(
         containerIdentifier: String,
         stateDirectory: URL,
@@ -1101,9 +1152,17 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         mode: CloudKitTransportMode,
         automaticallySync: Bool,
         expectedScope: String? = nil,
-        expectedNotebookID: UUID? = nil
+        expectedNotebookID: UUID? = nil,
+        labRunID: UUID? = nil
     ) async throws -> CloudKitSyncTransport {
-        try mode.validate(zoneName: zoneName)
+        if let labRunID {
+            guard mode == .notebook else { throw SyncError.scopeChanged }
+            try CloudKitNotebookLabScope.validate(
+                zoneName: zoneName, runID: labRunID
+            )
+        } else {
+            try mode.validate(zoneName: zoneName)
+        }
         var availabilityCooldown = try CloudKitAvailabilityCooldownStore(
             directory: stateDirectory
         )
@@ -1167,8 +1226,26 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             automaticallySync: automaticallySync
         )
         try await transport.initialize()
+        #if DEBUG
+        if labRunID != nil { await transport.enableLabRequestTimings() }
+        #endif
         return transport
     }
+
+    #if DEBUG
+    private func enableLabRequestTimings() {
+        labRequestTimingSamples = [:]
+    }
+
+    /// Elapsed milliseconds per lab request. Each sample includes any retry
+    /// cooldown wait, the CloudKit call, and error cooldown persistence. A
+    /// failed request is recorded too. Requests not explicitly named use
+    /// `other`; no account identity or record contents are retained.
+    @_spi(SyncLab)
+    public func labRequestTimings() -> [String: [Double]] {
+        labRequestTimingSamples ?? [:]
+    }
+    #endif
 
     private init(
         containerIdentifier: String,
@@ -1269,7 +1346,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             recordName: mode.bootstrapName, zoneID: zoneID
         )
         do {
-            let existing = try await cloudRequest {
+            let existing = try await cloudRequest(labLabel: "bootstrap.readCanonical") {
                 try await database.record(for: recordID)
             }
             let canonical = try decode(existing)
@@ -1288,7 +1365,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 record, id: recordID, assetURL: assetURL
             )
             do {
-                _ = try await cloudRequest {
+                _ = try await cloudRequest(labLabel: "bootstrap.saveCanonical") {
                     try await database.save(cloudRecord)
                 }
                 try await store.update { try $0.appendToInbox(record) }
@@ -1297,7 +1374,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             } catch let conflict as CKError
                 where conflict.code == .serverRecordChanged {
                 await observeRetryAfter(conflict)
-                let server = try await cloudRequest {
+                let server = try await cloudRequest(labLabel: "bootstrap.readCanonical") {
                     try await database.record(for: recordID)
                 }
                 let canonical = try decode(server)
@@ -1379,7 +1456,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         )
         let sendError: Error?
         do {
-            try await cloudRequest {
+            try await cloudRequest(labLabel: "publish.engineSend") {
                 try await engine.sendChanges(
                     .init(scope: .recordIDs(recordIDs))
                 )
@@ -1414,7 +1491,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 return buffered
             }
         }
-        try await cloudRequest {
+        try await cloudRequest(labLabel: "fetch.engineFetch") {
             try await engine.fetchChanges(.init(scope: .zoneIDs([zoneID])))
         }
         if let delegateFailure {
@@ -1467,7 +1544,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         try await verifyAccount()
         try await ensureZone()
         if requiresFetch {
-            try await cloudRequest {
+            try await cloudRequest(labLabel: "purge.engineFetch") {
                 try await engine.fetchChanges(
                     .init(scope: .zoneIDs([zoneID]))
                 )
@@ -1621,7 +1698,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     }
 
     private func verifyAccount() async throws {
-        let status = try await cloudRequest {
+        let status = try await cloudRequest(labLabel: "verifyAccount.accountStatus") {
             try await container.accountStatus()
         }
         switch status {
@@ -1633,7 +1710,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         default:
             throw CloudKitSyncTransportError.accountUnavailable
         }
-        let currentUser = try await cloudRequest {
+        let currentUser = try await cloudRequest(labLabel: "verifyAccount.userRecordID") {
             try await container.userRecordID()
         }
         guard currentUser == expectedUserRecordID else {
@@ -1643,8 +1720,22 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     }
 
     private func cloudRequest<T>(
+        labLabel: String = "other",
         _ operation: () async throws -> T
     ) async throws -> T {
+        #if DEBUG
+        let started = labRequestTimingSamples == nil ? nil : ContinuousClock.now
+        defer {
+            if let started, labRequestTimingSamples != nil {
+                let duration = started.duration(to: .now).components
+                let milliseconds = Double(duration.seconds) * 1_000
+                    + Double(duration.attoseconds) / 1_000_000_000_000_000
+                labRequestTimingSamples?[labLabel, default: []].append(
+                    milliseconds
+                )
+            }
+        }
+        #endif
         try assertActive()
         if let delegateFailure { throw delegateFailure }
         try await waitForRetryWindow()
@@ -1727,7 +1818,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     }
 
     private func ensureZone() async throws {
-        let result = try await cloudRequest {
+        let result = try await cloudRequest(labLabel: "ensureZone.recordZones") {
             try await database.recordZones(for: [zoneID])
         }
         guard let zoneResult = result[zoneID] else {
@@ -1744,7 +1835,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 throw error
             }
         }
-        let saved = try await cloudRequest {
+        let saved = try await cloudRequest(labLabel: "ensureZone.createZone") {
             try await database.modifyRecordZones(
                 saving: [CKRecordZone(zoneID: zoneID)], deleting: []
             )
