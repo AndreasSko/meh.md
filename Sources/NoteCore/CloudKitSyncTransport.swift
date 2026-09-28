@@ -619,6 +619,23 @@ enum CloudKitNotebookLabScope {
     }
 }
 
+/// An existing zone needs only its canonical record read. Resolve a zone
+/// exactly when CloudKit says it is missing, then retry that operation once.
+enum CloudKitBootstrapZoneRetry {
+    static func perform<T>(
+        isolation: isolated (any Actor)? = #isolation,
+        _ operation: () async throws -> T,
+        ensureZone: () async throws -> Void
+    ) async throws -> T {
+        do {
+            return try await operation()
+        } catch let error as CKError where error.code == .zoneNotFound {
+            try await ensureZone()
+            return try await operation()
+        }
+    }
+}
+
 struct CloudKitRecordCodec: @unchecked Sendable {
     let mode: CloudKitTransportMode
     let zoneID: CKRecordZone.ID
@@ -1341,13 +1358,16 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         try await assertHealthy()
         try mode.validate(record, bootstrap: true)
         try await verifyAccount()
-        try await ensureZone()
         let recordID = CKRecord.ID(
             recordName: mode.bootstrapName, zoneID: zoneID
         )
         do {
-            let existing = try await cloudRequest(labLabel: "bootstrap.readCanonical") {
-                try await database.record(for: recordID)
+            let existing = try await CloudKitBootstrapZoneRetry.perform {
+                try await cloudRequest(labLabel: "bootstrap.readCanonical") {
+                    try await database.record(for: recordID)
+                }
+            } ensureZone: {
+                try await ensureZone()
             }
             let canonical = try decode(existing)
             try await store.update { try $0.appendToInbox(canonical) }
@@ -1365,8 +1385,12 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 record, id: recordID, assetURL: assetURL
             )
             do {
-                _ = try await cloudRequest(labLabel: "bootstrap.saveCanonical") {
-                    try await database.save(cloudRecord)
+                _ = try await CloudKitBootstrapZoneRetry.perform {
+                    try await cloudRequest(labLabel: "bootstrap.saveCanonical") {
+                        try await database.save(cloudRecord)
+                    }
+                } ensureZone: {
+                    try await ensureZone()
                 }
                 try await store.update { try $0.appendToInbox(record) }
                 uploadCompleted = true
