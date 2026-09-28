@@ -691,11 +691,19 @@ struct NotebookView: View {
         .selectionDisabled()
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
-        .listRowInsets(sidebarSectionInsets)
+        .listRowInsets(recentSectionInsets)
     }
 
     private var sidebarSectionInsets: EdgeInsets {
         EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)
+    }
+
+    private var recentSectionInsets: EdgeInsets {
+        #if os(macOS)
+        EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
+        #else
+        sidebarSectionInsets
+        #endif
     }
 
     private var recentPlacements: [NotebookPlacement] {
