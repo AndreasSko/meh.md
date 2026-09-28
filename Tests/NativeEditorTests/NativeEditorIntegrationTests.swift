@@ -69,6 +69,25 @@ final class NativeEditorIntegrationTests: XCTestCase {
         XCTAssertEqual(try boundary.note.text, "**Moon 🪐**")
     }
 
+    func testTaskToggleCommitsLiteralMarkdownAndUndoes() throws {
+        let source = "- [ ] Pack a map"
+        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))
+        let editor = MarkdownEditor(
+            text: Binding(get: { boundary.text }, set: { boundary.text = $0 }),
+            mode: .livePreview
+        )
+        let mounted = mount(editor)
+        let textView = try XCTUnwrap(mounted.textView as? MarkdownTextView)
+        defer { mounted.tearDown() }
+        textView.toggleMarkdownTask(at: 3)
+        XCTAssertEqual(nativeText(in: textView), "- [x] Pack a map")
+        XCTAssertEqual(try boundary.note.text, "- [x] Pack a map")
+        let undo = try XCTUnwrap(textView.undoManager)
+        undo.undo()
+        XCTAssertEqual(nativeText(in: textView), source)
+        XCTAssertEqual(try boundary.note.text, source)
+    }
+
     func testNativeReturnContinuesListAndEmptyItemExits() throws {
         let source = "* Moon 🪐"
         let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))

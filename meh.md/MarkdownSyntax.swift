@@ -9,6 +9,7 @@ enum MarkdownStyleRole: Equatable {
     case code
     case link
     case listMarker
+    case taskMarker(checked: Bool)
     case blockquote
     case blockquoteMarker
 }
@@ -618,6 +619,25 @@ enum MarkdownSyntax {
                         in: source
                     )
                     listContentStart = location
+                    if location + 3 <= contentEnd,
+                       source.character(at: location) == 91,
+                       source.character(at: location + 2) == 93,
+                       (location + 3 == contentEnd
+                           || isWhitespace(source.character(at: location + 3))) {
+                        let state = source.character(at: location + 1)
+                        if state == 32 || state == 120 || state == 88 {
+                            spans.append(MarkdownStyleSpan(
+                                range: NSRange(location: location, length: 3),
+                                role: .taskMarker(checked: state != 32)
+                            ))
+                            location = skipHorizontalWhitespace(
+                                from: location + 3,
+                                before: contentEnd,
+                                in: source
+                            )
+                            listContentStart = location
+                        }
+                    }
                     previousContainerWasList = true
                     continue
                 }
@@ -993,7 +1013,7 @@ enum MarkdownSyntax {
             switch span.role {
             case .heading, .strong, .emphasis, .code:
                 return true
-            case .highlight, .strikethrough, .link, .listMarker,
+            case .highlight, .strikethrough, .link, .listMarker, .taskMarker,
                     .blockquote, .blockquoteMarker:
                 return false
             }
@@ -1072,7 +1092,7 @@ enum MarkdownSyntax {
                 traits.insert(.italic)
             case .code:
                 traits.insert(.monospaced)
-            case .highlight, .strikethrough, .link, .listMarker,
+            case .highlight, .strikethrough, .link, .listMarker, .taskMarker,
                     .blockquote, .blockquoteMarker:
                 break
             }

@@ -5,6 +5,21 @@ import XCTest
 
 @MainActor
 final class MarkdownSyntaxIncrementalTests: XCTestCase {
+    func testTaskMarkersStayInLiteralMarkdown() {
+        let text = "- [ ] Open\n1. [x] Done\n> + [X] Quoted\n"
+            + "\\- [x] Escaped\n- \\[x] Escaped marker\n"
+            + "```\n- [x] Code\n```\n| Task |\n| --- |\n| - [x] Cell |"
+        let tasks = MarkdownSyntax.parse(text).spans.compactMap { span -> Bool? in
+            if case let .taskMarker(checked) = span.role { return checked }
+            return nil
+        }
+        XCTAssertEqual(tasks, [false, true, true])
+        XCTAssertEqual((text as NSString).substring(with:
+            MarkdownSyntax.parse(text).spans.first {
+                $0.role == .taskMarker(checked: false)
+            }!.range), "[ ]")
+    }
+
     func testEmphasisSpansSoftBreaksButNotSeparateBlocks() {
         for marker in ["**", "__", "*", "_"] {
             for newline in ["\n", "\r\n"] {

@@ -53,6 +53,13 @@ struct EditorWritingControls: View {
             commandButton(
                 "Code Block", systemImage: "curlybraces.square", command: .codeBlock
             )
+            commandButton(
+                "Task List", systemImage: "checklist", command: .taskList
+            )
+            commandButton(
+                "Toggle Task", systemImage: "checkmark.square",
+                command: .toggleTask
+            )
             Divider()
             EditorTableMenu(navigation: navigation)
             Divider()
@@ -99,6 +106,8 @@ private extension MarkdownEditingCommand {
         case .link: "editor-command-link"
         case .inlineCode: "editor-command-inline-code"
         case .codeBlock: "editor-command-code-block"
+        case .taskList: "editor-command-task-list"
+        case .toggleTask: "editor-command-toggle-task"
         case .insertTable: "editor-command-insert-table"
         case .tableRowAbove: "editor-command-table-row-above"
         case .tableRowBelow: "editor-command-table-row-below"
@@ -586,6 +595,8 @@ private final class MarkdownKeyboardAccessoryView: UIView,
                 .inlineCode
             ),
             ("Code Block", "curlybraces.square", .codeBlock),
+            ("Task List", "checklist", .taskList),
+            ("Toggle Task", "checkmark.square", .toggleTask),
         ]
         let actions = commands.map { title, image, command in
             UIAction(

@@ -361,10 +361,13 @@ final class MarkdownTextView: NSTextView {
 
     @discardableResult
     func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
-        guard isEditable, !hasMarkedText(),
-              let change = MarkdownEditingRules.change(
-                for: command, text: string, selection: selectedRange()
-              ) else { return false }
+        guard isEditable, !hasMarkedText() else { return false }
+        let syntaxResult = command == .toggleTask
+            ? markdownSyntaxCache.result(for: string) : nil
+        guard let change = MarkdownEditingRules.change(
+            for: command, text: string, selection: selectedRange(),
+            syntaxResult: syntaxResult
+        ) else { return false }
         let expected = (string as NSString).replacingCharacters(
             in: change.range, with: change.replacement
         )
@@ -382,6 +385,28 @@ final class MarkdownTextView: NSTextView {
             scrollRangeToVisible(selectedRange())
         }
         return true
+    }
+
+    func toggleMarkdownTask(at location: Int) {
+        guard isEditable, !hasMarkedText() else { return }
+        let syntaxResult = markdownSyntaxCache.result(for: string)
+        guard let change = MarkdownEditingRules.toggleTask(
+            text: string, at: location, syntaxResult: syntaxResult
+        ) else { return }
+        let selection = selectedRange()
+        breakUndoCoalescing()
+        insertText(change.replacement, replacementRange: change.range)
+        breakUndoCoalescing()
+        setSelectedRange(string.clampedSelection(selection))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if let checkbox = MarkdownPresentation.taskCheckbox(at: point, in: self) {
+            toggleMarkdownTask(at: checkbox.range.location)
+            return
+        }
+        super.mouseDown(with: event)
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -410,6 +435,7 @@ final class MarkdownTextView: NSTextView {
         case ("k", .command): command = .link
         case ("h", [.command, .shift]): command = .heading
         case ("c", [.command, .shift]): command = .inlineCode
+        case ("t", [.command, .shift]): command = .toggleTask
         default: command = nil
         }
         if let command, performMarkdownCommand(command) { return true }
@@ -1177,7 +1203,7 @@ nonisolated(unsafe) private var markdownTextViewStateKey: UInt8 = 0
 
 // UIKit's TextKit factory can bypass Swift subclass property initializers.
 // Keep editor state in a normally initialized object attached to the view.
-final class MarkdownTextView: UITextView {
+final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
     override func layoutSubviews() {
         super.layoutSubviews()
         // Scroll-past-end space belongs to the document. A content inset
@@ -1295,10 +1321,14 @@ final class MarkdownTextView: UITextView {
     @discardableResult
     func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
         guard isEditable, markedTextRange == nil,
-              !markdownState.isApplyingCommand,
-              let change = MarkdownEditingRules.change(
-                for: command, text: text ?? "", selection: selectedRange
-              ) else { return false }
+              !markdownState.isApplyingCommand else { return false }
+        let source = text ?? ""
+        let syntaxResult = command == .toggleTask
+            ? markdownSyntaxCache.result(for: source) : nil
+        guard let change = MarkdownEditingRules.change(
+            for: command, text: source, selection: selectedRange,
+            syntaxResult: syntaxResult
+        ) else { return false }
         let expected = ((text ?? "") as NSString).replacingCharacters(
             in: change.range, with: change.replacement
         )
@@ -1318,6 +1348,50 @@ final class MarkdownTextView: UITextView {
         // UIKit programmatic insertion does not consistently notify delegates.
         delegate?.textViewDidChange?(self)
         return true
+    }
+
+    func toggleMarkdownTask(at location: Int) {
+        guard isEditable, markedTextRange == nil else { return }
+        let source = text ?? ""
+        let syntaxResult = markdownSyntaxCache.result(for: source)
+        guard let change = MarkdownEditingRules.toggleTask(
+            text: source, at: location, syntaxResult: syntaxResult
+        ) else { return }
+        let selection = selectedRange
+        markdownState.isApplyingCommand = true
+        defer { markdownState.isApplyingCommand = false }
+        selectedRange = change.range
+        super.insertText(change.replacement)
+        selectedRange = (text ?? "").clampedSelection(selection)
+        delegate?.textViewDidChange?(self)
+    }
+
+    func installMarkdownTaskTap() {
+        guard markdownState.taskTap == nil else { return }
+        let tap = UITapGestureRecognizer(
+            target: self, action: #selector(tappedMarkdownTask(_:))
+        )
+        tap.delegate = self
+        addGestureRecognizer(tap)
+        markdownState.taskTap = tap
+        accessibilityCustomActions = [UIAccessibilityCustomAction(
+            name: String(localized: "Toggle Task"),
+            target: self,
+            selector: #selector(accessibilityToggleMarkdownTask(_:))
+        )]
+    }
+
+    @objc private func accessibilityToggleMarkdownTask(
+        _ action: UIAccessibilityCustomAction
+    ) -> Bool {
+        performMarkdownCommand(.toggleTask)
+    }
+
+    @objc private func tappedMarkdownTask(_ tap: UITapGestureRecognizer) {
+        guard let checkbox = MarkdownPresentation.taskCheckbox(
+            at: tap.location(in: self), in: self
+        ) else { return }
+        toggleMarkdownTask(at: checkbox.range.location)
     }
 
     override func insertText(_ text: String) {
@@ -1345,6 +1419,7 @@ final class MarkdownTextView: UITextView {
             ("k", .command, #selector(linkMarkdown)),
             ("h", [.command, .shift], #selector(headingMarkdown)),
             ("c", [.command, .shift], #selector(codeMarkdown)),
+            ("t", [.command, .shift], #selector(toggleTaskMarkdown)),
         ]
         return (super.keyCommands ?? []) + commands.map { input, flags, action in
             let key = UIKeyCommand(input: input, modifierFlags: flags, action: action)
@@ -1367,6 +1442,9 @@ final class MarkdownTextView: UITextView {
     @objc private func linkMarkdown() { _ = performMarkdownCommand(.link) }
     @objc private func headingMarkdown() { _ = performMarkdownCommand(.heading) }
     @objc private func codeMarkdown() { _ = performMarkdownCommand(.inlineCode) }
+    @objc private func toggleTaskMarkdown() {
+        _ = performMarkdownCommand(.toggleTask)
+    }
 
     func installMarkdownLayoutManagerDelegate(
         on layoutManager: NSTextLayoutManager
@@ -1388,6 +1466,17 @@ final class MarkdownTextView: UITextView {
         markdownState.layoutDelegate = delegate
         layoutManager.delegate = delegate
     }
+    override func gestureRecognizerShouldBegin(
+        _ gestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        guard gestureRecognizer === markdownState.taskTap,
+              let tap = gestureRecognizer as? UITapGestureRecognizer else {
+            return super.gestureRecognizerShouldBegin(gestureRecognizer)
+        }
+        return MarkdownPresentation.taskCheckbox(
+            at: tap.location(in: self), in: self
+        ) != nil
+    }
 }
 
 private final class MarkdownTextViewState: NSObject {
@@ -1397,6 +1486,7 @@ private final class MarkdownTextViewState: NSObject {
     var didAttachToWindow: (() -> Void)?
     var didLayout: (() -> Void)?
     let syntaxCache = MarkdownSyntaxCache()
+    var taskTap: UITapGestureRecognizer?
     var layoutDelegate: MarkdownLayoutManagerDelegate?
     var titleHost: UIHostingController<AnyView>?
     var titleHeight: CGFloat = 0
