@@ -397,12 +397,11 @@ public actor NotebookMarkdownPublisher {
         }
         for item in plan where item.entry.kind == .file {
             let url = stageURL.appending(path: item.entry.path)
-            try fileManager.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try DurableFileIO.writeAndSync(item.data!, to: url)
-            try applyDates(item.entry, to: url)
+            // The stage root and every planned folder already exist. Flush
+            // bytes and dates together before this generation can be swapped.
+            try DurableFileIO.writeAndSync(item.data!, to: url) {
+                try applyDates(item.entry, to: url)
+            }
         }
         let directories = Set(plan.flatMap { item -> [URL] in
             let url = stageURL.appending(path: item.entry.path)
@@ -428,7 +427,6 @@ public actor NotebookMarkdownPublisher {
                 at: url
             )
         }
-        try syncFile(url)
     }
 
     private func setAttributeIfSupported(
@@ -458,15 +456,6 @@ public actor NotebookMarkdownPublisher {
             return isUnsupportedAttributeError(underlying)
         }
         return false
-    }
-
-    private func syncFile(_ url: URL) throws {
-        let descriptor = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
-        guard descriptor >= 0 else { throw DurableFileIO.posixError() }
-        defer { close(descriptor) }
-        guard fsync(descriptor) == 0 else {
-            throw DurableFileIO.posixError()
-        }
     }
 
     private func beginStage(generation: UUID, at stageURL: URL) throws {

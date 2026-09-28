@@ -381,6 +381,43 @@ final class NotebookMarkdownPublisherCacheTests: XCTestCase {
         }
     }
 
+    func testWarmCacheRejectsSymlinkedManagedFile() async throws {
+        let root = temporaryDirectory()
+        let outside = FileManager.default.temporaryDirectory.appending(
+            path: "NotebookMarkdownPublisherCacheExternal-\(UUID().uuidString)"
+        )
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let catalog = try NotebookCatalogDocument()
+        let note = try NoteDocument(text: "trusted")
+        try catalog.add(id: note.noteID, kind: .note, name: "Note")
+        let publisher = NotebookMarkdownPublisher(directory: root)
+        let snapshot = catalog.snapshot()
+        let placements = try catalog.placements()
+        let notes = [note.snapshot()]
+        try await publisher.publish(
+            catalog: snapshot, placements: placements, notes: notes
+        )
+
+        try Data("foreign".utf8).write(to: outside)
+        let copy = root.appending(path: "Markdown/Note.md")
+        try FileManager.default.removeItem(at: copy)
+        try FileManager.default.createSymbolicLink(
+            at: copy, withDestinationURL: outside
+        )
+
+        await assertPublisherError(.unsafeManagedContent) {
+            try await publisher.publish(
+                catalog: snapshot, placements: placements, notes: notes
+            )
+        }
+        XCTAssertEqual(try Data(contentsOf: outside), Data("foreign".utf8))
+        let values = try copy.resourceValues(forKeys: [.isSymbolicLinkKey])
+        XCTAssertEqual(values.isSymbolicLink, true)
+    }
+
     private func assertPublisherError(
         _ expected: NotebookMarkdownPublisherError,
         operation: () async throws -> Void

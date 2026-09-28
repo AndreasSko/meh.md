@@ -2,7 +2,11 @@ import Darwin
 import Foundation
 
 enum DurableFileIO {
-    static func writeAndSync(_ data: Data, to url: URL) throws {
+    static func writeAndSync(
+        _ data: Data,
+        to url: URL,
+        beforeSync: () throws -> Void = {}
+    ) throws {
         let descriptor = open(
             url.path,
             O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
@@ -27,6 +31,9 @@ enum DurableFileIO {
                 written += result
             }
         }
+        // Metadata for a new staged file can join the same final flush. A
+        // callback failure propagates before the caller may publish the file.
+        try beforeSync()
         guard fsync(descriptor) == 0 else { throw posixError() }
     }
 
