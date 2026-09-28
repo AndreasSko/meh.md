@@ -46,9 +46,41 @@ public actor NotebookMarkdownPublisher {
     private static let stagePrefix = ".notebook-stage-"
 
     private let fileManager = FileManager.default
+    private let maximumCachedNotes: Int
+    private let maximumCachedBytes: Int
+    private var cachedCatalog: CachedCatalog?
+    private var cachedNotes: [UUID: CachedNote] = [:]
+    private var cachedBytes = 0
+    private(set) var lastDecodedNoteCount = 0
+    private(set) var lastDecodedCatalogCount = 0
+
+    var cachedNoteCount: Int { cachedNotes.count }
+    var retainedCacheBytes: Int { cachedBytes }
+
+    private struct CachedCatalog {
+        let snapshot: NotebookCatalogSnapshot
+        let placements: [NotebookPlacement]
+        let bytes: Int
+    }
+
+    private struct CachedNote {
+        let snapshot: NoteSnapshot
+        let data: Data
+        let createdAt: Date?
+        let modifiedAt: Date?
+        let bytes: Int
+    }
 
     public init(directory: URL) {
         self.directory = directory
+        maximumCachedNotes = 1_024
+        maximumCachedBytes = 32 * 1_024 * 1_024
+    }
+
+    init(directory: URL, maximumCachedNotes: Int, maximumCachedBytes: Int) {
+        self.directory = directory
+        self.maximumCachedNotes = max(0, maximumCachedNotes)
+        self.maximumCachedBytes = max(0, maximumCachedBytes)
     }
 
     public func publish(
@@ -70,13 +102,9 @@ public actor NotebookMarkdownPublisher {
         notes: [NoteSnapshot],
         afterStage: (NotebookMarkdownPublishStage) throws -> Void
     ) throws {
-        let document: NotebookCatalogDocument
-        do {
-            document = try NotebookCatalogDocument(snapshot: catalog)
-        } catch {
-            throw NotebookMarkdownPublisherError.invalidCatalog
-        }
-        let placements = try document.placements()
+        lastDecodedNoteCount = 0
+        lastDecodedCatalogCount = 0
+        let placements = try validatedPlacements(for: catalog)
         guard placements == suppliedPlacements else {
             throw NotebookMarkdownPublisherError.invalidCatalog
         }
@@ -139,6 +167,17 @@ public actor NotebookMarkdownPublisher {
         notes: [NoteSnapshot]
     ) throws -> [PlannedFile] {
         let noteMap = Dictionary(grouping: notes, by: \.noteID)
+        let activeIDs = Set(placements.filter {
+            !$0.isInTrash && $0.item.kind == .note
+        }.map { $0.item.id })
+        // Snapshot equality covers bytes, heads, and identity. A cached decode
+        // grants no trust in the output files: ownership, recovery, and exact
+        // published bytes are still checked below on every publication.
+        cachedNotes = cachedNotes.filter { id, cached in
+            activeIDs.contains(id) && noteMap[id]?.count == 1
+                && noteMap[id]?.first == cached.snapshot
+        }
+        trimCacheToBudget()
         var children = Dictionary(grouping: placements.filter { !$0.isInTrash }) {
             $0.parentID
         }
@@ -188,23 +227,16 @@ public actor NotebookMarkdownPublisher {
                             placement.item.id
                         )
                     }
-                    let note: NoteDocument
-                    do {
-                        note = try NoteDocument(snapshot: candidates[0])
-                    } catch {
-                        throw NotebookMarkdownPublisherError.invalidNote(
-                            placement.item.id
-                        )
-                    }
+                    let note = try decodedNote(candidates[0])
                     plan.append(
                         PlannedFile(
                             entry: Entry(
                                 path: relative,
                                 kind: .file,
-                                createdAt: try note.metadata.createdAt,
-                                modifiedAt: try note.metadata.modifiedAt
+                                createdAt: note.createdAt,
+                                modifiedAt: note.modifiedAt
                             ),
-                            data: Data((try note.text).utf8)
+                            data: note.data
                         )
                     )
                 }
@@ -212,6 +244,75 @@ public actor NotebookMarkdownPublisher {
         }
         try appendChildren(parent: nil, path: "")
         return plan
+    }
+
+    private func trimCacheToBudget() {
+        cachedBytes = (cachedCatalog?.bytes ?? 0)
+            + cachedNotes.values.reduce(0) { $0 + $1.bytes }
+        guard cachedBytes > maximumCachedBytes else { return }
+        for id in cachedNotes.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard cachedBytes > maximumCachedBytes else { break }
+            if let removed = cachedNotes.removeValue(forKey: id) {
+                cachedBytes -= removed.bytes
+            }
+        }
+    }
+
+    private func validatedPlacements(
+        for snapshot: NotebookCatalogSnapshot
+    ) throws -> [NotebookPlacement] {
+        if let cachedCatalog, cachedCatalog.snapshot == snapshot {
+            return cachedCatalog.placements
+        }
+        cachedCatalog = nil
+        defer { trimCacheToBudget() }
+        let document: NotebookCatalogDocument
+        do {
+            lastDecodedCatalogCount += 1
+            document = try NotebookCatalogDocument(snapshot: snapshot)
+        } catch {
+            throw NotebookMarkdownPublisherError.invalidCatalog
+        }
+        let placements = try document.placements()
+        let bytes = snapshot.data.count
+            + snapshot.heads.reduce(0) { $0 + $1.utf8.count + 128 }
+            + placements.reduce(0) {
+                $0 + $1.item.name.utf8.count + $1.displayName.utf8.count + 512
+            }
+        if bytes <= maximumCachedBytes {
+            cachedCatalog = CachedCatalog(
+                snapshot: snapshot, placements: placements, bytes: bytes
+            )
+        }
+        return placements
+    }
+
+    private func decodedNote(_ snapshot: NoteSnapshot) throws -> CachedNote {
+        if let cached = cachedNotes[snapshot.noteID], cached.snapshot == snapshot {
+            return cached
+        }
+        let decoded: CachedNote
+        do {
+            lastDecodedNoteCount += 1
+            let note = try NoteDocument(snapshot: snapshot)
+            let data = Data((try note.text).utf8)
+            decoded = CachedNote(
+                snapshot: snapshot,
+                data: data,
+                createdAt: try note.metadata.createdAt,
+                modifiedAt: try note.metadata.modifiedAt,
+                bytes: snapshot.data.count + data.count + 256
+                    + snapshot.heads.reduce(0) { $0 + $1.utf8.count + 128 }
+            )
+        } catch {
+            throw NotebookMarkdownPublisherError.invalidNote(snapshot.noteID)
+        }
+        if cachedNotes.count < maximumCachedNotes,
+           decoded.bytes <= maximumCachedBytes - cachedBytes {
+            cachedNotes[snapshot.noteID] = decoded
+            cachedBytes += decoded.bytes
+        }
+        return decoded
     }
 
     private func markdownFileName(_ name: String) -> String {
