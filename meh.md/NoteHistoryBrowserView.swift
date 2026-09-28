@@ -194,6 +194,12 @@ private struct NoteHistoryHeading: View {
 }
 
 private struct NoteHistoryTimeline: View {
+    private struct DayGroup: Identifiable {
+        let id: Int
+        let day: Date?
+        var indices: [Int]
+    }
+
     let versions: [NoteHistoryVersion]
     let overviewNavigationStops: [Int]
     let overviewStops: [Int]
@@ -212,6 +218,19 @@ private struct NoteHistoryTimeline: View {
     private var sliderIndex: Int {
         stops.firstIndex(of: selectedIndex) ??
             (stops.lastIndex { $0 < selectedIndex } ?? 0)
+    }
+
+    private var menuGroups: [DayGroup] {
+        var groups: [DayGroup] = []
+        for index in stops where versions.indices.contains(index) {
+            let day = versions[index].date.map(Calendar.current.startOfDay(for:))
+            if let last = groups.indices.last, groups[last].day == day {
+                groups[last].indices.append(index)
+            } else {
+                groups.append(DayGroup(id: index, day: day, indices: [index]))
+            }
+        }
+        return groups
     }
 
     var body: some View {
@@ -260,13 +279,33 @@ private struct NoteHistoryTimeline: View {
                 .accessibilityIdentifier("note-history-detail-toggle")
                 Spacer(minLength: 0)
                 Menu {
-                    ForEach(stops, id: \.self) { index in
-                        Button(versionLabel(at: index)) { select(index) }
+                    ForEach(menuGroups) { group in
+                        Section(groupTitle(for: group)) {
+                            ForEach(group.indices, id: \.self) { index in
+                                Button { select(index) } label: {
+                                    Label(
+                                        menuRowLabel(at: index),
+                                        systemImage: "number"
+                                    )
+                                }
+                                .accessibilityLabel(versionLabel(at: index))
+                            }
+                        }
+                    }
+                    if stops.contains(versions.count) {
+                        Button("Current version") { select(versions.count) }
                     }
                 } label: {
-                    Label(versionLabel(at: selectedIndex), systemImage: "calendar")
+                    Label(menuTriggerLabel(at: selectedIndex), systemImage: "calendar")
+                        .lineLimit(1)
+                        .padding(.horizontal, 12)
+                        .frame(minWidth: 160, maxWidth: 220, minHeight: 44)
+                        .background(.quaternary, in: Capsule())
+                        .contentShape(Rectangle())
                 }
                 .accessibilityIdentifier("note-history-date-list")
+                .accessibilityLabel(versionLabel(at: selectedIndex))
+                .accessibilityHint("Choose a version")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -310,9 +349,42 @@ private struct NoteHistoryTimeline: View {
         }
         let version = versions[index]
         guard let date = version.date else {
-            return String(localized: "Version \(version.ordinal)")
+            return String(localized: "Version \(version.ordinal) · Date unavailable")
         }
         let formattedDate = date.formatted(date: .abbreviated, time: .shortened)
         return String(localized: "Version \(version.ordinal) · \(formattedDate)")
+    }
+
+    private func menuTriggerLabel(at index: Int) -> String {
+        guard versions.indices.contains(index) else {
+            return String(localized: "Current version")
+        }
+        guard let date = versions[index].date else {
+            return String(localized: "Date unavailable")
+        }
+        return date.formatted(date: .numeric, time: .shortened)
+    }
+
+    private func groupTitle(for group: DayGroup) -> String {
+        guard let day = group.day else {
+            return String(localized: "Date unavailable")
+        }
+        let groups = menuGroups
+        if let position = groups.firstIndex(where: { $0.id == group.id }),
+           position > 0,
+           let previousDay = groups[position - 1].day,
+           Calendar.current.isDate(
+               previousDay, equalTo: day, toGranularity: .year
+           ) {
+            return day.formatted(.dateTime.day().month(.abbreviated))
+        }
+        return day.formatted(.dateTime.day().month(.abbreviated).year())
+    }
+
+    private func menuRowLabel(at index: Int) -> String {
+        let ordinal = versions[index].ordinal.formatted()
+        guard let date = versions[index].date else { return ordinal }
+        let time = date.formatted(date: .omitted, time: .shortened)
+        return String(localized: "\(ordinal) · \(time)")
     }
 }

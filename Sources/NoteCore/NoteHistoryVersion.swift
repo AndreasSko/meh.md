@@ -5,6 +5,8 @@ import Foundation
 public struct NoteHistoryVersion: Identifiable, Equatable, Sendable {
     public let id: String
     public let ordinal: Int
+    /// The content date, or the recorded change time if that date did not
+    /// advance. Legacy changes may have neither.
     public let date: Date?
     /// The last recorded text state in a short typing run before another
     /// run. Raw versions remain available through More Detail.

@@ -60,7 +60,7 @@ final class NoteHistoryTests: XCTestCase {
         XCTAssertTrue(versions.allSatisfy(\.isOverviewStop))
     }
 
-    func testMissingDatesStayUnknownAndRepeatedTextIsNotAnotherVersion()
+    func testUnknownMetadataUsesRecordedChangeDate()
         throws
     {
         let note = try NoteDocument(
@@ -81,7 +81,8 @@ final class NoteHistoryTests: XCTestCase {
         let versions = try note.historyVersions()
 
         XCTAssertEqual(versions.count, 2)
-        XCTAssertNil(versions[0].date)
+        XCTAssertNotNil(versions[0].date)
+        XCTAssertEqual(versions[1].date, Date(timeIntervalSince1970: 200))
         XCTAssertEqual(
             try versions.map(note.historicalText(for:)),
             ["first", "second"]
@@ -105,7 +106,7 @@ final class NoteHistoryTests: XCTestCase {
         XCTAssertEqual(try note.historyVersions().map(\.date), [first, second])
     }
 
-    func testClockSkewDoesNotReuseAnEarlierVersionDate() throws {
+    func testClockSkewUsesTheChangeDateForTheLaterVersion() throws {
         let first = Date(timeIntervalSince1970: 100)
         let note = try NoteDocument(
             text: "first",
@@ -125,7 +126,26 @@ final class NoteHistoryTests: XCTestCase {
 
         XCTAssertEqual(dates.count, 2)
         XCTAssertEqual(dates[0], first)
-        XCTAssertNil(dates[1])
+        XCTAssertEqual(dates[1], Date(timeIntervalSince1970: 50))
+    }
+
+    func testRapidEditsWithUnchangedMetadataStillHaveDates() throws {
+        let first = Date(timeIntervalSince1970: 100)
+        let note = try NoteDocument(
+            text: "first",
+            metadata: NoteMetadata(createdAt: first, modifiedAt: first)
+        )
+        _ = note.snapshot()
+        try note.replaceAll(with: "second", at: first)
+        _ = note.snapshot()
+        try note.replaceAll(with: "third", at: first)
+        _ = note.snapshot()
+        try note.replaceAll(with: "fourth", at: first)
+
+        let reopened = try NoteDocument(snapshot: note.snapshot())
+        let dates = try reopened.historyVersions().map(\.date)
+
+        XCTAssertEqual(dates, [first, first, first])
     }
 
     func testRapidTypingHasOnePriorOverviewStopAndRawDetail()

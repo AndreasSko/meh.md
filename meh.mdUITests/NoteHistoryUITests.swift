@@ -62,6 +62,22 @@ final class NoteHistoryUITests: XCTestCase {
             .matching(identifier: "note-history-status").firstMatch.exists)
         capture(app, name: "Aurora Observatory earlier text in History")
 
+        #if os(macOS)
+        let dateList = app.menuButtons["note-history-date-list"]
+        #else
+        let dateList = app.buttons["note-history-date-list"]
+        #endif
+        XCTAssertTrue(dateList.exists)
+        #if os(iOS)
+        XCTAssertGreaterThanOrEqual(dateList.frame.height, 44)
+        dateList.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)
+        ).tap()
+        XCTAssertTrue(app.buttons["Current version"].waitForExistence(timeout: 5))
+        capture(app, name: "Aurora Observatory dated versions menu")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.3)).tap()
+        #endif
+
         let restore = app.buttons["note-history-restore"]
         XCTAssertTrue(restore.exists)
         activate(restore)
