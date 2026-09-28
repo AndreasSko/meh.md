@@ -134,6 +134,21 @@ struct CloudKitTransportState: Codable, Equatable {
 
     mutating func appendToInbox(_ record: SyncRecord) throws {
         try record.validate()
+        try appendValidatedRecord(record)
+    }
+
+    mutating func appendToInbox(
+        _ validated: CloudKitValidatedBootstrapRecord
+    ) throws {
+        guard validated.mode.protocolVersion == protocolVersion else {
+            throw SyncError.invalidRecord
+        }
+        try appendValidatedRecord(validated.record)
+    }
+
+    private mutating func appendValidatedRecord(
+        _ record: SyncRecord
+    ) throws {
         guard record.protocolVersion == protocolVersion else {
             throw SyncError.invalidRecord
         }
@@ -595,6 +610,91 @@ enum CloudKitTransportMode: Equatable, Sendable {
     }
 }
 
+/// A token can only be created by the bootstrap validation cache after a full
+/// validation or an exact match with a retained, previously validated value.
+struct CloudKitValidatedBootstrapRecord: Sendable {
+    let record: SyncRecord
+    let mode: CloudKitTransportMode
+
+    fileprivate init(
+        validating record: SyncRecord,
+        mode: CloudKitTransportMode
+    ) throws {
+        try mode.validate(record, bootstrap: true)
+        self.record = record
+        self.mode = mode
+    }
+}
+
+/// Retains at most the proposal and canonical bootstrap values. Equality is
+/// full SyncRecord equality, including snapshot bytes, heads, and identity.
+struct CloudKitBootstrapValidationCache {
+    private struct Entry {
+        let validated: CloudKitValidatedBootstrapRecord
+        let retainedBytes: Int
+    }
+
+    private static let maximumEntries = 2
+    private static let defaultMaximumRetainedBytes = 16 * 1024 * 1024
+    private let maximumRetainedBytes: Int
+    private var entries: [Entry] = []
+    private var retainedBytes = 0
+
+    init(
+        maximumRetainedBytes: Int = Self.defaultMaximumRetainedBytes
+    ) {
+        self.maximumRetainedBytes = max(0, maximumRetainedBytes)
+    }
+
+    var cachedRecordCount: Int { entries.count }
+    var retainedPayloadByteCount: Int { retainedBytes }
+
+    mutating func validate(
+        _ record: SyncRecord,
+        mode: CloudKitTransportMode
+    ) throws -> CloudKitValidatedBootstrapRecord {
+        if let index = entries.firstIndex(where: {
+            $0.validated.mode == mode && $0.validated.record == record
+        }) {
+            let entry = entries.remove(at: index)
+            entries.append(entry)
+            return entry.validated
+        }
+
+        let token = try CloudKitValidatedBootstrapRecord(
+            validating: record, mode: mode
+        )
+        let payloadBytes = Self.payloadBytes(for: record)
+        guard payloadBytes <= maximumRetainedBytes else { return token }
+        while entries.count >= Self.maximumEntries
+            || retainedBytes > maximumRetainedBytes - payloadBytes
+        {
+            let removed = entries.removeFirst()
+            retainedBytes -= removed.retainedBytes
+        }
+        entries.append(Entry(
+            validated: token, retainedBytes: payloadBytes
+        ))
+        retainedBytes += payloadBytes
+        return token
+    }
+
+    private static func payloadBytes(for record: SyncRecord) -> Int {
+        let headBytes = record.snapshot.heads.reduce(into: 0) { total, head in
+            total += head.utf8.count + 128
+        }
+        let metadataBytes = record.id.utf8.count + 256
+        let (withHeads, firstOverflow) = record.snapshot.data.count
+            .addingReportingOverflow(headBytes)
+        let (total, secondOverflow) = withHeads
+            .addingReportingOverflow(metadataBytes)
+        guard !firstOverflow, !secondOverflow else {
+            return Int.max
+        }
+        return total
+    }
+}
+
 /// A separate CloudKit zone and local state for one fictional sync lab run.
 /// The caller supplies an identity, never an arbitrary CloudKit zone name.
 enum CloudKitNotebookLabScope {
@@ -677,7 +777,27 @@ struct CloudKitRecordCodec: @unchecked Sendable {
         }
     }
 
-    private func decodeRemoteRecord(_ record: CKRecord) throws -> SyncRecord {
+    func decodeBootstrap(
+        _ record: CKRecord,
+        using cache: inout CloudKitBootstrapValidationCache
+    ) throws -> CloudKitValidatedBootstrapRecord {
+        do {
+            guard record.recordID.recordName == mode.bootstrapName else {
+                throw CloudKitSyncTransportError.invalidRemoteRecord
+            }
+            let value = try decodeRemoteRecord(
+                record, validateSnapshot: false
+            )
+            return try cache.validate(value, mode: mode)
+        } catch {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+    }
+
+    private func decodeRemoteRecord(
+        _ record: CKRecord,
+        validateSnapshot: Bool = true
+    ) throws -> SyncRecord {
         guard record.recordType == mode.recordType,
               record.recordID.zoneID == zoneID,
               let id: String = record["snapshotID"],
@@ -755,13 +875,15 @@ struct CloudKitRecordCodec: @unchecked Sendable {
         guard value.id == id else {
             throw CloudKitSyncTransportError.invalidRemoteRecord
         }
-        do {
-            try mode.validate(
-                value,
-                bootstrap: record.recordID.recordName == mode.bootstrapName
-            )
-        } catch {
-            throw CloudKitSyncTransportError.invalidRemoteRecord
+        if validateSnapshot {
+            do {
+                try mode.validate(
+                    value,
+                    bootstrap: record.recordID.recordName == mode.bootstrapName
+                )
+            } catch {
+                throw CloudKitSyncTransportError.invalidRemoteRecord
+            }
         }
         return value
     }
@@ -1094,6 +1216,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private var publishWaiters: [CheckedContinuation<Void, Never>] = []
     private let activityChannel: CloudKitSyncActivityChannel
     private var activityTracker = CloudKitSyncActivityTracker()
+    private var bootstrapValidationCache = CloudKitBootstrapValidationCache()
     #if DEBUG
     private var labRequestTimingSamples: [String: [Double]]?
     #endif
@@ -1356,7 +1479,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
 
     public func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
         try await assertHealthy()
-        try mode.validate(record, bootstrap: true)
+        let proposal = try bootstrapValidationCache.validate(
+            record, mode: mode
+        )
         try await verifyAccount()
         let recordID = CKRecord.ID(
             recordName: mode.bootstrapName, zoneID: zoneID
@@ -1369,11 +1494,13 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             } ensureZone: {
                 try await ensureZone()
             }
-            let canonical = try decode(existing)
+            let canonical = try codec.decodeBootstrap(
+                existing, using: &bootstrapValidationCache
+            )
             try await store.update { try $0.appendToInbox(canonical) }
-            return canonical
+            return canonical.record
         } catch let error as CKError where error.code == .unknownItem {
-            let assetURL = try assetStaging.retain(record)
+            let assetURL = try assetStaging.retain(proposal.record)
             var uploadCompleted = false
             defer {
                 assetStaging.release(
@@ -1382,7 +1509,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 )
             }
             let cloudRecord = try makeCloudRecord(
-                record, id: recordID, assetURL: assetURL
+                proposal.record, id: recordID, assetURL: assetURL
             )
             do {
                 _ = try await CloudKitBootstrapZoneRetry.perform {
@@ -1392,19 +1519,21 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 } ensureZone: {
                     try await ensureZone()
                 }
-                try await store.update { try $0.appendToInbox(record) }
+                try await store.update { try $0.appendToInbox(proposal) }
                 uploadCompleted = true
-                return record
+                return proposal.record
             } catch let conflict as CKError
                 where conflict.code == .serverRecordChanged {
                 await observeRetryAfter(conflict)
                 let server = try await cloudRequest(labLabel: "bootstrap.readCanonical") {
                     try await database.record(for: recordID)
                 }
-                let canonical = try decode(server)
+                let canonical = try codec.decodeBootstrap(
+                    server, using: &bootstrapValidationCache
+                )
                 try await store.update { try $0.appendToInbox(canonical) }
                 uploadCompleted = true
-                return canonical
+                return canonical.record
             }
         }
     }

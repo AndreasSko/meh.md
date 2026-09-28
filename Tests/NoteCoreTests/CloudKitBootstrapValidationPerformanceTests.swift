@@ -32,10 +32,15 @@ final class CloudKitBootstrapValidationPerformanceTests: XCTestCase {
             zoneName: CloudKitTransportMode.notebook.zoneName,
             protocolVersion: 2
         )
+        var cache = CloudKitBootstrapValidationCache()
         try state.appendToInbox(fixture.proposal)
 
         // Warm the exact production path before collecting three samples.
-        _ = try runPath(fixture: fixture, state: &state)
+        let warmed = try runPath(
+            fixture: fixture, state: &state, cache: &cache
+        )
+        XCTAssertEqual(warmed, fixture.proposal)
+        XCTAssertEqual(state.inbox.count, 1)
 
         var proposalSamples: [Double] = []
         var decodeSamples: [Double] = []
@@ -45,24 +50,32 @@ final class CloudKitBootstrapValidationPerformanceTests: XCTestCase {
             let completeStart = clock.now
 
             let proposalStart = clock.now
-            try CloudKitTransportMode.notebook.validate(
-                fixture.proposal, bootstrap: true
+            let proposal = try cache.validate(
+                fixture.proposal, mode: .notebook
             )
             proposalSamples.append(milliseconds(since: proposalStart))
 
             let decodeStart = clock.now
-            let decoded = try fixture.codec.decode(fixture.canonicalCKRecord)
+            let decoded = try fixture.codec.decodeBootstrap(
+                fixture.canonicalCKRecord, using: &cache
+            )
             decodeSamples.append(milliseconds(since: decodeStart))
 
             let appendStart = clock.now
             try state.appendToInbox(decoded)
             appendSamples.append(milliseconds(since: appendStart))
             completeSamples.append(milliseconds(since: completeStart))
+
+            XCTAssertEqual(proposal.record, fixture.proposal)
+            XCTAssertEqual(decoded.record, fixture.proposal)
+            XCTAssertEqual(state.inbox.count, 1)
+            XCTAssertEqual(state.inbox.first, fixture.proposal)
         }
 
         let report: [String: Any] = [
             "benchmark": "cloudkit_bootstrap_validation",
             "fixture_version": 1,
+            "fixture_label": "synthetic_worst_case_canonical_catalog",
             "protocol_version": 2,
             "catalog_item_count": itemCount,
             "record_count": state.inbox.count,
@@ -70,9 +83,9 @@ final class CloudKitBootstrapValidationPerformanceTests: XCTestCase {
             "asset_bytes": fixture.assetBytes,
             "repetitions": 3,
             "phases_ms": [
-                "proposal_validation": proposalSamples,
-                "canonical_decode_validation": decodeSamples,
-                "duplicate_inbox_append_validation": appendSamples,
+                "proposal_validation_cache": proposalSamples,
+                "canonical_decode_and_cache_match": decodeSamples,
+                "validated_duplicate_inbox_append": appendSamples,
                 "complete_path": completeSamples,
             ],
         ]
@@ -86,14 +99,15 @@ final class CloudKitBootstrapValidationPerformanceTests: XCTestCase {
 
     private func runPath(
         fixture: Fixture,
-        state: inout CloudKitTransportState
+        state: inout CloudKitTransportState,
+        cache: inout CloudKitBootstrapValidationCache
     ) throws -> SyncRecord {
-        try CloudKitTransportMode.notebook.validate(
-            fixture.proposal, bootstrap: true
+        let proposal = try cache.validate(fixture.proposal, mode: .notebook)
+        let decoded = try fixture.codec.decodeBootstrap(
+            fixture.canonicalCKRecord, using: &cache
         )
-        let decoded = try fixture.codec.decode(fixture.canonicalCKRecord)
         try state.appendToInbox(decoded)
-        return decoded
+        return proposal.record
     }
 
     private func makeFixture(itemCount: Int) throws -> Fixture {
