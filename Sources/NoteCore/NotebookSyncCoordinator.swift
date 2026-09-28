@@ -26,6 +26,7 @@ public final class NotebookSyncCoordinator {
     @ObservationIgnored private let proposalURL: URL
     @ObservationIgnored private let diagnosticLog: NotebookSyncEventLog?
     @ObservationIgnored private var inFlight = false
+    @ObservationIgnored private var validatedProposalCache: ValidatedProposalCache?
 
     public init(
         replica: NotebookReplica,
@@ -108,13 +109,13 @@ public final class NotebookSyncCoordinator {
             throw SyncError.identityConflict
         }
         let seed = try await transport.bootstrap(proposing: bootstrapRecord)
-        try seed.validate()
         guard seed.protocolVersion == 2, seed.kind == .catalog,
             let notebookID = seed.notebookID
         else { throw SyncError.invalidRecord }
         if let expected = state.notebookID, expected != notebookID {
             throw SyncError.identityConflict
         }
+        // Acceptance validates the record or reuses an exact, durable match.
         try await replica.acceptSeed(seed)
         state.notebookID = notebookID
         try save(state)
@@ -356,6 +357,11 @@ public final class NotebookSyncCoordinator {
         var retiredLegacyNoteID: UUID? = nil
     }
 
+    private struct ValidatedProposalCache {
+        let serialized: Data
+        let proposal: Proposal
+    }
+
     /// The active V2 path intentionally does not decode a retained V1 body.
     /// This lets it recover the durable catalog even when that obsolete field
     /// can no longer be decoded as a `NoteSnapshot`.
@@ -417,6 +423,7 @@ public final class NotebookSyncCoordinator {
 
     private func durableProposal(legacyNote: NoteSnapshot?) throws -> Proposal {
         if legacyNote == nil { return try durableProposalWithoutLegacy() }
+        validatedProposalCache = nil
 
         let proposal: Proposal
         do {
@@ -465,27 +472,39 @@ public final class NotebookSyncCoordinator {
     }
 
     private func durableProposalWithoutLegacy() throws -> Proposal {
-        var proposal: Proposal
+        var serialized: Data
+        let proposal: Proposal
         do {
-            let stored = try JSONDecoder().decode(
-                ProposalWithoutLegacy.self,
-                from: Data(contentsOf: proposalURL)
-            )
-            guard stored.scope == transport.scope else { throw SyncError.scopeChanged }
-            try stored.record.validate()
-            guard stored.record.protocolVersion == 2, stored.record.kind == .catalog else {
-                throw SyncError.invalidRecord
-            }
-            proposal = Proposal(
-                scope: stored.scope,
-                record: stored.record,
-                legacyNote: nil,
-                retiredLegacyNoteID: stored.retiredLegacyNoteID
-            )
-            if stored.containsLegacyNote {
-                try SyncFileIO.replace(JSONEncoder().encode(proposal), at: proposalURL)
+            serialized = try Data(contentsOf: proposalURL)
+            if let cached = validatedProposalCache,
+                cached.serialized == serialized
+            {
+                proposal = cached.proposal
+            } else {
+                validatedProposalCache = nil
+                let stored = try JSONDecoder().decode(
+                    ProposalWithoutLegacy.self, from: serialized)
+                guard stored.scope == transport.scope else {
+                    throw SyncError.scopeChanged
+                }
+                guard stored.record.protocolVersion == 2,
+                    stored.record.kind == .catalog
+                else { throw SyncError.invalidRecord }
+                try stored.record.validate()
+                let decoded = Proposal(
+                    scope: stored.scope,
+                    record: stored.record,
+                    legacyNote: nil,
+                    retiredLegacyNoteID: stored.retiredLegacyNoteID
+                )
+                if stored.containsLegacyNote {
+                    serialized = try JSONEncoder().encode(decoded)
+                    try SyncFileIO.replace(serialized, at: proposalURL)
+                }
+                proposal = decoded
             }
         } catch CocoaError.fileReadNoSuchFile {
+            validatedProposalCache = nil
             let snapshot: NotebookCatalogSnapshot
             if let existing = replica.catalogSnapshot {
                 snapshot = existing
@@ -497,12 +516,25 @@ public final class NotebookSyncCoordinator {
                 record: SyncRecord(catalog: snapshot),
                 legacyNote: nil
             )
-            try SyncFileIO.replace(JSONEncoder().encode(proposal), at: proposalURL)
+            try proposal.record.validate()
+            serialized = try JSONEncoder().encode(proposal)
+            try SyncFileIO.replace(serialized, at: proposalURL)
         }
         guard proposal.scope == transport.scope else { throw SyncError.scopeChanged }
-        try proposal.record.validate()
         guard proposal.record.protocolVersion == 2, proposal.record.kind == .catalog else {
             throw SyncError.invalidRecord
+        }
+        // Count both the freshly read JSON and the decoded snapshot retained
+        // by the proposal. Oversized catalogs are validated on every pass.
+        let retainedBytes = serialized.count + proposal.record.snapshot.data.count
+            + proposal.record.snapshot.heads.count * 128
+        if retainedBytes <= 16 * 1_024 * 1_024 {
+            validatedProposalCache = ValidatedProposalCache(
+                serialized: serialized,
+                proposal: proposal
+            )
+        } else {
+            validatedProposalCache = nil
         }
         return proposal
     }

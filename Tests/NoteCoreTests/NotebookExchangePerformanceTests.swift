@@ -39,6 +39,7 @@ final class NotebookExchangePerformanceTests: XCTestCase {
             at: fixture, noteCount: noteCount, revisions: revisions
         )
         var samples: [String: [Double]] = [:]
+        var historyDecodes: [Int] = []
 
         for repetition in 0..<repetitions {
             let sourceURL = root.appending(path: "source-\(repetition)")
@@ -101,8 +102,29 @@ final class NotebookExchangePerformanceTests: XCTestCase {
             }
             XCTAssertTrue(contains)
 
+            // Separate file gathering from history membership work, including
+            // the cache behavior when a notebook exceeds its entry budget.
+            let checker = NotebookHistoryChecker()
+            _ = try await checker.containsHistory(
+                checkpoints, records: allRecords, deleted: []
+            )
+            let beforeDecodes = await checker.decodedSnapshotCount
+            let workerContains = try await measureThrowing(
+                "checkpoint_history_worker", into: &samples
+            ) {
+                try await checker.containsHistory(
+                    checkpoints, records: allRecords, deleted: []
+                )
+            }
+            XCTAssertTrue(workerContains)
+            let afterDecodes = await checker.decodedSnapshotCount
+            historyDecodes.append(afterDecodes - beforeDecodes)
+
             let catalog = try XCTUnwrap(source.catalogSnapshot)
             let seed = SyncRecord(catalog: catalog)
+            try await measureThrowing("validate_catalog_record", into: &samples) {
+                try seed.validate()
+            }
             try await measureThrowing("accept_seed_no_op", into: &samples) {
                 try await source.acceptSeed(seed)
             }
@@ -145,19 +167,20 @@ final class NotebookExchangePerformanceTests: XCTestCase {
             let changedRecords = try await source.records()
             let changedNotes = changedRecords.filter { $0.kind == .note }
                 .map(\.snapshot)
-            try await measureThrowing("markdown_publish_changed", into: &samples) {
-                try await publisher.publish(
-                    catalog: try XCTUnwrap(source.catalogSnapshot),
-                    placements: source.placements,
-                    notes: changedNotes
-                )
+            let publication = try await publisher.profiledPublish(
+                catalog: try XCTUnwrap(source.catalogSnapshot),
+                placements: source.placements,
+                notes: changedNotes
+            )
+            for (phase, milliseconds) in publication {
+                samples[phase, default: []].append(milliseconds)
             }
         }
 
         for phase in samples.keys.sorted() {
             let values = try XCTUnwrap(samples[phase])
             let sorted = values.sorted()
-            let result: [String: Any] = [
+            var result: [String: Any] = [
                 "benchmark": "notebook_local_exchange",
                 "fixture_version": 1,
                 "phase": phase,
@@ -171,6 +194,9 @@ final class NotebookExchangePerformanceTests: XCTestCase {
                 "median_ms": percentile(sorted, 0.5),
                 "p95_ms": percentile(sorted, 0.95),
             ]
+            if phase == "checkpoint_history_worker" {
+                result["decoded_snapshots"] = historyDecodes
+            }
             let data = try JSONSerialization.data(
                 withJSONObject: result, options: [.sortedKeys]
             )
@@ -299,6 +325,54 @@ final class NotebookExchangePerformanceTests: XCTestCase {
             path: "MehExchangeBenchmark-\(UUID().uuidString)"
         )
     }
+}
+
+// Benchmark-only instrumentation. The stage callback runs inside
+// the publisher actor, so no production API or publish behavior changes.
+private extension NotebookMarkdownPublisher {
+    func profiledPublish(
+        catalog: NotebookCatalogSnapshot,
+        placements: [NotebookPlacement],
+        notes: [NoteSnapshot]
+    ) throws -> [String: Double] {
+        let clock = ContinuousClock()
+        let started = clock.now
+        var marks: [(NotebookMarkdownPublishStage, ContinuousClock.Instant)] = []
+        try publish(
+            catalog: catalog,
+            placements: placements,
+            notes: notes,
+            afterStage: { marks.append(($0, clock.now)) }
+        )
+        let finished = clock.now
+        guard marks.count == 4,
+              case .pendingRecorded = marks[0].0,
+              case .stageBuilt = marks[1].0,
+              case .contentSwapped = marks[2].0,
+              case .manifestCommitted = marks[3].0 else {
+            throw MarkdownProfileError.missingStage
+        }
+        func milliseconds(
+            _ start: ContinuousClock.Instant,
+            _ end: ContinuousClock.Instant
+        ) -> Double {
+            let components = start.duration(to: end).components
+            return Double(components.seconds) * 1_000
+                + Double(components.attoseconds) / 1_000_000_000_000_000
+        }
+        return [
+            "markdown_publish_changed": milliseconds(started, finished),
+            "markdown_changed_prepare": milliseconds(started, marks[0].1),
+            "markdown_changed_stage_build": milliseconds(marks[0].1, marks[1].1),
+            "markdown_changed_swap": milliseconds(marks[1].1, marks[2].1),
+            "markdown_changed_commit": milliseconds(marks[2].1, marks[3].1),
+            "markdown_changed_cleanup": milliseconds(marks[3].1, finished),
+        ]
+    }
+}
+
+private enum MarkdownProfileError: Error {
+    case missingStage
 }
 
 private struct ExchangeConfiguration {

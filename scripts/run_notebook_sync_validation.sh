@@ -62,6 +62,12 @@ if ! python3 -m unittest discover -s Tools/LocalSyncServer -p 'test_*.py' \
     exit 1
 fi
 
+if ! python3 -m unittest discover -s Tools/CloudKit -p 'test_notebook_lab.py' \
+    >"$evidence_root/lab-guard-test.log" 2>&1; then
+    cat "$evidence_root/lab-guard-test.log"
+    exit 1
+fi
+
 if ! swift test --disable-sandbox >"$test_log" 2>&1; then
     tail -n 200 "$test_log"
     printf 'Full test log: %s\n' "$test_log"
@@ -70,6 +76,7 @@ if ! swift test --disable-sandbox >"$test_log" 2>&1; then
 fi
 
 tail -n 20 "$evidence_root/python-test.log"
+tail -n 20 "$evidence_root/lab-guard-test.log"
 grep 'Notebook scale' "$test_log" || true
 tail -n 40 "$test_log"
 printf 'Validation evidence: %s\n' "$evidence_root"

@@ -1,0 +1,3973 @@
+{
+  "schema_version": 1,
+  "captured_date": "2026-09-28",
+  "source": {
+    "base_revision": "b0e6fd4d5e246806d3b0adf5c6b42b641b3c762a",
+    "state": "Uncommitted measurement changes on the PR147 base at capture; source hashes identify measured Swift files. Python simulator capture tooling subsequently refined without changing Swift binaries.",
+    "swift_files_sha256": {
+      "Sources/NoteCore/CloudKitSyncTransport.swift": "b3f9268b5ea0ae3bde21af0a285739601c75f6a0b7e3bf52ca218dbeba83f65c",
+      "meh.md/NotebookSyncLabApp.swift": "63178ff7761e30fd3a41b86c2772e03ad0a2fef8543cb600272b75bc1b9b63ac",
+      "Tests/NotebookAppModelTests/NotebookWorkspacePipelineBenchmarkTests.swift": "120cb4451ada35a1aed87c268863f0ce6647bb2e7fdbc7e57eb6a15414df181f"
+    }
+  },
+  "model": {
+    "configuration": "Release",
+    "transport": "InMemorySyncTransport",
+    "poll_interval_ms": 25,
+    "fixture": "201-byte base bodies; edited note has 12 prior revisions, remaining notes initial history; prepared and settled outside timing.",
+    "log_sha256": "91b78fbee62ff4479733e3e1b6647d33328aab9e93a742a666d92cb15adbd150",
+    "samples": [
+      {
+        "bodyBytes": 201,
+        "editMs": 0,
+        "editorToModelVisibleMs": 10100,
+        "flushMs": 1,
+        "notes": 12,
+        "path": "automatic",
+        "receiverExchangeMs": 17,
+        "receiverRefreshMs": 30,
+        "repetition": 1,
+        "scheduledWaitMs": 10009,
+        "senderCompletedMs": 10070,
+        "senderExchangeMs": 27
+      },
+      {
+        "bodyBytes": 201,
+        "editMs": 0,
+        "editorToModelVisibleMs": 10089,
+        "flushMs": 1,
+        "notes": 12,
+        "path": "automatic",
+        "receiverExchangeMs": 19,
+        "receiverRefreshMs": 33,
+        "repetition": 2,
+        "scheduledWaitMs": 10006,
+        "senderCompletedMs": 10064,
+        "senderExchangeMs": 23
+      },
+      {
+        "bodyBytes": 201,
+        "editMs": 0,
+        "editorToModelVisibleMs": 10090,
+        "flushMs": 2,
+        "notes": 12,
+        "path": "automatic",
+        "receiverExchangeMs": 18,
+        "receiverRefreshMs": 30,
+        "repetition": 3,
+        "scheduledWaitMs": 10006,
+        "senderCompletedMs": 10065,
+        "senderExchangeMs": 31
+      },
+      {
+        "bodyBytes": 201,
+        "editMs": 0,
+        "editorToModelVisibleMs": 149,
+        "flushMs": 1,
+        "notes": 100,
+        "path": "manual",
+        "receiverExchangeMs": 65,
+        "receiverRefreshMs": 131,
+        "repetition": 1,
+        "senderCompletedMs": 124,
+        "senderExchangeMs": 64
+      },
+      {
+        "bodyBytes": 201,
+        "editMs": 0,
+        "editorToModelVisibleMs": 189,
+        "flushMs": 2,
+        "notes": 100,
+        "path": "manual",
+        "receiverExchangeMs": 73,
+        "receiverRefreshMs": 132,
+        "repetition": 2,
+        "senderCompletedMs": 139,
+        "senderExchangeMs": 75
+      },
+      {
+        "bodyBytes": 201,
+        "editMs": 0,
+        "editorToModelVisibleMs": 153,
+        "flushMs": 2,
+        "notes": 100,
+        "path": "manual",
+        "receiverExchangeMs": 64,
+        "receiverRefreshMs": 120,
+        "repetition": 3,
+        "senderCompletedMs": 127,
+        "senderExchangeMs": 68
+      },
+      {
+        "bodyBytes": 201,
+        "editMs": 0,
+        "editorToModelVisibleMs": 1456,
+        "flushMs": 2,
+        "notes": 1000,
+        "path": "manual",
+        "receiverExchangeMs": 634,
+        "receiverRefreshMs": 1177,
+        "repetition": 1,
+        "senderCompletedMs": 1218,
+        "senderExchangeMs": 677
+      },
+      {
+        "bodyBytes": 201,
+        "editMs": 0,
+        "editorToModelVisibleMs": 1512,
+        "flushMs": 2,
+        "notes": 1000,
+        "path": "manual",
+        "receiverExchangeMs": 690,
+        "receiverRefreshMs": 1273,
+        "repetition": 2,
+        "senderCompletedMs": 1252,
+        "senderExchangeMs": 670
+      },
+      {
+        "bodyBytes": 201,
+        "editMs": 0,
+        "editorToModelVisibleMs": 1528,
+        "flushMs": 2,
+        "notes": 1000,
+        "path": "manual",
+        "receiverExchangeMs": 683,
+        "receiverRefreshMs": 1215,
+        "repetition": 3,
+        "senderCompletedMs": 1266,
+        "senderExchangeMs": 708
+      }
+    ]
+  },
+  "cloud_runs": [
+    {
+      "name": "meh-notebook-cloud-exchange",
+      "platform": "macOS",
+      "configuration": "Debug-iCloud + SYNC_LAB",
+      "description": "Two clients on one Mac; manual warm exchanges.",
+      "report_date_encoding": "Seconds since 2001-01-01T00:00:00Z (Foundation reference date)",
+      "metadata": {
+        "run_id": "1caf1f65-74f4-46c7-bddc-44e10ef8b417",
+        "phase": "exchange",
+        "zone": "meh-md-notebook-lab-v2-1caf1f65-74f4-46c7-bddc-44e10ef8b417",
+        "source_revision": "b0e6fd4d5e246806d3b0adf5c6b42b641b3c762a",
+        "working_tree": " M Package.swift\n M Sources/NoteCore/CloudKitSyncTransport.swift\n M meh.md/MyApp.swift\n?? Tests/NoteCoreTests/CloudKitNotebookLabScopeTests.swift\n?? Tests/NotebookAppModelTests/NotebookWorkspacePipelineBenchmarkTests.swift\n?? Tools/CloudKit/__pycache__/\n?? Tools/CloudKit/run_notebook_lab.py\n?? meh.md/NotebookSyncLabApp.swift\n",
+        "binary_sha256": "3649557cd7a15082a3fead8686e689293be5795789d30e8a7f3a9d535f1e1267",
+        "scope": "Two independent clients on one Mac; manual CloudKit exchanges. No push delivery or native editor rendering measurement."
+      },
+      "report_sha256": "3401ba9e0489ceb0a66fcf8c10b2ecaff50fe9ea38aa65162662a25bd368689e",
+      "report": {
+        "runID": "1CAF1F65-74F4-46C7-BDDC-44E10EF8B417",
+        "startedAt": 812260436.063349,
+        "stage": "complete",
+        "status": "passed",
+        "measurementsMS": {
+          "settle_receiver": [
+            757.866375,
+            717.782333
+          ],
+          "initial_upload": [
+            5917.281167
+          ],
+          "character_download": [
+            1434.923291,
+            1348.998042,
+            1346.85125
+          ],
+          "edit_and_flush": [
+            3.4905,
+            2.93875,
+            2.190083
+          ],
+          "character_upload": [
+            1992.681875,
+            2264.32425,
+            2156.525334
+          ],
+          "sender_transport": [
+            18.577834
+          ],
+          "receiver_transport": [
+            11.576083
+          ],
+          "account_status": [
+            4.291042
+          ],
+          "initial_download": [
+            2157.812041
+          ],
+          "settle_sender": [
+            1209.761667,
+            738.857334
+          ]
+        },
+        "accountStatus": 1,
+        "finishedAt": 812260458.277089,
+        "events": {
+          "sender": [
+            {
+              "counts": {},
+              "timestamp": 812260436.202963,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "cursorPresent": 0,
+                "acknowledgedDocuments": 0,
+                "appliedDocuments": 0
+              },
+              "timestamp": 812260436.203286,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "timestamp": 812260439.534369,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "timestamp": 812260440.79733,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 10,
+                "total": 10,
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 10
+              },
+              "timestamp": 812260440.79845,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "requested": 10
+              },
+              "timestamp": 812260440.798992,
+              "event": "note_batch_start"
+            },
+            {
+              "counts": {
+                "acknowledged": 10,
+                "requested": 10,
+                "error": 0
+              },
+              "timestamp": 812260442.111737,
+              "event": "note_batch_result"
+            },
+            {
+              "counts": {
+                "acknowledged": 10
+              },
+              "timestamp": 812260442.113515,
+              "event": "batch_checkpoint_saved"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 5916,
+                "pending": 0
+              },
+              "timestamp": 812260442.119689,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812260444.28185,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11
+              },
+              "timestamp": 812260444.282322,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 10,
+                "exactAcknowledgements": 10
+              },
+              "timestamp": 812260444.845856,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "timestamp": 812260445.482357,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 0,
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260445.484678,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1209,
+                "pending": 0
+              },
+              "timestamp": 812260445.491034,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812260446.252533,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "timestamp": 812260446.253415,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "timestamp": 812260446.978822,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 0,
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260446.982026,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 738,
+                "pending": 0
+              },
+              "timestamp": 812260446.990773,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812260447.716929,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "timestamp": 812260447.717638,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "timestamp": 812260448.508185,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 1,
+                "changedSinceAcknowledgement": 1,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260448.511198,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "timestamp": 812260448.511862,
+              "event": "note_batch_start"
+            },
+            {
+              "counts": {
+                "acknowledged": 1,
+                "requested": 1,
+                "error": 0
+              },
+              "timestamp": 812260449.700454,
+              "event": "note_batch_result"
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "timestamp": 812260449.702998,
+              "event": "batch_checkpoint_saved"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1991,
+                "pending": 0
+              },
+              "timestamp": 812260449.70887,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812260451.151957,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "timestamp": 812260451.152628,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 1
+              },
+              "timestamp": 812260451.708028,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "timestamp": 812260452.196419,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 1,
+                "changedSinceAcknowledgement": 1,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260452.198485,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "timestamp": 812260452.199217,
+              "event": "note_batch_start"
+            },
+            {
+              "counts": {
+                "acknowledged": 1,
+                "error": 0,
+                "requested": 1
+              },
+              "timestamp": 812260453.405586,
+              "event": "note_batch_result"
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "timestamp": 812260453.407594,
+              "event": "batch_checkpoint_saved"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2263,
+                "pending": 0
+              },
+              "timestamp": 812260453.415562,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812260454.771255,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "timestamp": 812260454.771825,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 1
+              },
+              "timestamp": 812260455.291351,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "timestamp": 812260455.790722,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 1,
+                "changedSinceAcknowledgement": 1,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260455.792535,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "timestamp": 812260455.793118,
+              "event": "note_batch_start"
+            },
+            {
+              "counts": {
+                "acknowledged": 1,
+                "error": 0,
+                "requested": 1
+              },
+              "timestamp": 812260456.920672,
+              "event": "note_batch_result"
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "timestamp": 812260456.921819,
+              "event": "batch_checkpoint_saved"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2155,
+                "pending": 0
+              },
+              "timestamp": 812260456.927235,
+              "event": "pass_end"
+            }
+          ],
+          "receiver": [
+            {
+              "counts": {},
+              "timestamp": 812260442.121603,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "cursorPresent": 0,
+                "appliedDocuments": 0,
+                "acknowledgedDocuments": 0
+              },
+              "timestamp": 812260442.122014,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "timestamp": 812260442.740588,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "records": 10,
+                "exactAcknowledgements": 10
+              },
+              "timestamp": 812260444.273049,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 0,
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260444.274442,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2157,
+                "pending": 0
+              },
+              "timestamp": 812260444.279008,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812260445.492942,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "timestamp": 812260445.493513,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "timestamp": 812260446.238969,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 0,
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260446.242083,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 756,
+                "pending": 0
+              },
+              "timestamp": 812260446.249905,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812260446.99242,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11
+              },
+              "timestamp": 812260446.992863,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "timestamp": 812260447.696775,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 0,
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260447.700169,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 716,
+                "pending": 0
+              },
+              "timestamp": 812260447.709413,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812260449.711212,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11
+              },
+              "timestamp": 812260449.711964,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "timestamp": 812260451.137546,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 0,
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260451.139611,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1434,
+                "pending": 0
+              },
+              "timestamp": 812260451.14554,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812260453.417876,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "timestamp": 812260453.418574,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "timestamp": 812260454.760225,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 0,
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260454.761774,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1348,
+                "pending": 0
+              },
+              "timestamp": 812260454.766301,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812260456.928934,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11
+              },
+              "timestamp": 812260456.929474,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "timestamp": 812260458.265824,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "total": 0,
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0
+              },
+              "timestamp": 812260458.267761,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1345,
+                "pending": 0
+              },
+              "timestamp": 812260458.274804,
+              "event": "pass_end"
+            }
+          ]
+        },
+        "phase": "exchange"
+      }
+    },
+    {
+      "name": "meh-notebook-cloud-request-profile",
+      "platform": "macOS",
+      "configuration": "Debug-iCloud + SYNC_LAB",
+      "description": "Same-Mac warm exchanges with request-wrapper timings; last three labeled samples correspond to three edits.",
+      "report_date_encoding": "Seconds since 2001-01-01T00:00:00Z (Foundation reference date)",
+      "metadata": {
+        "run_id": "19983d4c-da42-4bac-9c3d-ae32a803a466",
+        "phase": "exchange",
+        "zone": "meh-md-notebook-lab-v2-19983d4c-da42-4bac-9c3d-ae32a803a466",
+        "source_revision": "b0e6fd4d5e246806d3b0adf5c6b42b641b3c762a",
+        "working_tree": " M Package.swift\n M Sources/NoteCore/CloudKitSyncTransport.swift\n M meh.md/MyApp.swift\n?? Tests/NoteCoreTests/CloudKitNotebookLabScopeTests.swift\n?? Tests/NotebookAppModelTests/NotebookWorkspacePipelineBenchmarkTests.swift\n?? Tools/CloudKit/__pycache__/\n?? Tools/CloudKit/run_notebook_lab.py\n?? Tools/CloudKit/run_notebook_lab_device.py\n?? Tools/CloudKit/test_notebook_lab.py\n?? Tools/LocalSyncServer/__pycache__/\n?? meh.md/NotebookSyncLabApp.swift\n",
+        "binary_sha256": "9c010ee81f08402697568cc5ce13cb8a14f675a372fe02130e379dfa34d341eb",
+        "scope": "Manual Development CloudKit lab phases. The exchange phase uses two clients on one Mac; staged phases can run across devices. No push delivery or native editor rendering measurement."
+      },
+      "report_sha256": "799003abe88d436f5c7e2bcff18ee0c765bac6282fc8d31035dd96d4f86fa959",
+      "report": {
+        "measurementsMS": {
+          "receiver_transport": [
+            1.115875
+          ],
+          "initial_download": [
+            1882.203375
+          ],
+          "edit_and_flush": [
+            1.90925,
+            2.598583,
+            2.690209
+          ],
+          "settle_sender": [
+            1342.177333,
+            709.861916
+          ],
+          "character_download": [
+            1269.55475,
+            1352.158833,
+            1379.657625
+          ],
+          "character_upload": [
+            1851.713459,
+            2367.47475,
+            2563.458458
+          ],
+          "sender_transport": [
+            14.833334
+          ],
+          "initial_upload": [
+            5884.990417
+          ],
+          "settle_receiver": [
+            743.353833,
+            728.159083
+          ],
+          "account_status": [
+            4.83725
+          ]
+        },
+        "requestTimingsMS": {
+          "sender": {
+            "verifyAccount.accountStatus": [
+              0.125291,
+              0.183708,
+              0.127916,
+              0.166125,
+              0.183959,
+              0.258084,
+              0.18575,
+              0.196917,
+              0.122583,
+              0.1455,
+              0.170417,
+              0.132291,
+              0.157,
+              0.186083,
+              0.094333,
+              0.231417,
+              0.195042,
+              0.190417,
+              0.174333,
+              0.194375
+            ],
+            "ensureZone.recordZones": [
+              631.616583,
+              252.831958,
+              250.38775,
+              243.533459,
+              295.001583,
+              275.35175
+            ],
+            "verifyAccount.userRecordID": [
+              0.004542,
+              0.006458,
+              0.005,
+              0.004667,
+              0.005917,
+              0.007416,
+              0.005416,
+              0.004625,
+              0.007333,
+              0.004917,
+              0.011042,
+              0.003917,
+              0.004167,
+              0.007708,
+              0.002375,
+              0.005917,
+              0.006375,
+              0.004708,
+              0.006333,
+              0.007458
+            ],
+            "bootstrap.saveCanonical": [
+              1212.623792
+            ],
+            "ensureZone.createZone": [
+              1045.878542
+            ],
+            "fetch.engineFetch": [
+              1225.892542,
+              771.054042,
+              178.904125,
+              178.65275,
+              518.957792,
+              492.446417
+            ],
+            "bootstrap.readCanonical": [
+              294.833084,
+              261.598375,
+              239.523541,
+              251.730667,
+              255.979083,
+              281.22775
+            ],
+            "publish.engineSend": [
+              1397.763292,
+              1134.903666,
+              1240.049542,
+              1463.231417
+            ]
+          },
+          "receiver": {
+            "ensureZone.recordZones": [
+              246.327458,
+              245.22025,
+              244.916,
+              251.766542,
+              267.989,
+              255.928125
+            ],
+            "bootstrap.readCanonical": [
+              267.268917,
+              259.519917,
+              266.729833,
+              279.130209,
+              281.443958,
+              327.510417
+            ],
+            "verifyAccount.accountStatus": [
+              0.130792,
+              0.157709,
+              0.175625,
+              0.188875,
+              0.232,
+              0.126,
+              0.28175,
+              0.151708,
+              0.139875,
+              0.221917,
+              0.270167,
+              0.175,
+              0.206458
+            ],
+            "fetch.engineFetch": [
+              1299.8834590000001,
+              190.971,
+              184.41775,
+              704.728625,
+              759.30825,
+              752.719875
+            ],
+            "verifyAccount.userRecordID": [
+              0.00425,
+              0.004875,
+              0.004292,
+              0.006459,
+              0.006417,
+              0.003875,
+              0.010042,
+              0.004916,
+              0.004292,
+              0.011041,
+              0.00725,
+              0.005375,
+              0.007292
+            ]
+          }
+        },
+        "finishedAt": 812261181.180654,
+        "status": "passed",
+        "phase": "exchange",
+        "events": {
+          "sender": [
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261159.078594
+            },
+            {
+              "counts": {
+                "cursorPresent": 0,
+                "appliedDocuments": 0,
+                "acknowledgedDocuments": 0
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261159.079047
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "event": "page_received",
+              "timestamp": 812261162.320722
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "event": "page_received",
+              "timestamp": 812261163.548757
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 10,
+                "total": 10,
+                "noAcknowledgement": 10,
+                "changedSinceAcknowledgement": 0
+              },
+              "event": "pending_notes",
+              "timestamp": 812261163.549937
+            },
+            {
+              "counts": {
+                "requested": 10
+              },
+              "event": "note_batch_start",
+              "timestamp": 812261163.550343
+            },
+            {
+              "counts": {
+                "error": 0,
+                "requested": 10,
+                "acknowledged": 10
+              },
+              "event": "note_batch_result",
+              "timestamp": 812261164.957783
+            },
+            {
+              "counts": {
+                "acknowledged": 10
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": 812261164.958695
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 5884,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261164.963146
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261166.849588
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261166.850142
+            },
+            {
+              "counts": {
+                "records": 10,
+                "exactAcknowledgements": 10
+              },
+              "event": "page_received",
+              "timestamp": 812261167.40813
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "event": "page_received",
+              "timestamp": 812261168.182719
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 0
+              },
+              "event": "pending_notes",
+              "timestamp": 812261168.184897
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1341,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261168.191274
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261168.937658
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261168.938183
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "event": "page_received",
+              "timestamp": 812261169.639237
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 0
+              },
+              "event": "pending_notes",
+              "timestamp": 812261169.642878
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 709,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261169.647132
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261170.38023
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261170.380659
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "event": "page_received",
+              "timestamp": 812261171.083683
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 1,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 1
+              },
+              "event": "pending_notes",
+              "timestamp": 812261171.087318
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "event": "note_batch_start",
+              "timestamp": 812261171.088258
+            },
+            {
+              "counts": {
+                "error": 0,
+                "requested": 1,
+                "acknowledged": 1
+              },
+              "event": "note_batch_result",
+              "timestamp": 812261172.225588
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": 812261172.226683
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1851,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261172.231324
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261173.50811
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261173.508672
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 0
+              },
+              "event": "page_received",
+              "timestamp": 812261174.092058
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "event": "page_received",
+              "timestamp": 812261174.616201
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 1,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 1
+              },
+              "event": "pending_notes",
+              "timestamp": 812261174.620251
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "event": "note_batch_start",
+              "timestamp": 812261174.621208
+            },
+            {
+              "counts": {
+                "error": 0,
+                "requested": 1,
+                "acknowledged": 1
+              },
+              "event": "note_batch_result",
+              "timestamp": 812261175.865314
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": 812261175.867165
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2366,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261175.875034
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261177.234703
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261177.235465
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 0
+              },
+              "event": "page_received",
+              "timestamp": 812261177.81942
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "event": "page_received",
+              "timestamp": 812261178.317896
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 1,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 1
+              },
+              "event": "pending_notes",
+              "timestamp": 812261178.321515
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "event": "note_batch_start",
+              "timestamp": 812261178.322268
+            },
+            {
+              "counts": {
+                "error": 0,
+                "requested": 1,
+                "acknowledged": 1
+              },
+              "event": "note_batch_result",
+              "timestamp": 812261179.789471
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": 812261179.791403
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2563,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261179.797844
+            }
+          ],
+          "receiver": [
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261164.964495
+            },
+            {
+              "counts": {
+                "cursorPresent": 0,
+                "appliedDocuments": 0,
+                "acknowledgedDocuments": 0
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261164.964764
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "event": "page_received",
+              "timestamp": 812261165.523562
+            },
+            {
+              "counts": {
+                "records": 10,
+                "exactAcknowledgements": 10
+              },
+              "event": "page_received",
+              "timestamp": 812261166.839487
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 0
+              },
+              "event": "pending_notes",
+              "timestamp": 812261166.840948
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1881,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261166.846087
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261168.193112
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261168.193787
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "event": "page_received",
+              "timestamp": 812261168.925763
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 0
+              },
+              "event": "pending_notes",
+              "timestamp": 812261168.930283
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 742,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261168.935842
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261169.648395
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261169.648904
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "event": "page_received",
+              "timestamp": 812261170.370016
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 0
+              },
+              "event": "pending_notes",
+              "timestamp": 812261170.371576
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 727,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261170.376106
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261172.232994
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261172.233433
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "event": "page_received",
+              "timestamp": 812261173.496712
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 0
+              },
+              "event": "pending_notes",
+              "timestamp": 812261173.498002
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1268,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261173.501979
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261175.877225
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261175.877969
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "event": "page_received",
+              "timestamp": 812261177.220313
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 0
+              },
+              "event": "pending_notes",
+              "timestamp": 812261177.222382
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1351,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261177.228805
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": 812261179.799738
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": 812261179.800288
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "event": "page_received",
+              "timestamp": 812261181.169243
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "noAcknowledgement": 0,
+                "changedSinceAcknowledgement": 0
+              },
+              "event": "pending_notes",
+              "timestamp": 812261181.171946
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1379,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": 812261181.17901
+            }
+          ]
+        },
+        "startedAt": 812261158.946005,
+        "accountStatus": 1,
+        "stage": "complete",
+        "runID": "19983D4C-DA42-4BAC-9C3D-AE32A803A466"
+      }
+    },
+    {
+      "name": "meh-cross-device-publish",
+      "platform": "macOS",
+      "configuration": "Debug-iCloud + SYNC_LAB",
+      "description": "Staged physical-device test: initial publish overlapped tail of correctness suite; functional evidence only.",
+      "report_date_encoding": "Seconds since 2001-01-01T00:00:00Z (Foundation reference date)",
+      "metadata": {
+        "run_id": "2ac5bbe7-2d9c-47a0-8632-8c6b685ad9fa",
+        "phase": "publish",
+        "zone": "meh-md-notebook-lab-v2-2ac5bbe7-2d9c-47a0-8632-8c6b685ad9fa",
+        "source_revision": "b0e6fd4d5e246806d3b0adf5c6b42b641b3c762a",
+        "working_tree": " M Package.swift\n M Sources/NoteCore/CloudKitSyncTransport.swift\n M meh.md/MyApp.swift\n?? Tests/NoteCoreTests/CloudKitNotebookLabScopeTests.swift\n?? Tests/NotebookAppModelTests/NotebookWorkspacePipelineBenchmarkTests.swift\n?? Tools/CloudKit/__pycache__/\n?? Tools/CloudKit/run_notebook_lab.py\n?? Tools/CloudKit/run_notebook_lab_device.py\n?? Tools/CloudKit/test_notebook_lab.py\n?? Tools/LocalSyncServer/__pycache__/\n?? meh.md/NotebookSyncLabApp.swift\n",
+        "binary_sha256": "9c010ee81f08402697568cc5ce13cb8a14f675a372fe02130e379dfa34d341eb",
+        "scope": "Manual Development CloudKit lab phases. The exchange phase uses two clients on one Mac; staged phases can run across devices. No push delivery or native editor rendering measurement."
+      },
+      "report_sha256": "16106aedba914021c4466af3f8d8a59c45bd26efd9e0665f16ec2ba275e40394",
+      "report": {
+        "runID": "2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA",
+        "expectedText": "Synthetic sync lab 2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA note 0\n",
+        "requestTimingsMS": {
+          "source": {
+            "bootstrap.readCanonical": [
+              297.471709
+            ],
+            "verifyAccount.accountStatus": [
+              0.1495,
+              0.131166,
+              0.08125,
+              0.171833
+            ],
+            "ensureZone.createZone": [
+              1147.94425
+            ],
+            "fetch.engineFetch": [
+              1322.5318750000001
+            ],
+            "ensureZone.recordZones": [
+              608.4055
+            ],
+            "bootstrap.saveCanonical": [
+              1370.189667
+            ],
+            "publish.engineSend": [
+              1602.128667
+            ],
+            "verifyAccount.userRecordID": [
+              0.00425,
+              0.004417,
+              0.002875,
+              0.006
+            ]
+          }
+        },
+        "startedAt": 812260979.474357,
+        "stage": "complete",
+        "phase": "publish",
+        "status": "passed",
+        "noteID": "4B75091E-0EE6-4A43-997D-2E9745C95A0A",
+        "observedHeadsCount": 1,
+        "finishedAt": 812260986.021228,
+        "events": {
+          "source": [
+            {
+              "timestamp": 812260979.605656,
+              "event": "pass_start",
+              "counts": {}
+            },
+            {
+              "timestamp": 812260979.606005,
+              "event": "checkpoints_loaded",
+              "counts": {
+                "cursorPresent": 0,
+                "appliedDocuments": 0,
+                "acknowledgedDocuments": 0
+              }
+            },
+            {
+              "timestamp": 812260983.072359,
+              "event": "page_received",
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              }
+            },
+            {
+              "timestamp": 812260984.398885,
+              "event": "page_received",
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              }
+            },
+            {
+              "timestamp": 812260984.401646,
+              "event": "pending_notes",
+              "counts": {
+                "noAcknowledgement": 10,
+                "changedSinceAcknowledgement": 0,
+                "total": 10,
+                "matchingAppliedWithoutAcknowledgement": 10
+              }
+            },
+            {
+              "timestamp": 812260984.40269,
+              "event": "note_batch_start",
+              "counts": {
+                "requested": 10
+              }
+            },
+            {
+              "timestamp": 812260986.014648,
+              "event": "note_batch_result",
+              "counts": {
+                "acknowledged": 10,
+                "error": 0,
+                "requested": 10
+              }
+            },
+            {
+              "timestamp": 812260986.015527,
+              "event": "batch_checkpoint_saved",
+              "counts": {
+                "acknowledged": 10
+              }
+            },
+            {
+              "timestamp": 812260986.019578,
+              "event": "pass_end",
+              "counts": {
+                "durationMilliseconds": 6413,
+                "pending": 0
+              }
+            }
+          ]
+        },
+        "accountStatus": 1,
+        "observedText": "Synthetic sync lab 2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA note 0\n",
+        "measurementsMS": {
+          "initial_upload": [
+            6414.250625
+          ],
+          "source_transport": [
+            13.873958
+          ],
+          "create_source_fixture": [
+            100.551333
+          ],
+          "account_status": [
+            6.252417
+          ]
+        }
+      }
+    },
+    {
+      "name": "meh-cross-device-receive",
+      "platform": "iPadOS",
+      "configuration": "Debug-iCloud + SYNC_LAB",
+      "description": "Initial physical iPad join: ten note placements and first note body checked.",
+      "report_date_encoding": "Seconds since 2001-01-01T00:00:00Z (Foundation reference date)",
+      "metadata": {
+        "run_id": "2ac5bbe7-2d9c-47a0-8632-8c6b685ad9fa",
+        "phase": "receive",
+        "binary_sha256": "de57320929ac8975f5df9846d892fc8ca628d33ce280b0194071d4526dc3a764",
+        "restore_binary_sha256": "38f2b298057b51a5e2dc582aea40ebffd00eeab078255cfe0f0c0f1c37dae70e",
+        "restored": true
+      },
+      "report_sha256": "0934d3859797e228e6acf74239062f672d2c1086c1fe14ee33e5d12a51e368ad",
+      "report": {
+        "phase": "receive",
+        "requestTimingsMS": {
+          "receiver": {
+            "fetch.engineFetch": [
+              2134.279584
+            ],
+            "ensureZone.recordZones": [
+              1153.217833
+            ],
+            "verifyAccount.accountStatus": [
+              0.325583,
+              0.290625,
+              0.200042
+            ],
+            "verifyAccount.userRecordID": [
+              0.00575,
+              0.006334,
+              0.00675
+            ],
+            "bootstrap.readCanonical": [
+              799.441833
+            ]
+          }
+        },
+        "stage": "complete",
+        "noteID": "4B75091E-0EE6-4A43-997D-2E9745C95A0A",
+        "startedAt": 812261026.316295,
+        "finishedAt": 812261030.661431,
+        "runID": "2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA",
+        "measurementsMS": {
+          "initial_download": [
+            4275.535542
+          ],
+          "account_status": [
+            42.975833
+          ],
+          "receiver_transport": [
+            10.0285
+          ]
+        },
+        "events": {
+          "receiver": [
+            {
+              "counts": {},
+              "timestamp": 812261026.382057,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "appliedDocuments": 0,
+                "cursorPresent": 0,
+                "acknowledgedDocuments": 0
+              },
+              "timestamp": 812261026.389527,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "timestamp": 812261028.473287,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "records": 10,
+                "exactAcknowledgements": 10
+              },
+              "timestamp": 812261030.641665,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "noAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "changedSinceAcknowledgement": 0
+              },
+              "timestamp": 812261030.646344,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 4274,
+                "pending": 0
+              },
+              "timestamp": 812261030.656423,
+              "event": "pass_end"
+            }
+          ]
+        },
+        "status": "passed",
+        "expectedText": "Synthetic sync lab 2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA note 0\n",
+        "accountStatus": 1,
+        "observedText": "Synthetic sync lab 2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA note 0\n",
+        "observedHeadsCount": 1
+      }
+    },
+    {
+      "name": "meh-cross-device-edit",
+      "platform": "macOS",
+      "configuration": "Debug-iCloud + SYNC_LAB",
+      "description": "Relaunch source, append one fictional character, upload.",
+      "report_date_encoding": "Seconds since 2001-01-01T00:00:00Z (Foundation reference date)",
+      "metadata": {
+        "run_id": "2ac5bbe7-2d9c-47a0-8632-8c6b685ad9fa",
+        "phase": "edit",
+        "zone": "meh-md-notebook-lab-v2-2ac5bbe7-2d9c-47a0-8632-8c6b685ad9fa",
+        "source_revision": "b0e6fd4d5e246806d3b0adf5c6b42b641b3c762a",
+        "working_tree": " M Package.swift\n M Sources/NoteCore/CloudKitSyncTransport.swift\n M meh.md/MyApp.swift\n?? Tests/NoteCoreTests/CloudKitNotebookLabScopeTests.swift\n?? Tests/NotebookAppModelTests/NotebookWorkspacePipelineBenchmarkTests.swift\n?? Tools/CloudKit/__pycache__/\n?? Tools/CloudKit/run_notebook_lab.py\n?? Tools/CloudKit/run_notebook_lab_device.py\n?? Tools/CloudKit/test_notebook_lab.py\n?? Tools/LocalSyncServer/__pycache__/\n?? meh.md/NotebookSyncLabApp.swift\n",
+        "binary_sha256": "9c010ee81f08402697568cc5ce13cb8a14f675a372fe02130e379dfa34d341eb",
+        "scope": "Manual Development CloudKit lab phases. The exchange phase uses two clients on one Mac; staged phases can run across devices. No push delivery or native editor rendering measurement."
+      },
+      "report_sha256": "0c7823361352a296306c08923e1d0f01aad70a66c6b0f613415ef6249f69f3de",
+      "report": {
+        "measurementsMS": {
+          "source_transport": [
+            22.553084
+          ],
+          "account_status": [
+            4.405125
+          ],
+          "edit_and_flush": [
+            1.939375
+          ],
+          "character_upload": [
+            2971.300375
+          ]
+        },
+        "runID": "2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA",
+        "phase": "edit",
+        "observedHeadsCount": 1,
+        "accountStatus": 1,
+        "requestTimingsMS": {
+          "source": {
+            "bootstrap.readCanonical": [
+              269.971125
+            ],
+            "verifyAccount.accountStatus": [
+              0.164459,
+              0.16975,
+              0.182209,
+              0.23825
+            ],
+            "fetch.engineFetch": [
+              904.637375
+            ],
+            "verifyAccount.userRecordID": [
+              0.0045,
+              0.004042,
+              0.004542,
+              0.006541
+            ],
+            "ensureZone.recordZones": [
+              537.296958
+            ],
+            "publish.engineSend": [
+              1179.704334
+            ]
+          }
+        },
+        "finishedAt": 812261079.345672,
+        "events": {
+          "source": [
+            {
+              "counts": {},
+              "timestamp": 812260979.605656,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "cursorPresent": 0,
+                "acknowledgedDocuments": 0,
+                "appliedDocuments": 0
+              },
+              "timestamp": 812260979.606005,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "timestamp": 812260983.072359,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "timestamp": 812260984.398885,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "matchingAppliedWithoutAcknowledgement": 10,
+                "changedSinceAcknowledgement": 0,
+                "total": 10,
+                "noAcknowledgement": 10
+              },
+              "timestamp": 812260984.401646,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "requested": 10
+              },
+              "timestamp": 812260984.40269,
+              "event": "note_batch_start"
+            },
+            {
+              "counts": {
+                "requested": 10,
+                "acknowledged": 10,
+                "error": 0
+              },
+              "timestamp": 812260986.014648,
+              "event": "note_batch_result"
+            },
+            {
+              "counts": {
+                "acknowledged": 10
+              },
+              "timestamp": 812260986.015527,
+              "event": "batch_checkpoint_saved"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 6413,
+                "pending": 0
+              },
+              "timestamp": 812260986.019578,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812261076.373469,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "cursorPresent": 1,
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11
+              },
+              "timestamp": 812261076.374017,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 10,
+                "exactAcknowledgements": 9
+              },
+              "timestamp": 812261077.239954,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "records": 0,
+                "exactAcknowledgements": 0
+              },
+              "timestamp": 812261078.148023,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 1,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 1,
+                "noAcknowledgement": 0
+              },
+              "timestamp": 812261078.150206,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "timestamp": 812261078.150613,
+              "event": "note_batch_start"
+            },
+            {
+              "counts": {
+                "requested": 1,
+                "acknowledged": 1,
+                "error": 0
+              },
+              "timestamp": 812261079.333711,
+              "event": "note_batch_result"
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "timestamp": 812261079.33603,
+              "event": "batch_checkpoint_saved"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2970,
+                "pending": 0
+              },
+              "timestamp": 812261079.344085,
+              "event": "pass_end"
+            }
+          ]
+        },
+        "status": "passed",
+        "observedText": "Synthetic sync lab 2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA note 0\nx",
+        "stage": "complete",
+        "expectedText": "Synthetic sync lab 2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA note 0\nx",
+        "noteID": "4B75091E-0EE6-4A43-997D-2E9745C95A0A",
+        "startedAt": 812261076.324726
+      }
+    },
+    {
+      "name": "meh-cross-device-verify",
+      "platform": "iPadOS",
+      "configuration": "Debug-iCloud + SYNC_LAB",
+      "description": "Relaunch receiver and open first session before fetch; edited text and nonempty heads verified. Normal Dev app restored afterward.",
+      "report_date_encoding": "Seconds since 2001-01-01T00:00:00Z (Foundation reference date)",
+      "metadata": {
+        "run_id": "2ac5bbe7-2d9c-47a0-8632-8c6b685ad9fa",
+        "phase": "verify",
+        "binary_sha256": "de57320929ac8975f5df9846d892fc8ca628d33ce280b0194071d4526dc3a764",
+        "restore_binary_sha256": "38f2b298057b51a5e2dc582aea40ebffd00eeab078255cfe0f0c0f1c37dae70e",
+        "restored": true
+      },
+      "report_sha256": "ad47afcd36a5383911be30e69fb1ef367bd6c328e671f6c73805929fb9e3295a",
+      "report": {
+        "phase": "verify",
+        "expectedText": "Synthetic sync lab 2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA note 0\nx",
+        "requestTimingsMS": {
+          "receiver": {
+            "ensureZone.recordZones": [
+              354.149375
+            ],
+            "fetch.engineFetch": [
+              1085.483167
+            ],
+            "verifyAccount.userRecordID": [
+              0.005958,
+              0.005875
+            ],
+            "bootstrap.readCanonical": [
+              321.528625
+            ],
+            "verifyAccount.accountStatus": [
+              0.271,
+              0.272208
+            ]
+          }
+        },
+        "finishedAt": 812261115.081477,
+        "stage": "complete",
+        "noteID": "4B75091E-0EE6-4A43-997D-2E9745C95A0A",
+        "status": "passed",
+        "accountStatus": 1,
+        "measurementsMS": {
+          "account_status": [
+            24.366833
+          ],
+          "character_download": [
+            1908.9546249999999
+          ],
+          "receiver_transport": [
+            23.643459
+          ]
+        },
+        "observedHeadsCount": 1,
+        "startedAt": 812261113.082336,
+        "observedText": "Synthetic sync lab 2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA note 0\nx",
+        "events": {
+          "receiver": [
+            {
+              "counts": {},
+              "timestamp": 812261026.382057,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "appliedDocuments": 0,
+                "acknowledgedDocuments": 0,
+                "cursorPresent": 0
+              },
+              "timestamp": 812261026.389527,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "timestamp": 812261028.473287,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "records": 10,
+                "exactAcknowledgements": 10
+              },
+              "timestamp": 812261030.641665,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "noAcknowledgement": 0
+              },
+              "timestamp": 812261030.646344,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 4274,
+                "pending": 0
+              },
+              "timestamp": 812261030.656423,
+              "event": "pass_end"
+            },
+            {
+              "counts": {},
+              "timestamp": 812261113.171247,
+              "event": "pass_start"
+            },
+            {
+              "counts": {
+                "appliedDocuments": 11,
+                "acknowledgedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "timestamp": 812261113.172901,
+              "event": "checkpoints_loaded"
+            },
+            {
+              "counts": {
+                "records": 1,
+                "exactAcknowledgements": 1
+              },
+              "timestamp": 812261115.05619,
+              "event": "page_received"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "total": 0,
+                "noAcknowledgement": 0
+              },
+              "timestamp": 812261115.064608,
+              "event": "pending_notes"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1907,
+                "pending": 0
+              },
+              "timestamp": 812261115.078861,
+              "event": "pass_end"
+            }
+          ]
+        },
+        "runID": "2AC5BBE7-2D9C-47A0-8632-8C6B685AD9FA"
+      }
+    },
+    {
+      "name": "meh-simulator-cloud-file-output",
+      "platform": "iOS Simulator",
+      "configuration": "Debug-iCloud + SYNC_LAB",
+      "description": "Two clients in dedicated simulator; completed saved report retrieved from exact UUID lab directory using simctl. Console/file-redirection capture troubleshooting excluded from stage timings.",
+      "report_date_encoding": "ISO8601",
+      "metadata": {
+        "run_id": "bc305249-2465-4845-b9a0-34a3febf9bf9",
+        "phase": "exchange",
+        "platform": "iPhoneSimulator",
+        "binary_sha256": "d87e758a4ed35dd061c90d9bec9d60c4fc5653645c306ba18fdd8bd02a0a42f1",
+        "source_revision": "b0e6fd4d5e246806d3b0adf5c6b42b641b3c762a",
+        "scope": "Development lab; two replicas on same simulator; fresh UUID zone; manual sync; no APNs or editor rendering."
+      },
+      "report_sha256": "cf97d8af87ec0df82f2aa1bfca605f1023c2f8509383e083c106e016f989116a",
+      "report": {
+        "accountStatus": 1,
+        "events": {
+          "receiver": [
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:25Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 0,
+                "appliedDocuments": 0,
+                "cursorPresent": 0
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:25Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:26Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 10,
+                "records": 10
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:27Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:27Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2209,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:27Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:29Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:29Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:29Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:29Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 646,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:29Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:30Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:30Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:31Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:31Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 725,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:31Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:33Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:33Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:34Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:34Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1203,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:34Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:36Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:36Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:37Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:37Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1254,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:37Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:40Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:40Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:41Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:41Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1322,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:41Z"
+            }
+          ],
+          "sender": [
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:19Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 0,
+                "appliedDocuments": 0,
+                "cursorPresent": 0
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:19Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:22Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:24Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 10,
+                "noAcknowledgement": 10,
+                "total": 10
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:24Z"
+            },
+            {
+              "counts": {
+                "requested": 10
+              },
+              "event": "note_batch_start",
+              "timestamp": "2026-09-28T04:18:24Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 10,
+                "error": 0,
+                "requested": 10
+              },
+              "event": "note_batch_result",
+              "timestamp": "2026-09-28T04:18:25Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 10
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": "2026-09-28T04:18:25Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 6239,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:25Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:27Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:27Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 10,
+                "records": 10
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:28Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:29Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:29Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1197,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:29Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:29Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:29Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:30Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:30Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 750,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:30Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:31Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:31Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:31Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 1,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 1
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:31Z"
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "event": "note_batch_start",
+              "timestamp": "2026-09-28T04:18:31Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1,
+                "error": 0,
+                "requested": 1
+              },
+              "event": "note_batch_result",
+              "timestamp": "2026-09-28T04:18:33Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": "2026-09-28T04:18:33Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2005,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:33Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:34Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:34Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:34Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:35Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 1,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 1
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:35Z"
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "event": "note_batch_start",
+              "timestamp": "2026-09-28T04:18:35Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1,
+                "error": 0,
+                "requested": 1
+              },
+              "event": "note_batch_result",
+              "timestamp": "2026-09-28T04:18:36Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": "2026-09-28T04:18:36Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2142,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:36Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:18:37Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:18:37Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:38Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:18:38Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 1,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 1
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:18:38Z"
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "event": "note_batch_start",
+              "timestamp": "2026-09-28T04:18:38Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1,
+                "error": 0,
+                "requested": 1
+              },
+              "event": "note_batch_result",
+              "timestamp": "2026-09-28T04:18:40Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": "2026-09-28T04:18:40Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2174,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:18:40Z"
+            }
+          ]
+        },
+        "finishedAt": "2026-09-28T04:18:41Z",
+        "measurementsMS": {
+          "account_status": [
+            50.282083
+          ],
+          "character_download": [
+            1203.465459,
+            1254.965875,
+            1322.9587080000001
+          ],
+          "character_upload": [
+            2005.686833,
+            2143.287417,
+            2175.302791
+          ],
+          "edit_and_flush": [
+            2.615834,
+            2.537792,
+            2.789417
+          ],
+          "initial_download": [
+            2210.120375
+          ],
+          "initial_upload": [
+            6239.695458
+          ],
+          "receiver_transport": [
+            17.771875
+          ],
+          "sender_transport": [
+            31.489209
+          ],
+          "settle_receiver": [
+            647.369625,
+            725.7295
+          ],
+          "settle_sender": [
+            1197.915958,
+            751.377625
+          ]
+        },
+        "phase": "exchange",
+        "requestTimingsMS": {
+          "receiver": {
+            "bootstrap.readCanonical": [
+              323.51025,
+              217.966083,
+              299.625458,
+              242.744292,
+              247.011417,
+              335.194833
+            ],
+            "ensureZone.recordZones": [
+              293.716291,
+              219.017459,
+              220.977,
+              236.415167,
+              243.322459,
+              238.295375
+            ],
+            "fetch.engineFetch": [
+              1528.088,
+              178.739875,
+              174.197166,
+              697.821042,
+              738.003667,
+              719.043625
+            ],
+            "verifyAccount.accountStatus": [
+              1.99275,
+              1.553375,
+              1.605625,
+              1.622,
+              1.642583,
+              1.667166,
+              1.43975,
+              1.738542,
+              1.461459,
+              1.7085,
+              1.42425,
+              1.722667,
+              1.745625
+            ],
+            "verifyAccount.userRecordID": [
+              0.0175,
+              0.016958,
+              0.020167,
+              0.014584,
+              0.017917,
+              0.019,
+              0.017333,
+              0.018209,
+              0.016833,
+              0.018958,
+              0.019167,
+              0.039542,
+              0.022584
+            ]
+          },
+          "sender": {
+            "bootstrap.readCanonical": [
+              215.917375,
+              262.156375,
+              220.006291,
+              222.672291,
+              213.402208,
+              263.764375
+            ],
+            "bootstrap.saveCanonical": [
+              1231.849666
+            ],
+            "ensureZone.createZone": [
+              1257.18275
+            ],
+            "ensureZone.recordZones": [
+              444.714083,
+              228.328958,
+              240.702875,
+              297.348959,
+              236.742667,
+              242.543166
+            ],
+            "fetch.engineFetch": [
+              1744.9575,
+              656.647792,
+              257.6245,
+              172.981083,
+              526.150667,
+              512.824625
+            ],
+            "publish.engineSend": [
+              1258.174292,
+              1274.538583,
+              1126.768167,
+              1118.943333
+            ],
+            "verifyAccount.accountStatus": [
+              4.046625,
+              1.644,
+              1.348583,
+              1.899125,
+              1.915208,
+              1.807958,
+              1.751583,
+              1.607,
+              1.6775,
+              1.6805,
+              1.608,
+              1.692459,
+              1.976917,
+              1.400041,
+              1.147458,
+              1.638375,
+              1.860625,
+              1.413875,
+              1.339375,
+              1.72475
+            ],
+            "verifyAccount.userRecordID": [
+              0.019208,
+              0.018708,
+              0.017208,
+              0.018,
+              0.035375,
+              0.016833,
+              0.026125,
+              0.018208,
+              0.017292,
+              0.018875,
+              0.016083,
+              0.017875,
+              0.032125,
+              0.016583,
+              0.011792,
+              0.018584,
+              0.016417,
+              0.012333,
+              0.015959,
+              0.018209
+            ]
+          }
+        },
+        "runID": "BC305249-2465-4845-B9A0-34A3FEBF9BF9",
+        "stage": "complete",
+        "startedAt": "2026-09-28T04:18:19Z",
+        "status": "passed"
+      }
+    },
+    {
+      "name": "meh-simulator-runner-exchange",
+      "platform": "iOS Simulator",
+      "configuration": "Debug-iCloud + SYNC_LAB",
+      "description": "Final reusable runner validation; default simctl launch, exact UUID report polling. Includes a 6.246-second first upload outlier; retain all samples.",
+      "report_date_encoding": "ISO8601",
+      "metadata": {
+        "run_id": "1299cb4e-afeb-4375-9417-e47e796a1f89",
+        "phase": "exchange",
+        "binary_sha256": "d87e758a4ed35dd061c90d9bec9d60c4fc5653645c306ba18fdd8bd02a0a42f1",
+        "scope": "Dedicated iOS Simulator; fictional Development CloudKit lab only"
+      },
+      "report_sha256": "5e72b6b7c7d86bffb3cd9d9c0578a7854fda2645c2ebfeb1fd46af50ec31ae41",
+      "report": {
+        "accountStatus": 1,
+        "events": {
+          "receiver": [
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:16Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 0,
+                "appliedDocuments": 0,
+                "cursorPresent": 0
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:16Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:17Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 10,
+                "records": 10
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:18Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:18Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2112,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:18Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:19Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:19Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:20Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:20Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 728,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:20Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:21Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:21Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:21Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:21Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 688,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:21Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:28Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:28Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:29Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:29Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1227,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:29Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:31Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:31Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:33Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:33Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1269,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:33Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:35Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:35Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:36Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:36Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1425,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:36Z"
+            }
+          ],
+          "sender": [
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:10Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 0,
+                "appliedDocuments": 0,
+                "cursorPresent": 0
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:10Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 1,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:13Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:14Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 10,
+                "noAcknowledgement": 10,
+                "total": 10
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:14Z"
+            },
+            {
+              "counts": {
+                "requested": 10
+              },
+              "event": "note_batch_start",
+              "timestamp": "2026-09-28T04:24:14Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 10,
+                "error": 0,
+                "requested": 10
+              },
+              "event": "note_batch_result",
+              "timestamp": "2026-09-28T04:24:16Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 10
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": "2026-09-28T04:24:16Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 6316,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:16Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:18Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:18Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 10,
+                "records": 10
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:19Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:19Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:19Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 1306,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:19Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:20Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:20Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:21Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 0,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 0
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:21Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 656,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:21Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:21Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:21Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:26Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 1,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 1
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:26Z"
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "event": "note_batch_start",
+              "timestamp": "2026-09-28T04:24:26Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1,
+                "error": 0,
+                "requested": 1
+              },
+              "event": "note_batch_result",
+              "timestamp": "2026-09-28T04:24:28Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": "2026-09-28T04:24:28Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 6245,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:28Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:29Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:29Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:29Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:30Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 1,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 1
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:30Z"
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "event": "note_batch_start",
+              "timestamp": "2026-09-28T04:24:30Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1,
+                "error": 0,
+                "requested": 1
+              },
+              "event": "note_batch_result",
+              "timestamp": "2026-09-28T04:24:31Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": "2026-09-28T04:24:31Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2343,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:31Z"
+            },
+            {
+              "counts": {},
+              "event": "pass_start",
+              "timestamp": "2026-09-28T04:24:33Z"
+            },
+            {
+              "counts": {
+                "acknowledgedDocuments": 11,
+                "appliedDocuments": 11,
+                "cursorPresent": 1
+              },
+              "event": "checkpoints_loaded",
+              "timestamp": "2026-09-28T04:24:33Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 1
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:33Z"
+            },
+            {
+              "counts": {
+                "exactAcknowledgements": 0,
+                "records": 0
+              },
+              "event": "page_received",
+              "timestamp": "2026-09-28T04:24:34Z"
+            },
+            {
+              "counts": {
+                "changedSinceAcknowledgement": 1,
+                "matchingAppliedWithoutAcknowledgement": 0,
+                "noAcknowledgement": 0,
+                "total": 1
+              },
+              "event": "pending_notes",
+              "timestamp": "2026-09-28T04:24:34Z"
+            },
+            {
+              "counts": {
+                "requested": 1
+              },
+              "event": "note_batch_start",
+              "timestamp": "2026-09-28T04:24:34Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1,
+                "error": 0,
+                "requested": 1
+              },
+              "event": "note_batch_result",
+              "timestamp": "2026-09-28T04:24:35Z"
+            },
+            {
+              "counts": {
+                "acknowledged": 1
+              },
+              "event": "batch_checkpoint_saved",
+              "timestamp": "2026-09-28T04:24:35Z"
+            },
+            {
+              "counts": {
+                "durationMilliseconds": 2263,
+                "pending": 0
+              },
+              "event": "pass_end",
+              "timestamp": "2026-09-28T04:24:35Z"
+            }
+          ]
+        },
+        "finishedAt": "2026-09-28T04:24:36Z",
+        "measurementsMS": {
+          "account_status": [
+            33.905791
+          ],
+          "character_download": [
+            1228.053792,
+            1269.627583,
+            1426.445
+          ],
+          "character_upload": [
+            6245.736083,
+            2343.447792,
+            2263.743542
+          ],
+          "edit_and_flush": [
+            2.686542,
+            2.340583,
+            2.683125
+          ],
+          "initial_download": [
+            2113.1010420000002
+          ],
+          "initial_upload": [
+            6317.039292
+          ],
+          "receiver_transport": [
+            28.535833
+          ],
+          "sender_transport": [
+            118.658459
+          ],
+          "settle_receiver": [
+            728.946417,
+            688.972292
+          ],
+          "settle_sender": [
+            1306.9358750000001,
+            656.730167
+          ]
+        },
+        "phase": "exchange",
+        "requestTimingsMS": {
+          "receiver": {
+            "bootstrap.readCanonical": [
+              330.491542,
+              293.745833,
+              205.980208,
+              257.823917,
+              257.735417,
+              307.893
+            ],
+            "ensureZone.recordZones": [
+              307.626167,
+              231.185709,
+              220.880542,
+              245.690458,
+              251.659958,
+              324.101167
+            ],
+            "fetch.engineFetch": [
+              1410.6410409999999,
+              171.848333,
+              235.654334,
+              699.227042,
+              733.510958,
+              762.268
+            ],
+            "verifyAccount.accountStatus": [
+              1.963625,
+              1.667167,
+              1.719625,
+              1.632458,
+              1.601833,
+              1.748208,
+              1.639041,
+              1.760416,
+              1.391375,
+              1.559792,
+              1.951584,
+              1.925333,
+              1.640458
+            ],
+            "verifyAccount.userRecordID": [
+              0.015542,
+              0.019708,
+              0.017708,
+              0.051083,
+              0.018834,
+              0.019917,
+              0.017833,
+              0.018916,
+              0.015417,
+              0.015375,
+              0.01875,
+              0.076292,
+              0.0175
+            ]
+          },
+          "sender": {
+            "bootstrap.readCanonical": [
+              248.209292,
+              322.539834,
+              218.601583,
+              4512.053,
+              222.112042,
+              218.793291
+            ],
+            "bootstrap.saveCanonical": [
+              1275.450875
+            ],
+            "ensureZone.createZone": [
+              975.679792
+            ],
+            "ensureZone.recordZones": [
+              552.3315,
+              272.711375,
+              231.033167,
+              227.302458,
+              245.417541,
+              256.896958
+            ],
+            "fetch.engineFetch": [
+              1668.6530830000002,
+              666.814959,
+              178.222291,
+              183.649667,
+              593.202875,
+              522.134625
+            ],
+            "publish.engineSend": [
+              1430.744041,
+              1286.035667,
+              1240.967791,
+              1228.865125
+            ],
+            "verifyAccount.accountStatus": [
+              2.901542,
+              1.66325,
+              1.417791,
+              1.536666,
+              1.689792,
+              1.557333,
+              1.593542,
+              1.936708,
+              1.629916,
+              1.786959,
+              1.594917,
+              1.573167,
+              1.840125,
+              1.494042,
+              1.229166,
+              1.428958,
+              1.858958,
+              1.44825,
+              1.300375,
+              1.43575
+            ],
+            "verifyAccount.userRecordID": [
+              0.027375,
+              0.020542,
+              0.016875,
+              0.010208,
+              0.018416,
+              0.0195,
+              0.014,
+              0.022583,
+              0.022708,
+              0.018917,
+              0.017,
+              0.018,
+              0.019708,
+              0.017166,
+              0.0185,
+              0.017209,
+              0.016958,
+              0.016167,
+              0.0185,
+              0.016083
+            ]
+          }
+        },
+        "runID": "1299CB4E-AFEB-4375-9417-E47E796A1F89",
+        "stage": "complete",
+        "startedAt": "2026-09-28T04:24:09Z",
+        "status": "passed"
+      }
+    }
+  ],
+  "validation": {
+    "swift_tests": 736,
+    "expected_skips": 5,
+    "failures": 0,
+    "local_server_python_tests": 16,
+    "stress_seeds": [
+      7,
+      11,
+      23,
+      47,
+      97,
+      193,
+      389,
+      769
+    ],
+    "scale_counts": [
+      100,
+      500,
+      1000
+    ],
+    "logs_sha256": {
+      "meh-pipeline-final-validation.log": "bc61dc1d9ef8a639fb4d37e2b7c0597d16da5e50323f4dcb6f53ec8c448c9515",
+      "meh-pipeline-release-mac.log": "a2ec2f6ae083517029639c322b6e8c0a11363338f0369cf95ffa06cfaff2114f",
+      "meh-pipeline-release-simulator-corrected.log": "6f29b061ec12f47a1e7bdeafe82d3d0f110c752432b6ecb1d6dba3c910801f02"
+    },
+    "normal_release_builds": {
+      "macOS": "passed",
+      "generic_iOS_Simulator": "passed"
+    },
+    "lab_guard_python_tests": 17,
+    "build_command_correction": "Initial simulator command requested nonexistent Release-iCloud configuration and failed NoteCore module resolution. Corrected to existing Release configuration; full generic simulator build passed."
+  },
+  "limitations": [
+    "Only synthetic UUID Development zones and lab directories were used; production and canonical Dev notebooks were not opened.",
+    "Manual pass durations do not measure APNs/background scheduling or native editor paint.",
+    "Cross-device stages are separated by launch/restoration; do not sum them as continuous edit-to-screen latency.",
+    "CloudKit request wrappers include SDK/delegate work and any retry waits, not only network/server time.",
+    "Physical normal Dev restore build was current source version 0.6.0; installed Dev version before test was 0.5.0; no source version bump.",
+    "CloudKit timings are small-fixture Debug runs and are not directly comparable to Release model benchmarks."
+  ]
+}

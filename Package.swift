@@ -37,6 +37,7 @@ let package = Package(
             path: "meh.md",
             exclude: [
                 "AppWorkspace.swift", "Assets.xcassets", "CloudKitSmokeCheck.swift",
+                "NotebookSyncLabApp.swift",
                 "ContentView.swift", "Info-iCloud.plist", "Info.plist",
                 "PrivacyInfo.xcprivacy",
                 "MarkdownEditor.swift", "EditorTextSizeControl.swift",
@@ -95,6 +96,7 @@ let package = Package(
                 "icon.icon", "Info-iCloud.plist", "Info.plist", "macOS.entitlements",
                 "PrivacyInfo.xcprivacy",
                 "iOS.entitlements", "CloudKitSmokeCheck.swift",
+                "NotebookSyncLabApp.swift",
                 "NotebookAppDelegate.swift", "NotebookBackupBackgroundScheduler.swift",
                 "NotebookQuickActionRequests.swift",
                 "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",

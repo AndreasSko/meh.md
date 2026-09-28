@@ -11,6 +11,7 @@ struct NotebookWindowValue: Codable, Hashable {
     }
 }
 
+#if !SYNC_LAB
 @main struct MyApp: App {
     #if os(iOS)
     @UIApplicationDelegateAdaptor(NotebookAppDelegate.self)
@@ -48,3 +49,4 @@ struct NotebookWindowValue: Codable, Hashable {
         }
     }
 }
+#endif
