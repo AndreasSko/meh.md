@@ -390,11 +390,10 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
     func testScopeChangeStopsBeforeNetworkMutation() async throws {
         let root = directory()
         let initial = InMemorySyncTransport(scope: "first")
-        let legacy = try NoteDocument(text: "legacy")
         await NotebookSyncCoordinator(
             replica: NotebookReplica(directory: root),
             transport: initial
-        ).synchronize(legacyNote: legacy.snapshot())
+        ).synchronize()
         let proposalURL = root.appending(path: "notebook-proposal.json")
         let proposalBeforeScopeChange = try Data(contentsOf: proposalURL)
         let changed = CountingTransport(scope: "second")
@@ -1077,68 +1076,14 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         }
     }
 
-    func testLegacyRevisionsJoinAndNewerProposalSurvivesRestart() async throws {
-        let store = InMemorySyncStore()
-        let transport = InMemorySyncTransport(scope: "legacy", store: store)
-        let original = try NoteDocument(text: "original")
-        let newer = try original.fork()
-        try newer.replaceAll(with: "newer")
-        let first = NotebookReplica(directory: directory())
-        await NotebookSyncCoordinator(replica: first, transport: transport)
-            .synchronize(legacyNote: original.snapshot())
-        let secondRoot = directory()
-        let second = NotebookReplica(directory: secondRoot)
-        await NotebookSyncCoordinator(replica: second, transport: transport)
-            .synchronize(legacyNote: newer.snapshot())
-
-        let restarted = NotebookReplica(directory: secondRoot)
-        await NotebookSyncCoordinator(replica: restarted, transport: transport)
-            .synchronize()
-        let session = try await restarted.openNote(original.noteID)
-        XCTAssertEqual(session.text, "newer")
-        await NotebookSyncCoordinator(replica: first, transport: transport)
-            .synchronize(legacyNote: original.snapshot())
-        let firstSession = try await first.openNote(original.noteID)
-        XCTAssertEqual(firstSession.text, "newer")
-    }
-
-    func testNilLegacySyncDoesNotReadoptProposalAfterRollback() async throws {
-        let base = InMemorySyncTransport(scope: "legacy-rollback")
-        let original = try NoteDocument(text: "original")
-        let newer = try original.fork()
-        try newer.replaceAll(with: "newer")
-        let root = directory()
-        let first = NotebookReplica(directory: root)
-        await NotebookSyncCoordinator(replica: first, transport: base)
-            .synchronize(legacyNote: original.snapshot())
-        let interrupted = NotebookReplica(directory: root)
-        await NotebookSyncCoordinator(
-            replica: interrupted,
-            transport: FailingFetchTransport(base: base)
-        ).synchronize(legacyNote: newer.snapshot())
-        let storage = interrupted.noteStorage(original.noteID)
-        try Data(contentsOf: storage.previousURL).write(
-            to: storage.currentURL,
-            options: .atomic
-        )
-
-        let restarted = NotebookReplica(directory: root)
-        await NotebookSyncCoordinator(replica: restarted, transport: base)
-            .synchronize()
-
-        let session = try await restarted.openNote(original.noteID)
-        XCTAssertEqual(session.text, "original")
-    }
-
-    func testNilLegacySyncScrubsMalformedBodyAndPreservesV2Note() async throws {
+    func testSyncScrubsMalformedLegacyBodyAndPreservesNotes() async throws {
         let transport = InMemorySyncTransport(scope: "malformed-legacy-proposal")
-        let legacy = try NoteDocument(text: "legacy")
         let root = directory()
         let initial = NotebookReplica(directory: root)
         let initialSync = NotebookSyncCoordinator(replica: initial, transport: transport)
-        await initialSync.synchronize(legacyNote: legacy.snapshot())
+        await initialSync.synchronize()
         let keptID = try await initial.createNote(name: "kept.md", text: "kept V2 body")
-        await initialSync.synchronize(legacyNote: legacy.snapshot())
+        await initialSync.synchronize()
 
         let proposalURL = root.appending(path: "notebook-proposal.json")
         var proposal = try XCTUnwrap(
@@ -1303,13 +1248,19 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
     func testFailedLegacyProposalRewriteDoesNotCacheUnwrittenBytes() async throws {
         let transport = InMemorySyncTransport(scope: "proposal-rewrite-failure")
         let root = directory()
-        let legacy = try NoteDocument(text: "legacy body")
         let initial = NotebookSyncCoordinator(
             replica: NotebookReplica(directory: root), transport: transport)
-        await initial.synchronize(legacyNote: legacy.snapshot())
+        await initial.synchronize()
         assertExchanged(initial.status)
 
+        // An older build left a single-note body in the proposal.
         let proposalURL = root.appending(path: "notebook-proposal.json")
+        var proposal = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: proposalURL))
+                as? [String: Any])
+        proposal["legacyNote"] = ["noteID": UUID().uuidString, "data": "bGVnYWN5"]
+        try JSONSerialization.data(withJSONObject: proposal).write(
+            to: proposalURL, options: .atomic)
         let original = try Data(contentsOf: proposalURL)
         do {
             try FileManager.default.setAttributes(

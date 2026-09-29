@@ -270,7 +270,6 @@ private struct SeedCheckpoint: Equatable, Sendable {
     let appliedHeads: [String: Set<String>]
     let acknowledgedHeads: [String: Set<String>]
     let deletedIDs: Set<UUID>
-    let adoptedLegacyHeads: Set<String>?
 
     init(_ state: NotebookSyncState) {
         notebookID = state.notebookID
@@ -278,7 +277,6 @@ private struct SeedCheckpoint: Equatable, Sendable {
         appliedHeads = state.appliedHeads
         acknowledgedHeads = state.acknowledgedHeads
         deletedIDs = state.deletedIDs
-        adoptedLegacyHeads = state.adoptedLegacyHeads
     }
 
     static let empty = Self(NotebookSyncState(scope: "seed-validation"))

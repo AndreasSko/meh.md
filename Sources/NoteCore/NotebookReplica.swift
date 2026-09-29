@@ -997,17 +997,6 @@ public final class NotebookReplica {
         searchBodyGeneration &+= 1
     }
 
-    /// Preserve a legacy body only after confirming canonical membership.
-    /// All replicas of the migrated V1 note reuse the seed's one catalog entry.
-    func adoptLegacy(_ snapshot: NoteSnapshot) async throws {
-        guard let catalog,
-            try catalog.items().contains(where: { $0.id == snapshot.noteID && $0.kind == .note })
-        else {
-            throw SyncError.identityConflict
-        }
-        try await apply(SyncRecord(snapshot: snapshot, notebookID: catalog.notebookID))
-    }
-
     /// Flush editing sessions without starting a network exchange.
     public func flushOpenNotes() async throws {
         for session in Array(sessions.values) where session.isEditingEnabled {
@@ -1445,11 +1434,7 @@ public final class NotebookReplica {
             notebookID: notebookID
         )
         hasPendingImport = importStorage.hasPendingImport
-        try NotebookSyncCoordinator.removeDeletedLegacyProposal(
-            in: directory,
-            notebookID: notebookID,
-            deletedIDs: rememberedDeletions
-        )
+        try NotebookSyncCoordinator.removeLegacyProposalBody(in: directory)
         try deletionFaultInjector?(.importJournalsScrubbed)
     }
 
