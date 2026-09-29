@@ -309,6 +309,45 @@ public final class NoteSession {
         queueSave()
     }
 
+    /// A catalog can arrive before its note body. Install that first body in
+    /// the registered session so an open editor observes the durable result.
+    /// Other blocked states still require explicit recovery.
+    var isWaitingForRemoteBody: Bool {
+        guard case let .blocked(failure) = status else { return false }
+        return failure.current == .absent && failure.previous == .absent
+    }
+
+    func installFirstRemoteBody(_ snapshot: NoteSnapshot) async throws {
+        guard isWaitingForRemoteBody, !isPermanentlyDeleted else {
+            throw SyncError.localSaveRequired
+        }
+        let remote = try NoteDocument(snapshot: snapshot)
+        let loaded = await storage.load()
+        // Catalog installation can make this session terminal while the
+        // storage read is suspended. Never revive or write a deleted body.
+        guard !isPermanentlyDeleted else { return }
+        switch loaded {
+        case let .blocked(failure)
+        where failure.current == .absent && failure.previous == .absent:
+            try await storage.save(snapshot)
+            guard !isPermanentlyDeleted else { return }
+            try install(remote, persistedHeads: snapshot.heads)
+            persistedSnapshot = snapshot
+            status = .saved
+        case let .current(current):
+            // The file may have arrived through another writer since this
+            // session observed it missing. Join both validated histories.
+            let local = try NoteDocument(snapshot: current)
+            try install(local, persistedHeads: current.heads)
+            persistedSnapshot = current
+            status = .saved
+            try mergeRemote(snapshot)
+            try await flush()
+        default:
+            throw SyncError.localSaveRequired
+        }
+    }
+
     /// Await this session's serialized save loop without creating another
     /// writer. A failed local save never acknowledges a remote download.
     public func flush() async throws {

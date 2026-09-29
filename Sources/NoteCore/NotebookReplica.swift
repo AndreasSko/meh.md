@@ -942,10 +942,31 @@ public final class NotebookReplica {
         if let session = sessions[id] {
             if let load = sessionLoads[id] { await load.value }
             if try deletedIDs.contains(id) { return }
-            guard session.isEditingEnabled else { throw NotebookReplicaError.noteUnavailable(id) }
-            try session.mergeRemote(record.snapshot)
-            try await session.flush()
-            return
+            // Opening may remove an unavailable session while the load above
+            // suspends us. In that case, use the unopened-note writer below.
+            if sessions[id] === session {
+                if session.isWaitingForRemoteBody {
+                    try await withCatalogWrite {
+                        if session.isWaitingForRemoteBody {
+                            try await session.installFirstRemoteBody(record.snapshot)
+                        } else if session.isEditingEnabled {
+                            // Another receiver installed the first body while
+                            // we waited for the serialized writer.
+                            try session.mergeRemote(record.snapshot)
+                            try await session.flush()
+                        } else {
+                            throw NotebookReplicaError.noteUnavailable(id)
+                        }
+                    }
+                } else {
+                    guard session.isEditingEnabled else {
+                        throw NotebookReplicaError.noteUnavailable(id)
+                    }
+                    try session.mergeRemote(record.snapshot)
+                    try await session.flush()
+                }
+                return
+            }
         }
         // Unopened note writes must not overlap an open/load or another
         // download. A single MainActor operation guard serializes this path.
@@ -991,6 +1012,7 @@ public final class NotebookReplica {
         guard let catalog else { throw NotebookReplicaError.notJoined }
         for (id, session) in sessions where !(try deletedIDs.contains(id)) {
             if let load = sessionLoads[id] { await load.value }
+            if session.isWaitingForRemoteBody { continue }
             try await session.flush()
         }
         let deleted = try deletedIDs
