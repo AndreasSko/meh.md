@@ -92,6 +92,7 @@ final class EditorKeyboardUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launch()
         let newItem = app.buttons["notebook-new-item"]
@@ -107,24 +108,15 @@ final class EditorKeyboardUITests: XCTestCase {
         let bold = app.buttons["editor-command-bold"]
         XCTAssertTrue(bold.waitForExistence(timeout: 5))
         XCTAssertLessThan(bold.frame.midY, app.keyboards.firstMatch.frame.minY)
-        let toolbarButtons = [
-            "editor-command-indent", "editor-command-outdent",
-            "editor-command-bold", "editor-command-italic", "editor-formatting",
-        ].map { app.buttons[$0] }
-        let centers = toolbarButtons.map { $0.frame.midX }.sorted()
-        let spacing = centers[1] - centers[0]
-        XCTAssertGreaterThan(spacing, 44)
-        for index in 1..<centers.count {
-            XCTAssertEqual(centers[index] - centers[index - 1], spacing, accuracy: 2)
-        }
+        let italic = app.buttons["editor-command-italic"]
+        XCTAssertTrue(italic.exists)
+        XCTAssertFalse(bold.frame.intersects(italic.frame))
+        capture(app, name: "Swipeable glass formatting bar")
         bold.tap()
         editor.typeText("bright")
         XCTAssertTrue((editor.value as? String)?.contains("**bright**") == true)
-        app.buttons["editor-formatting"].tap()
-        let highlight = app.cells["editor-command-highlight"]
-        XCTAssertTrue(highlight.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.cells["editor-command-continue-line"].exists)
-        XCTAssertFalse(app.cells["editor-reset-toolbar-order"].exists)
+        let highlight = toolbarCommand("editor-command-highlight", in: app)
+        XCTAssertTrue(highlight.exists)
         XCTAssertLessThan(highlight.frame.maxY, app.keyboards.firstMatch.frame.minY)
         highlight.tap()
         XCTAssertTrue(app.keyboards.firstMatch.exists)
@@ -209,33 +201,90 @@ final class EditorKeyboardUITests: XCTestCase {
         let editor = openToolbarTestNote(app)
         editor.typeText("Fictional toolbar sample")
         let source = try XCTUnwrap(editor.value as? String)
+        let toolbar = toolbarContainer(in: app)
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
+        let expectedCommands = [
+            "bold", "italic", "task-list", "insert-table", "indent",
+            "outdent", "heading", "link", "strikethrough", "highlight",
+            "inline-code", "code-block", "toggle-task",
+        ]
+        assertToolbarCommandsReachable(expectedCommands, in: app, toolbar: toolbar)
         let bold = app.buttons["editor-command-bold"]
-        let indent = app.buttons["editor-command-indent"]
         XCTAssertTrue(bold.waitForExistence(timeout: 5))
-        XCTAssertTrue(indent.waitForExistence(timeout: 5))
-        let boldWasFirst = bold.frame.midX < indent.frame.midX
-        let first = boldWasFirst ? bold : indent
-        let second = boldWasFirst ? indent : bold
+        let italic = app.buttons["editor-command-italic"]
+        XCTAssertTrue(italic.waitForExistence(timeout: 5))
+        let boldWasFirst = bold.frame.midX < italic.frame.midX
+        XCTAssertNotEqual(bold.frame.midX, italic.frame.midX)
+        let initialVisibleOrder = visibleToolbarOrder(in: toolbar)
+        XCTAssertTrue(initialVisibleOrder.contains("editor-command-bold"))
+        XCTAssertTrue(initialVisibleOrder.contains("editor-command-italic"))
         capture(app, name: "Formatting bar before reorder")
         let start = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: first.frame.midX, dy: first.frame.midY))
+            .withOffset(CGVector(dx: italic.frame.midX, dy: italic.frame.midY))
         let end = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: second.frame.midX, dy: second.frame.midY))
+            .withOffset(CGVector(
+                dx: bold.frame.midX + (boldWasFirst ? -20 : 20),
+                dy: bold.frame.midY
+            ))
         start.press(forDuration: 0.8, thenDragTo: end)
         let reordered = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
-                first.frame.midX > second.frame.midX
+                (bold.frame.midX < italic.frame.midX) != boldWasFirst
             },
             object: app
         )
         XCTAssertEqual(XCTWaiter.wait(for: [reordered], timeout: 5), .completed)
+        let italicVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"), object: italic
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [italicVisible], timeout: 5), .completed)
+        let reorderedVisibleOrder = visibleToolbarOrder(in: toolbar)
+        XCTAssertNotEqual(reorderedVisibleOrder, initialVisibleOrder)
+        assertToolbarOrderStaysStable(reorderedVisibleOrder, in: toolbar)
         XCTAssertEqual(editor.value as? String, source)
         XCTAssertTrue(app.keyboards.firstMatch.exists)
         capture(app, name: "Reordered formatting bar")
         app.terminate()
         app.launch()
         _ = openToolbarTestNote(app)
-        XCTAssertGreaterThan(first.frame.midX, second.frame.midX)
+        let relaunchedBold = app.buttons["editor-command-bold"]
+        let relaunchedItalic = app.buttons["editor-command-italic"]
+        XCTAssertTrue(relaunchedBold.waitForExistence(timeout: 5))
+        XCTAssertTrue(relaunchedItalic.waitForExistence(timeout: 5))
+        XCTAssertEqual(
+            relaunchedBold.frame.midX < relaunchedItalic.frame.midX,
+            !boldWasFirst
+        )
+        let relaunchedToolbar = toolbarContainer(in: app)
+        XCTAssertEqual(
+            visibleToolbarOrder(in: relaunchedToolbar), reorderedVisibleOrder
+        )
+        let returnStart = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: relaunchedBold.frame.midX,
+                                 dy: relaunchedBold.frame.midY))
+        let returnEnd = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(
+                dx: relaunchedItalic.frame.midX + (boldWasFirst ? -20 : 20),
+                dy: relaunchedItalic.frame.midY
+            ))
+        returnStart.press(forDuration: 0.8, thenDragTo: returnEnd)
+        let restored = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                (relaunchedBold.frame.midX < relaunchedItalic.frame.midX)
+                    == boldWasFirst
+            },
+            object: app
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
+        let boldVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"),
+            object: relaunchedBold
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [boldVisible], timeout: 5), .completed)
+        let restoredVisibleOrder = visibleToolbarOrder(in: relaunchedToolbar)
+        XCTAssertEqual(restoredVisibleOrder, initialVisibleOrder)
+        assertToolbarOrderStaysStable(restoredVisibleOrder, in: relaunchedToolbar)
+        capture(app, name: "Formatting bar after two drags")
     }
 
     private func openToolbarTestNote(_ app: XCUIApplication) -> XCUIElement {
@@ -253,6 +302,7 @@ final class EditorKeyboardUITests: XCTestCase {
     private func commitDefaultTitle(in app: XCUIApplication) {
         let titleField = app.textFields["title-field"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
+        titleField.tap()
         #if os(macOS)
         titleField.typeKey(.return, modifierFlags: [])
         #else
@@ -264,6 +314,76 @@ final class EditorKeyboardUITests: XCTestCase {
         let start = editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
         let end = editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
         start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    @discardableResult
+    private func toolbarCommand(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        let command = app.buttons[identifier]
+        let toolbar = toolbarContainer(in: app)
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
+        for _ in 0..<12 where !command.isHittable {
+            if command.exists && command.frame.midX < toolbar.frame.midX {
+                toolbar.swipeRight()
+            } else {
+                toolbar.swipeLeft()
+            }
+        }
+        XCTAssertTrue(command.isHittable, "Could not reveal \(identifier)")
+        return command
+    }
+
+    private func toolbarContainer(in app: XCUIApplication) -> XCUIElement {
+        let identifier = "editor-keyboard-toolbar"
+        let collection = app.collectionViews[identifier]
+        if collection.waitForExistence(timeout: 2) {
+            return collection
+        }
+        return app.scrollViews[identifier]
+    }
+
+    private func assertToolbarCommandsReachable(
+        _ commands: [String], in app: XCUIApplication, toolbar: XCUIElement
+    ) {
+        for command in commands {
+            let button = app.buttons["editor-command-\(command)"]
+            for _ in 0..<12 where !button.isHittable {
+                toolbar.swipeLeft()
+            }
+            XCTAssertTrue(
+                button.isHittable,
+                "Missing or unreachable toolbar command icon: \(command)"
+            )
+        }
+
+        let bold = app.buttons["editor-command-bold"]
+        for _ in 0..<12 where !bold.isHittable {
+            toolbar.swipeRight()
+        }
+        for _ in 0..<4 {
+            toolbar.swipeRight()
+        }
+        XCTAssertTrue(bold.isHittable, "Could not return to the start of the toolbar")
+    }
+
+    private func visibleToolbarOrder(in toolbar: XCUIElement) -> [String] {
+        toolbar.buttons.allElementsBoundByIndex
+            .filter { $0.exists && $0.frame.intersects(toolbar.frame) }
+            .sorted { $0.frame.midX < $1.frame.midX }
+            .map(\.identifier)
+    }
+
+    private func assertToolbarOrderStaysStable(
+        _ expectedOrder: [String], in toolbar: XCUIElement,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        for _ in 0..<5 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+            XCTAssertEqual(
+                visibleToolbarOrder(in: toolbar), expectedOrder,
+                "Visible toolbar order shifted after the drag completed",
+                file: file, line: line
+            )
+        }
     }
 
     private func capture(_ app: XCUIApplication, name: String) {
