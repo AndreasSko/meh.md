@@ -224,7 +224,7 @@ public final class NotebookReplica {
     public func createNoteInDefaultFolder(
         name: String, text: String = ""
     ) async throws -> UUID {
-        try await withQueuedCatalogWrite {
+        try await withCatalogWrite {
             guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
             let next = try catalog.fork()
             let note = try NoteDocument(text: text)
@@ -239,7 +239,7 @@ public final class NotebookReplica {
     }
 
     public func setDefaultNewNoteParentID(_ id: UUID?) async throws {
-        try await withQueuedCatalogWrite {
+        try await withCatalogWrite {
             guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
             let next = try catalog.fork()
             try next.setDefaultNewNoteParentID(id)
@@ -359,7 +359,7 @@ public final class NotebookReplica {
     }
 
     public func setPinnedInRecents(_ pinned: Bool, for id: UUID) async throws {
-        try await withQueuedCatalogWrite {
+        try await withCatalogWrite {
             guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
             guard self.placements.contains(where: {
                 $0.item.id == id && $0.item.kind == .note &&
@@ -390,7 +390,7 @@ public final class NotebookReplica {
     /// Call on a local text edit. Repeated keystrokes in the newest note do
     /// not create catalog writes; opening a note alone has no effect.
     public func recordRecentActivity(for id: UUID) async throws {
-        try await withQueuedCatalogWrite {
+        try await withCatalogWrite {
             guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
             guard self.placements.contains(where: {
                 $0.item.id == id && $0.item.kind == .note &&
@@ -1308,15 +1308,23 @@ public final class NotebookReplica {
         }
     }
 
+    /// True inside a catalog write, so a nested write fails instead of
+    /// waiting for itself.
+    @TaskLocal private static var holdsCatalogWrite = false
+
     private func saveCatalog(_ next: NotebookCatalogDocument) async throws {
         try await withCatalogWrite { try await self.persistCatalog(next) }
     }
 
+    /// Serializes catalog and unopened-note writes. Callers wait their turn,
+    /// so a user edit during a sync download no longer fails as busy.
     private func withCatalogWrite<T>(
         _ operation: () async throws -> T
     ) async throws -> T {
+        guard !Self.holdsCatalogWrite else { throw NotebookReplicaError.busy }
         guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
-        guard !writingCatalog else { throw NotebookReplicaError.busy }
+        await waitForWrites()
+        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
         writingCatalog = true
         defer {
             writingCatalog = false
@@ -1324,16 +1332,8 @@ public final class NotebookReplica {
             writeWaiters.removeAll()
             for waiter in waiters { waiter.resume() }
         }
-        return try await operation()
-    }
-
-    private func withQueuedCatalogWrite<T>(
-        _ operation: () async throws -> T
-    ) async throws -> T {
-        while true {
-            await waitForWrites()
-            do { return try await withCatalogWrite(operation) }
-            catch NotebookReplicaError.busy { continue }
+        return try await Self.$holdsCatalogWrite.withValue(true) {
+            try await operation()
         }
     }
 

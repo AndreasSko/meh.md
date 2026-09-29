@@ -74,6 +74,39 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
         XCTAssertNil(left.defaultNewNoteParentID)
     }
 
+    func testDownloadWaitsForConcurrentCatalogWrite() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = NotebookReplica(directory: root.appending(path: "source"))
+        try await source.createLocalNotebook()
+        let note = try await source.createNote(name: "Remote.md", text: "remote text")
+        let records = try await source.records()
+        let body = try XCTUnwrap(records.first { $0.kind == .note })
+        let replica = NotebookReplica(directory: root.appending(path: "replica"))
+        try await replica.load()
+        try await replica.acceptSeed(SyncRecord(catalog: try XCTUnwrap(source.catalogSnapshot)))
+
+        let writeEntered = expectation(description: "catalog write entered")
+        var releaseWrite: CheckedContinuation<Void, Never>?
+        replica.catalogWriteSuspension = {
+            writeEntered.fulfill()
+            await withCheckedContinuation { releaseWrite = $0 }
+        }
+        let create = Task { try await replica.createFolder(name: "Local") }
+        await fulfillment(of: [writeEntered], timeout: 1)
+        // A sync download arriving during a local edit waits instead of
+        // failing the whole sync pass as busy.
+        let download = Task { try await replica.apply(body) }
+        await Task.yield()
+
+        replica.catalogWriteSuspension = nil
+        releaseWrite?.resume()
+        _ = try await create.value
+        try await download.value
+        let session = try await replica.openNote(note)
+        XCTAssertEqual(session.text, "remote text")
+    }
+
     func testRenameWaitsForConcurrentCatalogWrite() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

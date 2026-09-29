@@ -293,7 +293,7 @@ final class NotebookSeedReuseTests: XCTestCase {
         }
     }
 
-    func testConcurrentCatalogWriteKeepsAcceptSeedBusyGuard() async throws {
+    func testAcceptSeedWaitsForAnInFlightCatalogWrite() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
@@ -312,17 +312,14 @@ final class NotebookSeedReuseTests: XCTestCase {
         }
         await fulfillment(of: [writeEntered], timeout: 2)
 
-        do {
-            try await replica.acceptSeed(seed)
-            XCTFail("acceptSeed must not bypass an in-flight catalog write")
-        } catch {
-            XCTAssertEqual(error as? NotebookReplicaError, .busy)
-        }
-
+        // acceptSeed must not bypass the in-flight write; it queues behind it.
         replica.catalogWriteSuspension = nil
+        let accept = Task { try await replica.acceptSeed(seed) }
+        await Task.yield()
+        XCTAssertNil(replica.defaultNewNoteParentID)
         releaseWrite?.resume()
         try await write.value
-        try await replica.acceptSeed(seed)
+        try await accept.value
         XCTAssertEqual(replica.defaultNewNoteParentID, inbox)
     }
 
