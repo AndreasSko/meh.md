@@ -987,17 +987,10 @@ public final class NotebookReplica {
             }
         }
         // Unopened note writes must not overlap an open/load or another
-        // download. A single MainActor operation guard serializes this path.
+        // download. A single MainActor operation guard serializes this path;
+        // the merge itself runs on the note's storage actor.
         try await withCatalogWrite {
-            let store = self.noteStorage(id)
-            switch await store.load() {
-            case .firstLaunch:
-                try await store.save(record.snapshot)
-            case .current(let snapshot):
-                let local = try NoteDocument(snapshot: snapshot)
-                try local.merge(NoteDocument(snapshot: record.snapshot))
-                if local.heads != snapshot.heads { try await store.save(local.snapshot()) }
-            case .recoveryRequired, .blocked:
+            guard try await self.noteStorage(id).merge(record.snapshot) else {
                 throw NotebookReplicaError.noteUnavailable(id)
             }
         }
