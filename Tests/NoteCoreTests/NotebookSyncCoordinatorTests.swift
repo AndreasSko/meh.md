@@ -582,6 +582,99 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         assertExchanged(coordinator.status)
     }
 
+    func testOversizedNoteDoesNotBlockOtherBatchesOrCatalog()
+        async throws
+    {
+        let base = InMemorySyncTransport(scope: "size-partial")
+        let transport = BatchRecordingTransport(base: base)
+        let root = directory()
+        let replica = NotebookReplica(directory: root)
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport
+        )
+        await coordinator.synchronize()
+        await transport.clearBatches()
+
+        let blockedID = try await replica.createNote(
+            name: "Long History.md", text: "Unique local edit"
+        )
+        var healthyIDs: [UUID] = []
+        for index in 0..<50 {
+            healthyIDs.append(try await replica.createNote(
+                name: "Healthy \(index).md", text: "body \(index)"
+            ))
+        }
+        await transport.rejectNoteAsOversized(blockedID)
+
+        await coordinator.synchronize()
+
+        guard case let .snapshotTooLarge(documentID, kind, displayName) =
+                coordinator.lastError as? CloudKitSyncTransportError else {
+            return XCTFail("Expected an identified oversized note")
+        }
+        XCTAssertEqual(documentID, blockedID)
+        XCTAssertEqual(kind, .note)
+        XCTAssertEqual(displayName, "Long History.md")
+        let batches = await transport.recordedBatches()
+        XCTAssertEqual(batches.map(\.count), [50, 1, 1])
+        XCTAssertEqual(coordinator.progress?.completedNotes, 50)
+
+        let stateURL = root.appending(path: "notebook-sync-state.json")
+        let state = try JSONDecoder().decode(
+            NotebookSyncState.self, from: Data(contentsOf: stateURL)
+        )
+        XCTAssertNil(state.acknowledgedHeads["note:\(blockedID.uuidString)"])
+        for id in healthyIDs {
+            XCTAssertNotNil(state.acknowledgedHeads["note:\(id.uuidString)"])
+        }
+        XCTAssertNotNil(
+            state.acknowledgedHeads["catalog:\(replica.catalogSnapshot!.notebookID.uuidString)"]
+        )
+
+        let reopened = NotebookReplica(directory: root)
+        try await reopened.load()
+        let note = try await reopened.openNote(blockedID)
+        XCTAssertEqual(note.text, "Unique local edit")
+        await transport.clearBatches()
+        let retry = NotebookSyncCoordinator(
+            replica: reopened, transport: transport
+        )
+        await retry.synchronize()
+        let retryBatches = await transport.recordedBatches()
+        XCTAssertEqual(retryBatches.count, 1)
+        XCTAssertEqual(retryBatches[0].map(\.snapshot.noteID), [blockedID])
+    }
+
+    func testOversizedCatalogKeepsItsKindAndRecoveryGuidance() async throws {
+        let base = InMemorySyncTransport(scope: "catalog-size")
+        let transport = BatchRecordingTransport(base: base)
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport
+        )
+        await coordinator.synchronize()
+        _ = try await replica.createNote(name: "Local note.md", text: "body")
+        await transport.rejectCatalogAsOversized()
+
+        await coordinator.synchronize()
+
+        guard case let .snapshotTooLarge(documentID, kind, displayName) =
+                coordinator.lastError as? CloudKitSyncTransportError else {
+            return XCTFail("Expected an identified oversized catalog")
+        }
+        XCTAssertEqual(documentID, replica.catalogSnapshot?.notebookID)
+        XCTAssertEqual(kind, .catalog)
+        XCTAssertEqual(displayName, "Notebook catalog")
+        let presentation = SyncFailurePresentation(
+            error: coordinator.lastError!, retryWillOccurAutomatically: false
+        )
+        XCTAssertEqual(presentation.retryDisposition, .unavailable)
+        XCTAssertEqual(
+            String(localized: presentation.title),
+            "Notebook too large to sync"
+        )
+    }
+
     func testPartialAcknowledgementCheckpointsBeforeErrorAndRestart() async throws {
         let base = InMemorySyncTransport(scope: "partial-batch")
         let transport = BatchRecordingTransport(base: base)
@@ -1408,6 +1501,8 @@ private actor BatchRecordingTransport: SyncTransport {
     private var catalogFailure = false
     private var unexpectedAcknowledgement = false
     private var missingAcknowledgements = false
+    private var oversizedNoteID: UUID?
+    private var oversizedCatalog = false
 
     init(base: InMemorySyncTransport) {
         self.base = base
@@ -1424,6 +1519,28 @@ private actor BatchRecordingTransport: SyncTransport {
 
     func publishBatch(_ records: [SyncRecord]) async throws -> SyncBatchResult {
         batches.append(records)
+        if oversizedCatalog, let record = records.first,
+           record.kind == .catalog {
+            return SyncBatchResult(
+                acknowledgedIDs: [],
+                error: CloudKitSyncTransportError.snapshotTooLarge(
+                    documentID: record.snapshot.noteID, kind: record.kind
+                )
+            )
+        }
+        if let oversizedNoteID,
+           records.contains(where: { $0.snapshot.noteID == oversizedNoteID }) {
+            let eligible = records.filter {
+                $0.snapshot.noteID != oversizedNoteID
+            }
+            let accepted = try await base.publishBatch(eligible)
+            return SyncBatchResult(
+                acknowledgedIDs: accepted.acknowledgedIDs,
+                error: CloudKitSyncTransportError.snapshotTooLarge(
+                    documentID: oversizedNoteID
+                )
+            )
+        }
         if partialNoteFailure, records.first?.kind == .note {
             partialNoteFailure = false
             guard let first = records.first else {
@@ -1463,6 +1580,8 @@ private actor BatchRecordingTransport: SyncTransport {
     func failNextCatalogBatch() { catalogFailure = true }
     func returnUnexpectedAcknowledgement() { unexpectedAcknowledgement = true }
     func returnNoAcknowledgements() { missingAcknowledgements = true }
+    func rejectNoteAsOversized(_ id: UUID) { oversizedNoteID = id }
+    func rejectCatalogAsOversized() { oversizedCatalog = true }
 }
 
 private actor PausingBatchTransport: SyncTransport {

@@ -85,6 +85,50 @@ final class SyncFailurePresentationTests: XCTestCase {
         XCTAssertEqual(String(localized: manual.actionHint!), "Try syncing again.")
     }
 
+    func testOversizedSnapshotShowsRecoveryGuidance() {
+        let documentID = UUID()
+        let presentation = SyncFailurePresentation(
+            error: CloudKitSyncTransportError.snapshotTooLarge(
+                documentID: documentID, displayName: "Fictional Note.md"
+            ),
+            retryWillOccurAutomatically: false
+        )
+        XCTAssertEqual(
+            String(localized: presentation.title),
+            "Snapshot too large to sync"
+        )
+        XCTAssertEqual(presentation.retryDisposition, .manual)
+        XCTAssertTrue(
+            String(localized: presentation.actionHint!).contains("backup")
+        )
+        XCTAssertTrue(
+            String(localized: presentation.message).contains("Fictional Note.md")
+        )
+    }
+
+    func testOversizedCatalogPausesNotebookSyncAndPreservesLocalData() {
+        let presentation = SyncFailurePresentation(
+            error: CloudKitSyncTransportError.snapshotTooLarge(
+                documentID: UUID(), kind: .catalog,
+                displayName: "Notebook catalog"
+            ),
+            retryWillOccurAutomatically: true
+        )
+        XCTAssertEqual(
+            String(localized: presentation.title),
+            "Notebook too large to sync"
+        )
+        XCTAssertEqual(presentation.retryDisposition, .unavailable)
+        XCTAssertTrue(
+            String(localized: presentation.message).contains("sync is paused")
+        )
+        let hint = String(localized: presentation.actionHint!)
+        XCTAssertTrue(hint.contains("Keep your local data"))
+        XCTAssertTrue(hint.contains("export a backup"))
+        XCTAssertFalse(hint.contains("Other notes can still sync"))
+        XCTAssertFalse(hint.contains("this note's history"))
+    }
+
     func testPartialAndUnderlyingCloudErrorsKeepTheirKnownCause() {
         let partial = NSError(
             domain: CKErrorDomain,

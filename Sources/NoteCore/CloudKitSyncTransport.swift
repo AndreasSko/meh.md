@@ -8,6 +8,10 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
     case unexpectedDeletion
     case uploadFailed(code: Int)
     case uploadNotAcknowledged
+    case snapshotTooLarge(
+        documentID: UUID, kind: SyncDocumentKind = .note,
+        displayName: String? = nil
+    )
 
     public var errorDescription: String? {
         switch self {
@@ -20,6 +24,8 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
             "CloudKit upload failed (CKError code \(code))."
         case .uploadNotAcknowledged:
             "CloudKit did not acknowledge the requested snapshot."
+        case let .snapshotTooLarge(documentID, _, displayName):
+            "The snapshot for \(displayName ?? documentID.uuidString) exceeds the app's 64 MiB iCloud sync limit."
         }
     }
 }
@@ -133,6 +139,7 @@ struct CloudKitTransportState: Codable, Equatable {
     var inbox: [SyncRecord] { inboxSlots.compactMap { $0 } }
 
     mutating func appendToInbox(_ record: SyncRecord) throws {
+        try CloudKitSnapshotSizeLimit.validate(record)
         try record.validate()
         try appendValidatedRecord(record)
     }
@@ -143,6 +150,7 @@ struct CloudKitTransportState: Codable, Equatable {
         guard validated.mode.protocolVersion == protocolVersion else {
             throw SyncError.invalidRecord
         }
+        try CloudKitSnapshotSizeLimit.validate(validated.record)
         try appendValidatedRecord(validated.record)
     }
 
@@ -152,6 +160,7 @@ struct CloudKitTransportState: Codable, Equatable {
         guard record.protocolVersion == protocolVersion else {
             throw SyncError.invalidRecord
         }
+        try CloudKitSnapshotSizeLimit.validate(record)
         unresolvedRemoteDeletionRecordIDs.remove(record.id)
         if purgedRecordIDs.contains(record.id) {
             if record.protocolVersion == 2, record.kind == .note,
@@ -557,7 +566,7 @@ struct CloudKitAcknowledgedRecord: Sendable {
 }
 
 enum CloudKitRemoteRecordValidator {
-    static let maximumAssetSize = 64 * 1024 * 1024
+    static let maximumAssetSize = CloudKitSnapshotSizeLimit.maximumBytes
 
     static func validateSnapshotID(_ id: String) throws {
         guard id.count == 64,
@@ -565,6 +574,85 @@ enum CloudKitRemoteRecordValidator {
                   ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
               }) else {
             throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+    }
+}
+
+enum CloudKitSnapshotSizeLimit {
+    static let maximumBytes = 64 * 1024 * 1024
+
+    static func validate(
+        _ record: SyncRecord, limit: Int? = nil
+    ) throws {
+        guard let maximum = maximumBytes(
+            for: record.protocolVersion
+        ) else {
+            throw SyncError.invalidRecord
+        }
+        guard record.snapshot.data.count <= min(limit ?? maximum, maximum) else {
+            throw CloudKitSyncTransportError.snapshotTooLarge(
+                documentID: record.snapshot.noteID, kind: record.kind
+            )
+        }
+    }
+
+    static func validateAssetSize(
+        _ bytes: UInt64, protocolVersion: Int
+    ) throws {
+        guard let maximum = maximumBytes(for: protocolVersion),
+              bytes <= UInt64(maximum) else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+    }
+
+    static func partition(
+        _ records: [SyncRecord], limit: Int? = nil
+    ) throws -> (admitted: [SyncRecord], rejected: [SyncRecord]) {
+        var admitted: [SyncRecord] = []
+        var rejected: [SyncRecord] = []
+        for record in records {
+            do {
+                try validate(record, limit: limit)
+                admitted.append(record)
+            } catch let error as CloudKitSyncTransportError {
+                guard case .snapshotTooLarge = error else { throw error }
+                rejected.append(record)
+            }
+        }
+        return (admitted, rejected)
+    }
+
+    static func partitionPendingSaves(
+        _ pending: [CKSyncEngine.PendingRecordZoneChange],
+        outbox: [String: SyncRecord], zoneID: CKRecordZone.ID,
+        limit: Int? = nil
+    ) throws -> (
+        admitted: [CKSyncEngine.PendingRecordZoneChange],
+        rejected: [CKSyncEngine.PendingRecordZoneChange]
+    ) {
+        var admitted: [CKSyncEngine.PendingRecordZoneChange] = []
+        var rejected: [CKSyncEngine.PendingRecordZoneChange] = []
+        for change in pending {
+            if case let .saveRecord(id) = change,
+               id.zoneID == zoneID,
+               let record = outbox[id.recordName] {
+                do {
+                    try validate(record, limit: limit)
+                } catch let error as CloudKitSyncTransportError {
+                    guard case .snapshotTooLarge = error else { throw error }
+                    rejected.append(change)
+                    continue
+                }
+            }
+            admitted.append(change)
+        }
+        return (admitted, rejected)
+    }
+
+    private static func maximumBytes(for protocolVersion: Int) -> Int? {
+        switch protocolVersion {
+        case 1, 2: maximumBytes
+        default: nil
         }
     }
 }
@@ -600,6 +688,7 @@ enum CloudKitTransportMode: Equatable, Sendable {
     }
 
     func validate(_ record: SyncRecord, bootstrap: Bool = false) throws {
+        try CloudKitSnapshotSizeLimit.validate(record)
         try record.validate()
         guard record.protocolVersion == protocolVersion else {
             throw SyncError.invalidRecord
@@ -849,11 +938,17 @@ struct CloudKitRecordCodec: @unchecked Sendable {
         let attributes = try FileManager.default.attributesOfItem(
             atPath: source.path
         )
-        guard let size = attributes[.size] as? NSNumber,
-              size.intValue <= CloudKitRemoteRecordValidator.maximumAssetSize
+        guard let size = attributes[.size] as? NSNumber
         else { throw CloudKitSyncTransportError.invalidRemoteRecord }
+        try CloudKitSnapshotSizeLimit.validateAssetSize(
+            size.uint64Value, protocolVersion: version
+        )
+        let data = try Data(contentsOf: source)
+        try CloudKitSnapshotSizeLimit.validateAssetSize(
+            UInt64(data.count), protocolVersion: version
+        )
         let snapshot = NoteSnapshot(
-            data: try Data(contentsOf: source),
+            data: data,
             heads: try JSONDecoder().decode(Set<String>.self, from: headsData),
             noteID: documentID
         )
@@ -895,6 +990,7 @@ struct CloudKitAssetStaging {
     private var completedUploads = Set<URL>()
 
     mutating func retain(_ record: SyncRecord) throws -> URL {
+        try CloudKitSnapshotSizeLimit.validate(record)
         let url = directory.appendingPathComponent(record.id)
         do {
             try record.snapshot.data.write(to: url, options: .atomic)
@@ -1457,6 +1553,32 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         )
         configuration.automaticallySync = automaticallySync
         engine = CKSyncEngine(configuration)
+        let oversizedOutbox = try CloudKitSnapshotSizeLimit.partition(
+            Array(saved.outbox.values)
+        ).rejected
+        let oversizedIDs = Set(oversizedOutbox.map(\.id))
+        if !oversizedIDs.isEmpty {
+            // Preserve the durable records: an older build may have staged
+            // unique history. Only retire their CK save requests so they
+            // cannot block smaller records after this transport restarts.
+            let queuedOversizedSaves = engine.state.pendingRecordZoneChanges
+                .filter { change in
+                    guard case let .saveRecord(id) = change else {
+                        return false
+                    }
+                    return oversizedIDs.contains(id.recordName)
+                }
+            engine.state.remove(
+                pendingRecordZoneChanges: queuedOversizedSaves
+            )
+            if let record = oversizedOutbox.first {
+                let error = CloudKitSyncTransportError.snapshotTooLarge(
+                    documentID: record.snapshot.noteID, kind: record.kind
+                )
+                lastReportedFailure = error
+                activityChannel.yield([.failed(error.localizedDescription)])
+            }
+        }
         let queuedSaves = Set(
             engine.state.pendingRecordZoneChanges.compactMap { change in
                 if case let .saveRecord(id) = change {
@@ -1466,7 +1588,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             }
         )
         let missingSaves = saved.outbox.keys.filter {
-            !queuedSaves.contains($0)
+            !queuedSaves.contains($0) && !oversizedIDs.contains($0)
         }.map { name in
             CKSyncEngine.PendingRecordZoneChange.saveRecord(
                 CKRecord.ID(recordName: name, zoneID: zoneID)
@@ -1555,7 +1677,12 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         await acquirePublishLease()
         defer { releasePublishLease() }
         try await assertHealthy()
-        for record in records { try mode.validate(record) }
+        for record in records {
+            try record.validate()
+            guard record.protocolVersion == mode.protocolVersion else {
+                throw SyncError.invalidRecord
+            }
+        }
         try await verifyAccount()
         let deletedNoteIDs = await store.snapshot().deletedNoteIDs
         let suppressedIDs = Set(records.compactMap { record in
@@ -1563,10 +1690,19 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 && deletedNoteIDs.contains(record.snapshot.noteID)
                 ? record.id : nil
         })
-        let records = records.filter { !suppressedIDs.contains($0.id) }
+        let activeRecords = records.filter {
+            !suppressedIDs.contains($0.id)
+        }
+        let partition = try CloudKitSnapshotSizeLimit.partition(activeRecords)
+        let records = partition.admitted
+        let oversizedError = partition.rejected.first.map {
+            CloudKitSyncTransportError.snapshotTooLarge(
+                documentID: $0.snapshot.noteID, kind: $0.kind
+            )
+        }
         guard !records.isEmpty else {
             return SyncBatchResult(
-                acknowledgedIDs: suppressedIDs, error: nil
+                acknowledgedIDs: suppressedIDs, error: oversizedError
             )
         }
         try await store.update { state in
@@ -1628,7 +1764,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         completedIDs = result.acknowledgedIDs
         return SyncBatchResult(
             acknowledgedIDs: result.acknowledgedIDs.union(suppressedIDs),
-            error: result.error
+            error: result.error ?? oversizedError
         )
     }
 
@@ -2033,9 +2169,27 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         guard !unexpectedDeletionObserved else {
             throw CloudKitSyncTransportError.unexpectedDeletion
         }
+        let partition = try CloudKitSnapshotSizeLimit.partitionPendingSaves(
+            pending, outbox: outbox, zoneID: zoneID
+        )
+        if !partition.rejected.isEmpty {
+            // Recheck every batch: CK may restore a save request after startup.
+            // Retire only the request, keeping its unique durable history.
+            engine.state.remove(
+                pendingRecordZoneChanges: partition.rejected
+            )
+            if case let .saveRecord(id) = partition.rejected[0],
+               let value = outbox[id.recordName] {
+                let error = CloudKitSyncTransportError.snapshotTooLarge(
+                    documentID: value.snapshot.noteID, kind: value.kind
+                )
+                lastReportedFailure = error
+                yieldAfterDelegateReturns([.failed(error.localizedDescription)])
+            }
+        }
         var records: [String: CKRecord] = [:]
         do {
-            for change in pending {
+            for change in partition.admitted {
                 guard case let .saveRecord(recordID) = change,
                       recordID.zoneID == zoneID,
                       let value = outbox[recordID.recordName] else {

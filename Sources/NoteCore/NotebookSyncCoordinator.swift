@@ -75,15 +75,35 @@ public final class NotebookSyncCoordinator {
             if isPending { diagnosticLog?.record("pass_pending") }
             progress = nil
         } catch {
-            lastError = error
+            let failure = namedOversizedError(error)
+            lastError = failure
             diagnosticLog?.record(
-                "pass_error:" + NotebookSyncEventLog.errorCode(error),
+                "pass_error:" + NotebookSyncEventLog.errorCode(failure),
                 counts: [
                     "durationMilliseconds": Self.durationMilliseconds(since: startedAt)
                 ]
             )
-            status = .failed(error.localizedDescription)
+            status = .failed(failure.localizedDescription)
         }
+    }
+
+    private func namedOversizedError(_ error: any Error) -> any Error {
+        guard let failure = error as? CloudKitSyncTransportError,
+              case let .snapshotTooLarge(documentID, kind, _) = failure else {
+            return error
+        }
+        var displayName: String?
+        if let snapshot = replica.catalogSnapshot,
+           let catalog = try? NotebookCatalogDocument(snapshot: snapshot) {
+            if documentID == snapshot.notebookID {
+                displayName = "Notebook catalog"
+            } else if let items = try? catalog.items() {
+                displayName = items.first { $0.id == documentID }?.name
+            }
+        }
+        return CloudKitSyncTransportError.snapshotTooLarge(
+            documentID: documentID, kind: kind, displayName: displayName
+        )
     }
 
     private func exchange(legacyNote: NoteSnapshot?) async throws {
@@ -224,6 +244,7 @@ public final class NotebookSyncCoordinator {
             completedNotes: 0,
             totalNotes: pendingNotes.count
         )
+        var oversizedError: CloudKitSyncTransportError?
         for start in stride(from: 0, to: pendingNotes.count, by: 50) {
             try Task.checkCancellation()
             let end = min(start + 50, pendingNotes.count)
@@ -240,11 +261,16 @@ public final class NotebookSyncCoordinator {
                 )
             }
             guard !batch.isEmpty else { continue }
-            try await publish(
-                batch,
-                state: &state,
-                completedNoteCount: batch.count
-            )
+            do {
+                try await publish(
+                    batch,
+                    state: &state,
+                    completedNoteCount: batch.count
+                )
+            } catch let error as CloudKitSyncTransportError {
+                guard case .snapshotTooLarge = error else { throw error }
+                oversizedError = oversizedError ?? error
+            }
         }
         if let pendingCatalog {
             updateProgress(phase: .uploadingCatalog)
@@ -269,6 +295,7 @@ public final class NotebookSyncCoordinator {
                 diagnosticLog?.record("deletion_cleanup_end", counts: ["items": deleted.count])
             }
         }
+        if let oversizedError { throw oversizedError }
         let current = try await replica.records()
         status =
             current.allSatisfy { state.acknowledgedHeads[$0.documentKey] == $0.snapshot.heads }

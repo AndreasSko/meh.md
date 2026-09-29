@@ -6,6 +6,17 @@ for its catalog and note snapshots; legacy version 1 joining is no longer
 active. Records contain immutable full-history Automerge snapshots in `CKAsset`
 payloads. Confirmed permanent deletion removes remote note snapshots after the
 catalog markers are acknowledged; general history compaction is separate work.
+Each version 1 or 2 snapshot asset must be at most 64 MiB. New oversized
+local snapshots remain on the device and are rejected before upload staging
+or outbox mutation. Previously queued oversized snapshots remain durable but
+cannot be uploaded or acknowledged. Sync reports a specific error so the
+notebook can be backed up before its history is repaired. Received assets
+above the same limit are rejected before they are read into memory or
+committed to the inbox.
+If one note is too large, smaller notes in the same upload batch and later
+batches can still be acknowledged. The oversized note stays pending; sync
+reports its name when the local catalog can supply one and its document ID
+otherwise. The catalog can still publish after healthy note batches.
 
 The app target includes CloudKit entitlements for macOS and iOS with this
 container selected. Xcode automatic provisioning successfully signed the Mac

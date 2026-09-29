@@ -90,6 +90,9 @@ public final class NotebookSyncEventLog {
                 return "CloudKitSyncTransportError.uploadFailed.\(code)"
             case .uploadNotAcknowledged:
                 return "CloudKitSyncTransportError.uploadNotAcknowledged"
+            case let .snapshotTooLarge(documentID, _, _):
+                return "CloudKitSyncTransportError.snapshotTooLarge."
+                    + documentID.uuidString
             }
         }
         if let error = error as? NotebookReplicaError {
