@@ -4,7 +4,7 @@
   width="160"
 />
 
-# meh.md - Minimalistic Markdown with a great sync
+# meh.md - Minimalistic Markdown note taking app with a great sync
 
 meh.md is my attempt to finally build the note taking app of my dreams:
 Markdown-first, without the whole ‘everything is a block’ thing (I look at
