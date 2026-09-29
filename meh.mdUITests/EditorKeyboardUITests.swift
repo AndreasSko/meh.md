@@ -369,7 +369,7 @@ final class EditorKeyboardUITests: XCTestCase {
         toolbar.buttons.allElementsBoundByIndex
             .filter { $0.exists && $0.frame.intersects(toolbar.frame) }
             .sorted { $0.frame.midX < $1.frame.midX }
-            .map(\.identifier)
+            .map { $0.identifier }
     }
 
     private func assertToolbarOrderStaysStable(

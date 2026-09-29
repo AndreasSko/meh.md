@@ -4,7 +4,7 @@ import XCTest
 /// Opt-in live checks. Run the phases individually, in order, on the
 /// iCloud Dev scheme: Mac publish, physical iPhone reply, Mac verify.
 final class ICloudDevelopmentUITests: XCTestCase {
-    private let app = XCUIApplication()
+    private var app: XCUIApplication!
     private var token: String {
         ProcessInfo.processInfo.environment["MEH_ICLOUD_UI_RUN"] ?? ""
     }
@@ -14,6 +14,7 @@ final class ICloudDevelopmentUITests: XCTestCase {
     private var offlinePhoneMarker: String { "Phone offline check \(token)" }
 
     override func setUpWithError() throws {
+        app = XCUIApplication()
         continueAfterFailure = false
         try XCTSkipIf(token.isEmpty, "Set a unique MEH_ICLOUD_UI_RUN to opt into live iCloud tests.")
         // No app environment flags: the installed build must choose iCloud.
@@ -117,11 +118,11 @@ final class ICloudDevelopmentUITests: XCTestCase {
     private func waitForOutage() {
         app.openSyncDetails()
         let status = app.staticTexts["note-sync-status"]
-        expectation(for: NSPredicate(
+        let outage = expectation(for: NSPredicate(
             format: "label CONTAINS %@ OR value CONTAINS %@",
             "Simulated network outage", "Simulated network outage"
         ), evaluatedWith: status)
-        waitForExpectations(timeout: 20)
+        wait(for: [outage], timeout: 20)
         app.closeSyncDetails()
     }
 
@@ -151,8 +152,10 @@ final class ICloudDevelopmentUITests: XCTestCase {
     private func exchange() {
         app.openSyncDetails()
         let button = app.buttons["sync-now"]
-        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: button)
-        waitForExpectations(timeout: 30)
+        let enabled = expectation(
+            for: NSPredicate(format: "enabled == true"), evaluatedWith: button
+        )
+        wait(for: [enabled], timeout: 30)
 #if os(macOS)
         button.click()
 #else
@@ -163,8 +166,8 @@ final class ICloudDevelopmentUITests: XCTestCase {
             let text = status.label + " " + (status.value as? String ?? "")
             return text.contains("Last sync") || text.contains("Sync paused")
         }
-        expectation(for: completed, evaluatedWith: status)
-        waitForExpectations(timeout: 60)
+        wait(for: [expectation(for: completed, evaluatedWith: status)],
+             timeout: 60)
         let text = status.label + " " + (status.value as? String ?? "")
         XCTAssertTrue(text.contains("Last sync"), text)
         app.closeSyncDetails()
@@ -172,7 +175,10 @@ final class ICloudDevelopmentUITests: XCTestCase {
 
     private func waitForText(_ text: String) {
         let editor = app.textViews["markdown-editor"]
-        expectation(for: NSPredicate(format: "value CONTAINS %@", text), evaluatedWith: editor)
-        waitForExpectations(timeout: 60)
+        let shown = expectation(
+            for: NSPredicate(format: "value CONTAINS %@", text),
+            evaluatedWith: editor
+        )
+        wait(for: [shown], timeout: 60)
     }
 }

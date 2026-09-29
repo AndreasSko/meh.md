@@ -4,11 +4,12 @@ import XCTest
 /// then verify on the original iPhone. Use a fresh server data directory and
 /// disposable simulators, or override the workspace through the test runner.
 final class LocalSyncUITests: XCTestCase {
-    private let app = XCUIApplication()
+    private var app: XCUIApplication!
     private let first = "From iPhone: café 👋🏽 日本語\n"
     private let second = "From iPad: naïve 世界\n"
 
     override func setUpWithError() throws {
+        app = XCUIApplication()
         continueAfterFailure = false
         app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
         app.launchEnvironment["MEH_SYNC_URL"] = "http://127.0.0.1:8765"

@@ -1,9 +1,10 @@
 import XCTest
 
 final class NotePersistenceUITests: XCTestCase {
-    private let app = XCUIApplication()
+    private var app: XCUIApplication!
 
     override func setUpWithError() throws {
+        app = XCUIApplication()
         continueAfterFailure = false
     }
 
