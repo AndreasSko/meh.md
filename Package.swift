@@ -11,7 +11,6 @@ let package = Package(
         .library(name: "NoteCore", targets: ["NoteCore"]),
     ],
     dependencies: [
-        .package(path: "Spikes/AutomergeSpike"),
         .package(
             url: "https://github.com/automerge/automerge-swift.git",
             exact: "0.7.2"
@@ -118,10 +117,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NativeEditorTests",
-            dependencies: [
-                "NativeEditor",
-                .product(name: "AutomergeSpike", package: "AutomergeSpike"),
-            ],
+            dependencies: ["NativeEditor"],
             path: "Tests/NativeEditorTests"
         ),
     ]
