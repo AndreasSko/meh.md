@@ -2710,11 +2710,17 @@ extension CloudKitSyncTransport {
                 }
             )
             guard let prepared else { return nil }
+            // A batch stops at CloudKit's per-request limit. Changes left out
+            // are offered again later and must not keep their staged files.
+            let included = Set(prepared.batch.recordsToSave.map {
+                $0.recordID.recordName
+            })
+            releaseOutgoingBatchLeases(prepared.leasedIDs.subtracting(included))
             guard !isRetired, delegateFailure == nil,
                   store.writeHealth.failure == nil,
                   !unexpectedDeletionObserved,
                   syncEngine === engine else {
-                releaseOutgoingBatchLeases(prepared.leasedIDs)
+                releaseOutgoingBatchLeases(included)
                 return nil
             }
             return prepared.batch

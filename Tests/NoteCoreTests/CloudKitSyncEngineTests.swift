@@ -189,6 +189,19 @@ final class CloudKitSyncEngineTests: XCTestCase {
         XCTAssertEqual(server.recordNames, [])
     }
 
+    func testUploadsBeyondOneRequestLeaveNoStagedAssets() async throws {
+        // More pending saves than CloudKit accepts per request, e.g. after a
+        // long offline period with automatic engine scheduling.
+        let notes = try (0..<300).map { try makeNote("note \($0)") }
+        let transport = try await open("device")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+
+        let result = try await transport.publishBatch(notes)
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.acknowledgedIDs.count, notes.count)
+        XCTAssertEqual(try stagedAssetCount("device"), 0)
+    }
+
     // MARK: Helpers
 
     private func open(_ device: String) async throws -> CloudKitSyncTransport {
@@ -209,6 +222,18 @@ final class CloudKitSyncEngineTests: XCTestCase {
             records += page.records
             cursor = page.cursor
             if !page.hasMore { return (records, page.cursor) }
+        }
+    }
+
+    private func stagedAssetCount(_ device: String) throws -> Int {
+        let assets = root.appending(path: device).appending(path: "assets")
+        let generations = try FileManager.default.contentsOfDirectory(
+            at: assets, includingPropertiesForKeys: nil
+        )
+        return try generations.reduce(0) {
+            $0 + (try FileManager.default.contentsOfDirectory(
+                atPath: $1.path
+            ).count)
         }
     }
 
