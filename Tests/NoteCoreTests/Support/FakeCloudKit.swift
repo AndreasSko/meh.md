@@ -21,6 +21,8 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         case offline
         /// The next save of a matching record fails with this code.
         case failSave(CKError.Code, matching: @Sendable (CKRecord.ID) -> Bool)
+        /// The next direct record read fails with `networkFailure`.
+        case failNextRead
         /// The next engine send stores its batch, then the app dies before
         /// the sent-changes event is delivered.
         case crashAfterServerSave
@@ -126,6 +128,12 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
 
     func record(for recordID: CKRecord.ID) async throws -> CKRecord {
         try checkReachable()
+        if takeFault(where: {
+            if case .failNextRead = $0 { return true }
+            return false
+        }) != nil {
+            throw CKError(.networkFailure)
+        }
         return try locked {
             guard zoneExists else { throw CKError(.zoneNotFound) }
             guard let record = records[recordID] else {

@@ -2573,10 +2573,11 @@ extension CloudKitSyncTransport {
                     let id = failure.record.recordID.recordName
                     if failure.error.code == .serverRecordChanged {
                         do {
-                            let server = try await cloudRequest {
-                                try await database.record(
-                                    for: failure.record.recordID
-                                )
+                            // CloudKit attaches the conflicting record; never
+                            // make a request from inside an engine callback.
+                            guard let server = failure.error.serverRecord else {
+                                throw CloudKitSyncTransportError
+                                    .invalidRemoteRecord
                             }
                             let value = try decode(server)
                             guard value.id == id else {

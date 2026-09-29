@@ -55,6 +55,22 @@ final class CloudKitSyncEngineTests: XCTestCase {
         XCTAssertEqual(result.acknowledgedIDs, [note.id])
     }
 
+    func testConflictIsAcknowledgedWithoutAnotherRequest() async throws {
+        let note = try makeNote("shared")
+        let first = try await open("device-a")
+        _ = try await first.bootstrap(proposing: try makeCatalog())
+        _ = try await first.publishBatch([note])
+        let second = try await open("device-b")
+        _ = try await second.bootstrap(proposing: try makeCatalog())
+
+        // The conflict carries the server record. Reading it again from
+        // inside the engine callback could stall on a retry cooldown.
+        server.inject(.failNextRead)
+        let result = try await second.publishBatch([note])
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.acknowledgedIDs, [note.id])
+    }
+
     func testRejectedSaveIsReportedAndSucceedsWhenRetried() async throws {
         let notes = try (0..<3).map { try makeNote("note \($0)") }
         let rejected = notes[1].id
