@@ -173,6 +173,25 @@ final class NotebookWorkspace {
         var mode: Mode = preview ? .preview : .local
         #if ICLOUD_ENABLED
         mode = .cloud
+        #if DEBUG
+        // Native UI tests use isolated loopback workspaces in iCloud Dev.
+        // A malformed fixture must fail instead of falling back to CloudKit.
+        if environment["MEH_SYNC_TEST_TRANSPORT"] == "loopback" {
+            if !preview,
+               let endpoint = environment["MEH_SYNC_URL"],
+               let url = URL(string: endpoint),
+               url.scheme == "http",
+               ["127.0.0.1", "localhost", "::1"].contains(url.host ?? ""),
+               let name = environment["MEH_SYNC_WORKSPACE"],
+               name.range(
+                   of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression
+               ) != nil {
+                mode = .development(url, name)
+            } else {
+                mode = .invalid
+            }
+        }
+        #endif
         #elseif DEBUG
         if !preview, let endpoint = environment["MEH_SYNC_URL"] {
             if let url = URL(string: endpoint),

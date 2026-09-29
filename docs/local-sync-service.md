@@ -91,14 +91,16 @@ swift test --disable-sandbox \
 Start the service on port 8765 as above. Build the UI-test bundle:
 
 ```sh
-xcodebuild -project meh.md.xcodeproj -scheme meh.md \
+xcodebuild -project meh.md.xcodeproj -scheme 'meh.md iCloud Dev' \
   -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath /tmp/meh-sync-build \
   CODE_SIGNING_ALLOWED=NO build-for-testing
 ```
 
 Choose an iPhone and iPad simulator UDID from `xcrun simctl list devices`.
-The runner uses a unique test workspace and preserves each ordinary note:
+The runner uses a unique test workspace and preserves each ordinary note.
+The UI tests explicitly select the Debug-only HTTP loopback transport in the
+iCloud Dev app; normal launches continue to use CloudKit.
 
 ```sh
 python3 Tools/LocalSyncServer/run_simulator_checks.py \
@@ -113,5 +115,6 @@ verification report. It does not start/stop the service or erase simulators.
 
 The Debug app normally polls while active. Set `MEH_SYNC_AUTOMATIC=0` to use
 only Sync Now during deterministic UI checks. The runner sets this itself.
-Test copies appear under `Files / meh.md / SyncWorkspaces / <workspace>`;
-internal state is isolated by the endpoint/workspace scope hash.
+Test copies appear under the iCloud Dev app's Documents folder in
+`SyncWorkspaces / <workspace> / Notebook Copies / Markdown`; internal state is
+isolated by the endpoint/workspace scope hash.

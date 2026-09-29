@@ -182,6 +182,7 @@ extension XCUIApplication {
 #if os(macOS)
             titleField.typeKey(.return, modifierFlags: [])
 #else
+            titleField.tap()
             titleField.typeText("\n")
 #endif
         }
@@ -233,11 +234,42 @@ extension XCUIApplication {
         return editor
     }
 
+    func openNotebookNote(withText expected: String) -> XCUIElement? {
+        revealNotebookSidebar(timeout: 15)
+        let files = buttons["notebook-tree-toggle"]
+        if files.value as? String == "Collapsed" { activate(files) }
+        // Native sidebar rows can be exposed as Other on iPad.
+        let notes = descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "notebook-sidebar-note-"
+            )
+        )
+        _ = notes.firstMatch.waitForExistence(timeout: 10)
+        let identifiers = notes.allElementsBoundByIndex.map(\.identifier)
+        for identifier in identifiers {
+            revealNotebookSidebar(timeout: 15)
+            let note = descendants(matching: .any)
+                .matching(identifier: identifier).firstMatch
+            guard note.waitForExistence(timeout: 5) else { continue }
+            activate(note)
+            let editor = textViews["markdown-editor"]
+            guard editor.waitForExistence(timeout: 5) else { continue }
+            let match = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value == %@", expected),
+                object: editor
+            )
+            if XCTWaiter.wait(for: [match], timeout: 2) == .completed {
+                return editor
+            }
+        }
+        return nil
+    }
+
     private func revealNotebookSidebar(timeout: TimeInterval) {
 #if os(iOS)
-        let cloud = buttons["notebook-sync-details"]
         let files = buttons["notebook-tree-toggle"]
-        guard !cloud.isHittable && !files.isHittable else { return }
+        guard !files.isHittable else { return }
         let back = navigationBars.buttons.firstMatch
         XCTAssertTrue(
             back.waitForExistence(timeout: timeout),
@@ -245,11 +277,14 @@ extension XCUIApplication {
         )
         back.tap()
         XCTAssertTrue(
-            buttons["notebook-new-item"].firstMatch.waitForExistence(
-                timeout: timeout
-            ),
+            files.waitForExistence(timeout: timeout),
             "Expected the notebook sidebar to become visible"
         )
+        let visible = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"),
+            object: files
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: timeout), .completed)
 #endif
     }
 
