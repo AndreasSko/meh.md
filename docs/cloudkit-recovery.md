@@ -20,9 +20,11 @@ An unsuccessful reconstruction can be retried without clearing the original
 failure or changing the expected account scope.
 
 Corrupt state, account changes, invalid records, and unexplained remote
-deletion do not authorize reconstruction. Provisional note deletions can still
-be reconciled by a later catalog marker. Recovery never resets local or cloud
-data, and an uncertain upload result remains pending until acknowledged.
+deletion do not authorize reconstruction. A zone missing after this device
+has joined counts as remote deletion: only a first join creates the zone.
+Provisional note deletions can still be reconciled by a later catalog marker.
+Recovery never resets local or cloud data, and an uncertain upload result
+remains pending until acknowledged.
 
 The existing sync details show a cause and a next step. Automatic retry is
 promised only when the workspace has scheduled it. Technical failure codes

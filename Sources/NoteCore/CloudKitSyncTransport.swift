@@ -2286,6 +2286,13 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         }
     }
 
+    private func haltForDeletedZone() async throws {
+        unexpectedDeletionObserved = true
+        latchFailure(CloudKitSyncTransportError.unexpectedDeletion)
+        try await store.update { $0.hasUnexpectedDeletion = true }
+        lastReportedFailure = CloudKitSyncTransportError.unexpectedDeletion
+    }
+
     private func ensureZone() async throws {
         let result = try await cloudRequest(labLabel: "ensureZone.recordZones") {
             try await database.recordZones(for: [zoneID])
@@ -2303,6 +2310,13 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                     || cloudError.code == .zoneNotFound else {
                 throw error
             }
+        }
+        // Only a first join may create the zone. Once this device has joined,
+        // a missing zone means the cloud data was deleted; re-creating it
+        // would silently re-seed iCloud before anyone decided to.
+        guard await store.snapshot().inbox.isEmpty else {
+            try await haltForDeletedZone()
+            throw CloudKitSyncTransportError.unexpectedDeletion
         }
         let saved = try await cloudRequest(labLabel: "ensureZone.createZone") {
             try await database.modifyRecordZones(
@@ -2602,6 +2616,18 @@ extension CloudKitSyncTransport {
                                 error.localizedDescription
                             ))
                         }
+                    } else if failure.error.code == .zoneNotFound {
+                        // Uploads only follow a join, so the zone was
+                        // deleted remotely. Never re-create it here.
+                        try await haltForDeletedZone()
+                        if awaitedUploadIDs.contains(id) {
+                            failedUploads[id] =
+                                CloudKitSyncTransportError.unexpectedDeletion
+                        }
+                        activities.append(.failed(
+                            CloudKitSyncTransportError.unexpectedDeletion
+                                .localizedDescription
+                        ))
                     } else {
                         let error = CloudKitSyncTransportError
                             .uploadFailed(code: failure.error.code.rawValue)
@@ -2625,11 +2651,7 @@ extension CloudKitSyncTransport {
                 activities.append(.accountChanged)
             case let .fetchedDatabaseChanges(deletedZoneIDs):
                 if deletedZoneIDs.contains(zoneID) {
-                    unexpectedDeletionObserved = true
-                    latchFailure(CloudKitSyncTransportError.unexpectedDeletion)
-                    try await store.update { $0.hasUnexpectedDeletion = true }
-                    lastReportedFailure =
-                        CloudKitSyncTransportError.unexpectedDeletion
+                    try await haltForDeletedZone()
                     activities.append(.failed(
                         CloudKitSyncTransportError.unexpectedDeletion
                             .localizedDescription
