@@ -1452,8 +1452,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
 
     private static let pageSize = 100
 
-    private let container: CKContainer
-    private let database: CKDatabase
+    private let account: any CloudKitAccountClient
+    private let database: any CloudKitDatabaseClient
+    private let engineFactory: CloudKitSyncEngineFactory
     private let expectedUserRecordID: CKRecord.ID
     private let zoneID: CKRecordZone.ID
     private let mode: CloudKitTransportMode
@@ -1465,7 +1466,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private var assetStaging: CloudKitAssetStaging
     private var engineAssetLeases: [String: [URL]] = [:]
     private var availabilityCooldown: CloudKitAvailabilityCooldownStore
-    private var engine: CKSyncEngine!
+    private var engine: (any CloudKitSyncEngineClient)!
     private var retiredEngineID: ObjectIdentifier?
     private var awaitedUploadIDs = Set<String>()
     private var acknowledgedIDs = Set<String>()
@@ -1548,6 +1549,22 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     }
     #endif
 
+    /// Notebook transport over substitute CloudKit services, for tests.
+    static func makeNotebook(
+        services: CloudKitServices,
+        containerIdentifier: String,
+        stateDirectory: URL
+    ) async throws -> CloudKitSyncTransport {
+        try await make(
+            containerIdentifier: containerIdentifier,
+            stateDirectory: stateDirectory,
+            zoneName: CloudKitTransportMode.notebook.zoneName,
+            mode: .notebook,
+            automaticallySync: false,
+            services: services
+        )
+    }
+
     private static func make(
         containerIdentifier: String,
         stateDirectory: URL,
@@ -1556,7 +1573,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         automaticallySync: Bool,
         expectedScope: String? = nil,
         expectedNotebookID: UUID? = nil,
-        labRunID: UUID? = nil
+        labRunID: UUID? = nil,
+        services: CloudKitServices? = nil
     ) async throws -> CloudKitSyncTransport {
         if let labRunID {
             guard mode == .notebook else { throw SyncError.scopeChanged }
@@ -1570,10 +1588,11 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             directory: stateDirectory
         )
         try await availabilityCooldown.wait()
-        let container = CKContainer(identifier: containerIdentifier)
+        let services = services
+            ?? .system(containerIdentifier: containerIdentifier)
         let accountStatus: CKAccountStatus
         do {
-            accountStatus = try await container.accountStatus()
+            accountStatus = try await services.account.accountStatus()
         } catch {
             try availabilityCooldown.observe(error)
             throw error
@@ -1583,7 +1602,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         }
         let userRecordID: CKRecord.ID
         do {
-            userRecordID = try await container.userRecordID()
+            userRecordID = try await services.account.userRecordID()
         } catch {
             try availabilityCooldown.observe(error)
             throw error
@@ -1619,7 +1638,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         }
         let transport = CloudKitSyncTransport(
             containerIdentifier: containerIdentifier,
-            container: container,
+            services: services,
             userRecordID: userRecordID,
             zoneName: zoneName,
             stateDirectory: stateDirectory,
@@ -1652,7 +1671,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
 
     private init(
         containerIdentifier: String,
-        container: CKContainer,
+        services: CloudKitServices,
         userRecordID: CKRecord.ID,
         zoneName: String,
         stateDirectory: URL,
@@ -1661,8 +1680,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         mode: CloudKitTransportMode,
         automaticallySync: Bool
     ) {
-        self.container = container
-        database = container.privateCloudDatabase
+        account = services.account
+        database = services.database
+        engineFactory = services.makeEngine
         expectedUserRecordID = userRecordID
         let zoneID = CKRecordZone.ID(zoneName: zoneName)
         self.zoneID = zoneID
@@ -1703,25 +1723,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         if saved.retryNotBefore != deadline {
             try await store.update { $0.retryNotBefore = deadline }
         }
-        let serialization: CKSyncEngine.State.Serialization?
-        if let data = saved.engineState {
-            do {
-                serialization = try JSONDecoder().decode(
-                    CKSyncEngine.State.Serialization.self, from: data
-                )
-            } catch {
-                throw CloudKitSyncTransportError.corruptState
-            }
-        } else {
-            serialization = nil
-        }
-        var configuration = CKSyncEngine.Configuration(
-            database: database,
-            stateSerialization: serialization,
-            delegate: self
+        engine = try engineFactory(
+            saved.engineState, self, automaticallySync
         )
-        configuration.automaticallySync = automaticallySync
-        engine = CKSyncEngine(configuration)
         let oversizedOutbox = try CloudKitSnapshotSizeLimit.partition(
             Array(saved.outbox.values)
         ).rejected
@@ -1730,14 +1734,14 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             // Preserve the durable records: an older build may have staged
             // unique history. Only retire their CK save requests so they
             // cannot block smaller records after this transport restarts.
-            let queuedOversizedSaves = engine.state.pendingRecordZoneChanges
+            let queuedOversizedSaves = engine.pendingRecordZoneChanges
                 .filter { change in
                     guard case let .saveRecord(id) = change else {
                         return false
                     }
                     return oversizedIDs.contains(id.recordName)
                 }
-            engine.state.remove(
+            engine.remove(
                 pendingRecordZoneChanges: queuedOversizedSaves
             )
             if let record = oversizedOutbox.first {
@@ -1749,7 +1753,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             }
         }
         let queuedSaves = Set(
-            engine.state.pendingRecordZoneChanges.compactMap { change in
+            engine.pendingRecordZoneChanges.compactMap { change in
                 if case let .saveRecord(id) = change {
                     return id.recordName
                 }
@@ -1764,7 +1768,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             )
         }
         if !missingSaves.isEmpty {
-            engine.state.add(pendingRecordZoneChanges: missingSaves)
+            engine.add(pendingRecordZoneChanges: missingSaves)
         }
     }
 
@@ -1909,7 +1913,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             acknowledgedIDs.subtract(ids)
             for id in ids { failedUploads[id] = nil }
         }
-        engine.state.add(
+        engine.add(
             pendingRecordZoneChanges: recordIDs.map { .saveRecord($0) }
         )
         let sendError: Error?
@@ -2031,7 +2035,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             )
         }
         try assertActive()
-        engine.state.remove(pendingRecordZoneChanges: changes)
+        engine.remove(pendingRecordZoneChanges: changes)
         try assetStaging.purge(recordIDs: pendingIDs)
 
         let sortedPendingIDs = pendingIDs.sorted()
@@ -2048,6 +2052,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 try await database.modifyRecords(
                     saving: [],
                     deleting: ids,
+                    savePolicy: .ifServerRecordUnchanged,
                     atomically: false
                 ).deleteResults
             }
@@ -2155,7 +2160,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
 
     private func verifyAccount() async throws {
         let status = try await cloudRequest(labLabel: "verifyAccount.accountStatus") {
-            try await container.accountStatus()
+            try await account.accountStatus()
         }
         switch status {
         case .available:
@@ -2167,7 +2172,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             throw CloudKitSyncTransportError.accountUnavailable
         }
         let currentUser = try await cloudRequest(labLabel: "verifyAccount.userRecordID") {
-            try await container.userRecordID()
+            try await account.userRecordID()
         }
         guard currentUser == expectedUserRecordID else {
             latchFailure(SyncError.scopeChanged)
@@ -2350,7 +2355,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         if !partition.rejected.isEmpty {
             // Recheck every batch: CK may restore a save request after startup.
             // Retire only the request, keeping its unique durable history.
-            engine.state.remove(
+            engine.remove(
                 pendingRecordZoneChanges: partition.rejected
             )
             if case let .saveRecord(id) = partition.rejected[0],
@@ -2414,22 +2419,34 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
     public func handleEvent(
         _ event: CKSyncEngine.Event, syncEngine: CKSyncEngine
     ) async {
+        await handle(CloudKitEngineEvent(event), from: syncEngine)
+    }
+
+    public func nextRecordZoneChangeBatch(
+        _ context: CKSyncEngine.SendChangesContext,
+        syncEngine: CKSyncEngine
+    ) async -> CKSyncEngine.RecordZoneChangeBatch? {
+        let pending = syncEngine.state.pendingRecordZoneChanges.filter {
+            context.options.scope.contains($0)
+        }
+        return await nextRecordZoneChangeBatch(
+            pending: pending, from: syncEngine
+        )
+    }
+}
+
+extension CloudKitSyncTransport {
+    func handle(
+        _ event: CloudKitEngineEvent,
+        from syncEngine: any CloudKitSyncEngineClient
+    ) async {
         if isRetired {
             if retiredEngineID == ObjectIdentifier(syncEngine),
-               case let .sentRecordZoneChanges(changes) = event {
+               let sent = event.sentRecordIDs {
                 // CK may report a completed operation after cancellation.
                 // Its asset paths belong only to this transport generation.
-                for record in changes.savedRecords {
-                    releaseEngineAssetLease(
-                        for: record.recordID.recordName,
-                        uploadCompleted: true
-                    )
-                }
-                for failure in changes.failedRecordSaves {
-                    releaseEngineAssetLease(
-                        for: failure.record.recordID.recordName,
-                        uploadCompleted: true
-                    )
+                for id in sent.saved + sent.failed {
+                    releaseEngineAssetLease(for: id, uploadCompleted: true)
                 }
             }
             return
@@ -2448,17 +2465,10 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                 // An upload completed before the failure may still be
                 // acknowledged if the committer remains healthy.
             } else {
-                if case let .sentRecordZoneChanges(changes) = event {
-                    for record in changes.savedRecords {
+                if let sent = event.sentRecordIDs {
+                    for id in sent.saved + sent.failed {
                         releaseEngineAssetLease(
-                            for: record.recordID.recordName,
-                            uploadCompleted: true
-                        )
-                    }
-                    for failure in changes.failedRecordSaves {
-                        releaseEngineAssetLease(
-                            for: failure.record.recordID.recordName,
-                            uploadCompleted: true
+                            for: id, uploadCompleted: true
                         )
                     }
                 }
@@ -2471,17 +2481,14 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
             switch event {
             case let .stateUpdate(update):
                 guard delegateFailure == nil else { return }
-                let data = try JSONEncoder().encode(update.stateSerialization)
+                let data = try update.get()
                 try await eventCommitter.commitEngineState(data)
-            case let .fetchedRecordZoneChanges(changes):
-                let targetDeletions = changes.deletions.filter {
-                    $0.recordID.zoneID == zoneID
+            case let .fetchedRecordZoneChanges(modifications, deletions):
+                let targetDeletions = deletions.filter {
+                    $0.zoneID == zoneID
                 }
-                let recordNames = Set(targetDeletions.map {
-                    $0.recordID.recordName
-                })
-                let records = try changes.modifications
-                    .map(\.record)
+                let recordNames = Set(targetDeletions.map(\.recordName))
+                let records = try modifications
                     .filter { $0.recordID.zoneID == zoneID }
                     .map(decode)
                 let committed = try await eventCommitter.commitFetched(
@@ -2493,11 +2500,11 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                     recordCount: committed.recordCount,
                     deletionCount: committed.deletionCount
                 )
-            case let .sentRecordZoneChanges(changes):
-                let savedIDs = Set(changes.savedRecords.map {
+            case let .sentRecordZoneChanges(savedCloudRecords, failedSaves):
+                let savedIDs = Set(savedCloudRecords.map {
                     $0.recordID.recordName
                 })
-                let failedIDs = Set(changes.failedRecordSaves.map {
+                let failedIDs = Set(failedSaves.map {
                     $0.record.recordID.recordName
                 })
                 var durablyCommittedIDs = Set<String>()
@@ -2519,7 +2526,7 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                         )
                     }
                 }
-                let savedRecords = try changes.savedRecords.map { record in
+                let savedRecords = try savedCloudRecords.map { record in
                     let id = record.recordID.recordName
                     let saved = try decode(record)
                     guard saved.id == id else {
@@ -2546,7 +2553,7 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                         committedCount
                     )
                 }
-                for failure in changes.failedRecordSaves {
+                for failure in failedSaves {
                     await observeRetryAfter(failure.error)
                     if let delegateFailure { throw delegateFailure }
                     let id = failure.record.recordID.recordName
@@ -2572,7 +2579,7 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                                 return pending != nil || changed
                             }
                             durablyCommittedIDs.insert(id)
-                            syncEngine.state.remove(
+                            syncEngine.remove(
                                 pendingRecordZoneChanges: [
                                     .saveRecord(failure.record.recordID)
                                 ]
@@ -2608,18 +2615,16 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                     }
                 }
             case let .accountChange(change):
-                switch change.changeType {
+                switch change {
                 case let .signIn(currentUser)
                     where currentUser == expectedUserRecordID:
                     break
                 case .signIn, .signOut, .switchAccounts:
                     latchFailure(SyncError.scopeChanged)
-                @unknown default:
-                    latchFailure(SyncError.scopeChanged)
                 }
                 activities.append(.accountChanged)
-            case let .fetchedDatabaseChanges(changes):
-                if changes.deletions.contains(where: { $0.zoneID == zoneID }) {
+            case let .fetchedDatabaseChanges(deletedZoneIDs):
+                if deletedZoneIDs.contains(zoneID) {
                     unexpectedDeletionObserved = true
                     latchFailure(CloudKitSyncTransportError.unexpectedDeletion)
                     try await store.update { $0.hasUnexpectedDeletion = true }
@@ -2630,20 +2635,18 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                             .localizedDescription
                     ))
                 }
-            case let .didFetchRecordZoneChanges(completion):
-                if completion.zoneID == zoneID, let error = completion.error {
+            case let .didFetchRecordZoneChanges(completedZoneID, error):
+                if completedZoneID == zoneID, let error {
                     await observeRetryAfter(error)
                     if let delegateFailure { throw delegateFailure }
                     lastReportedFailure = error
                     activities.append(.failed(error.localizedDescription))
                 }
-            case let .didFetchChanges(completion):
+            case let .didFetchChanges(scheduled):
                 do {
                     try await eventCommitter.finishFetch()
                     let reason: CloudKitSyncReason =
-                        completion.context.reason == .scheduled
-                        ? .scheduled
-                        : .manual
+                        scheduled ? .scheduled : .manual
                     if let activity = activityTracker.finishFetch(
                         reason: reason
                     ) {
@@ -2657,13 +2660,13 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
                     lastReportedFailure = error
                     activities.append(.failed(error.localizedDescription))
                 }
-            case let .didSendChanges(completion):
+            case let .didSendChanges(scheduled):
                 if let activity = activityTracker.finishSend(
-                    wasScheduled: completion.context.reason == .scheduled
+                    wasScheduled: scheduled
                 ) {
                     activities.append(activity)
                 }
-            default:
+            case .other:
                 break
             }
         } catch {
@@ -2671,24 +2674,18 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
             latchFailure(error)
             lastReportedFailure = error
             activities.append(.failed(error.localizedDescription))
-            if case let .sentRecordZoneChanges(changes) = event {
-                for record in changes.savedRecords {
-                    let id = record.recordID.recordName
-                    if awaitedUploadIDs.contains(id) {
-                        failedUploads[id] = error
-                    }
+            if let sent = event.sentRecordIDs {
+                for id in sent.saved where awaitedUploadIDs.contains(id) {
+                    failedUploads[id] = error
                 }
             }
         }
     }
 
-    public func nextRecordZoneChangeBatch(
-        _ context: CKSyncEngine.SendChangesContext,
-        syncEngine: CKSyncEngine
+    func nextRecordZoneChangeBatch(
+        pending: [CKSyncEngine.PendingRecordZoneChange],
+        from syncEngine: any CloudKitSyncEngineClient
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
-        let pending = syncEngine.state.pendingRecordZoneChanges.filter {
-            context.options.scope.contains($0)
-        }
         do {
             let prepared = try await CloudKitOutgoingBatchPreparer.assemble(
                 allowed: { await self.canOfferOutgoingBatch(syncEngine) },
@@ -2730,8 +2727,9 @@ extension CloudKitSyncTransport: CKSyncEngineDelegate {
         }
     }
 
-    private func canOfferOutgoingBatch(_ syncEngine: CKSyncEngine)
-        async -> Bool
+    private func canOfferOutgoingBatch(
+        _ syncEngine: any CloudKitSyncEngineClient
+    ) async -> Bool
     {
         if let failure = store.writeHealth.failure { latchFailure(failure) }
         guard !isRetired, delegateFailure == nil,
