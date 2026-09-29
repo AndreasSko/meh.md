@@ -1349,7 +1349,7 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
     }
 
     private func assertExchanged(
-        _ status: NoteSyncCoordinator.Status,
+        _ status: NotebookSyncCoordinator.Status,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {

@@ -102,7 +102,7 @@ final class NotebookSyncProgressIntegrationTests: XCTestCase {
     }
 
     private func assertExchanged(
-        _ status: NoteSyncCoordinator.Status
+        _ status: NotebookSyncCoordinator.Status
     ) throws {
         guard case .exchanged = status else {
             XCTFail("Expected an acknowledged sync, got \(status)")

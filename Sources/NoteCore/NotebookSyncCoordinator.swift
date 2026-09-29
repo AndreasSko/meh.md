@@ -17,7 +17,15 @@ struct NotebookSyncState: Codable {
 @MainActor
 @Observable
 public final class NotebookSyncCoordinator {
-    public private(set) var status: NoteSyncCoordinator.Status = .idle
+    public enum Status: Equatable, Sendable {
+        case idle
+        case syncing
+        case pending
+        case exchanged(Date)
+        case failed(String)
+    }
+
+    public private(set) var status: Status = .idle
     public private(set) var progress: NotebookSyncProgress?
     @ObservationIgnored public private(set) var lastError: (any Error)?
     @ObservationIgnored private let replica: NotebookReplica
