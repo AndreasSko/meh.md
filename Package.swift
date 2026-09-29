@@ -36,9 +36,9 @@ let package = Package(
             dependencies: ["NoteCore"],
             path: "meh.md",
             exclude: [
-                "AppWorkspace.swift", "Assets.xcassets", "CloudKitSmokeCheck.swift",
+                "Assets.xcassets", "CloudKitSmokeCheck.swift",
                 "NotebookSyncLabApp.swift",
-                "ContentView.swift", "Info-iCloud.plist", "Info.plist",
+                "Info-iCloud.plist", "Info.plist",
                 "PrivacyInfo.xcprivacy",
                 "MarkdownEditor.swift", "EditorTextSizeControl.swift",
                 "MarkdownEditingCommands.swift",
@@ -80,7 +80,7 @@ let package = Package(
             name: "NativeEditor",
             path: "meh.md",
             exclude: [
-                "ContentView.swift", "MyApp.swift", "AppWorkspace.swift", "Assets.xcassets",
+                "MyApp.swift", "Assets.xcassets",
                 "NotebookView.swift", "NotebookNoteEditor.swift", "NotebookWorkspace.swift",
                 "NotebookTrashView.swift", "NotebookMoveSheet.swift",
                 "NotebookSyncIndicator.swift",
