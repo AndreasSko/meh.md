@@ -297,438 +297,447 @@ private struct EditorTableMenu: View {
 }
 
 #if os(iOS)
-extension MarkdownTextView {
-    func installMarkdownKeyboardToolbar() {
-        inputAccessoryView = MarkdownKeyboardAccessoryView(textView: self)
+private struct KeyboardCommandDefinition: Identifiable {
+    let id: String
+    let title: LocalizedStringResource
+    let image: String
+    let command: MarkdownEditingCommand
+
+    static let all: [Self] = [
+        .init(id: "bold", title: "Bold", image: "bold", command: .bold),
+        .init(id: "italic", title: "Italic", image: "italic", command: .italic),
+        .init(id: "taskList", title: "Task List", image: "checklist",
+              command: .taskList),
+        .init(id: "insertTable", title: "Insert Table", image: "tablecells",
+              command: .insertTable),
+        .init(id: "indent", title: "Indent", image: "increase.indent",
+              command: .indent),
+        .init(id: "outdent", title: "Outdent", image: "decrease.indent",
+              command: .outdent),
+        .init(id: "heading", title: "Heading", image: "textformat.size.larger",
+              command: .heading),
+        .init(id: "link", title: "Link", image: "link", command: .link),
+        .init(id: "strikethrough", title: "Strikethrough",
+              image: "strikethrough", command: .strikethrough),
+        .init(id: "highlight", title: "Highlight", image: "highlighter",
+              command: .highlight),
+        .init(id: "inlineCode", title: "Inline Code",
+              image: "chevron.left.forwardslash.chevron.right",
+              command: .inlineCode),
+        .init(id: "codeBlock", title: "Code Block",
+              image: "curlybraces.square", command: .codeBlock),
+        .init(id: "toggleTask", title: "Toggle Task",
+              image: "checkmark.square", command: .toggleTask),
+    ]
+}
+
+private struct SymbolDragPreviewShape: Shape {
+    let systemName: String
+
+    func path(in rect: CGRect) -> Path {
+        let scale = 3
+        let width = max(1, Int(rect.width.rounded(.up)))
+        let height = max(1, Int(rect.height.rounded(.up)))
+        let pixelWidth = width * scale
+        let pixelHeight = height * scale
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = CGFloat(scale)
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(
+            size: CGSize(width: width, height: height), format: format
+        ).image { _ in
+            let configuration = UIImage.SymbolConfiguration(
+                pointSize: 18, weight: .regular
+            )
+            guard let symbol = UIImage(
+                systemName: systemName, withConfiguration: configuration
+            ) else { return }
+            symbol.withTintColor(.black, renderingMode: .alwaysOriginal).draw(
+                at: CGPoint(x: (CGFloat(width) - symbol.size.width) / 2,
+                            y: (CGFloat(height) - symbol.size.height) / 2)
+            )
+        }
+        guard let cgImage = image.cgImage else { return Path() }
+        var pixels = [UInt8](repeating: 0, count: pixelWidth * pixelHeight * 4)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue
+            | CGImageAlphaInfo.premultipliedLast.rawValue
+        let didDraw = pixels.withUnsafeMutableBytes { bytes in
+            guard let context = CGContext(
+                data: bytes.baseAddress, width: pixelWidth,
+                height: pixelHeight, bitsPerComponent: 8,
+                bytesPerRow: pixelWidth * 4,
+                space: colorSpace, bitmapInfo: bitmapInfo
+            ) else { return false }
+            context.draw(cgImage, in: CGRect(x: 0, y: 0,
+                                            width: pixelWidth,
+                                            height: pixelHeight))
+            return true
+        }
+        guard didDraw else { return Path() }
+
+        var path = Path()
+        for row in 0..<pixelHeight {
+            var runStart: Int?
+            for column in 0...pixelWidth {
+                let opaque = column < pixelWidth
+                    && pixels[(row * pixelWidth + column) * 4 + 3] > 1
+                if opaque && runStart == nil { runStart = column }
+                if !opaque, let start = runStart {
+                    path.addRect(CGRect(
+                        x: rect.minX + CGFloat(start) / CGFloat(scale),
+                        y: rect.minY + CGFloat(row) / CGFloat(scale),
+                        width: CGFloat(column - start) / CGFloat(scale),
+                        height: 1 / CGFloat(scale)
+                    ))
+                    runStart = nil
+                }
+            }
+        }
+        return path
     }
 }
 
-private final class MarkdownKeyboardAccessoryView: UIView,
-    UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
-    private struct CommandDefinition {
-        let id: String
-        let title: String
-        let systemImage: String
-        let command: MarkdownEditingCommand
-    }
+struct EditorKeyboardToolbar: View {
+    let navigation: MarkdownEditorNavigation
 
-    private static let orderDefaultsKey = "editor.keyboardToolbar.commands"
-    private static let definitions = [
-        CommandDefinition(
-            id: "indent", title: "Indent",
-            systemImage: "increase.indent", command: .indent
-        ),
-        CommandDefinition(
-            id: "outdent", title: "Outdent",
-            systemImage: "decrease.indent", command: .outdent
-        ),
-        CommandDefinition(
-            id: "bold", title: "Bold", systemImage: "bold", command: .bold
-        ),
-        CommandDefinition(
-            id: "italic", title: "Italic", systemImage: "italic",
-            command: .italic
-        ),
-    ]
-    private static let defaultOrder = definitions.map(\.id)
+    @State private var showsDeletionConfirmation = false
+    @State private var deletionAction: (() -> Void)?
 
-    private weak var textView: MarkdownTextView?
-    private var order: [String]
-    private var isMovingCommand = false
-    private let layout = UICollectionViewFlowLayout()
-    private lazy var collectionView = MarkdownKeyboardCollectionView(
-        frame: .zero,
-        collectionViewLayout: layout
-    )
-
-    init(textView: MarkdownTextView) {
-        self.textView = textView
-        order = Self.savedOrder()
-        super.init(
-            frame: CGRect(x: 0, y: 0, width: textView.bounds.width, height: 50)
-        )
-        configureView()
-    }
-
-    required init?(coder: NSCoder) {
-        return nil
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let spacing = max(4, (collectionView.bounds.width - 5 * 44) / 4)
-        if layout.minimumLineSpacing != spacing {
-            layout.minimumLineSpacing = spacing
-            layout.invalidateLayout()
-        }
-    }
-
-    private func configureView() {
-        autoresizingMask = [.flexibleWidth]
-        backgroundColor = .secondarySystemBackground
-        tintColor = .label
-        accessibilityIdentifier = "editor-keyboard-toolbar"
-
-        let separator = UIView()
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        separator.backgroundColor = .separator
-        addSubview(separator)
-
-        layout.scrollDirection = .horizontal
-        layout.itemSize = CGSize(width: 44, height: 44)
-        layout.minimumInteritemSpacing = 0
-        layout.sectionInset = .zero
-        collectionView.translatesAutoresizingMaskIntoConstraints = false
-        collectionView.backgroundColor = .clear
-        collectionView.showsHorizontalScrollIndicator = false
-        collectionView.isScrollEnabled = false
-        collectionView.dataSource = self
-        collectionView.delegate = self
-        collectionView.register(
-            MarkdownKeyboardButtonCell.self,
-            forCellWithReuseIdentifier: MarkdownKeyboardButtonCell.reuseIdentifier
-        )
-        let longPress = UILongPressGestureRecognizer(
-            target: self,
-            action: #selector(handleLongPress(_:))
-        )
-        collectionView.addGestureRecognizer(longPress)
-        addSubview(collectionView)
-
-        let adaptiveWidth = collectionView.widthAnchor.constraint(
-            equalTo: widthAnchor,
-            constant: -24
-        )
-        adaptiveWidth.priority = UILayoutPriority(
-            rawValue: UILayoutPriority.defaultHigh.rawValue + 1
-        )
-        let preferredTabletWidth = collectionView.widthAnchor.constraint(
-            equalToConstant: 480
-        )
-        preferredTabletWidth.priority = .defaultHigh
-        NSLayoutConstraint.activate([
-            separator.leadingAnchor.constraint(equalTo: leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: trailingAnchor),
-            separator.topAnchor.constraint(equalTo: topAnchor),
-            separator.heightAnchor.constraint(equalToConstant: 0.5),
-            collectionView.centerXAnchor.constraint(equalTo: centerXAnchor),
-            collectionView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            collectionView.heightAnchor.constraint(equalToConstant: 44),
-            collectionView.leadingAnchor.constraint(
-                greaterThanOrEqualTo: leadingAnchor,
-                constant: 12
-            ),
-            collectionView.trailingAnchor.constraint(
-                lessThanOrEqualTo: trailingAnchor,
-                constant: -12
-            ),
-            collectionView.widthAnchor.constraint(lessThanOrEqualToConstant: 480),
-            adaptiveWidth,
-            preferredTabletWidth,
-        ])
-    }
-
-    func collectionView(
-        _ collectionView: UICollectionView,
-        numberOfItemsInSection section: Int
-    ) -> Int {
-        order.count + 1
-    }
-
-    func collectionView(
-        _ collectionView: UICollectionView,
-        cellForItemAt indexPath: IndexPath
-    ) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCell(
-            withReuseIdentifier: MarkdownKeyboardButtonCell.reuseIdentifier,
-            for: indexPath
-        ) as! MarkdownKeyboardButtonCell
-        if indexPath.item == order.count {
-            cell.configure(
-                title: "More Formatting",
-                systemImage: "ellipsis.circle",
-                accessibilityIdentifier: "editor-formatting",
-                action: nil,
-                menu: UIMenu(children: [
-                    UIDeferredMenuElement.uncached { [weak self] completion in
-                        completion(self?.formattingMenuElements() ?? [])
-                    },
-                ]),
-                accessibilityActions: []
-            )
-            return cell
-        }
-
-        let definition = definition(at: indexPath.item)
-        let action = UIAction { [weak textView] _ in
-            _ = textView?.performMarkdownCommand(definition.command)
-        }
-        cell.configure(
-            title: definition.title,
-            systemImage: definition.systemImage,
-            accessibilityIdentifier: definition.command.accessibilityIdentifier,
-            action: action,
-            menu: nil,
-            accessibilityActions: accessibilityMoveActions(for: definition.id)
-        )
-        return cell
-    }
-
-    func collectionView(
-        _ collectionView: UICollectionView,
-        canMoveItemAt indexPath: IndexPath
-    ) -> Bool {
-        indexPath.item < order.count
-    }
-
-    func collectionView(
-        _ collectionView: UICollectionView,
-        moveItemAt sourceIndexPath: IndexPath,
-        to destinationIndexPath: IndexPath
-    ) {
-        let command = order.remove(at: sourceIndexPath.item)
-        order.insert(command, at: min(destinationIndexPath.item, order.count))
-        saveOrder()
-    }
-
-    func collectionView(
-        _ collectionView: UICollectionView,
-        targetIndexPathForMoveFromItemAt originalIndexPath: IndexPath,
-        toProposedIndexPath proposedIndexPath: IndexPath
-    ) -> IndexPath {
-        IndexPath(
-            item: min(proposedIndexPath.item, order.count - 1),
-            section: proposedIndexPath.section
-        )
-    }
-
-    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
-        let location = gesture.location(in: collectionView)
-        switch gesture.state {
-        case .began:
-            guard let indexPath = collectionView.indexPathForItem(at: location),
-                  indexPath.item < order.count else { return }
-            isMovingCommand = collectionView.beginInteractiveMovementForItem(
-                at: indexPath
-            )
-        case .changed:
-            if isMovingCommand {
-                collectionView.updateInteractiveMovementTargetPosition(location)
+    var body: some View {
+        KeyboardToolbarCollection(
+            navigation: navigation,
+            tableCommands: contextualTableCommands,
+            currentAlignment: navigation.tableCommands.currentAlignment
+        ) { definition in
+            guard let action = navigation.prepareCommand?(definition.command) else {
+                return
             }
-        case .ended:
-            if isMovingCommand {
-                collectionView.endInteractiveMovement()
-                DispatchQueue.main.async { [weak self] in
-                    self?.refreshVisibleAccessibilityActions()
-                }
-            }
-            isMovingCommand = false
-        default:
-            if isMovingCommand { collectionView.cancelInteractiveMovement() }
-            isMovingCommand = false
-        }
-    }
-
-    private func definition(at index: Int) -> CommandDefinition {
-        let id = order[index]
-        return Self.definitions.first { $0.id == id }!
-    }
-
-    private func accessibilityMoveActions(
-        for id: String
-    ) -> [UIAccessibilityCustomAction] {
-        guard let index = order.firstIndex(of: id) else { return [] }
-        var actions: [UIAccessibilityCustomAction] = []
-        if index > 0 {
-            actions.append(
-                UIAccessibilityCustomAction(name: "Move Left") {
-                    [weak self] _ in self?.moveCommand(id: id, by: -1) == true
-                }
-            )
-        }
-        if index < order.count - 1 {
-            actions.append(
-                UIAccessibilityCustomAction(name: "Move Right") {
-                    [weak self] _ in self?.moveCommand(id: id, by: 1) == true
-                }
-            )
-        }
-        return actions
-    }
-
-    private func moveCommand(id: String, by offset: Int) -> Bool {
-        guard let index = order.firstIndex(of: id) else { return false }
-        let destination = index + offset
-        guard order.indices.contains(index), order.indices.contains(destination) else {
-            return false
-        }
-        order.swapAt(index, destination)
-        saveOrder()
-        collectionView.reloadData()
-        return true
-    }
-
-    private func refreshVisibleAccessibilityActions() {
-        for visibleCell in collectionView.visibleCells {
-            guard let cell = visibleCell as? MarkdownKeyboardButtonCell,
-                  let indexPath = collectionView.indexPath(for: cell),
-                  indexPath.item < order.count else {
-                (visibleCell as? MarkdownKeyboardButtonCell)?
-                    .updateAccessibilityActions([])
-                continue
-            }
-            cell.updateAccessibilityActions(
-                accessibilityMoveActions(for: order[indexPath.item])
-            )
-        }
-    }
-
-    private func formattingMenuElements() -> [UIMenuElement] {
-        let commands: [(LocalizedStringResource, String, MarkdownEditingCommand)] = [
-            ("Heading", "textformat.size.larger", .heading),
-            ("Link", "link", .link),
-            ("Strikethrough", "strikethrough", .strikethrough),
-            ("Highlight", "highlighter", .highlight),
-            (
-                "Inline Code",
-                "chevron.left.forwardslash.chevron.right",
-                .inlineCode
-            ),
-            ("Code Block", "curlybraces.square", .codeBlock),
-            ("Task List", "checklist", .taskList),
-            ("Toggle Task", "checkmark.square", .toggleTask),
-        ]
-        let actions = commands.map { title, image, command in
-            UIAction(
-                title: String(localized: title),
-                image: UIImage(systemName: image),
-                identifier: UIAction.Identifier(command.accessibilityIdentifier)
-            ) { [weak textView] _ in
-                _ = textView?.performMarkdownCommand(command)
-            }
-        }
-        return actions + [tableMenu()]
-    }
-
-    private func tableMenu() -> UIMenu {
-        let available = textView?.availableTableCommands ?? []
-        let alignment = textView?.currentTableAlignment
-        let groups: [(LocalizedStringResource, [TableCommandDefinition])] = [
-            ("Insert", TableCommandDefinition.groups[0]),
-            ("Row", TableCommandDefinition.groups[1]),
-            ("Column", TableCommandDefinition.groups[2]),
-            ("Alignment", TableCommandDefinition.groups[3]),
-            ("Cell", TableCommandDefinition.groups[4]),
-            ("Delete", TableCommandDefinition.groups[5]),
-        ]
-        let children: [UIMenuElement] = groups.compactMap { title, definitions in
-            let actions = definitions.filter { available.contains($0.command) }
-                .map { definition in
-                    tableAction(definition, alignment: alignment)
-                }
-            guard !actions.isEmpty else { return nil }
-            if definitions.first?.command == .insertTable {
-                return actions.first
-            }
-            return UIMenu(
-                title: String(localized: title),
-                children: actions
-            )
-        }
-        return UIMenu(
-            title: String(localized: "Table"),
-            image: UIImage(systemName: "tablecells"),
-            identifier: UIMenu.Identifier("editor-table-menu"),
-            children: children
-        )
-    }
-
-    private func tableAction(
-        _ definition: TableCommandDefinition,
-        alignment: MarkdownTableAlignment?
-    ) -> UIAction {
-        let isSelected = definition.alignment != nil
-            && definition.alignment == alignment
-        return UIAction(
-            title: String(localized: definition.title),
-            image: UIImage(systemName: definition.image),
-            identifier: UIAction.Identifier(
-                definition.command.accessibilityIdentifier
-            ),
-            attributes: definition.isDestructive ? .destructive : [],
-            state: isSelected ? .on : .off
-        ) { [weak textView] _ in
-            guard let textView,
-                  let action = textView.preparedMarkdownCommand(
-                    definition.command
-                  ) else { return }
             if definition.isDestructive {
-                Self.confirmDeletion(
-                    definition, action: action, textView: textView
-                )
+                deletionAction = action
+                showsDeletionConfirmation = true
             } else {
                 action()
             }
         }
-    }
-
-    private static func confirmDeletion(
-        _ definition: TableCommandDefinition,
-        action: @escaping () -> Void,
-        textView: MarkdownTextView
-    ) {
-        guard let presenter = owningViewController(for: textView) else { return }
-        let alert = UIAlertController(
-            title: String(localized: definition.title),
-            message: String(localized:
-                "The selected row or column and its contents will be removed."),
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(
-            title: String(localized: "Cancel"), style: .cancel
-        ) { [weak textView] _ in
-            textView?.becomeFirstResponder()
-        })
-        alert.addAction(UIAlertAction(
-            title: String(localized: "Delete"), style: .destructive
-        ) { _ in action() })
-        DispatchQueue.main.async { presenter.present(alert, animated: true) }
-    }
-
-    private func saveOrder() {
-        UserDefaults.standard.set(order, forKey: Self.orderDefaultsKey)
-    }
-
-    private static func savedOrder() -> [String] {
-        let saved = UserDefaults.standard.stringArray(forKey: orderDefaultsKey) ?? []
-        guard saved.count == defaultOrder.count,
-              Set(saved) == Set(defaultOrder) else { return defaultOrder }
-        return saved
-    }
-
-    private static func owningViewController(for view: UIView) -> UIViewController? {
-        var responder: UIResponder? = view
-        while let next = responder?.next {
-            if let controller = next as? UIViewController { return controller }
-            responder = next
+        .frame(maxWidth: 520)
+        .frame(height: 50)
+        .background {
+            Capsule().fill(.clear).glassEffect(.regular, in: .capsule)
         }
-        return nil
+        .padding(.horizontal, 8)
+        .confirmationDialog(
+            "Delete table content?", isPresented: $showsDeletionConfirmation
+        ) {
+            Button("Delete", role: .destructive) {
+                deletionAction?()
+                deletionAction = nil
+            }
+            Button("Cancel", role: .cancel) {
+                deletionAction = nil
+            }
+        } message: {
+            Text("The selected row or column and its contents will be removed.")
+        }
+        .onChange(of: showsDeletionConfirmation) { _, isShown in
+            if !isShown { deletionAction = nil }
+        }
+    }
+
+    private var contextualTableCommands: [TableCommandDefinition] {
+        let available = navigation.tableCommands.available
+        return TableCommandDefinition.groups.flatMap { $0 }.filter {
+            $0.command != .insertTable && available.contains($0.command)
+        }
+    }
+
+}
+
+private struct KeyboardToolbarCollection: UIViewRepresentable {
+    let navigation: MarkdownEditorNavigation
+    let tableCommands: [TableCommandDefinition]
+    let currentAlignment: MarkdownTableAlignment?
+    let performTableCommand: (TableCommandDefinition) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(navigation: navigation, performTableCommand: performTableCommand)
+    }
+
+    func makeUIView(context: Context) -> UICollectionView {
+        let layout = UICollectionViewFlowLayout()
+        layout.scrollDirection = .horizontal
+        layout.itemSize = CGSize(width: 44, height: 44)
+        layout.minimumLineSpacing = 12
+        layout.minimumInteritemSpacing = 12
+        layout.sectionInset = UIEdgeInsets(top: 3, left: 12, bottom: 3, right: 12)
+
+        let view = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        view.backgroundColor = .clear
+        view.showsHorizontalScrollIndicator = false
+        view.contentInsetAdjustmentBehavior = .never
+        view.decelerationRate = .fast
+        view.dragInteractionEnabled = true
+        view.dataSource = context.coordinator
+        view.delegate = context.coordinator
+        view.dragDelegate = context.coordinator
+        view.dropDelegate = context.coordinator
+        view.register(KeyboardToolbarCell.self, forCellWithReuseIdentifier: "command")
+        view.accessibilityIdentifier = "editor-keyboard-toolbar"
+        context.coordinator.collectionView = view
+        context.coordinator.update(
+            navigation: navigation,
+            tableCommands: tableCommands,
+            currentAlignment: currentAlignment,
+            performTableCommand: performTableCommand
+        )
+        return view
+    }
+
+    func updateUIView(_ view: UICollectionView, context: Context) {
+        context.coordinator.update(
+            navigation: navigation,
+            tableCommands: tableCommands,
+            currentAlignment: currentAlignment,
+            performTableCommand: performTableCommand
+        )
+    }
+
+    final class Coordinator: NSObject, UICollectionViewDataSource,
+                             UICollectionViewDelegate, UICollectionViewDragDelegate,
+                             UICollectionViewDropDelegate {
+        private static let orderDefaultsKey = "editor.keyboardToolbar.commands"
+        weak var collectionView: UICollectionView?
+        private var navigation: MarkdownEditorNavigation
+        private var performTableCommand: (TableCommandDefinition) -> Void
+        private var tableCommands: [TableCommandDefinition] = []
+        private var currentAlignment: MarkdownTableAlignment?
+        private var commands: [KeyboardCommandDefinition]
+        private var needsReloadAfterDrag = false
+        private var resetOffsetAfterDrag = false
+
+        init(
+            navigation: MarkdownEditorNavigation,
+            performTableCommand: @escaping (TableCommandDefinition) -> Void
+        ) {
+            self.navigation = navigation
+            self.performTableCommand = performTableCommand
+            self.commands = Self.savedCommands()
+        }
+
+        func update(
+            navigation: MarkdownEditorNavigation,
+            tableCommands: [TableCommandDefinition],
+            currentAlignment: MarkdownTableAlignment?,
+            performTableCommand: @escaping (TableCommandDefinition) -> Void
+        ) {
+            self.navigation = navigation
+            self.performTableCommand = performTableCommand
+            let tableChanged = self.tableCommands.map(\.id) != tableCommands.map(\.id)
+            let changed = tableChanged || self.currentAlignment != currentAlignment
+            self.tableCommands = tableCommands
+            self.currentAlignment = currentAlignment
+            guard changed else { return }
+            if collectionView?.hasActiveDrag == true {
+                needsReloadAfterDrag = true
+                resetOffsetAfterDrag = resetOffsetAfterDrag || tableChanged
+            } else {
+                collectionView?.reloadData()
+                if tableChanged {
+                    collectionView?.setContentOffset(.zero, animated: false)
+                }
+            }
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView, numberOfItemsInSection section: Int
+        ) -> Int {
+            tableCommands.count + commands.count
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath
+        ) -> UICollectionViewCell {
+            let cell = collectionView.dequeueReusableCell(
+                withReuseIdentifier: "command", for: indexPath
+            ) as! KeyboardToolbarCell
+            if indexPath.item < tableCommands.count {
+                let definition = tableCommands[indexPath.item]
+                let selected = definition.alignment != nil
+                    && definition.alignment == currentAlignment
+                cell.configure(
+                    image: selected ? "checkmark" : definition.image,
+                    title: String(localized: definition.title),
+                    identifier: definition.command.accessibilityIdentifier,
+                    color: definition.isDestructive ? .systemRed : .label,
+                    selected: selected,
+                    action: { [weak self] in self?.performTableCommand(definition) }
+                )
+            } else {
+                let definition = commands[indexPath.item - tableCommands.count]
+                cell.configure(
+                    image: definition.image,
+                    title: String(localized: definition.title),
+                    identifier: definition.command.accessibilityIdentifier,
+                    color: .label,
+                    selected: false,
+                    action: { [weak self] in
+                        self?.navigation.performCommand?(definition.command)
+                    },
+                    moveLeft: { [weak self] in
+                        self?.move(definition.id, by: -1) ?? false
+                    },
+                    moveRight: { [weak self] in
+                        self?.move(definition.id, by: 1) ?? false
+                    }
+                )
+            }
+            return cell
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            itemsForBeginning session: UIDragSession, at indexPath: IndexPath
+        ) -> [UIDragItem] {
+            guard indexPath.item >= tableCommands.count else { return [] }
+            let definition = commands[indexPath.item - tableCommands.count]
+            let item = UIDragItem(itemProvider: NSItemProvider(object: definition.id as NSString))
+            item.localObject = definition.id
+            return [item]
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            dragPreviewParametersForItemAt indexPath: IndexPath
+        ) -> UIDragPreviewParameters? {
+            previewParameters(at: indexPath)
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            dropPreviewParametersForItemAt indexPath: IndexPath
+        ) -> UIDragPreviewParameters? {
+            previewParameters(at: indexPath)
+        }
+
+        private func previewParameters(at indexPath: IndexPath) -> UIDragPreviewParameters? {
+            guard indexPath.item >= tableCommands.count,
+                  commands.indices.contains(indexPath.item - tableCommands.count)
+            else { return nil }
+            let definition = commands[indexPath.item - tableCommands.count]
+            let parameters = UIDragPreviewParameters()
+            parameters.backgroundColor = .clear
+            parameters.visiblePath = UIBezierPath(cgPath: SymbolDragPreviewShape(
+                systemName: definition.image
+            ).path(in: CGRect(x: 0, y: 0, width: 44, height: 44)).cgPath)
+            return parameters
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            dropSessionDidUpdate session: UIDropSession,
+            withDestinationIndexPath destinationIndexPath: IndexPath?
+        ) -> UICollectionViewDropProposal {
+            guard let id = session.localDragSession?.items.first?.localObject as? String,
+                  commands.contains(where: { $0.id == id }),
+                  (destinationIndexPath?.item ?? tableCommands.count)
+                    >= tableCommands.count else {
+                return UICollectionViewDropProposal(operation: .forbidden)
+            }
+            return UICollectionViewDropProposal(
+                operation: .move, intent: .insertAtDestinationIndexPath
+            )
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            performDropWith coordinator: UICollectionViewDropCoordinator
+        ) {
+            guard let item = coordinator.items.first,
+                  let id = item.dragItem.localObject as? String,
+                  let source = commands.firstIndex(where: { $0.id == id })
+            else { return }
+            let prefix = tableCommands.count
+            let destination = min(
+                max(coordinator.destinationIndexPath?.item ?? prefix + commands.count - 1,
+                    prefix),
+                prefix + commands.count - 1
+            )
+            let target = destination - prefix
+            if source != target {
+                let command = commands.remove(at: source)
+                commands.insert(command, at: target)
+                collectionView.performBatchUpdates {
+                    collectionView.moveItem(
+                        at: IndexPath(item: prefix + source, section: 0),
+                        to: IndexPath(item: destination, section: 0)
+                    )
+                }
+                saveOrder()
+            }
+            coordinator.drop(
+                item.dragItem, toItemAt: IndexPath(item: destination, section: 0)
+            )
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView, dragSessionDidEnd session: UIDragSession
+        ) {
+            guard needsReloadAfterDrag else { return }
+            needsReloadAfterDrag = false
+            collectionView.reloadData()
+            if resetOffsetAfterDrag {
+                resetOffsetAfterDrag = false
+                collectionView.setContentOffset(.zero, animated: false)
+            }
+        }
+
+        private func move(_ id: String, by offset: Int) -> Bool {
+            guard let source = commands.firstIndex(where: { $0.id == id }),
+                  commands.indices.contains(source + offset),
+                  let collectionView else { return false }
+            let target = source + offset
+            let command = commands.remove(at: source)
+            commands.insert(command, at: target)
+            collectionView.performBatchUpdates {
+                collectionView.moveItem(
+                    at: IndexPath(item: tableCommands.count + source, section: 0),
+                    to: IndexPath(item: tableCommands.count + target, section: 0)
+                )
+            }
+            saveOrder()
+            return true
+        }
+
+        private func saveOrder() {
+            UserDefaults.standard.set(commands.map(\.id), forKey: Self.orderDefaultsKey)
+        }
+
+        private static func savedCommands() -> [KeyboardCommandDefinition] {
+            let ids = KeyboardCommandDefinition.all.map(\.id)
+            let saved = UserDefaults.standard.stringArray(forKey: orderDefaultsKey) ?? []
+            var retained: [String] = []
+            for id in saved where ids.contains(id) && !retained.contains(id) {
+                retained.append(id)
+            }
+            let order = retained + ids.filter { !retained.contains($0) }
+            return order.compactMap { id in
+                KeyboardCommandDefinition.all.first { $0.id == id }
+            }
+        }
     }
 }
 
-private final class MarkdownKeyboardCollectionView: UICollectionView {
-    override var canBecomeFirstResponder: Bool { false }
-}
-
-private final class MarkdownKeyboardButtonCell: UICollectionViewCell {
-    static let reuseIdentifier = "MarkdownKeyboardButtonCell"
-
-    private let button = UIButton(type: .system)
-    private var primaryAction: UIAction?
+private final class KeyboardToolbarCell: UICollectionViewCell {
+    private let button = UIButton(type: .custom)
+    private var action: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
         button.translatesAutoresizingMaskIntoConstraints = false
+        button.backgroundColor = .clear
+        button.addTarget(self, action: #selector(activate), for: .touchUpInside)
         contentView.addSubview(button)
         NSLayoutConstraint.activate([
             button.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -738,42 +747,83 @@ private final class MarkdownKeyboardButtonCell: UICollectionViewCell {
         ])
     }
 
+    required init?(coder: NSCoder) { nil }
+
+    func configure(
+        image: String, title: String, identifier: String, color: UIColor,
+        selected: Bool, action: @escaping () -> Void,
+        moveLeft: (() -> Bool)? = nil, moveRight: (() -> Bool)? = nil
+    ) {
+        self.action = action
+        button.setImage(UIImage(systemName: image)?.withConfiguration(
+            UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)
+        ), for: .normal)
+        button.tintColor = color
+        button.accessibilityLabel = title
+        button.accessibilityIdentifier = identifier
+        button.accessibilityTraits = selected ? [.button, .selected] : .button
+        var actions: [UIAccessibilityCustomAction] = []
+        if let moveLeft {
+            actions.append(UIAccessibilityCustomAction(
+                name: String(localized: "Move Left")
+            ) { _ in
+                moveLeft()
+            })
+        }
+        if let moveRight {
+            actions.append(UIAccessibilityCustomAction(
+                name: String(localized: "Move Right")
+            ) { _ in
+                moveRight()
+            })
+        }
+        button.accessibilityCustomActions = actions
+    }
+
+    @objc private func activate() { action?() }
+}
+
+extension MarkdownTextView {
+    func installMarkdownKeyboardToolbar(navigation: MarkdownEditorNavigation?) {
+        let commands = navigation ?? MarkdownEditorNavigation()
+        if navigation == nil {
+            commands.performCommand = { [weak self] command in
+                _ = self?.performMarkdownCommand(command)
+            }
+            commands.prepareCommand = { [weak self] command in
+                self?.preparedMarkdownCommand(command)
+            }
+        }
+        inputAccessoryView = MarkdownKeyboardAccessoryView(
+            navigation: commands, width: bounds.width
+        )
+    }
+}
+
+private final class MarkdownKeyboardAccessoryView: UIView {
+    init(navigation: MarkdownEditorNavigation, width: CGFloat) {
+        super.init(frame: CGRect(x: 0, y: 0, width: width, height: 58))
+        autoresizingMask = [.flexibleWidth]
+        backgroundColor = .clear
+        let hosted = UIHostingConfiguration {
+            EditorKeyboardToolbar(navigation: navigation)
+        }
+        .margins(.all, 0)
+        .background(.clear)
+        .makeContentView()
+        hosted.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hosted)
+        NSLayoutConstraint.activate([
+            hosted.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hosted.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hosted.topAnchor.constraint(equalTo: topAnchor),
+            hosted.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
     required init?(coder: NSCoder) {
         return nil
     }
-
-    func configure(
-        title: String,
-        systemImage: String,
-        accessibilityIdentifier: String,
-        action: UIAction?,
-        menu: UIMenu?,
-        accessibilityActions: [UIAccessibilityCustomAction]
-    ) {
-        if let primaryAction {
-            button.removeAction(primaryAction, for: .primaryActionTriggered)
-        }
-        primaryAction = action
-        if let action {
-            button.addAction(action, for: .primaryActionTriggered)
-        }
-        var configuration = UIButton.Configuration.plain()
-        configuration.image = UIImage(systemName: systemImage)
-        configuration.baseForegroundColor = .label
-        configuration.preferredSymbolConfigurationForImage =
-            UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)
-        button.configuration = configuration
-        button.menu = menu
-        button.showsMenuAsPrimaryAction = menu != nil
-        button.accessibilityLabel = title
-        button.accessibilityIdentifier = accessibilityIdentifier
-        button.accessibilityCustomActions = accessibilityActions
-    }
-
-    func updateAccessibilityActions(
-        _ actions: [UIAccessibilityCustomAction]
-    ) {
-        button.accessibilityCustomActions = actions
-    }
 }
+
 #endif

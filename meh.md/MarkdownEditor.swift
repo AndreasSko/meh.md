@@ -1663,7 +1663,7 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         textView.delegate = context.coordinator
-        textView.installMarkdownKeyboardToolbar()
+        textView.installMarkdownKeyboardToolbar(navigation: navigation)
         textView.isFindInteractionEnabled = true
         textView.keyboardDismissMode = UIDevice.current.userInterfaceIdiom == .pad
             ? .none : .interactive

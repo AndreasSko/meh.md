@@ -22,39 +22,26 @@ final class MarkdownTableUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         editor.typeText("A fictional coastal itinerary.")
-        openTableMenu(in: app)
-        XCTAssertTrue(command("editor-command-insert-table", in: app).exists)
-        capture(app, name: "Table menu at current text size")
+        let insertTable = toolbarCommand("editor-command-insert-table", in: app)
+        XCTAssertTrue(insertTable.exists)
+        capture(app, name: "Keyboard bar at current text size")
 
-        command("editor-command-insert-table", in: app).tap()
+        insertTable.tap()
         XCTAssertTrue(waitForSource(editor) { $0.contains("| Column 1 | Column 2 |") })
-        openTableMenu(in: app)
-        let groups = ["Row", "Column", "Alignment", "Cell", "Delete"].map {
-            menuButton($0, in: app)
+        for identifier in [
+            "editor-command-table-row-above", "editor-command-table-row-below",
+            "editor-command-table-column-before", "editor-command-table-column-after",
+            "editor-command-table-align-left", "editor-command-table-align-center",
+            "editor-command-table-align-right", "editor-command-table-next-cell",
+            "editor-command-table-previous-cell", "editor-command-table-delete-row",
+            "editor-command-table-delete-column",
+        ] {
+            XCTAssertTrue(
+                toolbarCommand(identifier, in: app).exists,
+                "Expected contextual table command \(identifier)"
+            )
         }
-        for group in groups {
-            XCTAssertTrue(group.exists, "Missing \(group.label) table submenu")
-        }
-        let visibleGroups = groups.filter(\.isHittable)
-        XCTAssertFalse(visibleGroups.isEmpty)
-        for (upper, lower) in zip(visibleGroups, visibleGroups.dropFirst()) {
-            XCTAssertGreaterThanOrEqual(lower.frame.minY, upper.frame.maxY - 1,
-                                        "Table menu rows should not overlap")
-        }
-        capture(app, name: "Grouped table menu at current text size")
-        let deleteGroup = menuButton("Delete", in: app)
-        if !deleteGroup.isHittable {
-            let menuScroll = app.collectionViews.containing(
-                .button, identifier: "Row"
-            ).firstMatch
-            XCTAssertTrue(menuScroll.exists, "Expected a scrollable native menu")
-            for _ in 0..<3 where !deleteGroup.isHittable {
-                menuScroll.swipeUp()
-            }
-            XCTAssertTrue(deleteGroup.isHittable,
-                          "Delete submenu should be reachable by scrolling")
-            capture(app, name: "Bottom of grouped table menu")
-        }
+        capture(app, name: "Contextual table commands at current text size")
     }
 
     func testTableCommandsEditLiteralMarkdown() throws {
@@ -78,13 +65,7 @@ final class MarkdownTableUITests: XCTestCase {
         editor.tap()
         editor.typeText("A fictional coastal itinerary.")
 
-        let formatting = app.buttons["editor-formatting"].firstMatch
-        XCTAssertTrue(formatting.waitForExistence(timeout: 5))
-        formatting.tap()
-        capture(app, name: "Formatting menu with Table entry")
-        command("editor-table-menu", in: app).tap()
-        capture(app, name: "Table commands in Formatting")
-        command("editor-command-insert-table", in: app).tap()
+        toolbarCommand("editor-command-insert-table", in: app).tap()
         XCTAssertTrue(waitForSource(editor) { $0.contains("| Column 1 | Column 2 |") })
         let inserted = try XCTUnwrap(editor.value as? String)
         XCTAssertTrue(inserted.hasPrefix("A fictional coastal itinerary."))
@@ -94,58 +75,42 @@ final class MarkdownTableUITests: XCTestCase {
         // The inserted header is selected so typing names it directly.
         editor.typeText("Activity")
         XCTAssertTrue(waitForSource(editor) { $0.contains("| Activity | Column 2 |") })
-        openTableMenu(in: app)
-        tapTableAction("editor-command-table-next-cell", group: "Cell", in: app)
+        toolbarCommand("editor-command-table-next-cell", in: app).tap()
         editor.typeText("When")
         XCTAssertTrue(waitForSource(editor) { $0.contains("| Activity | When |") })
         capture(app, name: "Next Cell selects the header contents")
 
-        openTableMenu(in: app)
         capture(app, name: "Commands while editing a table cell")
-        for group in ["Row", "Column", "Alignment", "Cell", "Delete"] {
-            XCTAssertTrue(menuButton(group, in: app).exists,
-                          "Missing \(group) table submenu")
-        }
-        tapTableAction("editor-command-table-row-below", group: "Row", in: app)
+        XCTAssertTrue(toolbarCommand("editor-command-table-row-below", in: app).exists)
+        toolbarCommand("editor-command-table-row-below", in: app).tap()
         XCTAssertTrue(waitForSource(editor) {
             $0.components(separatedBy: "|  |  |").count == 3
         })
         capture(app, name: "Added table row")
 
-        openTableMenu(in: app)
-        tapTableAction("editor-command-table-column-after", group: "Column", in: app)
+        toolbarCommand("editor-command-table-column-after", in: app).tap()
         XCTAssertTrue(waitForSource(editor) {
             $0.contains("| Activity |  | When |")
         })
         capture(app, name: "Added table column")
 
-        openTableMenu(in: app)
-        tapTableAction("editor-command-table-align-right", group: "Alignment", in: app)
+        toolbarCommand("editor-command-table-align-right", in: app).tap()
         XCTAssertTrue(waitForSource(editor) { $0.contains("---:") })
-        openTableMenu(in: app)
-        let alignment = menuButton("Alignment", in: app)
-        XCTAssertTrue(alignment.waitForExistence(timeout: 5))
-        alignment.tap()
-        let right = command("editor-command-table-align-right", in: app)
+        let right = toolbarCommand("editor-command-table-align-right", in: app)
         XCTAssertTrue(right.waitForExistence(timeout: 5))
         XCTAssertTrue(right.isSelected, "Active alignment should have a checkmark")
         capture(app, name: "Right alignment has a checkmark")
-        app.coordinate(withNormalizedOffset: .zero).withOffset(
-            CGVector(dx: 10, dy: 200)
-        ).tap()
         let beforeDelete = try XCTUnwrap(editor.value as? String)
 
-        openTableMenu(in: app)
-        tapTableAction("editor-command-table-delete-column", group: "Delete", in: app)
-        let cancel = app.buttons["Cancel"].firstMatch
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        toolbarCommand("editor-command-table-delete-column", in: app).tap()
+        let delete = app.buttons["Delete"].firstMatch
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
         capture(app, name: "Confirm deletion of table column")
-        cancel.tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
+        XCTAssertFalse(delete.exists)
         XCTAssertEqual(editor.value as? String, beforeDelete)
 
-        openTableMenu(in: app)
-        tapTableAction("editor-command-table-delete-column", group: "Delete", in: app)
-        let delete = app.buttons["Delete"].firstMatch
+        toolbarCommand("editor-command-table-delete-column", in: app).tap()
         XCTAssertTrue(delete.waitForExistence(timeout: 5))
         delete.tap()
         XCTAssertTrue(waitForSource(editor) { $0 != beforeDelete })
@@ -220,46 +185,26 @@ final class MarkdownTableUITests: XCTestCase {
         add(attachment)
     }
 
-    private func openTableMenu(in app: XCUIApplication) {
-        let formatting = app.buttons["editor-formatting"].firstMatch
-        XCTAssertTrue(formatting.waitForExistence(timeout: 5))
-        formatting.tap()
-        let table = command("editor-table-menu", in: app)
-        XCTAssertTrue(table.waitForExistence(timeout: 5))
-        table.tap()
-    }
-
-    private func tapTableAction(
+    @discardableResult
+    private func toolbarCommand(
         _ identifier: String,
-        group: String,
         in app: XCUIApplication
-    ) {
-        let submenu = menuButton(group, in: app)
-        XCTAssertTrue(submenu.waitForExistence(timeout: 5))
-        submenu.tap()
-        let action = command(identifier, in: app)
-        XCTAssertTrue(action.waitForExistence(timeout: 5))
-        action.tap()
+    ) -> XCUIElement {
+        let command = app.buttons[identifier].firstMatch
+        let toolbar = app.collectionViews["editor-keyboard-toolbar"]
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
+        for _ in 0..<4 where !command.isHittable {
+            toolbar.swipeRight()
+        }
+        for _ in 0..<8 where !command.isHittable {
+            toolbar.swipeLeft()
+        }
+        XCTAssertTrue(command.isHittable, "Could not reveal \(identifier)")
+        return command
     }
 
     private func command(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
-        let identified = app.descendants(matching: .any)[identifier].firstMatch
-        if identified.exists { return identified }
-        let titles = [
-            "editor-table-menu": "Table",
-            "editor-command-insert-table": "Insert Table",
-            "editor-command-table-next-cell": "Next Cell",
-            "editor-command-table-row-below": "Add Row Below",
-            "editor-command-table-column-after": "Add Column After",
-            "editor-command-table-align-right": "Align Right",
-            "editor-command-table-delete-column": "Delete Column",
-        ]
-        return menuButton(titles[identifier] ?? identifier, in: app)
-    }
-
-    private func menuButton(_ title: String, in app: XCUIApplication) -> XCUIElement {
-        let button = app.buttons[title].firstMatch
-        return button.exists ? button : app.menuItems[title].firstMatch
+        app.descendants(matching: .any)[identifier].firstMatch
     }
 
     private func waitForSource(
