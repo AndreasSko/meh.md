@@ -59,7 +59,9 @@ enum NotebookBackupBackgroundScheduler {
     }
 }
 
-private final class BackgroundBackupCompletion {
+/// Called from BackgroundTasks' expiration handler on an arbitrary thread,
+/// so it is not main-actor isolated; the lock guards its state.
+private nonisolated final class BackgroundBackupCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private let task: BGProcessingTask
     private var work: Task<Void, Never>?
