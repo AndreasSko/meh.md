@@ -11,7 +11,11 @@ struct NotebookSyncButton: View {
     @State private var showingDetails = false
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        // Only a retry countdown depends on the clock; otherwise the
+        // toolbar button redraws when the workspace changes.
+        TimelineView(.animation(
+            minimumInterval: 1, paused: workspace.syncRetryNotBefore == nil
+        )) { context in
             let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
             Button { showingDetails = true } label: {
                 Image(systemName: presentation.indicator.symbol)
