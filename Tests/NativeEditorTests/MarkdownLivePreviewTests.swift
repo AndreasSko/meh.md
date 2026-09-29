@@ -616,6 +616,100 @@ final class MarkdownLivePreviewTests: XCTestCase {
     }
 #endif
 
+    func testTableRevealsOnceDuringOverlappingSelectionGrowth() throws {
+        let source = """
+        **A coastal plan**
+
+        | Activity | Time |
+        | --- | --- |
+        | Walk | Morning |
+
+        A quiet afternoon.
+        """ as NSString
+        let result = MarkdownSyntax.parse(source as String)
+        let table = try XCTUnwrap(result.tables.first)
+        let start = source.range(of: "coastal").location
+        func snapshot(endingAt end: Int) -> MarkdownLivePreviewSnapshot {
+            MarkdownLivePreviewSnapshot(
+                mode: .livePreview,
+                selection: NSRange(location: start, length: end - start),
+                tableWidth: 360
+            )
+        }
+        let before = snapshot(endingAt: start + 7)
+        let entered = snapshot(endingAt: source.range(of: "Activity").location + 3)
+        let extended = snapshot(endingAt: source.range(of: "afternoon").location + 4)
+        XCTAssertTrue(MarkdownLivePreview.needsTableVisibilityRefresh(
+            in: source, result: result, from: before, to: entered
+        ))
+        XCTAssertFalse(MarkdownLivePreview.needsTableVisibilityRefresh(
+            in: source, result: result, from: entered, to: extended
+        ))
+        XCTAssertTrue(MarkdownLivePreview.needsTableVisibilityRefresh(
+            in: source, result: result, from: extended, to: before
+        ))
+        XCTAssertTrue(MarkdownLivePreview.hiddenRanges(
+            in: source as String, result: result, snapshot: before
+        ).contains { NSIntersectionRange($0, table.range) == table.range })
+        XCTAssertFalse(MarkdownLivePreview.hiddenRanges(
+            in: source as String, result: result, snapshot: extended
+        ).contains { NSIntersectionRange($0, table.range) == table.range })
+    }
+
+    func testSelectionEnteringAnotherTableStillRefreshes() throws {
+        let source = """
+        | First | Time |
+        | --- | --- |
+        | Walk | Morning |
+
+        A pause between plans.
+
+        | Second | Time |
+        | --- | --- |
+        | Lunch | Noon |
+        """ as NSString
+        let result = MarkdownSyntax.parse(source as String)
+        XCTAssertEqual(result.tables.count, 2)
+        let start = source.range(of: "First").location
+        let first = MarkdownLivePreviewSnapshot(
+            mode: .livePreview,
+            selection: NSRange(location: start, length: 5),
+            tableWidth: 360
+        )
+        let second = MarkdownLivePreviewSnapshot(
+            mode: .livePreview,
+            selection: NSRange(
+                location: start,
+                length: source.range(of: "Second").location + 3 - start
+            ),
+            tableWidth: 360
+        )
+        XCTAssertTrue(MarkdownLivePreview.needsTableVisibilityRefresh(
+            in: source, result: result, from: first, to: second
+        ))
+    }
+
+    func testSourceTablesDoNotBypassSelectionFreeze() {
+        let source = "Intro\n\n| A | B |\n| --- | --- |\n| 1 | 2 |" as NSString
+        let result = MarkdownSyntax.parse(source as String)
+        for mode in [MarkdownEditorMode.source, .livePreview] {
+            // A zero-width preview cannot render a table and keeps its source.
+            let before = MarkdownLivePreviewSnapshot(
+                mode: mode,
+                selection: NSRange(location: 0, length: 3),
+                tableWidth: 0
+            )
+            let after = MarkdownLivePreviewSnapshot(
+                mode: mode,
+                selection: NSRange(location: 0, length: source.length),
+                tableWidth: 0
+            )
+            XCTAssertFalse(MarkdownLivePreview.needsTableVisibilityRefresh(
+                in: source, result: result, from: before, to: after
+            ))
+        }
+    }
+
     private func hiddenSubstrings(
         in source: String,
         selection: NSRange,

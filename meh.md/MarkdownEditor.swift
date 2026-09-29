@@ -1771,6 +1771,9 @@ struct MarkdownEditor: UIViewRepresentable {
         private var displayedFontFamily: EditorFontFamily
         private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
+        private var presentationRefreshIsSelectionOnly = false
+        private var selectionPresentationRefreshAllowed = true
+        private var previousSelection: NSRange?
         private var pendingPosition: MarkdownEditorPosition?
         private var positionRestoreScheduled = false
         private var positionRestoreGeneration = 0
@@ -1935,13 +1938,61 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            let selection = textView.selectedRange
+            let previousSelection = self.previousSelection
+            self.previousSelection = selection
             guard !isUpdating else { return }
             refreshTableCommands(in: textView)
-            if parent.mode == .livePreview {
-                schedulePresentationRefresh(for: textView)
+            selectionPresentationRefreshAllowed = shouldRefreshSelectionPresentation(
+                from: previousSelection,
+                to: selection,
+                in: textView
+            )
+            if parent.mode == .livePreview,
+               selectionPresentationRefreshAllowed {
+                schedulePresentationRefresh(for: textView, selectionOnly: true)
             }
             schedulePendingSearchMatchReveal(in: textView)
             schedulePendingPositionRestore(in: textView)
+        }
+
+        private func shouldRefreshSelectionPresentation(
+            from previous: NSRange?,
+            to selection: NSRange,
+            in textView: UITextView
+        ) -> Bool {
+            guard UIDevice.current.userInterfaceIdiom == .phone else {
+                return true
+            }
+            guard let previous,
+                  previous.length > 0,
+                  selection.length > 0,
+                  NSIntersectionRange(previous, selection).length > 0 else {
+                return true
+            }
+
+            // Revealing Markdown in each newly selected paragraph changes
+            // TextKit's layout while UIKit is moving a selection handle.
+            // Keep the presentation fixed until the selection ends or moves
+            // to a different passage. Tables need one refresh when their
+            // visibility changes, not on every movement within the table.
+            let cache = MarkdownPresentation.syntaxCache(for: textView)
+            guard let presentation = cache.currentPresentation,
+                  !presentation.result.tables.isEmpty else { return false }
+            let snapshot = MarkdownLivePreview.snapshot(for: textView)
+            let nextSnapshot = MarkdownLivePreviewSnapshot(
+                mode: snapshot.mode,
+                selection: selection,
+                isEditing: textView.isFirstResponder,
+                tableWidth: snapshot.tableWidth,
+                fontSize: snapshot.fontSize
+            )
+            return MarkdownLivePreview.needsTableVisibilityRefresh(
+                in: cache.textSnapshot(in: textView.textStorage) as NSString,
+                result: presentation.result,
+                from: snapshot,
+                to: nextSnapshot
+            )
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -2326,15 +2377,29 @@ struct MarkdownEditor: UIViewRepresentable {
             displayedRevision = revision
         }
 
-        private func schedulePresentationRefresh(for textView: UITextView) {
-            guard !presentationRefreshScheduled else { return }
+        private func schedulePresentationRefresh(
+            for textView: UITextView,
+            selectionOnly: Bool = false
+        ) {
+            if presentationRefreshScheduled {
+                // Typing and focus changes must still refresh even if a
+                // selection-only request was queued first.
+                if !selectionOnly { presentationRefreshIsSelectionOnly = false }
+                return
+            }
+            presentationRefreshIsSelectionOnly = selectionOnly
             presentationRefreshScheduled = true
             DispatchQueue.main.async { [weak self, weak textView] in
                 guard let self else { return }
+                let selectionOnly = self.presentationRefreshIsSelectionOnly
                 self.presentationRefreshScheduled = false
                 guard let textView, textView.markedTextRange == nil else {
                     return
                 }
+                // A later handle movement can freeze the preview before
+                // this queued selection refresh gets a turn to execute.
+                guard !selectionOnly || self.selectionPresentationRefreshAllowed
+                    || self.parent.mode != .livePreview else { return }
                 MarkdownPresentation.refresh(
                     textView,
                     fontSize: self.parent.fontSize,
