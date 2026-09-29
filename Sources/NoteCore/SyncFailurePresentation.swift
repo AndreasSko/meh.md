@@ -128,6 +128,13 @@ public struct SyncFailurePresentation: Equatable, Sendable {
                     actionHint: "Sync recovery is needed before syncing can continue.",
                     disposition: .unavailable
                 )
+            case .unrecoverableRetryDelay:
+                return Failure(
+                    "Sync paused for retry safety",
+                    "The saved iCloud server retry delay could not be verified.",
+                    actionHint: "Keep local notes and share sync diagnostics for recovery.",
+                    disposition: .unavailable
+                )
             case .invalidRemoteRecord:
                 return Failure(
                     "Sync needs attention",

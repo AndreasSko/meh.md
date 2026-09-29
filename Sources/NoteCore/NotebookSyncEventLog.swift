@@ -82,6 +82,8 @@ public final class NotebookSyncEventLog {
             switch error {
             case .accountUnavailable: return "CloudKitSyncTransportError.accountUnavailable"
             case .corruptState: return "CloudKitSyncTransportError.corruptState"
+            case .unrecoverableRetryDelay:
+                return "CloudKitSyncTransportError.unrecoverableRetryDelay"
             case .invalidRemoteRecord:
                 return "CloudKitSyncTransportError.invalidRemoteRecord"
             case .unexpectedDeletion:

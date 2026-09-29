@@ -1,9 +1,11 @@
 import CloudKit
+import Darwin
 import Foundation
 
 public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
     case accountUnavailable
     case corruptState
+    case unrecoverableRetryDelay
     case invalidRemoteRecord
     case unexpectedDeletion
     case uploadFailed(code: Int)
@@ -17,6 +19,9 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
         switch self {
         case .accountUnavailable: "An iCloud account is required for sync."
         case .corruptState: "The saved CloudKit sync state is corrupt."
+        case .unrecoverableRetryDelay:
+            "The saved CloudKit retry delay cannot be recovered safely. "
+                + "Sync is paused to avoid bypassing server throttling."
         case .invalidRemoteRecord: "CloudKit returned an invalid snapshot."
         case .unexpectedDeletion:
             "A remote snapshot was deleted. Sync is paused to preserve history."
@@ -1039,25 +1044,84 @@ struct CloudKitAssetStaging {
     }
 }
 
+enum CloudKitBootIdentity {
+    static func current() -> String? {
+        // KERN_BOOTTIME is a public boot marker on both iOS and macOS.
+        // Calendar steps can change it, which conservatively restarts the
+        // delay once. Do not infer boot identity from Date minus uptime.
+        var bootTime = timeval()
+        var size = MemoryLayout<timeval>.size
+        let result = sysctlbyname(
+            "kern.boottime", &bootTime, &size, nil, 0
+        )
+        guard result == 0, size == MemoryLayout<timeval>.size,
+              bootTime.tv_sec > 0, bootTime.tv_usec >= 0,
+              bootTime.tv_usec < 1_000_000 else { return nil }
+        return "boottime:\(bootTime.tv_sec):\(bootTime.tv_usec)"
+    }
+}
+
 struct CloudKitRetryThrottle {
-    private(set) var notBefore: Date?
-
-    init(notBefore: Date? = nil) { self.notBefore = notBefore }
-
-    mutating func observe(retryAfter seconds: Double?, now: Date) -> Bool {
-        guard let seconds, seconds.isFinite, seconds > 0 else { return false }
-        return merge(notBefore: now.addingTimeInterval(seconds))
+    struct Anchor: Codable {
+        var duration: TimeInterval
+        var uptime: TimeInterval
+        var bootID: String? = nil
     }
 
-    mutating func merge(notBefore proposed: Date) -> Bool {
-        guard notBefore.map({ proposed > $0 }) ?? true else { return false }
-        notBefore = proposed
+    private let bootID: String?
+    private(set) var anchor: Anchor?
+
+    init(
+        anchor: Anchor? = nil,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        bootID: String? = CloudKitBootIdentity.current()
+    ) {
+        self.bootID = bootID?.isEmpty == false ? bootID : nil
+        if let anchor, anchor.duration.isFinite, anchor.duration > 0,
+           anchor.uptime.isFinite, anchor.uptime >= 0 {
+            if let currentBootID = self.bootID,
+               anchor.bootID == currentBootID, anchor.uptime <= uptime {
+                // Relaunches during this boot share the same monotonic clock.
+                self.anchor = anchor
+            } else {
+                // Unknown or changed boot identity cannot establish elapsed
+                // time, even when the new uptime exceeds the saved value.
+                self.anchor = Anchor(
+                    duration: anchor.duration, uptime: uptime,
+                    bootID: self.bootID
+                )
+            }
+        }
+    }
+
+    var notBefore: Date? { deadline(at: Date()) }
+
+    func deadline(
+        at now: Date,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Date? {
+        remaining(at: now, uptime: uptime).map { now.addingTimeInterval($0) }
+    }
+
+    mutating func observe(
+        retryAfter seconds: Double?, now: Date,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Bool {
+        guard let seconds, seconds.isFinite, seconds > 0,
+              seconds > (remaining(at: now, uptime: uptime) ?? 0) else {
+            return false
+        }
+        anchor = Anchor(duration: seconds, uptime: uptime, bootID: bootID)
         return true
     }
 
-    func remaining(at now: Date) -> TimeInterval? {
-        guard let notBefore else { return nil }
-        let interval = notBefore.timeIntervalSince(now)
+    func remaining(
+        at now: Date,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> TimeInterval? {
+        guard let anchor else { return nil }
+        let elapsed = max(0, uptime - anchor.uptime)
+        let interval = anchor.duration - elapsed
         return interval > 0 ? interval : nil
     }
 }
@@ -1215,43 +1279,139 @@ enum CloudKitRetryMetadata {
 }
 
 struct CloudKitAvailabilityCooldownStore {
-    private struct State: Codable { var retryNotBefore: Date? }
+    private struct State: Codable {
+        var retryNotBefore: Date?
+        var anchor: CloudKitRetryThrottle.Anchor?
+        var completed: Bool?
+    }
 
     private let fileURL: URL
+    private let bootID: String?
     private(set) var throttle: CloudKitRetryThrottle
+    private(set) var completed = false
 
-    init(directory: URL) throws {
+    // The old file was atomically renamed shortly after the retry was
+    // observed. Its modification time therefore preserves the old clock's
+    // era, even if the device calendar has since been corrected.
+    private static let legacyWriteMargin: TimeInterval = 60
+    private static let maximumLegacyDelay: TimeInterval = 7 * 24 * 60 * 60
+
+    init(
+        directory: URL, now: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        persistOnLoad: Bool = true,
+        bootIDProvider: () -> String? = CloudKitBootIdentity.current
+    ) throws {
+        bootID = bootIDProvider()
         fileURL = directory.appendingPathComponent(
             "cloudkit-availability-retry.json"
         )
+        var needsPersistence = false
         do {
             let state = try JSONDecoder().decode(
                 State.self, from: Data(contentsOf: fileURL)
             )
-            throttle = CloudKitRetryThrottle(notBefore: state.retryNotBefore)
+            if let anchor = state.anchor,
+               !anchor.duration.isFinite || anchor.duration <= 0
+                || !anchor.uptime.isFinite || anchor.uptime < 0 {
+                throw CloudKitSyncTransportError.unrecoverableRetryDelay
+            }
+            if state.completed == true,
+               state.anchor != nil || state.retryNotBefore != nil {
+                throw CloudKitSyncTransportError.corruptState
+            }
+            let recoveredAnchor: CloudKitRetryThrottle.Anchor?
+            if state.anchor == nil, let deadline = state.retryNotBefore {
+                let attributes = try? FileManager.default.attributesOfItem(
+                    atPath: fileURL.path
+                )
+                recoveredAnchor = try Self.recoverLegacyAnchor(
+                    deadline: deadline,
+                    writeDate: attributes?[.modificationDate] as? Date,
+                    uptime: uptime
+                )
+            } else {
+                recoveredAnchor = state.anchor
+            }
+            throttle = CloudKitRetryThrottle(
+                anchor: recoveredAnchor, uptime: uptime, bootID: bootID
+            )
+            completed = state.completed == true
+            needsPersistence = !completed && persistOnLoad
         } catch CocoaError.fileReadNoSuchFile {
-            throttle = CloudKitRetryThrottle()
+            throttle = CloudKitRetryThrottle(bootID: bootID)
+        } catch let error as CloudKitSyncTransportError {
+            throw error
         } catch {
             throw CloudKitSyncTransportError.corruptState
         }
+        if needsPersistence { try persist(now: now, uptime: uptime) }
+    }
+
+    static func recoverLegacyAnchor(
+        deadline: Date, writeDate: Date?, uptime: TimeInterval
+    ) throws -> CloudKitRetryThrottle.Anchor {
+        guard let writeDate else {
+            throw CloudKitSyncTransportError.unrecoverableRetryDelay
+        }
+        let elapsed = deadline.timeIntervalSince(writeDate)
+        guard elapsed.isFinite, elapsed > 0,
+              uptime.isFinite, uptime >= 0,
+              elapsed <= maximumLegacyDelay else {
+            throw CloudKitSyncTransportError.unrecoverableRetryDelay
+        }
+        return .init(duration: elapsed + legacyWriteMargin, uptime: uptime)
     }
 
     var notBefore: Date? { throttle.notBefore }
 
-    func wait() async throws {
+    func reconciledDeadline(
+        saved: Date?, now: Date,
+        uptime: TimeInterval
+    ) throws -> Date? {
+        if throttle.anchor == nil, saved != nil, !completed {
+            throw CloudKitSyncTransportError.unrecoverableRetryDelay
+        }
+        return throttle.deadline(at: now, uptime: uptime)
+    }
+
+    mutating func wait() async throws {
         try await wait(
             now: { Date() },
+            uptime: { ProcessInfo.processInfo.systemUptime },
             sleep: { try await Task.sleep(for: .seconds($0)) }
         )
     }
 
-    func wait(
+    mutating func wait(
         now: () -> Date,
+        uptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         sleep: (TimeInterval) async throws -> Void
     ) async throws {
-        while let remaining = throttle.remaining(at: now()) {
+        while let remaining = throttle.remaining(
+            at: now(), uptime: uptime()
+        ) {
             try await sleep(remaining)
         }
+        try completeIfElapsed(now: now(), uptime: uptime())
+    }
+
+    mutating func completeIfElapsed(
+        now: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) throws {
+        guard throttle.anchor != nil,
+              throttle.remaining(at: now, uptime: uptime) == nil else {
+            return
+        }
+        try SyncFileIO.replace(
+            JSONEncoder().encode(State(
+                retryNotBefore: nil, anchor: nil, completed: true
+            )),
+            at: fileURL
+        )
+        throttle = CloudKitRetryThrottle(bootID: bootID)
+        completed = true
     }
 
     mutating func observe(_ error: Error, now: Date = Date()) throws {
@@ -1260,19 +1420,26 @@ struct CloudKitAvailabilityCooldownStore {
         )
     }
 
-    mutating func merge(notBefore: Date?) throws {
-        guard let notBefore, throttle.merge(notBefore: notBefore) else { return }
-        try persist()
+    mutating func merge(
+        retryAfter: Double?, now: Date,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) throws {
+        guard throttle.observe(
+            retryAfter: retryAfter, now: now, uptime: uptime
+        ) else { return }
+        completed = false
+        try persist(now: now, uptime: uptime)
     }
 
-    mutating func merge(retryAfter: Double?, now: Date) throws {
-        guard throttle.observe(retryAfter: retryAfter, now: now) else { return }
-        try persist()
-    }
-
-    private func persist() throws {
+    private func persist(
+        now: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) throws {
         try SyncFileIO.replace(
-            JSONEncoder().encode(State(retryNotBefore: throttle.notBefore)),
+            JSONEncoder().encode(State(
+                retryNotBefore: throttle.deadline(at: now, uptime: uptime),
+                anchor: throttle.anchor, completed: completed
+            )),
             at: fileURL
         )
     }
@@ -1321,7 +1488,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         stateDirectory: URL
     ) throws -> Date? {
         try CloudKitAvailabilityCooldownStore(
-            directory: stateDirectory
+            directory: stateDirectory, persistOnLoad: false
         ).notBefore
     }
 
@@ -1527,10 +1694,12 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         )
         let saved = await store.snapshot()
         unexpectedDeletionObserved = saved.hasUnexpectedDeletion
-        let deadline = [saved.retryNotBefore, availabilityCooldown.notBefore]
-            .compactMap { $0 }.max()
-        retryThrottle = CloudKitRetryThrottle(notBefore: deadline)
-        try availabilityCooldown.merge(notBefore: deadline)
+        let now = Date()
+        let uptime = ProcessInfo.processInfo.systemUptime
+        retryThrottle = availabilityCooldown.throttle
+        let deadline = try availabilityCooldown.reconciledDeadline(
+            saved: saved.retryNotBefore, now: now, uptime: uptime
+        )
         if saved.retryNotBefore != deadline {
             try await store.update { $0.retryNotBefore = deadline }
         }
@@ -1911,9 +2080,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     }
 
     public func retryNotBefore() async -> Date? {
-        [retryThrottle.notBefore, availabilityCooldown.notBefore]
-            .compactMap { $0 }
-            .max()
+        retryThrottle.notBefore
     }
 
     public func haltStatus() async -> CloudKitSyncHaltStatus? {
@@ -2048,18 +2215,26 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         while let remaining = retryThrottle.remaining(at: Date()) {
             try await Task.sleep(for: .seconds(remaining))
         }
+        try availabilityCooldown.completeIfElapsed()
+        retryThrottle = availabilityCooldown.throttle
     }
 
     private func observeRetryAfter(_ error: Error) async {
         guard !isRetired else { return }
         let delay = CloudKitRetryMetadata.seconds(in: error)
-        guard retryThrottle.observe(retryAfter: delay, now: Date()) else {
+        let now = Date()
+        let uptime = ProcessInfo.processInfo.systemUptime
+        guard retryThrottle.observe(
+            retryAfter: delay, now: now, uptime: uptime
+        ) else {
             return
         }
-        let deadline = retryThrottle.notBefore
+        let deadline = retryThrottle.deadline(at: now, uptime: uptime)
         do {
             do {
-                try availabilityCooldown.merge(notBefore: deadline)
+                try availabilityCooldown.merge(
+                    retryAfter: delay, now: now, uptime: uptime
+                )
             } catch {
                 throw CloudKitStateWriteFailure(underlyingError: error)
             }

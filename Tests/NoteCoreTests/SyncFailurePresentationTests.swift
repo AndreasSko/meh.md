@@ -187,6 +187,7 @@ final class SyncFailurePresentationTests: XCTestCase {
     func testUnsafeStateAndDeletionNeverSuggestReset() {
         for error: any Error in [
             CloudKitSyncTransportError.corruptState,
+            CloudKitSyncTransportError.unrecoverableRetryDelay,
             CloudKitSyncTransportError.invalidRemoteRecord,
             CloudKitSyncTransportError.unexpectedDeletion,
             SyncError.scopeChanged,

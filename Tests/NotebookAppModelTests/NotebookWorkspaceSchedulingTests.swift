@@ -1,7 +1,7 @@
 import Foundation
-import NoteCore
 import XCTest
 
+@testable import NoteCore
 @testable import NotebookAppModel
 
 @MainActor
@@ -65,6 +65,46 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         await workspace.refresh()
         let bootstrapCount = await transport.bootstrapCount
         XCTAssertEqual(bootstrapCount, 1)
+    }
+
+    func testPrestartCooldownReadsCannotPostponeTransportCreation()
+        async throws {
+        let transport = RecordingTransport(scope: "startup-cooldown")
+        var attempts = 0
+        let root = FileManager.default.temporaryDirectory.appending(
+            path: UUID().uuidString
+        )
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let workspace = NotebookWorkspace(
+            directory: root.appending(path: "Notebook"),
+            documentsDirectory: root.appending(path: "Documents"),
+            transport: nil, automaticSync: true, mode: .cloud,
+            transportFactory: { _ in
+                attempts += 1
+                if attempts == 1 { throw SyncError.scopeChanged }
+                return transport
+            }
+        )
+        let cloudDirectory = workspace.directory.appending(path: "CloudKit")
+        var cooldown = try CloudKitAvailabilityCooldownStore(
+            directory: cloudDirectory
+        )
+        try cooldown.merge(retryAfter: 30, now: Date())
+
+        await workspace.start()
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNil(workspace.sync)
+        _ = try CloudKitSyncTransport.persistedRetryNotBefore(
+            stateDirectory: cloudDirectory
+        )
+        _ = try CloudKitSyncTransport.persistedRetryNotBefore(
+            stateDirectory: cloudDirectory
+        )
+
+        await workspace.refresh()
+
+        XCTAssertEqual(attempts, 2)
+        XCTAssertNotNil(workspace.sync)
     }
 
     func testBackgroundFlushesOnceAndForegroundResumes() async throws {

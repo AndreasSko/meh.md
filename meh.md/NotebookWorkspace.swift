@@ -112,6 +112,8 @@ final class NotebookWorkspace {
     @ObservationIgnored private var previousConnectivity: NWPath.Status?
     @ObservationIgnored private var retryPolicy = NotebookSyncRetryPolicy()
     private var plannedRetryDate: Date?
+    private var plannedRetryUptime: TimeInterval?
+    private var plannedRetryDelay: TimeInterval?
     // A notification may launch the process without creating a UI scene.
     private var isForeground = false
     @ObservationIgnored private var activeSceneIDs = Set<UUID>()
@@ -226,7 +228,8 @@ final class NotebookWorkspace {
 
     /// Deterministic app-model tests use the same scheduler with an isolated
     /// replica and transport, without a signed app or CloudKit account.
-    init(directory: URL, documentsDirectory: URL, transport: any SyncTransport,
+    init(directory: URL, documentsDirectory: URL,
+         transport: (any SyncTransport)?,
          automaticSync: Bool, mode: Mode? = nil,
          transportFactory: (@MainActor (String?) async throws -> any SyncTransport)? = nil) {
         self.directory = directory
@@ -490,7 +493,9 @@ final class NotebookWorkspace {
         let retryDelay = Duration.seconds(max(
             0, (notBefore ?? syncRetryNotBefore ?? Date()).timeIntervalSinceNow
         ))
-        let delay = max(policyDelay, retryDelay)
+        // Recheck the transport's monotonic cooldown periodically so a
+        // corrected calendar cannot strand a previously scheduled refresh.
+        let delay = max(policyDelay, min(retryDelay, .seconds(60)))
         scheduledRefresh = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: delay) }
             catch { return }
@@ -575,7 +580,9 @@ final class NotebookWorkspace {
         guard !isResetPending else { return }
         guard whileLoading || !isLoading else { return }
         guard let replica else { return }
-        if !manual, let deadline = syncRetryNotBefore, deadline > Date() {
+        await updateRetryDeadline()
+        if !manual, !whileLoading,
+           let deadline = syncRetryNotBefore, deadline > Date() {
             if isForeground { scheduleRefresh(trigger: trigger, notBefore: deadline) }
             return
         }
@@ -591,6 +598,8 @@ final class NotebookWorkspace {
         scheduledRefresh = nil
         syncSchedule.clearPending()
         plannedRetryDate = nil
+        plannedRetryUptime = nil
+        plannedRetryDelay = nil
         isRefreshing = true
         // The app may enter the background after this exchange starts, so
         // acquire the lease for every refresh that owns the exchange.
@@ -662,8 +671,15 @@ final class NotebookWorkspace {
             await updateRetryDeadline()
             syncHalt = await (notebookTransport as? any HaltableSyncTransport)?.haltStatus()
             if let failure {
+                let now = Date()
                 plannedRetryDate = syncHalt == nil ? retryPolicy.retryDate(
-                    for: failure, now: Date(), serverNotBefore: syncRetryNotBefore) : nil
+                    for: failure, now: now,
+                    serverNotBefore: syncRetryNotBefore) : nil
+                plannedRetryUptime = plannedRetryDate == nil ? nil
+                    : ProcessInfo.processInfo.systemUptime
+                plannedRetryDelay = plannedRetryDate.map {
+                    max(0, $0.timeIntervalSince(now))
+                }
                 if let deadline = plannedRetryDate {
                     syncRetryNotBefore = deadline
                     if automaticSync, isForeground {
@@ -677,6 +693,9 @@ final class NotebookWorkspace {
             } else {
                 syncFailure = nil
                 retryPolicy.reset()
+                plannedRetryDate = nil
+                plannedRetryUptime = nil
+                plannedRetryDelay = nil
                 if automaticSync, sync?.status == .pending { needsAnotherRefresh = true }
             }
             endSyncPresentation()
@@ -739,13 +758,15 @@ final class NotebookWorkspace {
     }
 
     private func updateRetryDeadline() async {
-        var notebook = await notebookTransport?.retryNotBefore()
-        if case .cloud = mode {
-            if notebookTransport == nil {
-                notebook = try? CloudKitSyncTransport.persistedRetryNotBefore(
-                    stateDirectory: directory.appending(path: "CloudKit"))
-            }
+        if let plannedRetryUptime, let plannedRetryDelay {
+            let elapsed = max(
+                0, ProcessInfo.processInfo.systemUptime - plannedRetryUptime
+            )
+            let remaining = max(0, plannedRetryDelay - elapsed)
+            plannedRetryDate = remaining > 0
+                ? Date().addingTimeInterval(remaining) : nil
         }
+        let notebook = await notebookTransport?.retryNotBefore()
         let deadline = [notebook, plannedRetryDate].compactMap { $0 }
             .filter { $0 > Date() }.max()
         if deadline != syncRetryNotBefore {

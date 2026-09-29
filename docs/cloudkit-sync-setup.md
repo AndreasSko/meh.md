@@ -94,12 +94,19 @@ adapter persists the longest active retry-after delay, including per-record
 errors, and waits before making further requests. A small availability-only
 file also gates account discovery after app restart; it is never used as proof
 of account identity. Pending snapshots remain durable throughout the cooldown.
+Retry waits use elapsed uptime. A saved boot-time marker lets repeated app
+launches during the same boot count time already waited. A reboot, an
+unavailable marker, or a calendar step that changes the marker restarts the
+full saved delay conservatively. The marker stays in local sync state and is
+not sent to CloudKit. Older cooldown files migrate to this format without
+discarding the server delay.
 If Apple reports throttling or service unavailability without a usable delay,
 the adapter waits 30 seconds. A failed cooldown write stops further requests
 until the adapter is recreated from durable state.
 
 Tests cover nested retry metadata, fallback delays, deadline persistence,
-pending uploads, and startup gating with a simulated clock. They do not
+repeated same-boot launches, reboot and legacy recovery, pending uploads,
+and startup gating with a simulated clock. They do not
 intentionally trigger Apple's real quota or throttling mechanisms. See
 [automatic scheduling](notebook-sync-scheduling.md) and
 [batching](notebook-sync-progress.md) for the implemented notebook behavior.
