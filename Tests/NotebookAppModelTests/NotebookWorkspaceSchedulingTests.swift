@@ -213,6 +213,43 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         XCTAssertEqual(fetches, baseline + 2)
     }
 
+    func testPendingResetRejectsManualAndAutomaticRefresh() async throws {
+        let transport = RecordingTransport(scope: "reset-pending")
+        let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        let replica = try XCTUnwrap(workspace.replica)
+        let noteID = try await replica.createNote(name: "draft.md", text: "saved")
+        let session = try await replica.openNote(noteID)
+        let baseline = await transport.operationCount
+
+        workspace.contentDidSave()
+        workspace.localStorageResetWasScheduled()
+        XCTAssertTrue(workspace.isResetPending)
+        XCTAssertFalse(session.isEditingEnabled)
+        do {
+            _ = try await replica.createNote(name: "later.md")
+            XCTFail("Creating a note after reset scheduling should fail")
+        } catch {
+            XCTAssertEqual(error as? NotebookReplicaError, .resetPending)
+        }
+        do {
+            _ = try await replica.openNote(noteID)
+            XCTFail("Opening a note after reset scheduling should fail")
+        } catch {
+            XCTAssertEqual(error as? NotebookReplicaError, .resetPending)
+        }
+        await workspace.refresh(manual: true)
+        workspace.requestAutomaticRefresh(trigger: "network restored")
+        await workspace.receiveCloudActivity(
+            .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
+        )
+        try await Task.sleep(for: .seconds(1))
+
+        let after = await transport.operationCount
+        XCTAssertEqual(after, baseline)
+    }
+
     func testLocalModePublishesSavedMarkdownWithoutSync() async throws {
         let transport = RecordingTransport(scope: "local-copies")
         let workspace = makeWorkspace(transport: transport, mode: .local)

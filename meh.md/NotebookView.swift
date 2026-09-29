@@ -436,6 +436,7 @@ struct NotebookView: View {
 
     var body: some View {
         searchNavigation
+        .disabled(workspace?.isResetPending == true)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let workspace { NotebookWorkspaceStatusView(workspace: workspace) }
         }
@@ -885,6 +886,7 @@ struct NotebookView: View {
 
     private func recentPreview(for id: UUID) -> String {
         guard let recent = navigationState.recentSessions[id] else { return "Preview unavailable" }
+        if workspace?.isResetPending == true { return "Restart to finish reset" }
         guard recent.isEditingEnabled else { return "Note unavailable" }
         let preview = NotebookRecentPreview.text(from: recent.text)
         return preview.isEmpty ? "Empty note" : preview

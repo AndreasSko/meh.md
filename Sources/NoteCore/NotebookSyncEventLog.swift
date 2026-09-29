@@ -105,6 +105,8 @@ public final class NotebookSyncEventLog {
                 return "NotebookReplicaError.permanentlyDeleted"
             case .pinLimitReached:
                 return "NotebookReplicaError.pinLimitReached"
+            case .resetPending:
+                return "NotebookReplicaError.resetPending"
             }
         }
         if let error = error as? CocoaError {

@@ -126,6 +126,7 @@ struct NotebookSettingsView: View {
                 let defaults = UserDefaults.standard
                 defaults.set(true, forKey: "meh.md.resetLocalStorage")
                 defaults.synchronize()
+                workspace.localStorageResetWasScheduled()
                 resetScheduled = true
             }
         } message: {

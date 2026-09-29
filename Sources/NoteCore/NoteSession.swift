@@ -38,6 +38,7 @@ public final class NoteSession {
     }
 
     public private(set) var isPermanentlyDeleted = false
+    public private(set) var isEditingSuspended = false
     public private(set) var text = ""
     public private(set) var status: Status = .loading
     public private(set) var recoveryErrorMessage: String?
@@ -56,7 +57,7 @@ public final class NoteSession {
     }
 
     public var isEditingEnabled: Bool {
-        if isPermanentlyDeleted { return false }
+        if isPermanentlyDeleted || isEditingSuspended { return false }
         return switch status {
         case .saved, .saving, .saveFailed:
             true
@@ -150,6 +151,11 @@ public final class NoteSession {
 
     func markPermanentlyDeleted() {
         isPermanentlyDeleted = true
+        cancelDelayedSave()
+    }
+
+    func suspendEditingForPendingReset() {
+        isEditingSuspended = true
         cancelDelayedSave()
     }
 
@@ -318,7 +324,8 @@ public final class NoteSession {
     }
 
     func installFirstRemoteBody(_ snapshot: NoteSnapshot) async throws {
-        guard isWaitingForRemoteBody, !isPermanentlyDeleted else {
+        guard isWaitingForRemoteBody, !isPermanentlyDeleted,
+              !isEditingSuspended else {
             throw SyncError.localSaveRequired
         }
         let remote = try NoteDocument(snapshot: snapshot)
@@ -329,12 +336,15 @@ public final class NoteSession {
         switch loaded {
         case let .blocked(failure)
         where failure.current == .absent && failure.previous == .absent:
+            guard !isEditingSuspended else { throw SyncError.localSaveRequired }
             try await storage.save(snapshot)
             guard !isPermanentlyDeleted else { return }
+            guard !isEditingSuspended else { throw SyncError.localSaveRequired }
             try install(remote, persistedHeads: snapshot.heads)
             persistedSnapshot = snapshot
             status = .saved
         case let .current(current):
+            guard !isEditingSuspended else { throw SyncError.localSaveRequired }
             // The file may have arrived through another writer since this
             // session observed it missing. Join both validated histories.
             let local = try NoteDocument(snapshot: current)
@@ -397,6 +407,7 @@ public final class NoteSession {
     }
 
     private func queueSave(immediately: Bool = false) {
+        guard !isEditingSuspended else { return }
         if let document, !isPermanentlyDeleted {
             editorRevision = editorIdentity + document.editorHeads
         }

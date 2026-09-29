@@ -80,6 +80,7 @@ final class NotebookWorkspace {
     var backupRetentionCount = 14
     private(set) var isLoading = false
     private(set) var isRefreshing = false
+    private(set) var isResetPending = false
     private(set) var isSyncing = false
     private(set) var showSyncCheck = false
     private(set) var syncRetryNotBefore: Date?
@@ -143,6 +144,7 @@ final class NotebookWorkspace {
         }
     }
     var canRetrySync: Bool {
+        if isResetPending { return false }
         if syncFailure?.retryDisposition == .unavailable { return false }
         if let syncHalt { return syncHalt.isRecoverable }
         return true
@@ -327,7 +329,8 @@ final class NotebookWorkspace {
     }
 
     func runDueBackup() async {
-        guard backupFrequency != .off, !Task.isCancelled else { return }
+        guard !isResetPending, backupFrequency != .off,
+              !Task.isCancelled else { return }
         if replica == nil { await start() }
         guard replica?.catalogSnapshot != nil, !isBackingUp else { return }
         await reloadBackupInfo()
@@ -348,6 +351,7 @@ final class NotebookWorkspace {
     }
 
     func start(manualRetry: Bool = false) async {
+        guard !isResetPending else { return }
         guard !isLoading, replica == nil || manualRetry else { return }
         isLoading = true
 
@@ -408,6 +412,7 @@ final class NotebookWorkspace {
     }
 
     private func recover(_ kind: RecoveryAction.Kind) async {
+        guard !isResetPending else { return }
         guard !isLoading, !isRefreshing else { return }
         // Claim activation ownership before the first suspension so Start and
         // recovery cannot concurrently mutate the same durable files.
@@ -433,28 +438,52 @@ final class NotebookWorkspace {
     private var syncTime: Duration { syncClockOrigin.duration(to: syncClock.now) }
 
     func noteDidEdit() {
-        guard automaticSync, usesSync else { return }
+        guard !isResetPending, automaticSync, usesSync else { return }
         syncSchedule.noteEdited(at: syncTime)
         armScheduledRefresh()
     }
 
     func requestAutomaticRefresh(trigger: String) {
-        guard automaticSync else { return }
+        guard !isResetPending, automaticSync else { return }
         scheduleRefresh(trigger: trigger)
     }
 
     func contentDidSave(trigger: String = "saved content or catalog update") {
-        guard !isPreview else { return }
+        guard !isResetPending, !isPreview else { return }
         scheduleRefresh(trigger: trigger)
     }
 
+    /// The reset is durable before the current workspace stops accepting work.
+    /// The next launch removes local files before opening documents or sync.
+    func localStorageResetWasScheduled() {
+        guard !isResetPending else { return }
+        isResetPending = true
+        replica?.suspendLocalEditsForPendingReset()
+        scheduledRefresh?.cancel()
+        scheduledRefresh = nil
+        syncSchedule.clearPending()
+        needsAnotherRefresh = false
+        needsImmediateRefresh = false
+        needsManualRefresh = false
+        cloudActivityTask?.cancel()
+        cloudActivityTask = nil
+        connectivityMonitor?.cancel()
+        connectivityMonitor = nil
+        transportGeneration = UUID()
+        if let transport = notebookTransport as? any HaltableSyncTransport {
+            Task { await transport.retire() }
+        }
+    }
+
     private func scheduleRefresh(trigger: String, notBefore: Date? = nil) {
+        guard !isResetPending else { return }
         pendingSyncTrigger = trigger
         syncSchedule.request(at: syncTime)
         armScheduledRefresh(notBefore: notBefore)
     }
 
     private func armScheduledRefresh(notBefore: Date? = nil) {
+        guard !isResetPending else { return }
         guard let policyDelay = syncSchedule.delay(at: syncTime) else { return }
         scheduledRefresh?.cancel()
         guard isForeground || !usesSync || !automaticSync else { return }
@@ -492,7 +521,7 @@ final class NotebookWorkspace {
         let newForeground = !activeSceneIDs.isEmpty
         let changed = isForeground != newForeground
         isForeground = newForeground
-        guard automaticSync, changed else { return }
+        guard !isResetPending, automaticSync, changed else { return }
         if newForeground {
             requestAutomaticRefresh(trigger: "foreground activation")
         } else {
@@ -543,6 +572,7 @@ final class NotebookWorkspace {
     func refresh(
         whileLoading: Bool = false, manual: Bool = false, trigger: String = "recovery"
     ) async {
+        guard !isResetPending else { return }
         guard whileLoading || !isLoading else { return }
         guard let replica else { return }
         if !manual, let deadline = syncRetryNotBefore, deadline > Date() {
@@ -591,6 +621,10 @@ final class NotebookWorkspace {
             do {
                 syncEventLog.record("notebook transport preparing")
                 try await prepareNotebookTransport(recoverIfHalted: manual)
+                guard !isResetPending else {
+                    endSyncPresentation()
+                    return
+                }
                 syncEventLog.record("notebook transport ready")
                 guard let notebookTransport else {
                     throw SyncError.unavailable(
@@ -604,6 +638,10 @@ final class NotebookWorkspace {
                 )
                 sync = coordinator
                 hasBinding = try coordinator.hasDurableBinding()
+                guard !isResetPending else {
+                    endSyncPresentation()
+                    return
+                }
                 syncSetupError = nil
                 await coordinator.synchronize()
                 failure = coordinator.lastError
@@ -771,6 +809,10 @@ final class NotebookWorkspace {
             await (transport as? any HaltableSyncTransport)?.retire()
             throw SyncError.scopeChanged
         }
+        if isResetPending {
+            await (transport as? any HaltableSyncTransport)?.retire()
+            return
+        }
         notebookTransport = unavailableWhenRequested(transport)
         syncHalt = nil
         let generation = transportGeneration
@@ -790,6 +832,7 @@ final class NotebookWorkspace {
     func receiveCloudActivity(
         _ activity: CloudKitSyncActivity, generation: UUID? = nil
     ) async {
+        guard !isResetPending else { return }
         if let generation, generation != transportGeneration { return }
         switch activity {
         case .remoteChanges(let records, let deletions, let reason):
@@ -856,7 +899,7 @@ final class NotebookWorkspace {
     }
 
     private func publishCopies() async {
-        guard !isPreview, replica != nil else { return }
+        guard !isResetPending, !isPreview, replica != nil else { return }
         guard !isPublishingCopies else {
             needsAnotherCopyPublication = true
             return

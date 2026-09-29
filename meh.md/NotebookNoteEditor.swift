@@ -111,26 +111,34 @@ struct NotebookNoteEditor: View {
     }
 
     @ViewBuilder private var unavailableContent: some View {
-        switch session.status {
-        case .recoveryRequired:
-            VStack(spacing: 12) {
-                Text("A previous saved copy is available.").font(.headline)
-                Text("Restoring it may lose newer edits. The damaged file will be kept.")
-                Button("Restore Previous Copy") {
-                    Task { await session.recoverFromPrevious() }
-                }
-                if let message = session.recoveryErrorMessage { Text(message) }
-            }.padding()
-        case .blocked, .loadFailed:
+        if session.isEditingSuspended {
             ContentUnavailableView {
-                Label("Note unavailable", systemImage: "exclamationmark.triangle")
+                Label("Restart to finish reset", systemImage: "arrow.clockwise")
             } description: {
-                Text("The saved files have been retained. This note may need recovery or a newer app version.")
-            } actions: {
-                Button("Retry") { Task { await session.load() } }
+                Text("Local storage reset is scheduled for the next launch.")
             }
-        default:
-            Text(session.isPermanentlyDeleted ? "This note was permanently deleted." : "Opening note…")
+        } else {
+            switch session.status {
+            case .recoveryRequired:
+                VStack(spacing: 12) {
+                    Text("A previous saved copy is available.").font(.headline)
+                    Text("Restoring it may lose newer edits. The damaged file will be kept.")
+                    Button("Restore Previous Copy") {
+                        Task { await session.recoverFromPrevious() }
+                    }
+                    if let message = session.recoveryErrorMessage { Text(message) }
+                }.padding()
+            case .blocked, .loadFailed:
+                ContentUnavailableView {
+                    Label("Note unavailable", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text("The saved files have been retained. This note may need recovery or a newer app version.")
+                } actions: {
+                    Button("Retry") { Task { await session.load() } }
+                }
+            default:
+                Text(session.isPermanentlyDeleted ? "This note was permanently deleted." : "Opening note…")
+            }
         }
     }
 

@@ -214,6 +214,36 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
         XCTAssertEqual(factory.transports.count, 1)
     }
 
+    func testPendingResetDuringConstructionRetiresReplacement() async throws {
+        let factory = RecoveryTransportFactory()
+        let original = HaltableRecordingTransport(
+            scope: "reset-during-construction", remoteStore: factory.remoteStore
+        )
+        let workspace = makeWorkspace(transport: original, factory: factory)
+        await workspace.start()
+        await original.setHalt(
+            .localStorageFailure,
+            underlyingError: POSIXError(.ENOSPC),
+            recoverable: true
+        )
+        factory.pauseNextCreation()
+
+        let refresh = Task { await workspace.refresh(manual: true) }
+        try await waitUntil { factory.isCreationPaused }
+        workspace.localStorageResetWasScheduled()
+        factory.resumeCreation()
+        await refresh.value
+
+        let replacement = try XCTUnwrap(factory.transports.first)
+        let replacementRetired = await replacement.isRetired
+        let replacementFetchCount = await replacement.fetchCount
+        XCTAssertTrue(replacementRetired)
+        XCTAssertEqual(replacementFetchCount, 0)
+        XCTAssertNil(workspace.sync)
+        XCTAssertFalse(workspace.isRefreshing)
+        XCTAssertFalse(workspace.isSyncing)
+    }
+
     private func makeWorkspace(
         transport: any SyncTransport,
         factory: RecoveryTransportFactory
