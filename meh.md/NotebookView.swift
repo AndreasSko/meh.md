@@ -389,6 +389,7 @@ struct NotebookView: View {
         }
         .focusedSceneValue(\.notebookSearch, search)
         .focusedSceneValue(\.notebookRecentCommands, recentCommands)
+        .focusedSceneValue(\.notebookFileActions, fileActions)
         .onChange(of: focusedRecentID) { _, id in
             recentCommands.focusedNoteID = id
         }
@@ -1761,16 +1762,6 @@ struct NotebookView: View {
                 browserSelection.selectAll(visibleActiveRows.map(\.id))
                 return .handled
             }
-            if press.modifiers.contains([.command, .shift]),
-               press.characters.lowercased() == "m", !browserSelection.isEmpty {
-                beginMoving(browserSelection.orderedIDs(in: activeBrowserOrder))
-                return .handled
-            }
-            if press.key == .delete, press.modifiers.contains(.command),
-               !browserSelection.isEmpty {
-                trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
-                return .handled
-            }
             if press.key == .return, browserSelection.count == 1,
                let id = browserSelection.selectedIDs.first,
                let placement = replica.placements.first(where: { $0.item.id == id }) {
@@ -1813,6 +1804,24 @@ struct NotebookView: View {
             set: { selectingItems = $0.isEditing }
         ))
         #endif
+    }
+
+    private var fileActions: NotebookFileActions {
+        let canEdit = !busy && replica.catalogSnapshot != nil
+        let browserCanAct = canEdit && browserFocused && editingID == nil
+            && detailEditingID == nil && !search.isPresented
+            && !browserSelection.isEmpty
+        return NotebookFileActions(
+            newNote: canEdit ? { createDefaultNote() } : nil,
+            newFolder: canEdit
+                ? { createItem(kind: .folder, parentID: nil) } : nil,
+            moveSelection: browserCanAct ? {
+                beginMoving(browserSelection.orderedIDs(in: activeBrowserOrder))
+            } : nil,
+            trashSelection: browserCanAct ? {
+                trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+            } : nil
+        )
     }
 
     private var libraryNewNote: some View {

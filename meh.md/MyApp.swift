@@ -44,6 +44,7 @@ struct NotebookWindowValue: Codable, Hashable {
             NotebookWindowValue()
         }
         .commands {
+            NotebookFileCommands()
             NotebookSearchCommands()
             NotebookRecentCommands()
         }
