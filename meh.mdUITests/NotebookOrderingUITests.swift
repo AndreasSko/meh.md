@@ -267,14 +267,12 @@ final class NotebookOrderingUITests: XCTestCase {
 
         activate(title(of: alpha, in: app))
         XCTAssertEqual(app.buttons["note-title"].label, "Alpha \(suffix)")
-        XCUIElement.perform(withKeyModifiers: .shift) {
-            title(of: charlie, in: app).click()
-        }
+        let charlieTitle = title(of: charlie, in: app)
+        XCUIElement.perform(withKeyModifiers: .shift) { charlieTitle.click() }
         XCTAssertTrue(app.buttons["3 selected"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["note-title"].label, "Alpha \(suffix)")
-        XCUIElement.perform(withKeyModifiers: .command) {
-            title(of: bravo, in: app).click()
-        }
+        let bravoTitle = title(of: bravo, in: app)
+        XCUIElement.perform(withKeyModifiers: .command) { bravoTitle.click() }
         XCTAssertTrue(app.buttons["2 selected"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["note-title"].label, "Alpha \(suffix)")
 

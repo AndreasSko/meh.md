@@ -331,7 +331,7 @@ private struct KeyboardCommandDefinition: Identifiable {
     ]
 }
 
-private struct SymbolDragPreviewShape: Shape {
+private nonisolated struct SymbolDragPreviewShape: Shape {
     let systemName: String
 
     func path(in rect: CGRect) -> Path {
