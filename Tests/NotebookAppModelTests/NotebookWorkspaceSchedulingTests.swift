@@ -109,7 +109,12 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
 
     func testBackgroundFlushesOnceAndForegroundResumes() async throws {
         let transport = RecordingTransport(scope: "foreground")
-        let workspace = makeWorkspace(transport: transport)
+        // The resumed exchange waits for the idle delay after the edit;
+        // a short one keeps the test from waiting ten real seconds.
+        let workspace = makeWorkspace(
+            transport: transport,
+            syncSchedule: NotebookSyncSchedule(idleDelay: .milliseconds(500))
+        )
         let sceneID = UUID()
         workspace.sceneActivityChanged(id: sceneID, isActive: true)
         await workspace.start()
@@ -132,7 +137,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         XCTAssertEqual(repeatedBackgroundFetches, backgroundFetches)
 
         workspace.sceneActivityChanged(id: sceneID, isActive: true)
-        try await waitUntil(timeout: .seconds(12)) {
+        try await waitUntil {
             await transport.fetchCount > backgroundFetches
         }
     }
@@ -320,7 +325,8 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
     private func makeWorkspace(
         transport: any SyncTransport,
         automaticSync: Bool = true,
-        mode: NotebookWorkspace.Mode? = nil
+        mode: NotebookWorkspace.Mode? = nil,
+        syncSchedule: NotebookSyncSchedule = NotebookSyncSchedule()
     ) -> NotebookWorkspace {
         let root = FileManager.default.temporaryDirectory.appending(
             path: UUID().uuidString
@@ -330,7 +336,8 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
             directory: root.appending(path: "Notebook"),
             documentsDirectory: root.appending(path: "Documents"),
             transport: transport,
-            automaticSync: automaticSync, mode: mode
+            automaticSync: automaticSync, mode: mode,
+            syncSchedule: syncSchedule
         )
     }
 

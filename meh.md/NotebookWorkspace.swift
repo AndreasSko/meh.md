@@ -250,8 +250,10 @@ final class NotebookWorkspace {
     init(directory: URL, documentsDirectory: URL,
          transport: (any SyncTransport)?,
          automaticSync: Bool, mode: Mode? = nil,
+         syncSchedule: NotebookSyncSchedule = NotebookSyncSchedule(),
          transportFactory: (@MainActor (String?) async throws -> any SyncTransport)? = nil) {
         self.directory = directory
+        self.syncSchedule = syncSchedule
         self.documentsDirectory = documentsDirectory
         self.automaticSync = automaticSync
         self.mode = mode ?? .development(URL(string: "http://127.0.0.1")!, "model-test")
