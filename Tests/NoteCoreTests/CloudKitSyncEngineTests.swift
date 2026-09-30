@@ -55,6 +55,22 @@ final class CloudKitSyncEngineTests: XCTestCase {
         XCTAssertEqual(result.acknowledgedIDs, [note.id])
     }
 
+    func testConflictIsAcknowledgedWithoutAnotherRequest() async throws {
+        let note = try makeNote("shared")
+        let first = try await open("device-a")
+        _ = try await first.bootstrap(proposing: try makeCatalog())
+        _ = try await first.publishBatch([note])
+        let second = try await open("device-b")
+        _ = try await second.bootstrap(proposing: try makeCatalog())
+
+        // The conflict carries the server record. Reading it again from
+        // inside the engine callback could stall on a retry cooldown.
+        server.inject(.failNextRead)
+        let result = try await second.publishBatch([note])
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.acknowledgedIDs, [note.id])
+    }
+
     func testRejectedSaveIsReportedAndSucceedsWhenRetried() async throws {
         let notes = try (0..<3).map { try makeNote("note \($0)") }
         let rejected = notes[1].id
@@ -181,12 +197,36 @@ final class CloudKitSyncEngineTests: XCTestCase {
 
         // Every coordinator pass starts with bootstrap. It must not re-seed
         // an empty cloud before the deletion has been noticed.
-        XCTExpectFailure(
-            "Bootstrap re-creates a deleted zone: "
-                + "https://github.com/AndreasSko/meh.md/issues/158"
-        )
-        _ = try? await transport.bootstrap(proposing: try makeCatalog())
+        do {
+            _ = try await transport.bootstrap(proposing: try makeCatalog())
+            XCTFail("A deleted zone must halt sync")
+        } catch {
+            XCTAssertEqual(
+                error as? CloudKitSyncTransportError, .unexpectedDeletion
+            )
+        }
         XCTAssertEqual(server.recordNames, [])
+        let halted = await transport.haltStatus()
+        XCTAssertNotNil(halted)
+
+        let restarted = try await open("device")
+        let stillHalted = await restarted.haltStatus()
+        XCTAssertNotNil(stillHalted, "The halt must survive a restart")
+    }
+
+    func testUploadAfterZoneDeletionHalts() async throws {
+        let transport = try await open("device")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        server.deleteZone()
+
+        let result = try await transport.publishBatch([try makeNote("late")])
+        XCTAssertEqual(result.acknowledgedIDs, [])
+        XCTAssertEqual(
+            result.error as? CloudKitSyncTransportError, .unexpectedDeletion
+        )
+        XCTAssertEqual(server.recordNames, [])
+        let halted = await transport.haltStatus()
+        XCTAssertNotNil(halted)
     }
 
     func testUploadsBeyondOneRequestLeaveNoStagedAssets() async throws {
