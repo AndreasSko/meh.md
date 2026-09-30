@@ -230,13 +230,14 @@ final class MarkdownTableScrollingTests: XCTestCase {
 
         overlay.revealMarkdownTableCell(row: 1, column: 2)
         XCTAssertEqual(view.selectedRange().location,
-                       (source as NSString).range(of: "Gamma").location)
+                       NSMaxRange((source as NSString).range(of: "Gamma")))
         XCTAssertEqual(view.string, source)
         XCTAssertFalse(view.undoManager?.canUndo == true)
         MarkdownPresentation.refresh(view, mode: .livePreview)
         view.updateMarkdownTableScrollOverlays()
-        XCTAssertTrue(view.markdownTableScrollOverlays.isEmpty,
-                      "Selecting a cell reveals the editable Markdown table")
+        XCTAssertFalse(view.markdownTableScrollOverlays.isEmpty,
+                       "Editing a cell keeps the table rendered")
+        XCTAssertTrue(view.markdownCellController.isActive)
     }
 
     func testVerticalWheelOverTableRoutesToNoteScrollView() throws {
@@ -265,7 +266,7 @@ final class MarkdownTableScrollingTests: XCTestCase {
         XCTAssertEqual(view.string, source)
     }
 
-    func testTapOnPaddedBlankCellRevealsSourceRow() throws {
+    func testTapOnPaddedBlankCellStartsCellEditor() throws {
         let source = "| One | Two | Three | Four |\n"
             + "| --- | --- | --- | --- |\n"
             + "| Alpha | Beta |\n\nOutside"
@@ -278,7 +279,10 @@ final class MarkdownTableScrollingTests: XCTestCase {
         let overlay = try XCTUnwrap(view.markdownTableScrollOverlays.first)
         let rowStart = (source as NSString).range(of: "| Alpha").location
         XCTAssertTrue(overlay.revealMarkdownTableCell(row: 1, column: 3))
-        XCTAssertEqual(view.selectedRange().location, rowStart)
+        XCTAssertEqual(view.markdownCellController.target?.row, 1)
+        XCTAssertEqual(view.markdownCellController.target?.column, 3)
+        XCTAssertGreaterThan(view.selectedRange().location, rowStart,
+                             "A padded cell edits its insertion position, not the row start")
         XCTAssertEqual(view.string, source)
     }
 

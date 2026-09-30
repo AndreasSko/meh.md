@@ -170,7 +170,9 @@ enum MarkdownPresentation {
         let tableWidth = snapshot.tableWidth
         if let tableRange = syntaxCache.prepareTables(
             text: text, presentation: presentation,
-            bodyFont: bodyFont, width: tableWidth
+            bodyFont: bodyFont, width: tableWidth,
+            activeCell: (textView as? MarkdownTextView)?.markdownCellController.target,
+            activeColumnWidths: (textView as? MarkdownTextView)?.markdownCellController.fixedColumnWidths
         ) {
             layoutRange = layoutRange.length == 0 ? tableRange
                 : NSUnionRange(layoutRange, tableRange)
@@ -286,7 +288,8 @@ enum MarkdownPresentation {
                         lineFragmentPadding: textContainer.lineFragmentPadding,
                         context: context,
                         horizontalOffsets: (textView as? MarkdownTextView)?.markdownTableDrawingOffsets
-                            ?? syntaxCache.tableHorizontalOffsets
+                            ?? syntaxCache.tableHorizontalOffsets,
+                        activeCell: (textView as? MarkdownTextView)?.markdownCellController.target
                     )
                 }
                 return true
@@ -414,7 +417,9 @@ enum MarkdownPresentation {
         let tableWidth = snapshot.tableWidth
         if let tableRange = syntaxCache.prepareTables(
             text: text, presentation: presentation,
-            bodyFont: bodyFont, width: tableWidth
+            bodyFont: bodyFont, width: tableWidth,
+            activeCell: (textView as? MarkdownTextView)?.markdownCellController.target,
+            activeColumnWidths: (textView as? MarkdownTextView)?.markdownCellController.fixedColumnWidths
         ) {
             layoutRange = layoutRange.length == 0 ? tableRange
                 : NSUnionRange(layoutRange, tableRange)
@@ -539,7 +544,8 @@ enum MarkdownPresentation {
             origin: drawingOffset,
             lineFragmentPadding: textView.textContainer.lineFragmentPadding,
             context: context,
-            horizontalOffsets: textView.markdownTableDrawingOffsets
+            horizontalOffsets: textView.markdownTableDrawingOffsets,
+            activeCell: textView.markdownCellController.target
         )
         for decoration in decorations {
             let rect = decoration.rect.offsetBy(
@@ -2121,6 +2127,7 @@ final class MarkdownSyntaxCache: NSObject {
     private var tableTexts: [String] = []
     private var parsedTables: [MarkdownTable] = []
     private var tableHiddenRanges: [NSRange] = []
+    private var tableActiveCell: MarkdownTableCellEditing.Target?
     private var tableFont: PlatformFont?
     private var tableWidth: CGFloat = 0
     var tableRefresh: (() -> Void)?
@@ -2128,7 +2135,9 @@ final class MarkdownSyntaxCache: NSObject {
 
     func prepareTables(
         text: String, presentation: MarkdownRenderingPresentation,
-        bodyFont: PlatformFont, width: CGFloat
+        bodyFont: PlatformFont, width: CGFloat,
+        activeCell: MarkdownTableCellEditing.Target? = nil,
+        activeColumnWidths: [CGFloat]? = nil
     ) -> NSRange? {
         guard !presentation.result.tables.isEmpty || tableLayout != nil else {
             return nil
@@ -2146,8 +2155,13 @@ final class MarkdownSyntaxCache: NSObject {
             && zip(texts, tableTexts).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
         let geometryChanged = tableWidth != width || tableFont?.isEqual(bodyFont) != true
         guard geometryChanged || tableHiddenRanges != hidden
-            || parsedTables != tables || !sameText else { return nil }
+            || parsedTables != tables || !sameText || tableActiveCell != activeCell else { return nil }
         var ranges: [NSRange] = []
+        if tableActiveCell != activeCell {
+            if let old = tableActiveCell { ranges.append(old.tableRange) }
+            if let activeCell { ranges.append(activeCell.tableRange) }
+        }
+        tableActiveCell = activeCell
         for (index, table) in parsedTables.enumerated() {
             if geometryChanged || index >= tables.count || table != tables[index]
                 || !tableTexts[index].utf8.elementsEqual(texts[index].utf8)
@@ -2178,7 +2192,8 @@ final class MarkdownSyntaxCache: NSObject {
         tableHiddenRanges = hidden
         tableLayout = presentation.result.tables.isEmpty ? nil : MarkdownTableLayout.make(
             text: text, result: presentation.result,
-            hiddenRanges: tableHiddenRanges, bodyFont: bodyFont, width: width
+            hiddenRanges: tableHiddenRanges, bodyFont: bodyFont, width: width,
+            activeCell: activeCell, activeColumnWidths: activeColumnWidths
         )
         tableHorizontalOffsets = retainedOffsets
         // A wider viewport can make the previous offset exceed the new limit.

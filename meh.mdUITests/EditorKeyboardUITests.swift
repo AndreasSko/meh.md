@@ -345,7 +345,9 @@ final class EditorKeyboardUITests: XCTestCase {
         _ commands: [String], in app: XCUIApplication, toolbar: XCUIElement
     ) {
         for command in commands {
-            let button = app.buttons["editor-command-\(command)"]
+            let identifier = command == "insert-table"
+                ? "editor-table-menu" : "editor-command-\(command)"
+            let button = app.buttons[identifier]
             for _ in 0..<12 where !button.isHittable {
                 toolbar.swipeLeft()
             }

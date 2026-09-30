@@ -1,8 +1,10 @@
 # Table rendering
 
-Live Preview renders top-level Markdown pipe tables as a grid. Entering any
-part of a table reveals the entire table's source, including inline markers.
-Leaving the table renders it again. Source mode always shows Markdown.
+Live Preview renders top-level Markdown pipe tables as a grid. Tapping or
+clicking a cell opens a native text editor inside that cell while the rest
+of the table stays rendered. The active cell shows its literal inline
+Markdown, including emphasis and link markers. Source mode shows the full
+Markdown table.
 
 ## Supported syntax
 
@@ -15,8 +17,9 @@ Leaving the table renders it again. Source mode always shows Markdown.
 
 This uses the GFM table syntax within the editor's existing Markdown subset;
 it is not a claim of full GFM conformance. Container-nested tables stay source.
-Rows with more cells than the header also stay source, so preview cannot hide
-extra user content. Invalid or incomplete tables remain editable Markdown.
+The header determines the displayed column count. Extra body cells are omitted
+from the grid, as in GFM, but retained in the Markdown and available in Source
+mode. Invalid or incomplete tables remain editable Markdown.
 
 ## Layout and editing
 
@@ -29,36 +32,51 @@ scrolls horizontally within the editor. Swipe sideways over a rendered row
 on iPhone/iPad, or scroll horizontally over it with a Mac trackpad or
 Shift-scroll wheel. A small indicator beneath the last row shows the
 horizontal position. The rest of the note keeps its usual width and vertical
-scrolling. Tapping a table still reveals the whole table's Markdown source.
+scrolling. The active cell moves with the table when scrolling sideways.
 
 Horizontal positions are temporary view state, independent for each table.
 They are clamped when the editor resizes, retained across unrelated prose
-edits, and reset when the table's contents change. Source mode, selection,
+edits. Cell typing retains the current horizontal position and column widths
+so the grid stays stable while rows grow to fit the edited text. Other table
+changes can reset the horizontal position. Source mode, selection,
 undo history, saved Markdown, and sync do not include these positions.
 
-The native text buffer retains every source character. Preview changes only
-layout attributes and draws the cell content over the reserved row space.
-Selection, copy, find, undo, saving, and synchronization still use source
-ranges. Native accessibility continues to expose the Markdown text; semantic
-VoiceOver table navigation is not added by the drawn grid.
+The native source buffer retains every Markdown character. The cell editor
+forwards edits through the note's existing native undo and sync path. Only
+the active cell's contents change; other cells, pipe spacing, and line endings
+remain intact. Bare pipes typed or pasted into a cell are escaped, and pasted
+line breaks become spaces so a paste cannot accidentally create table rows.
 
-The grid is a reading presentation. Clicking or tapping it enters ordinary
-Markdown editing. Precise caret placement inside the drawn cells is not
-provided. Table commands operate on the source selection, as described below.
+Caret placement, selection, copy, paste, and input-method composition use the
+native cell text view. Composition candidates remain local until accepted.
+Remote updates refresh or rebase the active cell; removing its row or making
+the table unsupported ends cell editing. Find uses the whole note's source.
+Switching back from Source to Live Preview restores the active cell when the
+source selection remains within a supported cell.
+
+VoiceOver exposes table headers and cell navigation. The active cell is the
+native editable accessibility element, with its row and column information.
+Selections spanning multiple cells and unsupported table structures remain
+available through Source mode.
 
 ## Table editing commands
 
 Formatting > Table offers insertion, row and column actions, alignment, and
-cell navigation. On iPhone and iPad, open More Formatting on the keyboard
-accessory and choose Table. Unavailable actions are disabled.
+cell navigation. On iPhone and iPad, tap the table icon on the keyboard
+toolbar to insert a table directly. Inside a table, the same icon opens
+a menu with labeled cell actions. Row and Column group insertion and deletion
+actions in short submenus. Column Alignment shows the selected alignment.
+The normal formatting buttons retain their order. Unavailable actions are
+disabled.
 
 Insert Table adds two columns and an empty body row after the current source
 line (or on the current empty line), leaving existing content intact. The
-first header is selected for replacement. Creation is unavailable within
+first header is selected for replacement. In Live Preview on iPhone/iPad,
+its native cell editor opens immediately. Creation is unavailable within
 code or an existing table, or when the selection crosses a table.
 
 Place the caret inside a table cell to add rows above/below or columns
-before/after it. The header cannot be deleted or have a row inserted above
+to its left/right. The header cannot be deleted or have a row inserted above
 it, and the final column cannot be deleted. Row/column deletion asks for
 confirmation. A pending action is canceled if the text or selection changes
 before confirmation, including changes received from sync.
@@ -67,23 +85,31 @@ Align Left, Center, and Right modify the selected column's delimiter.
 Tab and Shift-Tab select cell contents, skipping the delimiter. Tab in the
 last cell appends an empty row. Previous Cell and Next Cell offer the same
 navigation on touch devices. Missing body cells are filled in when needed
-for navigation. Return keeps its ordinary Markdown editing behavior.
+for navigation. In a rendered cell, Return selects the next row in the same
+column and appends a row when needed. Source mode retains ordinary Markdown
+Return behavior. Escape returns focus to source editing. Native Undo and Redo
+share the same history as the rest of the note.
 
 Commands require a caret or selection within one cell of a supported table.
-Selections spanning cells, nested tables, and rows with extra cells remain
-manual source editing. Column actions normalize pipe spacing and delimiter
-widths within that table while retaining cell contents and line endings.
+Selections spanning cells, nested tables, and selections in excess body cells
+remain manual source editing. Column actions normalize pipe spacing and
+delimiter widths while retaining all cell contents, including excess body
+cells, and line endings.
 Row actions change only the affected row; alignment changes the delimiter.
 Each content-changing command uses the native undo and sync edit path.
 
 ## Correctness checks
 
 The native editor tests cover parser ranges, cell-local inline syntax,
-incremental invalidation, whole-table source reveal, uneven-row fallback,
-adaptive widths, horizontal offsets, wrapping, alignment, font/width changes,
-byte preservation, undo, and remote
-replacement. Visual checks use fictional content in an isolated app preview
-notebook and a disposable native-editor harness. The iPhone app test taps
-into a table and verifies that typing still edits the original Markdown.
-Editing tests also cover command availability, structural operations, cell
-navigation, Unicode, CRLF, native undo/redo, and remote-update safety.
+incremental invalidation, missing and excess body cells, adaptive widths,
+horizontal offsets, wrapping, alignment, font/width changes, byte
+preservation, and source-backed undo/redo. Mounted editor tests cover cell
+focus, growing rows, commands, source updates, composition acceptance and
+cancellation, and read-only transitions.
+
+App UI checks use fictional content and an isolated loopback notebook in the
+iCloud Dev build. iPhone checks cover native cell editing, multiline paste,
+escaped pipes, Unicode, navigation, Source mode, undo, and large text sizes.
+iPad checks also exercise hardware Tab, Shift-Tab, Command-Z, and the native
+keyboard Undo button. Return uses native text input; simulator hardware Return
+is not delivered even in ordinary Source editing.

@@ -222,7 +222,7 @@ private final class MarkdownTableAXCell: UIAccessibilityElement, UIAccessibility
         guard let overlay else { return false }
         guard overlay.revealMarkdownTableCell(row: cell.row, column: cell.column) else { return false }
         if let textView = overlay.markdownTextView {
-            UIAccessibility.post(notification: .layoutChanged, argument: textView)
+            UIAccessibility.post(notification: .layoutChanged, argument: textView.markdownCellController.editor)
         }
         return true
     }
@@ -255,11 +255,19 @@ private final class MarkdownTableAXContainer: UIAccessibilityElement, UIAccessib
 
     func accessibilityRowCount() -> Int { overlay?.tableRows.count ?? 0 }
     func accessibilityColumnCount() -> Int { overlay?.tableRows.first?.cells.count ?? 0 }
+    func element(for cell: MarkdownTableAXCell) -> any UIAccessibilityContainerDataTableCell {
+        if let overlay, let controller = overlay.markdownTextView?.markdownCellController,
+           let target = controller.target, target.tableRange == overlay.tableRange,
+           target.row == cell.cell.row, target.column == cell.cell.column {
+            return controller.editor
+        }
+        return cell
+    }
     func accessibilityDataTableCellElement(forRow row: Int, column: Int) -> (any UIAccessibilityContainerDataTableCell)? {
-        cells.first { $0.cell.row == row && $0.cell.column == column }
+        cells.first { $0.cell.row == row && $0.cell.column == column }.map { element(for: $0) }
     }
     func accessibilityHeaderElements(forColumn column: Int) -> [any UIAccessibilityContainerDataTableCell]? {
-        cells.filter { $0.cell.row == 0 && $0.cell.column == column }
+        cells.filter { $0.cell.row == 0 && $0.cell.column == column }.map { element(for: $0) }
     }
 }
 
@@ -270,9 +278,13 @@ extension MarkdownTableScrollOverlay {
 
     func updateMarkdownTableAccessibility() {
         let model = MarkdownAccessibleTableCell.make(rows: tableRows, frames: rowFrames)
-        guard tableAccessibility?.model != model else { return }
-        let table = MarkdownTableAXContainer(overlay: self, model: model)
-        objc_setAssociatedObject(self, &tableAccessibilityKey, table, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        let table: MarkdownTableAXContainer
+        if let existing = tableAccessibility, existing.model == model { table = existing }
+        else {
+            table = MarkdownTableAXContainer(overlay: self, model: model)
+            objc_setAssociatedObject(self, &tableAccessibilityKey, table, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
+        table.accessibilityElements = table.cells.map { table.element(for: $0) }
         isAccessibilityElement = false
         accessibilityElements = [table]
     }
@@ -300,7 +312,8 @@ extension MarkdownTextView {
             UIAccessibilityCustomAction(name: String(localized: "Read table \(index + 1)")) { [weak overlay] _ in
                 guard let cell = overlay?.tableAccessibility?.cells.first else { return false }
                 overlay?.revealMarkdownTableCellFrame(cell.cell.frame)
-                UIAccessibility.post(notification: .layoutChanged, argument: cell)
+                UIAccessibility.post(notification: .layoutChanged,
+                                     argument: overlay?.tableAccessibility?.element(for: cell))
                 return true
             }
         }
@@ -311,14 +324,20 @@ extension MarkdownTextView {
         accessibilityCustomRotors = [UIAccessibilityCustomRotor(name: String(localized: "Table cells")) { [weak self] predicate in
             guard let self else { return nil }
             let cells = self.markdownTableScrollOverlays.flatMap { $0.tableAccessibility?.cells ?? [] }
-            let current = predicate.currentItem.targetElement as? MarkdownTableAXCell
-            let index = current.flatMap { item in cells.firstIndex { $0 === item } }
+            let current = predicate.currentItem.targetElement
+            let index = cells.firstIndex { item in
+                guard let table = item.overlay?.tableAccessibility else { return false }
+                return (table.element(for: item) as AnyObject) === current
+            }
             let next = predicate.searchDirection == .next
                 ? (index.map { $0 + 1 } ?? 0) : (index.map { $0 - 1 } ?? cells.count - 1)
             guard cells.indices.contains(next) else { return nil }
             let cell = cells[next]
             cell.overlay?.revealMarkdownTableCellFrame(cell.cell.frame)
-            return UIAccessibilityCustomRotorItemResult(targetElement: cell, targetRange: nil)
+            return UIAccessibilityCustomRotorItemResult(
+                targetElement: cell.overlay?.tableAccessibility?.element(for: cell) ?? cell,
+                targetRange: nil
+            )
         }]
     }
 }

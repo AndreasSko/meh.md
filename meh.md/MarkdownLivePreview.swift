@@ -21,19 +21,22 @@ struct MarkdownLivePreviewSnapshot: Equatable {
     let isEditing: Bool
     let tableWidth: CGFloat
     let fontSize: CGFloat
+    let renderedTableRange: NSRange?
 
     init(
         mode: MarkdownEditorMode,
         selection: NSRange,
         isEditing: Bool = true,
         tableWidth: CGFloat = .greatestFiniteMagnitude,
-        fontSize: CGFloat = 17
+        fontSize: CGFloat = 17,
+        renderedTableRange: NSRange? = nil
     ) {
         self.mode = mode
         self.selection = selection
         self.isEditing = isEditing
         self.tableWidth = tableWidth
         self.fontSize = fontSize
+        self.renderedTableRange = renderedTableRange
     }
 }
 
@@ -69,13 +72,20 @@ enum MarkdownLivePreview {
         let width = textView.textContainer.size.width
             - 2 * textView.textContainer.lineFragmentPadding
 #endif
+        let previousMode = state(for: textView).snapshot.mode
+        (textView as? MarkdownTextView)?.markdownCellController.synchronize(mode: mode)
         state(for: textView).snapshot = MarkdownLivePreviewSnapshot(
             mode: mode,
             selection: selection,
             isEditing: isEditing,
             tableWidth: width,
-            fontSize: fontSize
+            fontSize: fontSize,
+            renderedTableRange: (textView as? MarkdownTextView)?
+                .markdownCellController.renderedTableRange
         )
+        if mode == .livePreview, previousMode != mode, isEditing {
+            (textView as? MarkdownTextView)?.markdownCellController.activateSourceSelection()
+        }
     }
 
     static func snapshot(
@@ -141,6 +151,10 @@ enum MarkdownLivePreview {
         var activeRange = snapshot.isEditing
             ? activeParagraphRange(in: source, selection: snapshot.selection)
             : nil
+        if let rendered = snapshot.renderedTableRange,
+           let active = activeRange, intersects(rendered, active) {
+            activeRange = nil
+        }
         // A table is one editing unit. Revealing only the current paragraph
         // would leave a mixture of source rows and rendered rows.
         for table in result.tables {
@@ -172,7 +186,6 @@ enum MarkdownLivePreview {
         snapshot: MarkdownLivePreviewSnapshot
     ) -> Bool {
         snapshot.mode == .livePreview
-            && table.rows.allSatisfy { $0.cells.count <= table.alignments.count }
             && snapshot.tableWidth.isFinite
             && snapshot.tableWidth > 0
     }
