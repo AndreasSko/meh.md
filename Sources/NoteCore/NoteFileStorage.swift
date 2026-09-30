@@ -98,6 +98,23 @@ public actor NoteFileStorage: NoteStorage {
         try write(snapshot)
     }
 
+    /// Merges a received snapshot into the stored note. Decoding and merging
+    /// run on this actor, away from the caller. Returns false when the stored
+    /// note needs recovery or cannot be read, and leaves it unchanged.
+    func merge(_ remote: NoteSnapshot) throws -> Bool {
+        switch load() {
+        case .firstLaunch:
+            try write(remote)
+        case .current(let local):
+            let document = try NoteDocument(snapshot: local)
+            try document.merge(NoteDocument(snapshot: remote))
+            if document.heads != local.heads { try write(document.snapshot()) }
+        case .recoveryRequired, .blocked:
+            return false
+        }
+        return true
+    }
+
     public func recover(_ recovery: NoteRecovery) throws -> NoteSnapshot {
         try recover(recovery, afterStage: { _ in })
     }
