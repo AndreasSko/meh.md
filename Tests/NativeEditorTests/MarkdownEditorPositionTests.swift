@@ -203,6 +203,89 @@ final class MarkdownEditorPositionTests: XCTestCase {
         )
     }
 
+    #if os(iOS)
+    func testNavigationPreviewStartsAtSavedAnchorBeforeAsyncAttachment() async throws {
+        let source = (0..<180).map { "Fictional observation \($0) across the page." }
+            .joined(separator: "\n")
+        let originalNavigation = MarkdownEditorNavigation()
+        let original = mount(text: source, navigation: originalNavigation)
+        let originalView = try XCTUnwrap(original.textView)
+        setSelection(NSRange(location: source.utf16.count, length: 0), in: originalView)
+        scrollSelectionToVisible(in: originalView)
+        layout(original)
+        await flushMainQueue()
+        setVerticalScrollOffset(1_600, in: originalView)
+        layout(original)
+        let position = try XCTUnwrap(originalNavigation.capturePosition?())
+        let insets = originalNavigation.captureViewportInsets?()
+        original.tearDown()
+
+        let navigation = MarkdownEditorNavigation()
+        let preview = mount(text: source, navigation: navigation, isReadOnly: true,
+                            initialPreviewPosition: position, initialPreviewInsets: insets)
+        defer { preview.tearDown() }
+        let restored = try XCTUnwrap(navigation.capturePosition?())
+        XCTAssertEqual(restored.scrollAnchor, position.scrollAnchor)
+        XCTAssertEqual(restored.scrollAnchorOffset, position.scrollAnchorOffset, accuracy: 1)
+        XCTAssertGreaterThan(try XCTUnwrap(preview.textView).contentOffset.y, 0)
+    }
+
+    func testDestinationRevealAcknowledgesCanceledRestorationOnce() async throws {
+        let navigation = MarkdownEditorNavigation()
+        let mounted = mount(text: "Fictional first line\nSecond line", navigation: navigation)
+        defer { mounted.tearDown() }
+        let position = try XCTUnwrap(navigation.capturePosition?())
+        var completionCount = 0
+        let restore = try XCTUnwrap(navigation.restorePositionAndNotify)
+        restore(position) { completionCount += 1 }
+        navigation.revealSearchMatch?(NSRange(location: 0, length: 0))
+        XCTAssertEqual(completionCount, 1)
+        await flushMainQueue()
+        await flushMainQueue()
+        XCTAssertEqual(completionCount, 1)
+    }
+
+    func testRestorationCompletionWaitsForFreshEditorViewport() async throws {
+        let source = (0..<180).map {
+            "Fictional observation \($0) with enough text to wrap."
+        }.joined(separator: "\n")
+        let originalNavigation = MarkdownEditorNavigation()
+        let original = mount(text: source, navigation: originalNavigation)
+        let originalView = try XCTUnwrap(original.textView)
+        setSelection(NSRange(location: source.utf16.count, length: 0), in: originalView)
+        scrollSelectionToVisible(in: originalView)
+        layout(original)
+        await flushMainQueue()
+        setVerticalScrollOffset(1_600, in: originalView)
+        layout(original)
+        let position = try XCTUnwrap(originalNavigation.capturePosition?())
+        original.tearDown()
+
+        let navigation = MarkdownEditorNavigation()
+        let incoming = mount(text: source, navigation: navigation)
+        let incomingView = try XCTUnwrap(incoming.textView)
+        defer { incoming.tearDown() }
+        let restore = try XCTUnwrap(navigation.restorePositionAndNotify)
+        let completed = expectation(description: "Restored viewport is ready for display")
+        var completionCount = 0
+        restore(position) {
+            completionCount += 1
+            let restored = navigation.capturePosition?()
+            XCTAssertEqual(restored?.scrollAnchor, position.scrollAnchor)
+            XCTAssertEqual(restored?.scrollAnchorOffset ?? .infinity,
+                           position.scrollAnchorOffset, accuracy: 1)
+            XCTAssertGreaterThan(incomingView.contentOffset.y, 0)
+            XCTAssertFalse(incomingView.isFirstResponder)
+            completed.fulfill()
+        }
+        XCTAssertEqual(completionCount, 0)
+        await fulfillment(of: [completed], timeout: 3)
+        await flushMainQueue()
+        XCTAssertEqual(completionCount, 1)
+        XCTAssertEqual(incomingView.text, source)
+    }
+    #endif
+
     private func flushMainQueue() async {
         let flushed = expectation(description: "main queue flushed")
         DispatchQueue.main.async { flushed.fulfill() }
@@ -329,11 +412,16 @@ private extension MarkdownEditorPositionTests {
     func mount(
         text: String,
         navigation: MarkdownEditorNavigation,
-        size: CGSize = CGSize(width: 390, height: 844)
+        size: CGSize = CGSize(width: 390, height: 844),
+        isReadOnly: Bool = false,
+        initialPreviewPosition: MarkdownEditorPosition? = nil,
+        initialPreviewInsets: UIEdgeInsets? = nil
     ) -> MountedEditor {
         let editor = MarkdownEditor(
             text: .constant(text),
-            navigation: navigation
+            isReadOnly: isReadOnly, navigation: navigation,
+            initialPreviewPosition: initialPreviewPosition,
+            initialPreviewInsets: initialPreviewInsets
         )
         let host = UIHostingController(rootView: editor)
         let window = UIWindow(frame: CGRect(origin: .zero, size: size))

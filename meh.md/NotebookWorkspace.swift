@@ -55,8 +55,12 @@ final class NotebookWorkspace {
     }
 
     static var isPreviewEnabled: Bool {
-        #if DEBUG && !ICLOUD_ENABLED
+        #if DEBUG && (!ICLOUD_ENABLED || ICLOUD_DEV)
         let environment = ProcessInfo.processInfo.environment
+        #if ICLOUD_DEV
+        guard let run = environment["MEH_NOTEBOOK_PREVIEW_RUN"], run.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil
+        else { return false }
+        #endif
         return environment["MEH_NOTEBOOK_PREVIEW"] == "1"
             && environment["MEH_SYNC_URL"] == nil
             && environment["MEH_SYNC_CLOUDKIT"] != "1"
@@ -172,7 +176,7 @@ final class NotebookWorkspace {
         automaticSync = environment["MEH_SYNC_AUTOMATIC"] != "0"
         var mode: Mode = preview ? .preview : .local
         #if ICLOUD_ENABLED
-        mode = .cloud
+        if !preview { mode = .cloud }
         #if DEBUG
         // Native UI tests use isolated loopback workspaces in iCloud Dev.
         // A malformed fixture must fail instead of falling back to CloudKit.

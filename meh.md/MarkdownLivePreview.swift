@@ -1,4 +1,5 @@
 import Foundation
+import NoteCore
 import ObjectiveC
 
 #if os(macOS)
@@ -324,6 +325,18 @@ enum MarkdownLivePreview {
         for range: NSRange,
         in source: NSString
     ) -> [NSRange] {
+        if let link = NotebookLinkParser.parse(source.substring(with: range)).first,
+           link.kind == .wiki {
+            let start = range.location
+            let length = range.length
+            if let label = link.label {
+                let labelLength = (label as NSString).length
+                return [NSRange(location: start, length: length - labelLength - 2),
+                        NSRange(location: NSMaxRange(range) - 2, length: 2)]
+            }
+            return [NSRange(location: start, length: 2),
+                    NSRange(location: NSMaxRange(range) - 2, length: 2)]
+        }
         guard source.character(at: range.location) == 91,
               let labelEnd = closingBracket(
                   after: range.location,

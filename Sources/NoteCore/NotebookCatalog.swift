@@ -1,4 +1,5 @@
 import Automerge
+import CryptoKit
 import Foundation
 
 public enum NotebookItemKind: String, Codable, Sendable {
@@ -44,6 +45,8 @@ public struct NotebookItem: Equatable, Sendable {
     public let orderKey: NotebookOrderKey?
     public let isTrashed: Bool
     public let isPermanentlyDeleted: Bool
+    /// Origin scope for links imported together. Absent on pre-link catalogs.
+    public let importRootID: UUID?
 }
 
 public struct NotebookPlacement: Equatable, Sendable {
@@ -73,8 +76,9 @@ private struct NotebookLegacyMigrationReceipt: Codable {
 }
 
 /// The catalog owns metadata only. Note bodies retain their existing documents.
-/// Derived repairs never write back during merge, which would make outcomes
-/// depend on the sequence in which remote records happened to arrive.
+/// Structural conflicts materialize without replacing note text. Observed
+/// earlier link locations accumulate as immutable metadata aliases; merges
+/// retain their stable IDs even when an incoming name or parent loses.
 final class NotebookCatalogDocument {
     /// Flat root registers avoid conflicting creation of an optional map on
     /// two devices upgrading the same catalog independently.
@@ -100,6 +104,10 @@ final class NotebookCatalogDocument {
     )
     private var itemsCache: (heads: Set<ChangeHash>, entries: [ItemEntry])?
     private(set) var readItemsDecodeCount = 0
+    private var linkLocationsCache: (
+        heads: Set<ChangeHash>, locations: [UUID: [NotebookLinkLocation]]
+    )?
+    private(set) var historicalLinkLocationsDecodeCount = 0
     let notebookID: UUID
 
     var heads: Set<String> {
@@ -151,6 +159,65 @@ final class NotebookCatalogDocument {
         _ = try configuredNewNoteParentID()
         _ = try recentStates()
         _ = try legacyMigration()
+        _ = try historicalLinkLocations()
+    }
+
+    private struct LinkLocationRecord: Codable {
+        let noteID: UUID
+        let location: NotebookLinkLocation
+    }
+
+    /// Immutable flat registers retain concurrent path observations without
+    /// creating a conflicting optional map during an upgrade. No note text
+    /// is stored here and old locations never override current destinations.
+    func recordLinkLocations(_ notes: [NotebookLinkNote]) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        for note in notes {
+            let record = LinkLocationRecord(noteID: note.id, location: note.location)
+            let data = try encoder.encode(record)
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            let key = "linkLocation.\(note.id.uuidString).\(digest)"
+            guard try document.get(obj: .ROOT, key: key) == nil else { continue }
+            try document.put(obj: .ROOT, key: key,
+                             value: .String(String(decoding: data, as: UTF8.self)))
+        }
+    }
+
+    func historicalLinkLocations() throws -> [UUID: [NotebookLinkLocation]] {
+        let currentHeads = document.heads()
+        if let linkLocationsCache, linkLocationsCache.heads == currentHeads {
+            return linkLocationsCache.locations
+        }
+        // This serially owned document validates each head set before caching.
+        // Loading or merging an untrusted catalog still verifies every record.
+        historicalLinkLocationsDecodeCount += 1
+        var result: [UUID: [NotebookLinkLocation]] = [:]
+        for key in document.keys(obj: .ROOT).sorted()
+            where key.hasPrefix("linkLocation.") {
+            let parts = key.split(separator: ".")
+            guard parts.count == 3,
+                  let id = UUID(uuidString: String(parts[1])),
+                  id.uuidString == parts[1] else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            for value in try document.getAll(obj: .ROOT, key: key) {
+                guard case .Scalar(.String(let encoded)) = value,
+                      let data = encoded.data(using: .utf8),
+                      let record = try? JSONDecoder().decode(LinkLocationRecord.self,
+                                                            from: data),
+                      record.noteID == id,
+                      SHA256.hash(data: data).map({ String(format: "%02x", $0) })
+                        .joined() == parts[2] else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+                do { try NotebookName.validate(record.location.name) }
+                catch { throw NotebookCatalogError.invalidDocument }
+                result[id, default: []].append(record.location)
+            }
+        }
+        linkLocationsCache = (heads: currentHeads, locations: result)
+        return result
     }
 
     private func recentKey(_ field: RecentField, _ id: UUID) -> String {
@@ -456,6 +523,11 @@ final class NotebookCatalogDocument {
             obj: item, key: "parent", value: parentID.map { .String($0.uuidString) } ?? .Null)
         try document.put(
             obj: item, key: "visibility", value: .String("active:\(UUID().uuidString)"))
+        if let parentID,
+           let scope = try items().first(where: { $0.id == parentID })?.importRootID {
+            try document.put(
+                obj: item, key: "importRootID", value: .String(scope.uuidString))
+        }
         try writeOrder(order, parentID: parentID, object: item)
         return id
     }
@@ -533,6 +605,17 @@ final class NotebookCatalogDocument {
                 key: "visibility",
                 value: .String("active:\(UUID().uuidString)")
             )
+            var rootEntryID = entry.id
+            var ancestorID = entry.parentID
+            while let parent = ancestorID {
+                rootEntryID = parent
+                ancestorID = byID[parent]?.parentID
+            }
+            if byID[rootEntryID]?.kind == .folder {
+                try candidate.document.put(
+                    obj: item, key: "importRootID",
+                    value: .String(rootEntryID.uuidString))
+            }
         }
         let importedByParent = Dictionary(grouping: entries, by: \.parentID)
         for (parentID, siblings) in importedByParent {
@@ -571,6 +654,7 @@ final class NotebookCatalogDocument {
         )
         try document.put(
             obj: object, key: "parent", value: parentID.map { .String($0.uuidString) } ?? .Null)
+        try refreshImportRoots(for: [id])
         try writeOrder(order, parentID: parentID, object: object)
         try writePlacementRevision(object: object)
     }
@@ -810,6 +894,10 @@ final class NotebookCatalogDocument {
             )
         }
 
+        if receipt.action == .move {
+            try candidate.refreshImportRoots(for: receipt.itemIDs)
+        }
+
         var inverseRevisions: [UUID: String] = [:]
         for id in receipt.expectedPlacementRevisions.keys {
             let object = try candidate.object(for: id)
@@ -1047,8 +1135,35 @@ final class NotebookCatalogDocument {
                 NotebookItem(
                     id: id, kind: kind, name: name,
                     parentID: parentID, orderKey: order.key, isTrashed: trashed,
-                    isPermanentlyDeleted: !deleted.isEmpty), issues
+                    isPermanentlyDeleted: !deleted.isEmpty,
+                    importRootID: try readImportRootID(object)), issues
             )
+        }
+    }
+
+    private func readImportRootID(_ object: ObjId) throws -> UUID? {
+        let values = try document.getAll(obj: object, key: "importRootID")
+        guard !values.isEmpty else { return nil }
+        for value in values {
+            switch value {
+            case .Scalar(.Null): break
+            case .Scalar(.String(let raw)):
+                guard let id = UUID(uuidString: raw), id.uuidString == raw else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+            default:
+                throw NotebookCatalogError.invalidDocument
+            }
+        }
+        switch try document.get(obj: object, key: "importRootID") {
+        case .Scalar(.Null): return nil
+        case .Scalar(.String(let raw)):
+            guard let id = UUID(uuidString: raw), id.uuidString == raw else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            return id
+        default:
+            throw NotebookCatalogError.invalidDocument
         }
     }
 
@@ -1260,6 +1375,38 @@ final class NotebookCatalogDocument {
             try writeOrder(ranks[id]!, parentID: parentID, object: object)
             try writePlacementRevision(object: object)
         }
+        try refreshImportRoots(for: ids)
+    }
+
+    /// Keep the synchronized import scope aligned with the containing imported
+    /// root after local moves. Root entries retain their identity when moved;
+    /// ordinary descendants inherit the destination parent's scope.
+    private func refreshImportRoots(for movedIDs: [UUID]) throws {
+        let live = try items().filter { !$0.isPermanentlyDeleted }
+        let byID = Dictionary(uniqueKeysWithValues: live.map { ($0.id, $0) })
+        let children = Dictionary(grouping: live.compactMap { item -> (UUID, UUID)? in
+            item.parentID.map { ($0, item.id) }
+        }, by: { $0.0 })
+        func visit(_ id: UUID, inherited: UUID?, visited: inout Set<UUID>) throws {
+            guard visited.insert(id).inserted, let item = byID[id] else { return }
+            let scope = item.importRootID == item.id ? item.id : inherited
+            try setImportRootID(scope, for: id)
+            for (_, childID) in children[id] ?? [] {
+                try visit(childID, inherited: scope, visited: &visited)
+            }
+        }
+        var visited = Set<UUID>()
+        for id in movedIDs {
+            guard let item = byID[id] else { continue }
+            let parentScope = item.parentID.flatMap { byID[$0]?.importRootID }
+            try visit(id, inherited: parentScope, visited: &visited)
+        }
+    }
+
+    private func setImportRootID(_ id: UUID?, for itemID: UUID) throws {
+        try document.put(
+            obj: object(for: itemID), key: "importRootID",
+            value: id.map { .String($0.uuidString) } ?? .Null)
     }
 
     private func registerState(

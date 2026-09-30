@@ -98,8 +98,10 @@ public final class NotebookReplica {
     public private(set) var hasPendingImport: Bool
     public private(set) var localEditsSuspended = false
     public private(set) var deletionCleanupErrorMessage: String?
+    public private(set) var linkMaintenanceIssueMessage: String?
     private var searchBodyGeneration: UInt64 = 0
     @ObservationIgnored private var catalog: NotebookCatalogDocument?
+    @ObservationIgnored private var linkLocationHistory: [UUID: [NotebookLinkLocation]] = [:]
     @ObservationIgnored private var latestRecentActivityID: UUID?
     @ObservationIgnored private let storage: NotebookCatalogStorage
     @ObservationIgnored private let importStorage: NotebookImportStorage
@@ -116,6 +118,7 @@ public final class NotebookReplica {
     @ObservationIgnored private var writeWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored var importFaultInjector: ((NotebookImportStage) throws -> Void)?
     @ObservationIgnored var deletionFaultInjector: ((NotebookDeletionStage) throws -> Void)?
+    @ObservationIgnored var linkLocationFaultInjector: ((NotebookLinkLocationStage) throws -> Void)?
     @ObservationIgnored var catalogWriteSuspension: (@MainActor () async throws -> Void)?
 
     /// A cheap invalidation token for derived search state. Reading it also
@@ -132,6 +135,38 @@ public final class NotebookReplica {
                 }
             }.sorted { $0.id.uuidString < $1.id.uuidString }
         )
+    }
+
+    /// Current active note paths for link authoring and navigation. This is
+    /// derived from catalog placements and never reads note bodies.
+    public var linkNotes: [NotebookLinkNote] {
+        Self.linkNotes(in: placements, history: linkLocationHistory)
+    }
+
+    private static func linkNotes(
+        in placements: [NotebookPlacement],
+        history: [UUID: [NotebookLinkLocation]] = [:]
+    ) -> [NotebookLinkNote] {
+        let active = placements.filter {
+            $0.item.kind == .note && !$0.isInTrash
+                && !$0.item.isPermanentlyDeleted
+        }
+        let byID = Dictionary(uniqueKeysWithValues: placements.map { ($0.item.id, $0) })
+        return active.map { placement in
+            let rootID = placement.item.importRootID
+            let rootPath = rootID.flatMap { byID[$0] }.flatMap { root in
+                root.item.kind == .folder
+                    ? Self.linkFullPath(for: root, in: byID)
+                    : nil
+            }
+            return NotebookLinkNote(
+                id: placement.item.id,
+                name: placement.displayName,
+                path: Self.linkPath(for: placement, in: byID),
+                rootID: rootID,
+                rootPath: rootPath,
+                formerLocations: history[placement.item.id] ?? [])
+        }
     }
 
     public init(directory: URL) {
@@ -331,16 +366,17 @@ public final class NotebookReplica {
     }
 
     public func rename(_ id: UUID, to name: String) async throws {
-        await waitForWrites()
-        try ensureAlive(id)
-        let next = try catalog!.fork()
-        try next.rename(id, to: name)
-        if placements.contains(where: {
-            $0.item.id == id && $0.item.kind == .note && !$0.isInTrash
-        }) {
-            try next.recordRecentActivity(for: id)
+        try await withCatalogWrite {
+            try self.ensureAlive(id)
+            let next = try self.catalog!.fork()
+            try next.rename(id, to: name)
+            if self.placements.contains(where: {
+                $0.item.id == id && $0.item.kind == .note && !$0.isInTrash
+            }) {
+                try next.recordRecentActivity(for: id)
+            }
+            try await self.persistCatalog(next)
         }
-        try await saveCatalog(next)
     }
 
     public var canPinInRecents: Bool { pinnedRecentCount < 5 }
@@ -408,10 +444,12 @@ public final class NotebookReplica {
     }
 
     public func move(_ id: UUID, to parentID: UUID?) async throws {
-        try ensureAlive(id)
-        let next = try catalog!.fork()
-        try next.move(id, to: parentID)
-        try await saveCatalog(next)
+        try await withCatalogWrite {
+            try self.ensureAlive(id)
+            let next = try self.catalog!.fork()
+            try next.move(id, to: parentID)
+            try await self.persistCatalog(next)
+        }
     }
 
     /// Read the durable sibling order without opening editor sessions.
@@ -536,13 +574,14 @@ public final class NotebookReplica {
     public func moveItems(
         _ ids: [UUID], to parentID: UUID?
     ) async throws -> NotebookBrowserUndo? {
-        try await withCatalogWrite {
+        return try await withCatalogWrite {
             guard let catalog = self.catalog else {
                 throw NotebookReplicaError.notJoined
             }
             let next = try catalog.fork()
             let undo = try next.moveItems(ids, to: parentID)
-            if next.heads != catalog.heads {
+            let changed = next.heads != catalog.heads
+            if changed {
                 try await self.persistCatalog(next)
             }
             return undo
@@ -607,7 +646,7 @@ public final class NotebookReplica {
     public func undoBrowserChange(
         _ receipt: NotebookBrowserUndo
     ) async throws -> NotebookBrowserUndo {
-        try await withCatalogWrite {
+        let redo = try await withCatalogWrite {
             guard let catalog = self.catalog else {
                 throw NotebookReplicaError.notJoined
             }
@@ -623,6 +662,7 @@ public final class NotebookReplica {
             try await self.persistCatalog(next)
             return redo
         }
+        return redo
     }
 
     /// Capture all items currently shown in Trash, or one Trash subtree. The
@@ -924,6 +964,55 @@ public final class NotebookReplica {
         )
     }
 
+    /// Read current note text and structural paths for link resolution without
+    /// creating editor sessions. Missing bodies are reported by ID and never
+    /// represented as empty text.
+    public func linkCorpus() async throws -> NotebookLinkCorpus {
+        await waitForWrites()
+        guard catalog != nil else { throw NotebookReplicaError.notJoined }
+        let startingCatalogHeads = catalogSnapshot?.heads
+        let descriptors = linkNotes
+        var notes: [NotebookLinkNote] = []
+        var texts: [UUID: String] = [:]
+        var unavailable = Set<UUID>()
+        var editorRevisions: [UUID: Data] = [:]
+        for descriptor in descriptors {
+            try Task.checkCancellation()
+            let id = descriptor.id
+            let text: String?
+            if let session = sessions[id] {
+                if let load = sessionLoads[id] { await load.value }
+                text = session.isEditingEnabled ? session.text : nil
+                if let revision = session.editorRevision {
+                    editorRevisions[id] = revision
+                }
+            } else {
+                switch await noteStorage(id).load() {
+                case .current(let snapshot) where snapshot.noteID == id:
+                    text = try? await Task.detached(priority: .userInitiated) {
+                        try Task.checkCancellation()
+                        return try NoteDocument(snapshot: snapshot).text
+                    }.value
+                case .firstLaunch, .current, .recoveryRequired, .blocked:
+                    text = nil
+                }
+            }
+            if let text { texts[id] = text } else { unavailable.insert(id) }
+            notes.append(descriptor)
+        }
+        guard catalogSnapshot?.heads == startingCatalogHeads else {
+            throw NotebookReplicaError.busy
+        }
+        return NotebookLinkCorpus(
+            notes: notes, texts: texts, unavailableIDs: unavailable,
+            editorRevisions: editorRevisions)
+    }
+
+    /// Acknowledge the last structural link-maintenance issue.
+    public func acknowledgeLinkMaintenanceIssue() {
+        linkMaintenanceIssueMessage = nil
+    }
+
     func acceptSeed(_ record: SyncRecord) async throws {
         try await withCatalogWrite {
             if try await self.canReuseAcceptedCatalog(record) { return }
@@ -933,7 +1022,19 @@ public final class NotebookReplica {
             guard let snapshot = record.catalogSnapshot else { throw SyncError.invalidRecord }
             if let catalog = self.catalog {
                 let next = try catalog.fork()
-                try next.merge(NotebookCatalogDocument(snapshot: snapshot))
+                let incoming = try NotebookCatalogDocument(snapshot: snapshot)
+                try next.merge(incoming)
+                let mergedLocations = Dictionary(uniqueKeysWithValues:
+                    Self.linkNotes(in: try next.placements()).map { ($0.id, $0) })
+                // A concurrent losing name/parent may have been used to author
+                // offline links. Preserve every observed remote location even
+                // if this replica's current placement wins the merge.
+                let remoteFormerLocations = Self.linkNotes(in: try incoming.placements())
+                    .filter { remote in
+                        guard let current = mergedLocations[remote.id] else { return false }
+                        return remote.location != current.location
+                    }
+                try next.recordLinkLocations(remoteFormerLocations)
                 let former = Set(self.placements.filter {
                     !$0.isInTrash && $0.item.kind == .note
                         && !$0.item.isPermanentlyDeleted
@@ -1379,8 +1480,20 @@ public final class NotebookReplica {
             rememberedDeletions.union(durableIDs),
             notebookID: next.notebookID
         )
+        let nextLinkNotes = Dictionary(uniqueKeysWithValues:
+            Self.linkNotes(in: try next.placements()).map { ($0.id, $0) })
+        let changedLocations = linkNotes.filter { previous in
+            guard let current = nextLinkNotes[previous.id] else { return false }
+            return previous.location != current.location
+        }
+        // Keep old locations beside the structural change in the same CRDT
+        // document and durable save. Updating independent body documents here
+        // can duplicate text when two devices rename/move offline.
+        try next.recordLinkLocations(changedLocations)
+        try linkLocationFaultInjector?(.beforeCatalogSave)
         try await storage.save(next.snapshot())
         try install(next.snapshot())
+        try linkLocationFaultInjector?(.catalogSaved)
     }
 
     private func install(_ snapshot: NotebookCatalogSnapshot) throws {
@@ -1392,6 +1505,7 @@ public final class NotebookReplica {
         }
         catalog = document
         catalogSnapshot = snapshot
+        linkLocationHistory = try document.historicalLinkLocations()
         placements = nextPlacements
         defaultNewNoteParentID = try document.defaultNewNoteParentID()
         try updateRecentProjection(from: document, placements: nextPlacements)
@@ -1532,6 +1646,29 @@ public final class NotebookReplica {
             parentID = parent.parentID
         }
         return names.reversed().joined(separator: "/")
+    }
+
+    private static func linkPath(
+        for placement: NotebookPlacement,
+        in placements: [UUID: NotebookPlacement]
+    ) -> String {
+        var names: [String] = []
+        var parentID = placement.parentID
+        var visited: Set<UUID> = []
+        while let id = parentID, visited.insert(id).inserted,
+              let parent = placements[id] {
+            names.append(parent.displayName)
+            parentID = parent.parentID
+        }
+        return names.reversed().joined(separator: "/")
+    }
+
+    private static func linkFullPath(
+        for placement: NotebookPlacement,
+        in placements: [UUID: NotebookPlacement]
+    ) -> String {
+        let path = linkPath(for: placement, in: placements)
+        return path.isEmpty ? placement.displayName : path + "/" + placement.displayName
     }
 }
 
