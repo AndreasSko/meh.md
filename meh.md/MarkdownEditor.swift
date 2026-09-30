@@ -6,6 +6,12 @@ enum MarkdownEditorScrollPadding {
     }
 }
 
+@Observable
+@MainActor
+final class MarkdownEditorFindPresentation {
+    var isVisible = false
+}
+
 /// Synchronously commits the native buffer and freezes input before an
 /// asynchronous navigation/save operation can replace the editor.
 @MainActor
@@ -17,6 +23,7 @@ final class MarkdownEditorNavigation {
     var performCommand: ((MarkdownEditingCommand) -> Void)?
     var prepareCommand: ((MarkdownEditingCommand) -> (() -> Void)?)?
     let tableCommands = MarkdownTableCommandState()
+    let findPresentation = MarkdownEditorFindPresentation()
     var showFind: (() -> Void)?
     var revealSearchMatch: ((NSRange) -> Void)?
     var searchLandingPosition: MarkdownEditorPosition?
@@ -1212,13 +1219,50 @@ nonisolated(unsafe) private var markdownTextViewStateKey: UInt8 = 0
 // UIKit's TextKit factory can bypass Swift subclass property initializers.
 // Keep editor state in a normally initialized object attached to the view.
 final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
+    var markdownFindPresentation: MarkdownEditorFindPresentation? {
+        get { markdownState.findPresentation }
+        set { markdownState.findPresentation = newValue }
+    }
+
+    override func findInteraction(
+        _ interaction: UIFindInteraction, didBegin session: UIFindSession
+    ) {
+        super.findInteraction(interaction, didBegin: session)
+        markdownState.isFinding = true
+        markdownFindPresentation?.isVisible = true
+        setNeedsLayout()
+    }
+
+    override func findInteraction(
+        _ interaction: UIFindInteraction, didEnd session: UIFindSession
+    ) {
+        super.findInteraction(interaction, didEnd: session)
+        markdownState.isFinding = false
+        markdownFindPresentation?.isVisible = false
+        updateFindKeyboardInsets()
+    }
+
+    private func updateFindKeyboardInsets() {
+        // Find's glass accessory needs the dimmed document behind it.
+        // Keep matches above the keyboard while the view extends beneath it.
+        let overlap = bounds.intersection(keyboardLayoutGuide.layoutFrame)
+        let bottom = markdownState.isFinding && !overlap.isNull
+            ? overlap.height : 0
+        if contentInset.bottom != bottom {
+            contentInset.bottom = bottom
+            verticalScrollIndicatorInsets.bottom = bottom
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
+        updateFindKeyboardInsets()
         // Scroll-past-end space belongs to the document. A content inset
         // also reduces UIKit's caret-reveal viewport, which can become
         // smaller than that inset as the keyboard appears.
         let bottom = 18 + MarkdownEditorScrollPadding.bottom(
-            for: bounds.height
+            for: max(0, bounds.height - (markdownState.isFinding
+                ? adjustedContentInset.bottom : 0))
         )
         var insets = textContainerInset
         let titleExtent = markdownState.titleHost == nil
@@ -1488,6 +1532,8 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
 }
 
 private final class MarkdownTextViewState: NSObject {
+    weak var findPresentation: MarkdownEditorFindPresentation?
+    var isFinding = false
     var isApplyingCommand = false
     var isPasting = false
     var reportedWindowAttachment = false
@@ -1665,6 +1711,8 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.delegate = context.coordinator
         textView.installMarkdownKeyboardToolbar(navigation: navigation)
         textView.isFindInteractionEnabled = true
+        textView.markdownFindPresentation = navigation?.findPresentation
+        textView.keyboardLayoutGuide.usesBottomSafeArea = false
         textView.keyboardDismissMode = UIDevice.current.userInterfaceIdiom == .pad
             ? .none : .interactive
         textView.alwaysBounceVertical = true
