@@ -96,28 +96,6 @@ final class NotebookDeletionSyncTests: XCTestCase {
         })
     }
 
-    func testDeletedLegacyProposalDropsBodyAndIgnoresLateLegacyEdits() async throws {
-        let transport = DeletionCheckingTransport()
-        let local = replica()
-        let legacy = try NoteDocument(text: "retained legacy body")
-        let coordinator = NotebookSyncCoordinator(replica: local, transport: transport)
-        await coordinator.synchronize(legacyNote: legacy.snapshot())
-        try await local.setTrashed(legacy.noteID, true)
-        try await local.permanentlyDelete(local.deletionSelection())
-        let proposalURL = local.directory.appending(path: "notebook-proposal.json")
-        let proposal = try XCTUnwrap(JSONSerialization.jsonObject(
-            with: Data(contentsOf: proposalURL)) as? [String: Any])
-        XCTAssertNil(proposal["legacyNote"])
-        XCTAssertEqual(proposal["retiredLegacyNoteID"] as? String, legacy.noteID.uuidString)
-
-        try legacy.replaceAll(with: "later old-client edit")
-        await coordinator.synchronize(legacyNote: legacy.snapshot())
-        if case .exchanged = coordinator.status {} else { XCTFail("\(coordinator.status)") }
-        XCTAssertFalse(local.placements.contains { $0.item.id == legacy.noteID })
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: local.directory.appending(path: "notes/\(legacy.noteID.uuidString)").path))
-    }
-
     func testMalformedUnusedLegacyBodyDoesNotBlockOfflineCleanup() async throws {
         let local = replica()
         let transport = DeletionCheckingTransport()
