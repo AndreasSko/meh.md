@@ -11,7 +11,6 @@ let package = Package(
         .library(name: "NoteCore", targets: ["NoteCore"]),
     ],
     dependencies: [
-        .package(path: "Spikes/AutomergeSpike"),
         .package(
             url: "https://github.com/automerge/automerge-swift.git",
             exact: "0.7.2"
@@ -36,9 +35,9 @@ let package = Package(
             dependencies: ["NoteCore"],
             path: "meh.md",
             exclude: [
-                "AppWorkspace.swift", "Assets.xcassets", "CloudKitSmokeCheck.swift",
+                "Assets.xcassets", "CloudKitSmokeCheck.swift",
                 "NotebookSyncLabApp.swift",
-                "ContentView.swift", "Info-iCloud.plist", "Info.plist",
+                "Info-iCloud.plist", "Info.plist",
                 "PrivacyInfo.xcprivacy",
                 "MarkdownEditor.swift", "EditorTextSizeControl.swift",
                 "MarkdownEditingCommands.swift",
@@ -56,6 +55,7 @@ let package = Package(
                 "NotebookTrashView.swift", "NotebookMoveSheet.swift",
                 "NotebookSyncStatusView.swift", "NotebookView.swift", "icon.icon",
                 "NotebookSidebarStyle.swift", "NotebookSearchViews.swift",
+                "NoteHistoryBrowserView.swift", "NotebookRecentUIKitList.swift",
                 "iOS-iCloud.entitlements", "iOS.entitlements",
                 "macOS-iCloud.entitlements", "macOS.entitlements",
             ],
@@ -80,11 +80,12 @@ let package = Package(
             name: "NativeEditor",
             path: "meh.md",
             exclude: [
-                "ContentView.swift", "MyApp.swift", "AppWorkspace.swift", "Assets.xcassets",
+                "MyApp.swift", "Assets.xcassets",
                 "NotebookView.swift", "NotebookNoteEditor.swift", "NotebookWorkspace.swift",
                 "NotebookTrashView.swift", "NotebookMoveSheet.swift",
                 "NotebookSyncIndicator.swift",
                 "NotebookSidebarStyle.swift", "NotebookSearchViews.swift",
+                "NoteHistoryBrowserView.swift", "NotebookRecentUIKitList.swift",
                 "NotebookApplicationView.swift", "UnavailableDevelopmentTransport.swift",
                 "NotebookSettingsView.swift",
                 "NotebookImportView.swift", "NotebookSyncStatusView.swift",
@@ -118,10 +119,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NativeEditorTests",
-            dependencies: [
-                "NativeEditor",
-                .product(name: "AutomergeSpike", package: "AutomergeSpike"),
-            ],
+            dependencies: ["NativeEditor"],
             path: "Tests/NativeEditorTests"
         ),
     ]

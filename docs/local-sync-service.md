@@ -83,7 +83,7 @@ Run the Swift transport and coordinator tests with:
 
 ```sh
 swift test --disable-sandbox \
-  --filter 'SyncTransportTests|NoteSyncCoordinatorTests'
+  --filter 'SyncTransportTests|NotebookSyncCoordinatorTests'
 ```
 
 ## Two running simulator apps

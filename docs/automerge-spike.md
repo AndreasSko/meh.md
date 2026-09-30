@@ -3,6 +3,9 @@
 Date: 2026-09-12
 Status: local spike complete, including real native adapter validation.
 
+The spike package was removed from the repository once NoteCore replaced it.
+The commands below refer to `Spikes/AutomergeSpike` in git history.
+
 ## Outcome
 
 Automerge is suitable for the local document core. The tested package can

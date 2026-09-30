@@ -1,4 +1,3 @@
-import AutomergeSpike
 import SwiftUI
 import XCTest
 
@@ -10,14 +9,26 @@ import AppKit
 import UIKit
 #endif
 
+/// The text store behind the binding. These tests cover the editor's
+/// binding path; NoteSession's commit path has its own tests.
+private final class TextDocument {
+    private var value: String
+
+    init(text: String) throws { value = text }
+
+    var text: String { get throws { value } }
+
+    func replaceAll(with text: String) throws { value = text }
+}
+
 @MainActor
 final class NativeEditorIntegrationTests: XCTestCase {
     private final class DocumentBinding {
-        let note: SpikeNoteDocument
+        let note: TextDocument
         var receivedTexts: [String] = []
         var receivedError: Error?
 
-        init(note: SpikeNoteDocument) {
+        init(note: TextDocument) {
             self.note = note
         }
 
@@ -43,7 +54,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
 
     func testWritingCommandsReachBindingAndNativeUndo() throws {
         let source = "Moon 🪐"
-        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))
+        let boundary = try DocumentBinding(note: TextDocument(text: source))
         let navigation = MarkdownEditorNavigation()
         let editor = MarkdownEditor(
             text: Binding(get: { boundary.text }, set: { boundary.text = $0 }),
@@ -71,7 +82,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
 
     func testTaskToggleCommitsLiteralMarkdownAndUndoes() throws {
         let source = "- [ ] Pack a map"
-        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))
+        let boundary = try DocumentBinding(note: TextDocument(text: source))
         let editor = MarkdownEditor(
             text: Binding(get: { boundary.text }, set: { boundary.text = $0 }),
             mode: .livePreview
@@ -90,7 +101,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
 
     func testNativeReturnContinuesListAndEmptyItemExits() throws {
         let source = "* Moon 🪐"
-        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))
+        let boundary = try DocumentBinding(note: TextDocument(text: source))
         let editor = MarkdownEditor(
             text: Binding(get: { boundary.text }, set: { boundary.text = $0 })
         )
@@ -130,7 +141,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
                 ),
             ] {
                 let boundary = try DocumentBinding(
-                    note: SpikeNoteDocument(text: source)
+                    note: TextDocument(text: source)
                 )
                 let editor = MarkdownEditor(
                     text: Binding(
@@ -153,7 +164,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
 
     func testLivePreviewAndSourceSwitchPreserveBufferSelectionAndUndo() throws {
         let source = "# Moon\n\n**Orbit** and [map](https://example.test)"
-        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))
+        let boundary = try DocumentBinding(note: TextDocument(text: source))
         let editor = MarkdownEditor(
             text: Binding(get: { boundary.text }, set: { boundary.text = $0 })
         )
@@ -172,7 +183,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
     }
 
     func testFormattingWaitsForCompositionAndMultilineInsertionStaysLiteral() throws {
-        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: "* Moon"))
+        let boundary = try DocumentBinding(note: TextDocument(text: "* Moon"))
         let navigation = MarkdownEditorNavigation()
         let editor = MarkdownEditor(
             text: Binding(get: { boundary.text }, set: { boundary.text = $0 }),
@@ -197,7 +208,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
     func testNativeTypingUndoAndRedoReachAutomergeBinding() throws {
         let source = "* > ==hello== and ~~old~~"
         let boundary = try DocumentBinding(
-            note: SpikeNoteDocument(text: source)
+            note: TextDocument(text: source)
         )
         let editor = MarkdownEditor(
             text: Binding(
@@ -233,7 +244,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
 
     func testCommittedMarkedTextReachesAutomergeBinding() throws {
         let boundary = try DocumentBinding(
-            note: SpikeNoteDocument(text: "hello")
+            note: TextDocument(text: "hello")
         )
         let editor = MarkdownEditor(
             text: Binding(
@@ -262,7 +273,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
         let composed = "\u{00E9}"
         let decomposed = "e\u{0301}"
         let boundary = try DocumentBinding(
-            note: SpikeNoteDocument(text: composed)
+            note: TextDocument(text: composed)
         )
         let editor = MarkdownEditor(
             text: Binding(
@@ -354,7 +365,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
 
     func testFormattingMenuCommandExplicitlyActivatesEditor() throws {
         let source = "hello"
-        let boundary = try DocumentBinding(note: SpikeNoteDocument(text: source))
+        let boundary = try DocumentBinding(note: TextDocument(text: source))
         let navigation = MarkdownEditorNavigation()
         let editor = MarkdownEditor(
             text: Binding(get: { boundary.text }, set: { boundary.text = $0 }),
@@ -381,7 +392,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
         lines[41] = ""
         let source = lines.joined(separator: "\n")
         let boundary = try DocumentBinding(
-            note: SpikeNoteDocument(text: source)
+            note: TextDocument(text: source)
         )
         let editor = MarkdownEditor(
             text: Binding(
@@ -470,7 +481,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
                 let lines = (0..<80).map { "Invented paragraph \($0)." }
                 let source = lines.joined(separator: "\n")
                 let boundary = try DocumentBinding(
-                    note: SpikeNoteDocument(text: source)
+                    note: TextDocument(text: source)
                 )
                 let editor = MarkdownEditor(
                     text: Binding(
@@ -531,7 +542,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
         let lines = (0..<80).map { "Invented paragraph \($0)." }
         let source = lines.joined(separator: "\n")
         let boundary = try DocumentBinding(
-            note: SpikeNoteDocument(text: source)
+            note: TextDocument(text: source)
         )
         let editor = MarkdownEditor(
             text: Binding(
