@@ -38,6 +38,7 @@ public final class NoteSession {
     }
 
     public private(set) var isPermanentlyDeleted = false
+    public private(set) var isEditingSuspended = false
     public private(set) var text = ""
     public private(set) var status: Status = .loading
     public private(set) var recoveryErrorMessage: String?
@@ -56,7 +57,7 @@ public final class NoteSession {
     }
 
     public var isEditingEnabled: Bool {
-        if isPermanentlyDeleted { return false }
+        if isPermanentlyDeleted || isEditingSuspended { return false }
         return switch status {
         case .saved, .saving, .saveFailed:
             true
@@ -150,6 +151,11 @@ public final class NoteSession {
 
     func markPermanentlyDeleted() {
         isPermanentlyDeleted = true
+        cancelDelayedSave()
+    }
+
+    func suspendEditingForPendingReset() {
+        isEditingSuspended = true
         cancelDelayedSave()
     }
 
@@ -309,6 +315,49 @@ public final class NoteSession {
         queueSave()
     }
 
+    /// A catalog can arrive before its note body. Install that first body in
+    /// the registered session so an open editor observes the durable result.
+    /// Other blocked states still require explicit recovery.
+    var isWaitingForRemoteBody: Bool {
+        guard case let .blocked(failure) = status else { return false }
+        return failure.current == .absent && failure.previous == .absent
+    }
+
+    func installFirstRemoteBody(_ snapshot: NoteSnapshot) async throws {
+        guard isWaitingForRemoteBody, !isPermanentlyDeleted,
+              !isEditingSuspended else {
+            throw SyncError.localSaveRequired
+        }
+        let remote = try NoteDocument(snapshot: snapshot)
+        let loaded = await storage.load()
+        // Catalog installation can make this session terminal while the
+        // storage read is suspended. Never revive or write a deleted body.
+        guard !isPermanentlyDeleted else { return }
+        switch loaded {
+        case let .blocked(failure)
+        where failure.current == .absent && failure.previous == .absent:
+            guard !isEditingSuspended else { throw SyncError.localSaveRequired }
+            try await storage.save(snapshot)
+            guard !isPermanentlyDeleted else { return }
+            guard !isEditingSuspended else { throw SyncError.localSaveRequired }
+            try install(remote, persistedHeads: snapshot.heads)
+            persistedSnapshot = snapshot
+            status = .saved
+        case let .current(current):
+            guard !isEditingSuspended else { throw SyncError.localSaveRequired }
+            // The file may have arrived through another writer since this
+            // session observed it missing. Join both validated histories.
+            let local = try NoteDocument(snapshot: current)
+            try install(local, persistedHeads: current.heads)
+            persistedSnapshot = current
+            status = .saved
+            try mergeRemote(snapshot)
+            try await flush()
+        default:
+            throw SyncError.localSaveRequired
+        }
+    }
+
     /// Await this session's serialized save loop without creating another
     /// writer. A failed local save never acknowledges a remote download.
     public func flush() async throws {
@@ -358,6 +407,7 @@ public final class NoteSession {
     }
 
     private func queueSave(immediately: Bool = false) {
+        guard !isEditingSuspended else { return }
         if let document, !isPermanentlyDeleted {
             editorRevision = editorIdentity + document.editorHeads
         }

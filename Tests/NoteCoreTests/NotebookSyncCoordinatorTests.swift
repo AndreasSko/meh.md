@@ -179,6 +179,214 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         }
     }
 
+    func testBodyArrivingForOpenMissingNoteUnblocksItsSession() async throws {
+        let catalog = try NotebookCatalogDocument()
+        let note = try NoteDocument(text: "arrived")
+        try catalog.add(id: note.noteID, kind: .note, name: "arrived.md")
+        let replica = NotebookReplica(directory: directory())
+        try await replica.acceptSeed(SyncRecord(catalog: catalog.snapshot()))
+        let waiting = try await replica.openNote(note.noteID, allowingRecovery: true)
+        XCTAssertFalse(waiting.isEditingEnabled)
+
+        for _ in 0..<3 {
+            let reopened = try await replica.openNote(
+                note.noteID, allowingRecovery: true
+            )
+            XCTAssertTrue(reopened === waiting)
+            do {
+                _ = try await replica.openNote(note.noteID)
+                XCTFail("Opening again must not create an empty body")
+            } catch let error as NotebookReplicaError {
+                XCTAssertEqual(error, .noteUnavailable(note.noteID))
+            }
+        }
+
+        try await replica.apply(SyncRecord(
+            snapshot: note.snapshot(), notebookID: catalog.notebookID
+        ))
+
+        XCTAssertTrue(waiting.isEditingEnabled)
+        XCTAssertEqual(waiting.text, "arrived")
+        let opened = try await replica.openNote(note.noteID)
+        XCTAssertTrue(opened === waiting)
+    }
+
+    func testOpenMissingNoteKeepsLatestDuplicateAndOutOfOrderBodies()
+        async throws
+    {
+        let catalog = try NotebookCatalogDocument()
+        let note = try NoteDocument(text: "first")
+        let first = note.snapshot()
+        try note.replaceAll(with: "latest")
+        let latest = note.snapshot()
+        try catalog.add(id: note.noteID, kind: .note, name: "note.md")
+        let seed = SyncRecord(catalog: catalog.snapshot())
+        let records = [latest, first, latest].map {
+            SyncRecord(snapshot: $0, notebookID: catalog.notebookID)
+        }
+
+        for throughCoordinator in [false, true] {
+            let root = directory()
+            let replica = NotebookReplica(directory: root)
+            try await replica.acceptSeed(seed)
+            let waiting = try await replica.openNote(
+                note.noteID, allowingRecovery: true
+            )
+            if throughCoordinator {
+                let coordinator = NotebookSyncCoordinator(
+                    replica: replica,
+                    transport: OrderedTransport(seed: seed, records: records)
+                )
+                await coordinator.synchronize()
+                assertExchanged(coordinator.status)
+            } else {
+                for record in records { try await replica.apply(record) }
+            }
+
+            XCTAssertTrue(waiting.isEditingEnabled)
+            XCTAssertEqual(waiting.text, "latest")
+            XCTAssertEqual(waiting.persistedSnapshot?.heads, latest.heads)
+            let reopened = NotebookReplica(directory: root)
+            try await reopened.load()
+            let reopenedSession = try await reopened.openNote(note.noteID)
+            XCTAssertEqual(reopenedSession.text, "latest")
+            XCTAssertEqual(reopenedSession.persistedSnapshot?.heads, latest.heads)
+        }
+    }
+
+    func testDeletingWaitingNoteRejectsLateBodyAndSyncsUnrelatedNote()
+        async throws
+    {
+        let catalog = try NotebookCatalogDocument()
+        let late = try NoteDocument(text: "must stay deleted")
+        let unrelated = try NoteDocument(text: "other note arrives")
+        try catalog.add(id: late.noteID, kind: .note, name: "deleted.md")
+        try catalog.add(id: unrelated.noteID, kind: .note, name: "other.md")
+        let seed = SyncRecord(catalog: catalog.snapshot())
+        let root = directory()
+        let replica = NotebookReplica(directory: root)
+        try await replica.acceptSeed(seed)
+        let waiting = try await replica.openNote(
+            late.noteID, allowingRecovery: true
+        )
+        let deleted = try catalog.fork()
+        try deleted.markPermanentlyDeleted([late.noteID])
+        let transport = OrderedTransport(seed: seed, records: [
+            SyncRecord(catalog: deleted.snapshot()),
+            SyncRecord(snapshot: late.snapshot(), notebookID: catalog.notebookID),
+            SyncRecord(snapshot: unrelated.snapshot(), notebookID: catalog.notebookID),
+        ])
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica,
+            transport: transport
+        )
+
+        await coordinator.synchronize()
+
+        assertExchanged(coordinator.status)
+        let purged = await transport.purgedNoteIDs
+        XCTAssertEqual(purged, [late.noteID])
+        XCTAssertTrue(waiting.isPermanentlyDeleted)
+        XCTAssertFalse(waiting.isEditingEnabled)
+        XCTAssertNil(waiting.currentSnapshot)
+        guard case .firstLaunch = await replica.noteStorage(late.noteID).load() else {
+            return XCTFail("A late body must not resurrect a deleted note file")
+        }
+        let reopened = NotebookReplica(directory: root)
+        try await reopened.load()
+        do {
+            _ = try await reopened.openNote(late.noteID, allowingRecovery: true)
+            XCTFail("The deleted note must remain terminal after restart")
+        } catch let error as NotebookReplicaError {
+            XCTAssertEqual(error, .permanentlyDeleted(late.noteID))
+        }
+        let reopenedOther = try await reopened.openNote(unrelated.noteID)
+        XCTAssertEqual(reopenedOther.text, "other note arrives")
+    }
+
+    func testCoordinatorReceivesBodyAfterOpenMissingNoteAndRestart() async throws {
+        let catalog = try NotebookCatalogDocument()
+        let note = try NoteDocument(text: "arrived")
+        try catalog.add(id: note.noteID, kind: .note, name: "arrived.md")
+        let root = directory()
+        let replica = NotebookReplica(directory: root)
+        try await replica.acceptSeed(SyncRecord(catalog: catalog.snapshot()))
+        let waiting = try await replica.openNote(note.noteID, allowingRecovery: true)
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica,
+            transport: OrderedTransport(
+                seed: SyncRecord(catalog: catalog.snapshot()),
+                records: [SyncRecord(
+                    snapshot: note.snapshot(), notebookID: catalog.notebookID
+                )]
+            )
+        )
+
+        await coordinator.synchronize()
+
+        assertExchanged(coordinator.status)
+        XCTAssertTrue(waiting.isEditingEnabled)
+        XCTAssertEqual(waiting.text, "arrived")
+        let reopened = NotebookReplica(directory: root)
+        try await reopened.load()
+        let reopenedSession = try await reopened.openNote(note.noteID)
+        XCTAssertEqual(reopenedSession.text, "arrived")
+    }
+
+    func testDamagedOpenNoteDoesNotAcceptRemoteBodyAsFirstArrival() async throws {
+        let catalog = try NotebookCatalogDocument()
+        let note = try NoteDocument(text: "remote")
+        try catalog.add(id: note.noteID, kind: .note, name: "remote.md")
+        let replica = NotebookReplica(directory: directory())
+        try await replica.acceptSeed(SyncRecord(catalog: catalog.snapshot()))
+        let storage = replica.noteStorage(note.noteID)
+        try FileManager.default.createDirectory(
+            at: storage.currentURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let damaged = Data("damaged local body".utf8)
+        try damaged.write(to: storage.currentURL)
+        let blocked = try await replica.openNote(note.noteID, allowingRecovery: true)
+        XCTAssertFalse(blocked.isWaitingForRemoteBody)
+
+        do {
+            try await replica.apply(SyncRecord(
+                snapshot: note.snapshot(), notebookID: catalog.notebookID
+            ))
+            XCTFail("Remote arrival must not replace a damaged local file")
+        } catch let error as NotebookReplicaError {
+            XCTAssertEqual(error, .noteUnavailable(note.noteID))
+        }
+
+        XCTAssertEqual(try Data(contentsOf: storage.currentURL), damaged)
+        XCTAssertFalse(blocked.isEditingEnabled)
+    }
+
+    func testOpenMissingSessionJoinsBodyWrittenBeforeDelivery() async throws {
+        let catalog = try NotebookCatalogDocument()
+        let note = try NoteDocument(text: "first")
+        let first = note.snapshot()
+        try note.replaceAll(with: "second")
+        let second = note.snapshot()
+        try catalog.add(id: note.noteID, kind: .note, name: "note.md")
+        let replica = NotebookReplica(directory: directory())
+        try await replica.acceptSeed(SyncRecord(catalog: catalog.snapshot()))
+        let waiting = try await replica.openNote(note.noteID, allowingRecovery: true)
+        try await replica.noteStorage(note.noteID).save(first)
+
+        try await replica.apply(SyncRecord(
+            snapshot: second, notebookID: catalog.notebookID
+        ))
+
+        XCTAssertEqual(waiting.text, "second")
+        XCTAssertEqual(waiting.status, .saved)
+        let stored = await replica.noteStorage(note.noteID).load()
+        guard case let .current(snapshot) = stored else {
+            return XCTFail("Expected the joined body to be durable")
+        }
+        XCTAssertEqual(snapshot.heads, second.heads)
+    }
+
     func testScopeChangeStopsBeforeNetworkMutation() async throws {
         let root = directory()
         let initial = InMemorySyncTransport(scope: "first")
@@ -372,6 +580,99 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         XCTAssertTrue(batches[1].allSatisfy { $0.kind == .note })
         XCTAssertEqual(batches[2].map(\.kind), [.catalog])
         assertExchanged(coordinator.status)
+    }
+
+    func testOversizedNoteDoesNotBlockOtherBatchesOrCatalog()
+        async throws
+    {
+        let base = InMemorySyncTransport(scope: "size-partial")
+        let transport = BatchRecordingTransport(base: base)
+        let root = directory()
+        let replica = NotebookReplica(directory: root)
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport
+        )
+        await coordinator.synchronize()
+        await transport.clearBatches()
+
+        let blockedID = try await replica.createNote(
+            name: "Long History.md", text: "Unique local edit"
+        )
+        var healthyIDs: [UUID] = []
+        for index in 0..<50 {
+            healthyIDs.append(try await replica.createNote(
+                name: "Healthy \(index).md", text: "body \(index)"
+            ))
+        }
+        await transport.rejectNoteAsOversized(blockedID)
+
+        await coordinator.synchronize()
+
+        guard case let .snapshotTooLarge(documentID, kind, displayName) =
+                coordinator.lastError as? CloudKitSyncTransportError else {
+            return XCTFail("Expected an identified oversized note")
+        }
+        XCTAssertEqual(documentID, blockedID)
+        XCTAssertEqual(kind, .note)
+        XCTAssertEqual(displayName, "Long History.md")
+        let batches = await transport.recordedBatches()
+        XCTAssertEqual(batches.map(\.count), [50, 1, 1])
+        XCTAssertEqual(coordinator.progress?.completedNotes, 50)
+
+        let stateURL = root.appending(path: "notebook-sync-state.json")
+        let state = try JSONDecoder().decode(
+            NotebookSyncState.self, from: Data(contentsOf: stateURL)
+        )
+        XCTAssertNil(state.acknowledgedHeads["note:\(blockedID.uuidString)"])
+        for id in healthyIDs {
+            XCTAssertNotNil(state.acknowledgedHeads["note:\(id.uuidString)"])
+        }
+        XCTAssertNotNil(
+            state.acknowledgedHeads["catalog:\(replica.catalogSnapshot!.notebookID.uuidString)"]
+        )
+
+        let reopened = NotebookReplica(directory: root)
+        try await reopened.load()
+        let note = try await reopened.openNote(blockedID)
+        XCTAssertEqual(note.text, "Unique local edit")
+        await transport.clearBatches()
+        let retry = NotebookSyncCoordinator(
+            replica: reopened, transport: transport
+        )
+        await retry.synchronize()
+        let retryBatches = await transport.recordedBatches()
+        XCTAssertEqual(retryBatches.count, 1)
+        XCTAssertEqual(retryBatches[0].map(\.snapshot.noteID), [blockedID])
+    }
+
+    func testOversizedCatalogKeepsItsKindAndRecoveryGuidance() async throws {
+        let base = InMemorySyncTransport(scope: "catalog-size")
+        let transport = BatchRecordingTransport(base: base)
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport
+        )
+        await coordinator.synchronize()
+        _ = try await replica.createNote(name: "Local note.md", text: "body")
+        await transport.rejectCatalogAsOversized()
+
+        await coordinator.synchronize()
+
+        guard case let .snapshotTooLarge(documentID, kind, displayName) =
+                coordinator.lastError as? CloudKitSyncTransportError else {
+            return XCTFail("Expected an identified oversized catalog")
+        }
+        XCTAssertEqual(documentID, replica.catalogSnapshot?.notebookID)
+        XCTAssertEqual(kind, .catalog)
+        XCTAssertEqual(displayName, "Notebook catalog")
+        let presentation = SyncFailurePresentation(
+            error: coordinator.lastError!, retryWillOccurAutomatically: false
+        )
+        XCTAssertEqual(presentation.retryDisposition, .unavailable)
+        XCTAssertEqual(
+            String(localized: presentation.title),
+            "Notebook too large to sync"
+        )
     }
 
     func testPartialAcknowledgementCheckpointsBeforeErrorAndRestart() async throws {
@@ -1062,6 +1363,7 @@ private actor OrderedTransport: SyncTransport {
     nonisolated let scope = "ordered-v2"
     let seed: SyncRecord
     let records: [SyncRecord]
+    private(set) var purgedNoteIDs: Set<UUID> = []
 
     init(seed: SyncRecord, records: [SyncRecord]) {
         self.seed = seed
@@ -1072,6 +1374,10 @@ private actor OrderedTransport: SyncTransport {
     func publish(_ record: SyncRecord) {}
     func fetch(after cursor: String?) -> SyncPage {
         SyncPage(records: cursor == nil ? records : [], cursor: "done", hasMore: false)
+    }
+
+    func purgeDeletedNotes(_ noteIDs: Set<UUID>, notebookID: UUID) {
+        purgedNoteIDs.formUnion(noteIDs)
     }
 }
 
@@ -1195,6 +1501,8 @@ private actor BatchRecordingTransport: SyncTransport {
     private var catalogFailure = false
     private var unexpectedAcknowledgement = false
     private var missingAcknowledgements = false
+    private var oversizedNoteID: UUID?
+    private var oversizedCatalog = false
 
     init(base: InMemorySyncTransport) {
         self.base = base
@@ -1211,6 +1519,28 @@ private actor BatchRecordingTransport: SyncTransport {
 
     func publishBatch(_ records: [SyncRecord]) async throws -> SyncBatchResult {
         batches.append(records)
+        if oversizedCatalog, let record = records.first,
+           record.kind == .catalog {
+            return SyncBatchResult(
+                acknowledgedIDs: [],
+                error: CloudKitSyncTransportError.snapshotTooLarge(
+                    documentID: record.snapshot.noteID, kind: record.kind
+                )
+            )
+        }
+        if let oversizedNoteID,
+           records.contains(where: { $0.snapshot.noteID == oversizedNoteID }) {
+            let eligible = records.filter {
+                $0.snapshot.noteID != oversizedNoteID
+            }
+            let accepted = try await base.publishBatch(eligible)
+            return SyncBatchResult(
+                acknowledgedIDs: accepted.acknowledgedIDs,
+                error: CloudKitSyncTransportError.snapshotTooLarge(
+                    documentID: oversizedNoteID
+                )
+            )
+        }
         if partialNoteFailure, records.first?.kind == .note {
             partialNoteFailure = false
             guard let first = records.first else {
@@ -1250,6 +1580,8 @@ private actor BatchRecordingTransport: SyncTransport {
     func failNextCatalogBatch() { catalogFailure = true }
     func returnUnexpectedAcknowledgement() { unexpectedAcknowledgement = true }
     func returnNoAcknowledgements() { missingAcknowledgements = true }
+    func rejectNoteAsOversized(_ id: UUID) { oversizedNoteID = id }
+    func rejectCatalogAsOversized() { oversizedCatalog = true }
 }
 
 private actor PausingBatchTransport: SyncTransport {

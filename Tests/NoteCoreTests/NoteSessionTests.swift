@@ -391,6 +391,42 @@ final class NoteSessionTests: XCTestCase {
         XCTAssertEqual(requestCount, 0)
     }
 
+    func testFirstRemoteBodyCannotReviveDeletionDuringStorageRead()
+        async throws
+    {
+        let missing = NoteLoadResult.blocked(NoteLoadFailure(
+            current: .absent, previous: .absent
+        ))
+        let remote = try NoteDocument(text: "late remote body").snapshot()
+        // Exercise both the first write and the path joining an existing
+        // file that appeared since the editor first observed it missing.
+        for loaded in [missing, .current(remote)] {
+            let storage = ControlledStorage(loadResult: missing)
+            let session = NoteSession(storage: storage)
+            await session.load()
+            XCTAssertTrue(session.isWaitingForRemoteBody)
+            await storage.pauseNextLoad(returning: loaded)
+            let arrival = Task { try await session.installFirstRemoteBody(remote) }
+            await waitUntil { await storage.isLoadPaused }
+
+            session.markPermanentlyDeleted()
+            session.discardPermanentlyDeletedContent()
+            await storage.releaseLoad()
+            try await arrival.value
+
+            let saved = await storage.savedSnapshots
+            XCTAssertTrue(saved.isEmpty)
+            XCTAssertTrue(session.isPermanentlyDeleted)
+            XCTAssertFalse(session.isEditingEnabled)
+            XCTAssertNil(session.currentSnapshot)
+            XCTAssertNil(session.persistedSnapshot)
+            XCTAssertEqual(session.text, "")
+            XCTAssertEqual(session.status, .blocked(NoteLoadFailure(
+                current: .absent, previous: .absent
+            )))
+        }
+    }
+
     func testDuplicateRemoteRevisionDoesNotScheduleSaveOrChangeEditor() async throws {
         let initial = try NoteDocument(text: "unchanged").snapshot()
         let storage = ControlledStorage(loadResult: .current(initial))
@@ -525,7 +561,9 @@ private enum ControlledStorageError: Error {
 }
 
 private actor ControlledStorage: NoteStorage {
-    private let loadResult: NoteLoadResult
+    private var loadResult: NoteLoadResult
+    private var pauseLoad = false
+    private var loadContinuation: CheckedContinuation<Void, Never>?
     private var paused = false
     private var continuations: [CheckedContinuation<Void, Never>] = []
     private var failSave = false
@@ -533,13 +571,28 @@ private actor ControlledStorage: NoteStorage {
     private(set) var savedSnapshots: [NoteSnapshot] = []
 
     var saveCount: Int { savedSnapshots.count + continuations.count }
+    var isLoadPaused: Bool { loadContinuation != nil }
 
     init(loadResult: NoteLoadResult) {
         self.loadResult = loadResult
     }
 
-    func load() -> NoteLoadResult {
-        loadResult
+    func load() async -> NoteLoadResult {
+        if pauseLoad {
+            pauseLoad = false
+            await withCheckedContinuation { loadContinuation = $0 }
+        }
+        return loadResult
+    }
+
+    func pauseNextLoad(returning result: NoteLoadResult) {
+        loadResult = result
+        pauseLoad = true
+    }
+
+    func releaseLoad() {
+        loadContinuation?.resume()
+        loadContinuation = nil
     }
 
     func save(_ snapshot: NoteSnapshot) async throws {

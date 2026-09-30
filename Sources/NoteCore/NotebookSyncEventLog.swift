@@ -82,6 +82,8 @@ public final class NotebookSyncEventLog {
             switch error {
             case .accountUnavailable: return "CloudKitSyncTransportError.accountUnavailable"
             case .corruptState: return "CloudKitSyncTransportError.corruptState"
+            case .unrecoverableRetryDelay:
+                return "CloudKitSyncTransportError.unrecoverableRetryDelay"
             case .invalidRemoteRecord:
                 return "CloudKitSyncTransportError.invalidRemoteRecord"
             case .unexpectedDeletion:
@@ -90,6 +92,9 @@ public final class NotebookSyncEventLog {
                 return "CloudKitSyncTransportError.uploadFailed.\(code)"
             case .uploadNotAcknowledged:
                 return "CloudKitSyncTransportError.uploadNotAcknowledged"
+            case let .snapshotTooLarge(documentID, _, _):
+                return "CloudKitSyncTransportError.snapshotTooLarge."
+                    + documentID.uuidString
             }
         }
         if let error = error as? NotebookReplicaError {
@@ -105,6 +110,8 @@ public final class NotebookSyncEventLog {
                 return "NotebookReplicaError.permanentlyDeleted"
             case .pinLimitReached:
                 return "NotebookReplicaError.pinLimitReached"
+            case .resetPending:
+                return "NotebookReplicaError.resetPending"
             }
         }
         if let error = error as? CocoaError {

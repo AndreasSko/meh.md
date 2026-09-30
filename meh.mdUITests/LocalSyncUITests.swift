@@ -10,6 +10,7 @@ final class LocalSyncUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
         app.launchEnvironment["MEH_SYNC_URL"] = "http://127.0.0.1:8765"
         app.launchEnvironment["MEH_SYNC_WORKSPACE"] =
             ProcessInfo.processInfo.environment["MEH_SYNC_TEST_WORKSPACE"]
@@ -23,6 +24,10 @@ final class LocalSyncUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "")
         editor.tap()
         editor.typeText(first)
+        XCTAssertEqual(
+            app.flushCurrentEditorBySwitchingNotes().value as? String,
+            first
+        )
         app.terminate()
         app.launch()
         XCTAssertEqual(
@@ -38,30 +43,36 @@ final class LocalSyncUITests: XCTestCase {
 
     func test02ReceiveAndReplyFromPad() throws {
         app.launch()
-        let editor = try app.openOrCreateNotebookEditor(timeout: 20)
+        _ = try app.openOrCreateNotebookEditor(timeout: 20)
         synchronize()
-        waitForEditor(first)
+        let editor = try XCTUnwrap(app.openNotebookNote(withText: first))
         editor.tap()
         editor.typeKey(.downArrow, modifierFlags: .command)
         editor.typeText(second)
+        XCTAssertEqual(
+            app.flushCurrentEditorBySwitchingNotes().value as? String,
+            first + second
+        )
         app.terminate()
         app.launch()
         XCTAssertEqual(
-            try app.openOrCreateNotebookEditor(timeout: 20).value as? String,
+            app.openNotebookNote(withText: first + second)?.value as? String,
             first + second
         )
         synchronize()
-        waitForEditor(first + second)
+        XCTAssertNotNil(app.openNotebookNote(withText: first + second))
     }
 
     func test03ReceiveReplyOnPhoneAndRestart() throws {
         app.launch()
-        let editor = try app.openOrCreateNotebookEditor(timeout: 20)
+        _ = try app.openOrCreateNotebookEditor(timeout: 20)
         synchronize()
-        XCTAssertEqual(editor.value as? String, first + second)
+        XCTAssertNotNil(app.openNotebookNote(withText: first + second))
         app.terminate()
         app.launch()
-        let relaunchedEditor = try app.openOrCreateNotebookEditor(timeout: 20)
+        let relaunchedEditor = try XCTUnwrap(
+            app.openNotebookNote(withText: first + second)
+        )
         XCTAssertEqual(relaunchedEditor.value as? String, first + second)
         XCTAssertFalse(
             app.descendants(matching: .any)
@@ -78,13 +89,6 @@ final class LocalSyncUITests: XCTestCase {
             .matching(predicate).firstMatch
         XCTAssertTrue(status.waitForExistence(timeout: 20))
         app.closeSyncDetails()
-    }
-
-    private func waitForEditor(_ expected: String) {
-        let editor = app.textViews["markdown-editor"]
-        let predicate = NSPredicate(format: "value == %@", expected)
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: editor)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 20), .completed)
     }
 
 }

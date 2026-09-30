@@ -10,13 +10,13 @@ import uuid
 from pathlib import Path
 
 
-def verify_copies(devices: list, workspace: str) -> list:
+def verify_copies(devices: list, workspace: str, bundle_id: str) -> list:
     expected = "From iPhone: café 👋🏽 日本語\nFrom iPad: naïve 世界\n".encode()
     copies = []
     for name, device in devices:
         command = [
             "xcrun", "simctl", "get_app_container", device,
-            "de.andreas-sk.meh-md", "data",
+            bundle_id, "data",
         ]
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode and "Shutdown" in result.stderr:
@@ -29,11 +29,17 @@ def verify_copies(devices: list, workspace: str) -> list:
             )
             result = subprocess.run(command, capture_output=True, text=True)
         result.check_returncode()
-        path = Path(result.stdout.strip()) / "Documents" / "SyncWorkspaces" / workspace / "note.md"
-        actual = path.read_bytes()
-        if actual != expected:
+        copies_dir = (
+            Path(result.stdout.strip()) / "Documents" / "SyncWorkspaces"
+            / workspace / "Notebook Copies" / "Markdown"
+        )
+        matches = [
+            path for path in copies_dir.rglob("*.md")
+            if path.read_bytes() == expected
+        ]
+        if len(matches) != 1:
             raise RuntimeError(f"{name} Markdown copy does not match the expected UTF-8 bytes")
-        copies.append({"device": name, "path": str(path), "bytes": len(actual)})
+        copies.append({"device": name, "path": str(matches[0]), "bytes": len(expected)})
     return copies
 
 
@@ -42,21 +48,37 @@ def run() -> None:
     parser.add_argument("--products-dir", type=Path, required=True)
     parser.add_argument("--phone", required=True, help="iPhone simulator UDID")
     parser.add_argument("--pad", required=True, help="iPad simulator UDID")
+    parser.add_argument(
+        "--bundle-id", default="de.andreas-sk.meh-md.icloud-dev",
+        help="App bundle identifier; defaults to the iCloud Dev build",
+    )
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     workspace = "ui-" + uuid.uuid4().hex[:12]
     output = args.output_dir or Path(tempfile.mkdtemp(prefix="meh-sync-ui-"))
     output.mkdir(parents=True, exist_ok=True)
-    sources = list(args.products_dir.glob("meh.md_*.xctestrun"))
+    sources = list(args.products_dir.glob("meh.md*.xctestrun"))
     if len(sources) != 1:
         parser.error("Expected one meh.md xctestrun file after build-for-testing")
     plan = plistlib.loads(sources[0].read_bytes())
-    for configuration in plan["TestConfigurations"]:
-        for target in configuration["TestTargets"]:
-            if target["BlueprintName"] == "meh.mdUITests":
-                for key in ["EnvironmentVariables", "TestingEnvironmentVariables"]:
-                    target.setdefault(key, {})["MEH_SYNC_TEST_WORKSPACE"] = workspace
-                target["ParallelizationEnabled"] = False
+    if "TestConfigurations" in plan:
+        targets = (
+            target
+            for configuration in plan["TestConfigurations"]
+            for target in configuration["TestTargets"]
+        )
+    else:
+        targets = (
+            target for target in plan.values()
+            if isinstance(target, dict) and target.get("BlueprintName")
+        )
+    for target in targets:
+        if target["BlueprintName"] == "meh.mdUITests":
+            for key in ["EnvironmentVariables", "TestingEnvironmentVariables"]:
+                target.setdefault(key, {})["MEH_SYNC_TEST_WORKSPACE"] = workspace
+            target["ParallelizationEnabled"] = False
+            # The iCloud Dev scheme normally selects its CloudKit UI suite.
+            target["OnlyTestIdentifiers"] = ["LocalSyncUITests"]
     test_run = args.products_dir / (workspace + ".xctestrun")
     test_run.write_bytes(plistlib.dumps(plan))
     print(f"Workspace: {workspace}\nEvidence: {output}", flush=True)
@@ -76,7 +98,10 @@ def run() -> None:
             with (output / (name + ".log")).open("w") as log:
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
             print(f"Passed: {name}", flush=True)
-        copies = verify_copies([("phone", args.phone), ("pad", args.pad)], workspace)
+        copies = verify_copies(
+            [("phone", args.phone), ("pad", args.pad)], workspace,
+            args.bundle_id,
+        )
         report = {"workspace": workspace, "phases": [p[0] for p in phases], "copies": copies}
         (output / "verification.json").write_text(json.dumps(report, indent=2) + "\n")
         print(f"Both Markdown copies match all {copies[0]['bytes']} UTF-8 bytes.", flush=True)

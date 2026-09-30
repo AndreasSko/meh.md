@@ -6,6 +6,7 @@ public enum NotebookReplicaError: Error, Equatable, LocalizedError {
     case noteUnavailable(UUID)
     case permanentlyDeleted(UUID)
     case pinLimitReached
+    case resetPending
 
     public var errorDescription: String? {
         switch self {
@@ -23,6 +24,8 @@ public enum NotebookReplicaError: Error, Equatable, LocalizedError {
             "This note was permanently deleted."
         case .pinLimitReached:
             "Unpin a note before pinning another."
+        case .resetPending:
+            "Restart meh.md to finish resetting local storage."
         }
     }
 }
@@ -91,6 +94,7 @@ public final class NotebookReplica {
     public private(set) var recentNotes: [NotebookRecentNote] = []
     public private(set) var pinnedRecentCount = 0
     public private(set) var hasPendingImport: Bool
+    public private(set) var localEditsSuspended = false
     public private(set) var deletionCleanupErrorMessage: String?
     private var searchBodyGeneration: UInt64 = 0
     @ObservationIgnored private var catalog: NotebookCatalogDocument?
@@ -134,6 +138,14 @@ public final class NotebookReplica {
         importStorage = NotebookImportStorage(directory: directory)
         deletionStorage = NotebookDeletionStorage(directory: directory)
         hasPendingImport = importStorage.hasPendingImport
+    }
+
+    public func suspendLocalEditsForPendingReset() {
+        guard !localEditsSuspended else { return }
+        localEditsSuspended = true
+        for session in sessions.values {
+            session.suspendEditingForPendingReset()
+        }
     }
 
     public func load() async throws {
@@ -738,7 +750,9 @@ public final class NotebookReplica {
         _ id: UUID,
         allowingRecovery: Bool = false
     ) async throws -> NoteSession {
+        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
         await waitForWrites()
+        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
         try ensureAlive(id)
         guard try catalog!.items().contains(where: { $0.id == id && $0.kind == .note }) else {
             throw NotebookReplicaError.noteUnavailable(id)
@@ -760,6 +774,10 @@ public final class NotebookReplica {
         sessionLoads[id] = load
         await load.value
         sessionLoads[id] = nil
+        if localEditsSuspended {
+            session.suspendEditingForPendingReset()
+            throw NotebookReplicaError.resetPending
+        }
         if try deletedIDs.contains(id) {
             session.markPermanentlyDeleted()
             throw NotebookReplicaError.permanentlyDeleted(id)
@@ -942,10 +960,31 @@ public final class NotebookReplica {
         if let session = sessions[id] {
             if let load = sessionLoads[id] { await load.value }
             if try deletedIDs.contains(id) { return }
-            guard session.isEditingEnabled else { throw NotebookReplicaError.noteUnavailable(id) }
-            try session.mergeRemote(record.snapshot)
-            try await session.flush()
-            return
+            // Opening may remove an unavailable session while the load above
+            // suspends us. In that case, use the unopened-note writer below.
+            if sessions[id] === session {
+                if session.isWaitingForRemoteBody {
+                    try await withCatalogWrite {
+                        if session.isWaitingForRemoteBody {
+                            try await session.installFirstRemoteBody(record.snapshot)
+                        } else if session.isEditingEnabled {
+                            // Another receiver installed the first body while
+                            // we waited for the serialized writer.
+                            try session.mergeRemote(record.snapshot)
+                            try await session.flush()
+                        } else {
+                            throw NotebookReplicaError.noteUnavailable(id)
+                        }
+                    }
+                } else {
+                    guard session.isEditingEnabled else {
+                        throw NotebookReplicaError.noteUnavailable(id)
+                    }
+                    try session.mergeRemote(record.snapshot)
+                    try await session.flush()
+                }
+                return
+            }
         }
         // Unopened note writes must not overlap an open/load or another
         // download. A single MainActor operation guard serializes this path.
@@ -991,6 +1030,7 @@ public final class NotebookReplica {
         guard let catalog else { throw NotebookReplicaError.notJoined }
         for (id, session) in sessions where !(try deletedIDs.contains(id)) {
             if let load = sessionLoads[id] { await load.value }
+            if session.isWaitingForRemoteBody { continue }
             try await session.flush()
         }
         let deleted = try deletedIDs
@@ -1275,6 +1315,7 @@ public final class NotebookReplica {
     private func withCatalogWrite<T>(
         _ operation: () async throws -> T
     ) async throws -> T {
+        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
         guard !writingCatalog else { throw NotebookReplicaError.busy }
         writingCatalog = true
         defer {
@@ -1298,6 +1339,7 @@ public final class NotebookReplica {
 
     private func persistCatalog(_ next: NotebookCatalogDocument) async throws {
         try await catalogWriteSuspension?()
+        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
         let represented = Set(try next.items().map(\.id))
         let alreadyDeleted = Set(try next.items().filter(\.isPermanentlyDeleted).map(\.id))
         let missing = rememberedDeletions.intersection(represented).subtracting(alreadyDeleted)

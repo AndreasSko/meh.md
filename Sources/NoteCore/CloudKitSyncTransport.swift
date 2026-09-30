@@ -1,18 +1,27 @@
 import CloudKit
+import Darwin
 import Foundation
 
 public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
     case accountUnavailable
     case corruptState
+    case unrecoverableRetryDelay
     case invalidRemoteRecord
     case unexpectedDeletion
     case uploadFailed(code: Int)
     case uploadNotAcknowledged
+    case snapshotTooLarge(
+        documentID: UUID, kind: SyncDocumentKind = .note,
+        displayName: String? = nil
+    )
 
     public var errorDescription: String? {
         switch self {
         case .accountUnavailable: "An iCloud account is required for sync."
         case .corruptState: "The saved CloudKit sync state is corrupt."
+        case .unrecoverableRetryDelay:
+            "The saved CloudKit retry delay cannot be recovered safely. "
+                + "Sync is paused to avoid bypassing server throttling."
         case .invalidRemoteRecord: "CloudKit returned an invalid snapshot."
         case .unexpectedDeletion:
             "A remote snapshot was deleted. Sync is paused to preserve history."
@@ -20,6 +29,8 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
             "CloudKit upload failed (CKError code \(code))."
         case .uploadNotAcknowledged:
             "CloudKit did not acknowledge the requested snapshot."
+        case let .snapshotTooLarge(documentID, _, displayName):
+            "The snapshot for \(displayName ?? documentID.uuidString) exceeds the app's 64 MiB iCloud sync limit."
         }
     }
 }
@@ -133,6 +144,7 @@ struct CloudKitTransportState: Codable, Equatable {
     var inbox: [SyncRecord] { inboxSlots.compactMap { $0 } }
 
     mutating func appendToInbox(_ record: SyncRecord) throws {
+        try CloudKitSnapshotSizeLimit.validate(record)
         try record.validate()
         try appendValidatedRecord(record)
     }
@@ -143,6 +155,7 @@ struct CloudKitTransportState: Codable, Equatable {
         guard validated.mode.protocolVersion == protocolVersion else {
             throw SyncError.invalidRecord
         }
+        try CloudKitSnapshotSizeLimit.validate(validated.record)
         try appendValidatedRecord(validated.record)
     }
 
@@ -152,6 +165,7 @@ struct CloudKitTransportState: Codable, Equatable {
         guard record.protocolVersion == protocolVersion else {
             throw SyncError.invalidRecord
         }
+        try CloudKitSnapshotSizeLimit.validate(record)
         unresolvedRemoteDeletionRecordIDs.remove(record.id)
         if purgedRecordIDs.contains(record.id) {
             if record.protocolVersion == 2, record.kind == .note,
@@ -557,7 +571,7 @@ struct CloudKitAcknowledgedRecord: Sendable {
 }
 
 enum CloudKitRemoteRecordValidator {
-    static let maximumAssetSize = 64 * 1024 * 1024
+    static let maximumAssetSize = CloudKitSnapshotSizeLimit.maximumBytes
 
     static func validateSnapshotID(_ id: String) throws {
         guard id.count == 64,
@@ -565,6 +579,85 @@ enum CloudKitRemoteRecordValidator {
                   ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
               }) else {
             throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+    }
+}
+
+enum CloudKitSnapshotSizeLimit {
+    static let maximumBytes = 64 * 1024 * 1024
+
+    static func validate(
+        _ record: SyncRecord, limit: Int? = nil
+    ) throws {
+        guard let maximum = maximumBytes(
+            for: record.protocolVersion
+        ) else {
+            throw SyncError.invalidRecord
+        }
+        guard record.snapshot.data.count <= min(limit ?? maximum, maximum) else {
+            throw CloudKitSyncTransportError.snapshotTooLarge(
+                documentID: record.snapshot.noteID, kind: record.kind
+            )
+        }
+    }
+
+    static func validateAssetSize(
+        _ bytes: UInt64, protocolVersion: Int
+    ) throws {
+        guard let maximum = maximumBytes(for: protocolVersion),
+              bytes <= UInt64(maximum) else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+    }
+
+    static func partition(
+        _ records: [SyncRecord], limit: Int? = nil
+    ) throws -> (admitted: [SyncRecord], rejected: [SyncRecord]) {
+        var admitted: [SyncRecord] = []
+        var rejected: [SyncRecord] = []
+        for record in records {
+            do {
+                try validate(record, limit: limit)
+                admitted.append(record)
+            } catch let error as CloudKitSyncTransportError {
+                guard case .snapshotTooLarge = error else { throw error }
+                rejected.append(record)
+            }
+        }
+        return (admitted, rejected)
+    }
+
+    static func partitionPendingSaves(
+        _ pending: [CKSyncEngine.PendingRecordZoneChange],
+        outbox: [String: SyncRecord], zoneID: CKRecordZone.ID,
+        limit: Int? = nil
+    ) throws -> (
+        admitted: [CKSyncEngine.PendingRecordZoneChange],
+        rejected: [CKSyncEngine.PendingRecordZoneChange]
+    ) {
+        var admitted: [CKSyncEngine.PendingRecordZoneChange] = []
+        var rejected: [CKSyncEngine.PendingRecordZoneChange] = []
+        for change in pending {
+            if case let .saveRecord(id) = change,
+               id.zoneID == zoneID,
+               let record = outbox[id.recordName] {
+                do {
+                    try validate(record, limit: limit)
+                } catch let error as CloudKitSyncTransportError {
+                    guard case .snapshotTooLarge = error else { throw error }
+                    rejected.append(change)
+                    continue
+                }
+            }
+            admitted.append(change)
+        }
+        return (admitted, rejected)
+    }
+
+    private static func maximumBytes(for protocolVersion: Int) -> Int? {
+        switch protocolVersion {
+        case 1, 2: maximumBytes
+        default: nil
         }
     }
 }
@@ -600,6 +693,7 @@ enum CloudKitTransportMode: Equatable, Sendable {
     }
 
     func validate(_ record: SyncRecord, bootstrap: Bool = false) throws {
+        try CloudKitSnapshotSizeLimit.validate(record)
         try record.validate()
         guard record.protocolVersion == protocolVersion else {
             throw SyncError.invalidRecord
@@ -849,11 +943,17 @@ struct CloudKitRecordCodec: @unchecked Sendable {
         let attributes = try FileManager.default.attributesOfItem(
             atPath: source.path
         )
-        guard let size = attributes[.size] as? NSNumber,
-              size.intValue <= CloudKitRemoteRecordValidator.maximumAssetSize
+        guard let size = attributes[.size] as? NSNumber
         else { throw CloudKitSyncTransportError.invalidRemoteRecord }
+        try CloudKitSnapshotSizeLimit.validateAssetSize(
+            size.uint64Value, protocolVersion: version
+        )
+        let data = try Data(contentsOf: source)
+        try CloudKitSnapshotSizeLimit.validateAssetSize(
+            UInt64(data.count), protocolVersion: version
+        )
         let snapshot = NoteSnapshot(
-            data: try Data(contentsOf: source),
+            data: data,
             heads: try JSONDecoder().decode(Set<String>.self, from: headsData),
             noteID: documentID
         )
@@ -895,6 +995,7 @@ struct CloudKitAssetStaging {
     private var completedUploads = Set<URL>()
 
     mutating func retain(_ record: SyncRecord) throws -> URL {
+        try CloudKitSnapshotSizeLimit.validate(record)
         let url = directory.appendingPathComponent(record.id)
         do {
             try record.snapshot.data.write(to: url, options: .atomic)
@@ -943,25 +1044,84 @@ struct CloudKitAssetStaging {
     }
 }
 
+enum CloudKitBootIdentity {
+    static func current() -> String? {
+        // KERN_BOOTTIME is a public boot marker on both iOS and macOS.
+        // Calendar steps can change it, which conservatively restarts the
+        // delay once. Do not infer boot identity from Date minus uptime.
+        var bootTime = timeval()
+        var size = MemoryLayout<timeval>.size
+        let result = sysctlbyname(
+            "kern.boottime", &bootTime, &size, nil, 0
+        )
+        guard result == 0, size == MemoryLayout<timeval>.size,
+              bootTime.tv_sec > 0, bootTime.tv_usec >= 0,
+              bootTime.tv_usec < 1_000_000 else { return nil }
+        return "boottime:\(bootTime.tv_sec):\(bootTime.tv_usec)"
+    }
+}
+
 struct CloudKitRetryThrottle {
-    private(set) var notBefore: Date?
-
-    init(notBefore: Date? = nil) { self.notBefore = notBefore }
-
-    mutating func observe(retryAfter seconds: Double?, now: Date) -> Bool {
-        guard let seconds, seconds.isFinite, seconds > 0 else { return false }
-        return merge(notBefore: now.addingTimeInterval(seconds))
+    struct Anchor: Codable {
+        var duration: TimeInterval
+        var uptime: TimeInterval
+        var bootID: String? = nil
     }
 
-    mutating func merge(notBefore proposed: Date) -> Bool {
-        guard notBefore.map({ proposed > $0 }) ?? true else { return false }
-        notBefore = proposed
+    private let bootID: String?
+    private(set) var anchor: Anchor?
+
+    init(
+        anchor: Anchor? = nil,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        bootID: String? = CloudKitBootIdentity.current()
+    ) {
+        self.bootID = bootID?.isEmpty == false ? bootID : nil
+        if let anchor, anchor.duration.isFinite, anchor.duration > 0,
+           anchor.uptime.isFinite, anchor.uptime >= 0 {
+            if let currentBootID = self.bootID,
+               anchor.bootID == currentBootID, anchor.uptime <= uptime {
+                // Relaunches during this boot share the same monotonic clock.
+                self.anchor = anchor
+            } else {
+                // Unknown or changed boot identity cannot establish elapsed
+                // time, even when the new uptime exceeds the saved value.
+                self.anchor = Anchor(
+                    duration: anchor.duration, uptime: uptime,
+                    bootID: self.bootID
+                )
+            }
+        }
+    }
+
+    var notBefore: Date? { deadline(at: Date()) }
+
+    func deadline(
+        at now: Date,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Date? {
+        remaining(at: now, uptime: uptime).map { now.addingTimeInterval($0) }
+    }
+
+    mutating func observe(
+        retryAfter seconds: Double?, now: Date,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Bool {
+        guard let seconds, seconds.isFinite, seconds > 0,
+              seconds > (remaining(at: now, uptime: uptime) ?? 0) else {
+            return false
+        }
+        anchor = Anchor(duration: seconds, uptime: uptime, bootID: bootID)
         return true
     }
 
-    func remaining(at now: Date) -> TimeInterval? {
-        guard let notBefore else { return nil }
-        let interval = notBefore.timeIntervalSince(now)
+    func remaining(
+        at now: Date,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> TimeInterval? {
+        guard let anchor else { return nil }
+        let elapsed = max(0, uptime - anchor.uptime)
+        let interval = anchor.duration - elapsed
         return interval > 0 ? interval : nil
     }
 }
@@ -1119,43 +1279,139 @@ enum CloudKitRetryMetadata {
 }
 
 struct CloudKitAvailabilityCooldownStore {
-    private struct State: Codable { var retryNotBefore: Date? }
+    private struct State: Codable {
+        var retryNotBefore: Date?
+        var anchor: CloudKitRetryThrottle.Anchor?
+        var completed: Bool?
+    }
 
     private let fileURL: URL
+    private let bootID: String?
     private(set) var throttle: CloudKitRetryThrottle
+    private(set) var completed = false
 
-    init(directory: URL) throws {
+    // The old file was atomically renamed shortly after the retry was
+    // observed. Its modification time therefore preserves the old clock's
+    // era, even if the device calendar has since been corrected.
+    private static let legacyWriteMargin: TimeInterval = 60
+    private static let maximumLegacyDelay: TimeInterval = 7 * 24 * 60 * 60
+
+    init(
+        directory: URL, now: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        persistOnLoad: Bool = true,
+        bootIDProvider: () -> String? = CloudKitBootIdentity.current
+    ) throws {
+        bootID = bootIDProvider()
         fileURL = directory.appendingPathComponent(
             "cloudkit-availability-retry.json"
         )
+        var needsPersistence = false
         do {
             let state = try JSONDecoder().decode(
                 State.self, from: Data(contentsOf: fileURL)
             )
-            throttle = CloudKitRetryThrottle(notBefore: state.retryNotBefore)
+            if let anchor = state.anchor,
+               !anchor.duration.isFinite || anchor.duration <= 0
+                || !anchor.uptime.isFinite || anchor.uptime < 0 {
+                throw CloudKitSyncTransportError.unrecoverableRetryDelay
+            }
+            if state.completed == true,
+               state.anchor != nil || state.retryNotBefore != nil {
+                throw CloudKitSyncTransportError.corruptState
+            }
+            let recoveredAnchor: CloudKitRetryThrottle.Anchor?
+            if state.anchor == nil, let deadline = state.retryNotBefore {
+                let attributes = try? FileManager.default.attributesOfItem(
+                    atPath: fileURL.path
+                )
+                recoveredAnchor = try Self.recoverLegacyAnchor(
+                    deadline: deadline,
+                    writeDate: attributes?[.modificationDate] as? Date,
+                    uptime: uptime
+                )
+            } else {
+                recoveredAnchor = state.anchor
+            }
+            throttle = CloudKitRetryThrottle(
+                anchor: recoveredAnchor, uptime: uptime, bootID: bootID
+            )
+            completed = state.completed == true
+            needsPersistence = !completed && persistOnLoad
         } catch CocoaError.fileReadNoSuchFile {
-            throttle = CloudKitRetryThrottle()
+            throttle = CloudKitRetryThrottle(bootID: bootID)
+        } catch let error as CloudKitSyncTransportError {
+            throw error
         } catch {
             throw CloudKitSyncTransportError.corruptState
         }
+        if needsPersistence { try persist(now: now, uptime: uptime) }
+    }
+
+    static func recoverLegacyAnchor(
+        deadline: Date, writeDate: Date?, uptime: TimeInterval
+    ) throws -> CloudKitRetryThrottle.Anchor {
+        guard let writeDate else {
+            throw CloudKitSyncTransportError.unrecoverableRetryDelay
+        }
+        let elapsed = deadline.timeIntervalSince(writeDate)
+        guard elapsed.isFinite, elapsed > 0,
+              uptime.isFinite, uptime >= 0,
+              elapsed <= maximumLegacyDelay else {
+            throw CloudKitSyncTransportError.unrecoverableRetryDelay
+        }
+        return .init(duration: elapsed + legacyWriteMargin, uptime: uptime)
     }
 
     var notBefore: Date? { throttle.notBefore }
 
-    func wait() async throws {
+    func reconciledDeadline(
+        saved: Date?, now: Date,
+        uptime: TimeInterval
+    ) throws -> Date? {
+        if throttle.anchor == nil, saved != nil, !completed {
+            throw CloudKitSyncTransportError.unrecoverableRetryDelay
+        }
+        return throttle.deadline(at: now, uptime: uptime)
+    }
+
+    mutating func wait() async throws {
         try await wait(
             now: { Date() },
+            uptime: { ProcessInfo.processInfo.systemUptime },
             sleep: { try await Task.sleep(for: .seconds($0)) }
         )
     }
 
-    func wait(
+    mutating func wait(
         now: () -> Date,
+        uptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
         sleep: (TimeInterval) async throws -> Void
     ) async throws {
-        while let remaining = throttle.remaining(at: now()) {
+        while let remaining = throttle.remaining(
+            at: now(), uptime: uptime()
+        ) {
             try await sleep(remaining)
         }
+        try completeIfElapsed(now: now(), uptime: uptime())
+    }
+
+    mutating func completeIfElapsed(
+        now: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) throws {
+        guard throttle.anchor != nil,
+              throttle.remaining(at: now, uptime: uptime) == nil else {
+            return
+        }
+        try SyncFileIO.replace(
+            JSONEncoder().encode(State(
+                retryNotBefore: nil, anchor: nil, completed: true
+            )),
+            at: fileURL
+        )
+        throttle = CloudKitRetryThrottle(bootID: bootID)
+        completed = true
     }
 
     mutating func observe(_ error: Error, now: Date = Date()) throws {
@@ -1164,19 +1420,26 @@ struct CloudKitAvailabilityCooldownStore {
         )
     }
 
-    mutating func merge(notBefore: Date?) throws {
-        guard let notBefore, throttle.merge(notBefore: notBefore) else { return }
-        try persist()
+    mutating func merge(
+        retryAfter: Double?, now: Date,
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) throws {
+        guard throttle.observe(
+            retryAfter: retryAfter, now: now, uptime: uptime
+        ) else { return }
+        completed = false
+        try persist(now: now, uptime: uptime)
     }
 
-    mutating func merge(retryAfter: Double?, now: Date) throws {
-        guard throttle.observe(retryAfter: retryAfter, now: now) else { return }
-        try persist()
-    }
-
-    private func persist() throws {
+    private func persist(
+        now: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) throws {
         try SyncFileIO.replace(
-            JSONEncoder().encode(State(retryNotBefore: throttle.notBefore)),
+            JSONEncoder().encode(State(
+                retryNotBefore: throttle.deadline(at: now, uptime: uptime),
+                anchor: throttle.anchor, completed: completed
+            )),
             at: fileURL
         )
     }
@@ -1225,7 +1488,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         stateDirectory: URL
     ) throws -> Date? {
         try CloudKitAvailabilityCooldownStore(
-            directory: stateDirectory
+            directory: stateDirectory, persistOnLoad: false
         ).notBefore
     }
 
@@ -1431,10 +1694,12 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         )
         let saved = await store.snapshot()
         unexpectedDeletionObserved = saved.hasUnexpectedDeletion
-        let deadline = [saved.retryNotBefore, availabilityCooldown.notBefore]
-            .compactMap { $0 }.max()
-        retryThrottle = CloudKitRetryThrottle(notBefore: deadline)
-        try availabilityCooldown.merge(notBefore: deadline)
+        let now = Date()
+        let uptime = ProcessInfo.processInfo.systemUptime
+        retryThrottle = availabilityCooldown.throttle
+        let deadline = try availabilityCooldown.reconciledDeadline(
+            saved: saved.retryNotBefore, now: now, uptime: uptime
+        )
         if saved.retryNotBefore != deadline {
             try await store.update { $0.retryNotBefore = deadline }
         }
@@ -1457,6 +1722,32 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         )
         configuration.automaticallySync = automaticallySync
         engine = CKSyncEngine(configuration)
+        let oversizedOutbox = try CloudKitSnapshotSizeLimit.partition(
+            Array(saved.outbox.values)
+        ).rejected
+        let oversizedIDs = Set(oversizedOutbox.map(\.id))
+        if !oversizedIDs.isEmpty {
+            // Preserve the durable records: an older build may have staged
+            // unique history. Only retire their CK save requests so they
+            // cannot block smaller records after this transport restarts.
+            let queuedOversizedSaves = engine.state.pendingRecordZoneChanges
+                .filter { change in
+                    guard case let .saveRecord(id) = change else {
+                        return false
+                    }
+                    return oversizedIDs.contains(id.recordName)
+                }
+            engine.state.remove(
+                pendingRecordZoneChanges: queuedOversizedSaves
+            )
+            if let record = oversizedOutbox.first {
+                let error = CloudKitSyncTransportError.snapshotTooLarge(
+                    documentID: record.snapshot.noteID, kind: record.kind
+                )
+                lastReportedFailure = error
+                activityChannel.yield([.failed(error.localizedDescription)])
+            }
+        }
         let queuedSaves = Set(
             engine.state.pendingRecordZoneChanges.compactMap { change in
                 if case let .saveRecord(id) = change {
@@ -1466,7 +1757,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             }
         )
         let missingSaves = saved.outbox.keys.filter {
-            !queuedSaves.contains($0)
+            !queuedSaves.contains($0) && !oversizedIDs.contains($0)
         }.map { name in
             CKSyncEngine.PendingRecordZoneChange.saveRecord(
                 CKRecord.ID(recordName: name, zoneID: zoneID)
@@ -1555,7 +1846,12 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         await acquirePublishLease()
         defer { releasePublishLease() }
         try await assertHealthy()
-        for record in records { try mode.validate(record) }
+        for record in records {
+            try record.validate()
+            guard record.protocolVersion == mode.protocolVersion else {
+                throw SyncError.invalidRecord
+            }
+        }
         try await verifyAccount()
         let deletedNoteIDs = await store.snapshot().deletedNoteIDs
         let suppressedIDs = Set(records.compactMap { record in
@@ -1563,10 +1859,19 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 && deletedNoteIDs.contains(record.snapshot.noteID)
                 ? record.id : nil
         })
-        let records = records.filter { !suppressedIDs.contains($0.id) }
+        let activeRecords = records.filter {
+            !suppressedIDs.contains($0.id)
+        }
+        let partition = try CloudKitSnapshotSizeLimit.partition(activeRecords)
+        let records = partition.admitted
+        let oversizedError = partition.rejected.first.map {
+            CloudKitSyncTransportError.snapshotTooLarge(
+                documentID: $0.snapshot.noteID, kind: $0.kind
+            )
+        }
         guard !records.isEmpty else {
             return SyncBatchResult(
-                acknowledgedIDs: suppressedIDs, error: nil
+                acknowledgedIDs: suppressedIDs, error: oversizedError
             )
         }
         try await store.update { state in
@@ -1628,7 +1933,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         completedIDs = result.acknowledgedIDs
         return SyncBatchResult(
             acknowledgedIDs: result.acknowledgedIDs.union(suppressedIDs),
-            error: result.error
+            error: result.error ?? oversizedError
         )
     }
 
@@ -1775,9 +2080,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     }
 
     public func retryNotBefore() async -> Date? {
-        [retryThrottle.notBefore, availabilityCooldown.notBefore]
-            .compactMap { $0 }
-            .max()
+        retryThrottle.notBefore
     }
 
     public func haltStatus() async -> CloudKitSyncHaltStatus? {
@@ -1912,18 +2215,26 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         while let remaining = retryThrottle.remaining(at: Date()) {
             try await Task.sleep(for: .seconds(remaining))
         }
+        try availabilityCooldown.completeIfElapsed()
+        retryThrottle = availabilityCooldown.throttle
     }
 
     private func observeRetryAfter(_ error: Error) async {
         guard !isRetired else { return }
         let delay = CloudKitRetryMetadata.seconds(in: error)
-        guard retryThrottle.observe(retryAfter: delay, now: Date()) else {
+        let now = Date()
+        let uptime = ProcessInfo.processInfo.systemUptime
+        guard retryThrottle.observe(
+            retryAfter: delay, now: now, uptime: uptime
+        ) else {
             return
         }
-        let deadline = retryThrottle.notBefore
+        let deadline = retryThrottle.deadline(at: now, uptime: uptime)
         do {
             do {
-                try availabilityCooldown.merge(notBefore: deadline)
+                try availabilityCooldown.merge(
+                    retryAfter: delay, now: now, uptime: uptime
+                )
             } catch {
                 throw CloudKitStateWriteFailure(underlyingError: error)
             }
@@ -2033,9 +2344,27 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         guard !unexpectedDeletionObserved else {
             throw CloudKitSyncTransportError.unexpectedDeletion
         }
+        let partition = try CloudKitSnapshotSizeLimit.partitionPendingSaves(
+            pending, outbox: outbox, zoneID: zoneID
+        )
+        if !partition.rejected.isEmpty {
+            // Recheck every batch: CK may restore a save request after startup.
+            // Retire only the request, keeping its unique durable history.
+            engine.state.remove(
+                pendingRecordZoneChanges: partition.rejected
+            )
+            if case let .saveRecord(id) = partition.rejected[0],
+               let value = outbox[id.recordName] {
+                let error = CloudKitSyncTransportError.snapshotTooLarge(
+                    documentID: value.snapshot.noteID, kind: value.kind
+                )
+                lastReportedFailure = error
+                yieldAfterDelegateReturns([.failed(error.localizedDescription)])
+            }
+        }
         var records: [String: CKRecord] = [:]
         do {
-            for change in pending {
+            for change in partition.admitted {
                 guard case let .saveRecord(recordID) = change,
                       recordID.zoneID == zoneID,
                       let value = outbox[recordID.recordName] else {

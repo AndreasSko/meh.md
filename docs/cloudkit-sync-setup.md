@@ -6,6 +6,17 @@ for its catalog and note snapshots; legacy version 1 joining is no longer
 active. Records contain immutable full-history Automerge snapshots in `CKAsset`
 payloads. Confirmed permanent deletion removes remote note snapshots after the
 catalog markers are acknowledged; general history compaction is separate work.
+Each version 1 or 2 snapshot asset must be at most 64 MiB. New oversized
+local snapshots remain on the device and are rejected before upload staging
+or outbox mutation. Previously queued oversized snapshots remain durable but
+cannot be uploaded or acknowledged. Sync reports a specific error so the
+notebook can be backed up before its history is repaired. Received assets
+above the same limit are rejected before they are read into memory or
+committed to the inbox.
+If one note is too large, smaller notes in the same upload batch and later
+batches can still be acknowledged. The oversized note stays pending; sync
+reports its name when the local catalog can supply one and its document ID
+otherwise. The catalog can still publish after healthy note batches.
 
 The app target includes CloudKit entitlements for macOS and iOS with this
 container selected. Xcode automatic provisioning successfully signed the Mac
@@ -83,12 +94,19 @@ adapter persists the longest active retry-after delay, including per-record
 errors, and waits before making further requests. A small availability-only
 file also gates account discovery after app restart; it is never used as proof
 of account identity. Pending snapshots remain durable throughout the cooldown.
+Retry waits use elapsed uptime. A saved boot-time marker lets repeated app
+launches during the same boot count time already waited. A reboot, an
+unavailable marker, or a calendar step that changes the marker restarts the
+full saved delay conservatively. The marker stays in local sync state and is
+not sent to CloudKit. Older cooldown files migrate to this format without
+discarding the server delay.
 If Apple reports throttling or service unavailability without a usable delay,
 the adapter waits 30 seconds. A failed cooldown write stops further requests
 until the adapter is recreated from durable state.
 
 Tests cover nested retry metadata, fallback delays, deadline persistence,
-pending uploads, and startup gating with a simulated clock. They do not
+repeated same-boot launches, reboot and legacy recovery, pending uploads,
+and startup gating with a simulated clock. They do not
 intentionally trigger Apple's real quota or throttling mechanisms. See
 [automatic scheduling](notebook-sync-scheduling.md) and
 [batching](notebook-sync-progress.md) for the implemented notebook behavior.

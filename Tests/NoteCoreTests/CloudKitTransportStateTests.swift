@@ -372,10 +372,323 @@ final class CloudKitTransportStateTests: XCTestCase {
     func testRetryThrottleKeepsLongestActiveCooldown() {
         let now = Date(timeIntervalSince1970: 1_000)
         var throttle = CloudKitRetryThrottle()
-        XCTAssertTrue(throttle.observe(retryAfter: 10, now: now))
-        XCTAssertFalse(throttle.observe(retryAfter: 2, now: now))
-        XCTAssertEqual(throttle.remaining(at: now), 10)
-        XCTAssertNil(throttle.remaining(at: now.addingTimeInterval(10)))
+        XCTAssertTrue(throttle.observe(
+            retryAfter: 10, now: now, uptime: 1_000
+        ))
+        XCTAssertFalse(throttle.observe(
+            retryAfter: 2, now: now, uptime: 1_000
+        ))
+        XCTAssertEqual(throttle.remaining(at: now, uptime: 1_000), 10)
+        XCTAssertNil(throttle.remaining(
+            at: now.addingTimeInterval(10), uptime: 1_010
+        ))
+    }
+
+    func testRetryThrottleUsesElapsedTimeAcrossCalendarCorrections() {
+        let future = Date(timeIntervalSince1970: 1_000_000)
+        var throttle = CloudKitRetryThrottle()
+        XCTAssertTrue(throttle.observe(
+            retryAfter: 30, now: future, uptime: 1_000
+        ))
+
+        XCTAssertEqual(throttle.remaining(
+            at: future.addingTimeInterval(10), uptime: 1_010
+        ), 20)
+        XCTAssertEqual(throttle.remaining(
+            at: Date(timeIntervalSince1970: 1_000), uptime: 1_010
+        ), 20)
+        XCTAssertEqual(throttle.remaining(
+            at: Date(timeIntervalSince1970: 2_000_000), uptime: 1_010
+        ), 20)
+        XCTAssertNil(throttle.remaining(
+            at: Date(timeIntervalSince1970: 1_000), uptime: 1_030
+        ))
+    }
+
+    func testPersistedRetrySurvivesBackwardCorrectionWithoutLongStall()
+        async throws {
+        let directory = temporaryDirectory()
+        let future = Date(timeIntervalSince1970: 1_000_000)
+        var store = try CloudKitAvailabilityCooldownStore(
+            directory: directory, bootIDProvider: { "boot-A" }
+        )
+        try store.merge(retryAfter: 30, now: future, uptime: 1_000)
+
+        var reopened = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: Date(timeIntervalSince1970: 1_000),
+            uptime: 1_010, bootIDProvider: { "boot-A" }
+        )
+        var uptime = 1_010.0
+        var observed: [TimeInterval] = []
+        try await reopened.wait(
+            now: { Date(timeIntervalSince1970: 1_000) },
+            uptime: { uptime },
+            sleep: { interval in
+                observed.append(interval)
+                uptime += interval
+            }
+        )
+        XCTAssertEqual(observed, [20])
+        let afterCompletion = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: Date(timeIntervalSince1970: 1_000),
+            uptime: 1_000, bootIDProvider: { "boot-A" }
+        )
+        XCTAssertNil(afterCompletion.throttle.anchor)
+        XCTAssertNil(try afterCompletion.reconciledDeadline(
+            saved: future.addingTimeInterval(30),
+            now: Date(timeIntervalSince1970: 1_000), uptime: 1_000
+        ))
+    }
+
+    func testCalendarCorrectionDuringWaitDoesNotExtendCooldown()
+        async throws {
+        let directory = temporaryDirectory()
+        let future = Date(timeIntervalSince1970: 1_000_000)
+        var store = try CloudKitAvailabilityCooldownStore(directory: directory)
+        try store.merge(retryAfter: 30, now: future, uptime: 1_000)
+        var now = future
+        var uptime = 1_000.0
+        var sleeps: [TimeInterval] = []
+
+        try await store.wait(
+            now: { now }, uptime: { uptime },
+            sleep: { interval in
+                sleeps.append(interval)
+                uptime += interval
+                now = Date(timeIntervalSince1970: 1_000)
+            }
+        )
+
+        XCTAssertEqual(sleeps, [30])
+    }
+
+    func testPersistedRetrySurvivesForwardCorrectionAndHonorsServerDelay()
+        async throws {
+        let directory = temporaryDirectory()
+        let start = Date(timeIntervalSince1970: 1_000)
+        var store = try CloudKitAvailabilityCooldownStore(
+            directory: directory, bootIDProvider: { "boot-A" }
+        )
+        try store.merge(retryAfter: 3_600, now: start, uptime: 1_000)
+
+        let reopened = try CloudKitAvailabilityCooldownStore(
+            directory: directory,
+            now: Date(timeIntervalSince1970: 1_000_000),
+            uptime: 1_010, bootIDProvider: { "boot-A" }
+        )
+        XCTAssertEqual(reopened.throttle.remaining(
+            at: Date(timeIntervalSince1970: 1_000_000), uptime: 1_010
+        ), 3_590)
+    }
+
+    func testRebootRestartsServerDelayWhenElapsedTimeIsUnknown() throws {
+        let directory = temporaryDirectory()
+        let start = Date(timeIntervalSince1970: 1_000)
+        var store = try CloudKitAvailabilityCooldownStore(
+            directory: directory, bootIDProvider: { "boot-A" }
+        )
+        try store.merge(retryAfter: 30, now: start, uptime: 5_000)
+
+        let reopened = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: start.addingTimeInterval(100),
+            uptime: 10, bootIDProvider: { "boot-B" }
+        )
+        XCTAssertEqual(reopened.throttle.remaining(
+            at: start.addingTimeInterval(100), uptime: 10
+        ), 30)
+        let reopenedAgain = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: start.addingTimeInterval(110),
+            uptime: 20, bootIDProvider: { "boot-B" }
+        )
+        XCTAssertEqual(reopenedAgain.throttle.remaining(
+            at: start.addingTimeInterval(110), uptime: 20
+        ), 20)
+    }
+
+    func testRebootWithHigherUptimeStillHonorsServerDelay() throws {
+        let directory = temporaryDirectory()
+        let start = Date(timeIntervalSince1970: 1_000)
+        var store = try CloudKitAvailabilityCooldownStore(
+            directory: directory, bootIDProvider: { "boot-A" }
+        )
+        try store.merge(retryAfter: 30, now: start, uptime: 5_000)
+
+        // A reboot may be followed by enough uptime to exceed the value
+        // saved by the previous boot. It is not proof of elapsed time.
+        let reopened = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: start.addingTimeInterval(100),
+            uptime: 5_100, bootIDProvider: { "boot-B" }
+        )
+        XCTAssertEqual(reopened.throttle.remaining(
+            at: start.addingTimeInterval(100), uptime: 5_100
+        ), 30)
+    }
+
+    func testSameBootRelaunchesProgressToCompletedCooldown() async throws {
+        let directory = temporaryDirectory()
+        let start = Date(timeIntervalSince1970: 1_000)
+        var store = try CloudKitAvailabilityCooldownStore(
+            directory: directory, bootIDProvider: { "boot-A" }
+        )
+        try store.merge(retryAfter: 3_600, now: start, uptime: 1_000)
+
+        // Repeated startup reconstruction must preserve the original anchor,
+        // including when calendar time changes during the same boot.
+        for elapsed in [600.0, 1_200, 1_800, 3_000, 3_600] {
+            let calendar = Date(timeIntervalSince1970:
+                elapsed == 1_200 ? 100 : 2_000_000
+            )
+            var reopened = try CloudKitAvailabilityCooldownStore(
+                directory: directory, now: calendar, uptime: 1_000 + elapsed,
+                bootIDProvider: { "boot-A" }
+            )
+            XCTAssertEqual(reopened.throttle.anchor?.uptime, 1_000)
+            XCTAssertEqual(reopened.throttle.anchor?.bootID, "boot-A")
+            if elapsed < 3_600 {
+                XCTAssertEqual(reopened.throttle.remaining(
+                    at: calendar, uptime: 1_000 + elapsed
+                ), 3_600 - elapsed)
+                XCTAssertEqual(try reopened.reconciledDeadline(
+                    saved: start.addingTimeInterval(3_600), now: calendar,
+                    uptime: 1_000 + elapsed
+                ), calendar.addingTimeInterval(3_600 - elapsed))
+            } else {
+                var sleepCount = 0
+                try await reopened.wait(
+                    now: { calendar }, uptime: { 1_000 + elapsed },
+                    sleep: { _ in sleepCount += 1 }
+                )
+                XCTAssertEqual(sleepCount, 0)
+                XCTAssertTrue(reopened.completed)
+            }
+        }
+        let completed = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: start, uptime: 10,
+            bootIDProvider: { "boot-B" }
+        )
+        XCTAssertNil(try completed.reconciledDeadline(
+            saved: start.addingTimeInterval(3_600), now: start, uptime: 10
+        ))
+    }
+
+    func testUnknownAndLegacyBootIdentityRestartFullDelay() throws {
+        for savedBootID: String? in [nil, "boot-A"] {
+            for currentBootID: String? in [nil, "boot-B"] {
+                let directory = temporaryDirectory()
+                var store = try CloudKitAvailabilityCooldownStore(
+                    directory: directory, bootIDProvider: { savedBootID }
+                )
+                let now = Date(timeIntervalSince1970: 1_000)
+                try store.merge(retryAfter: 30, now: now, uptime: 1_000)
+                let reopened = try CloudKitAvailabilityCooldownStore(
+                    directory: directory, now: now, uptime: 1_010,
+                    bootIDProvider: { currentBootID }
+                )
+                XCTAssertEqual(reopened.throttle.remaining(
+                    at: now, uptime: 1_010
+                ), 30)
+            }
+        }
+    }
+
+    func testLegacyAnchorWithoutBootIDDecodesAndMigratesOnce() throws {
+        struct LegacyAnchor: Encodable {
+            let duration: TimeInterval
+            let uptime: TimeInterval
+        }
+        struct LegacyState: Encodable { let anchor: LegacyAnchor }
+        let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        let file = directory.appendingPathComponent(
+            "cloudkit-availability-retry.json"
+        )
+        try JSONEncoder().encode(LegacyState(anchor: .init(
+            duration: 30, uptime: 1_000
+        ))).write(to: file)
+        let now = Date(timeIntervalSince1970: 1_000)
+        let migrated = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: now, uptime: 1_010,
+            bootIDProvider: { "boot-A" }
+        )
+        XCTAssertEqual(migrated.throttle.remaining(at: now, uptime: 1_010), 30)
+        let reopened = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: now, uptime: 1_020,
+            bootIDProvider: { "boot-A" }
+        )
+        XCTAssertEqual(reopened.throttle.remaining(at: now, uptime: 1_020), 20)
+    }
+
+    func testSameBootIdentityWithRegressedUptimeRestartsDelay() {
+        let throttle = CloudKitRetryThrottle(
+            anchor: .init(duration: 30, uptime: 1_000, bootID: "boot-A"),
+            uptime: 10, bootID: "boot-A"
+        )
+        XCTAssertEqual(throttle.remaining(at: Date(), uptime: 10), 30)
+    }
+
+    func testOldDeadlineRecoversFullServerDelayFromFileDate()
+        async throws {
+        struct OldState: Encodable { let retryNotBefore: Date }
+        let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        let writeDate = Date(timeIntervalSince1970: 1_000_000)
+        let oldState = OldState(retryNotBefore: writeDate.addingTimeInterval(3_600))
+        let file = directory.appendingPathComponent(
+            "cloudkit-availability-retry.json"
+        )
+        try JSONEncoder().encode(oldState).write(to: file)
+        try FileManager.default.setAttributes(
+            [.modificationDate: writeDate], ofItemAtPath: file.path
+        )
+
+        let recovered = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: Date(timeIntervalSince1970: 1_000),
+            uptime: 1_000, bootIDProvider: { nil }
+        )
+        XCTAssertEqual(try XCTUnwrap(recovered.throttle.remaining(
+            at: Date(timeIntervalSince1970: 1_000), uptime: 1_000
+        )), 3_600 + 60, accuracy: 1)
+        let reopened = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: Date(timeIntervalSince1970: 2_000),
+            uptime: 1_010, bootIDProvider: { nil }
+        )
+        XCTAssertEqual(try XCTUnwrap(reopened.throttle.remaining(
+            at: Date(timeIntervalSince1970: 2_000), uptime: 1_010
+        )), 3_660, accuracy: 1)
+        var completedLegacy = reopened
+        var legacyUptime = 1_010.0
+        try await completedLegacy.wait(
+            now: { Date(timeIntervalSince1970: 2_000) },
+            uptime: { legacyUptime },
+            sleep: { legacyUptime += $0 }
+        )
+        let afterCompletion = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: Date(timeIntervalSince1970: 3_000),
+            uptime: 10, bootIDProvider: { nil }
+        )
+        XCTAssertNil(afterCompletion.throttle.anchor)
+    }
+
+    func testLegacyDeadlineWithoutTrustworthyFileDateFailsClosed() throws {
+        for writeDate: Date? in [
+            nil, Date(timeIntervalSince1970: 2_000),
+            Date(timeIntervalSince1970: -1_000_000)
+        ] {
+            XCTAssertThrowsError(try CloudKitAvailabilityCooldownStore
+                .recoverLegacyAnchor(
+                    deadline: Date(timeIntervalSince1970: 1_000),
+                    writeDate: writeDate, uptime: 100
+                )) {
+                XCTAssertEqual(
+                    $0 as? CloudKitSyncTransportError,
+                    .unrecoverableRetryDelay
+                )
+            }
+        }
     }
 
     func testRetryMetadataIncludesNestedPerItemErrors() {
@@ -413,17 +726,20 @@ final class CloudKitTransportStateTests: XCTestCase {
         let directory = temporaryDirectory()
         let start = Date(timeIntervalSince1970: 1_000)
         var store = try CloudKitAvailabilityCooldownStore(directory: directory)
-        try store.merge(retryAfter: 10, now: start)
+        try store.merge(retryAfter: 10, now: start, uptime: 1_000)
         var now = start
+        var uptime = 1_000.0
         var requestCount = 0
         var sleepCount = 0
 
         try await store.wait(
             now: { now },
+            uptime: { uptime },
             sleep: { interval in
                 XCTAssertEqual(requestCount, 0)
                 sleepCount += 1
                 now.addTimeInterval(interval)
+                uptime += interval
             }
         )
         requestCount += 1
@@ -431,9 +747,13 @@ final class CloudKitTransportStateTests: XCTestCase {
         XCTAssertEqual(requestCount, 1)
         XCTAssertEqual(sleepCount, 1)
         let reopened = try CloudKitAvailabilityCooldownStore(
-            directory: directory
+            directory: directory, now: start, uptime: 1_010
         )
-        XCTAssertEqual(reopened.notBefore, start.addingTimeInterval(10))
+        XCTAssertNil(reopened.throttle.remaining(at: now, uptime: uptime))
+        XCTAssertNil(try reopened.reconciledDeadline(
+            saved: start.addingTimeInterval(10),
+            now: start, uptime: 1_010
+        ))
         let persisted = try String(
             contentsOf: directory.appendingPathComponent(
                 "cloudkit-availability-retry.json"
@@ -444,19 +764,42 @@ final class CloudKitTransportStateTests: XCTestCase {
         XCTAssertFalse(persisted.contains("zone"))
     }
 
+    func testMissingCooldownFileCannotClearSavedRetryDeadline() throws {
+        let missing = try CloudKitAvailabilityCooldownStore(
+            directory: temporaryDirectory(),
+            now: Date(timeIntervalSince1970: 1_000), uptime: 100
+        )
+        XCTAssertThrowsError(try missing.reconciledDeadline(
+            saved: Date(timeIntervalSince1970: 2_000),
+            now: Date(timeIntervalSince1970: 1_000), uptime: 100
+        )) {
+            XCTAssertEqual(
+                $0 as? CloudKitSyncTransportError,
+                .unrecoverableRetryDelay
+            )
+        }
+    }
+
     func testTransportReadsPersistedStartupRetryDeadline() throws {
         let directory = temporaryDirectory()
-        let deadline = Date(timeIntervalSince1970: 2_000)
+        let now = Date()
+        let deadline = now.addingTimeInterval(30)
         var store = try CloudKitAvailabilityCooldownStore(
             directory: directory
         )
-        try store.merge(notBefore: deadline)
+        try store.merge(retryAfter: 30, now: now)
+        let file = directory.appendingPathComponent(
+            "cloudkit-availability-retry.json"
+        )
+        let beforeLookup = try Data(contentsOf: file)
 
         let persisted = try CloudKitSyncTransport.persistedRetryNotBefore(
             stateDirectory: directory
         )
 
-        XCTAssertEqual(persisted, deadline)
+        XCTAssertEqual(try XCTUnwrap(persisted).timeIntervalSince(deadline),
+                       0, accuracy: 0.1)
+        XCTAssertEqual(try Data(contentsOf: file), beforeLookup)
     }
 
     func testRebuiltInboxRejectsCursorFromPreviousGeneration() throws {

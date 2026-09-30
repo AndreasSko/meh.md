@@ -128,6 +128,13 @@ public struct SyncFailurePresentation: Equatable, Sendable {
                     actionHint: "Sync recovery is needed before syncing can continue.",
                     disposition: .unavailable
                 )
+            case .unrecoverableRetryDelay:
+                return Failure(
+                    "Sync paused for retry safety",
+                    "The saved iCloud server retry delay could not be verified.",
+                    actionHint: "Keep local notes and share sync diagnostics for recovery.",
+                    disposition: .unavailable
+                )
             case .invalidRemoteRecord:
                 return Failure(
                     "Sync needs attention",
@@ -144,6 +151,22 @@ public struct SyncFailurePresentation: Equatable, Sendable {
                 )
             case .uploadNotAcknowledged:
                 return transientFailure
+            case let .snapshotTooLarge(documentID, kind, displayName):
+                if kind == .catalog {
+                    return Failure(
+                        "Notebook too large to sync",
+                        "The notebook's saved organization history exceeds the 64 MiB iCloud sync limit. Notebook sync is paused. Local notes remain available.",
+                        actionHint: "Keep your local data and export a backup before seeking help to recover sync.",
+                        disposition: .unavailable
+                    )
+                }
+                let identity = displayName ?? documentID.uuidString
+                return Failure(
+                    "Snapshot too large to sync",
+                    "The saved history for \(identity) exceeds the 64 MiB iCloud sync limit. Its local copy remains available.",
+                    actionHint: "Other notes can still sync. Export a backup before seeking help to reduce this note's history.",
+                    disposition: .manual
+                )
             case let .uploadFailed(code):
                 return classifyCloudCode(code)
             }
