@@ -24,7 +24,8 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
                         await probe.didConstruct()
                         return 1
                     },
-                    release: { ids in await probe.didRelease(ids) }
+                    leased: { _ in ["snapshot"] },
+                release: { ids in await probe.didRelease(ids) }
                 )
             XCTAssertNil(batch)
             let counts = await probe.counts()
@@ -53,6 +54,7 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
                     await probe.didConstruct()
                     return 1
                 },
+                leased: { _ in ["snapshot"] },
                 release: { ids in await probe.didRelease(ids) }
             )
         }
@@ -88,6 +90,7 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
                     await probe.didConstruct()
                     return 1
                 },
+                leased: { _ in ["snapshot"] },
                 release: { ids in await probe.didRelease(ids) }
             )
         }

@@ -1465,6 +1465,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private let automaticallySync: Bool
     private var assetStaging: CloudKitAssetStaging
     private var engineAssetLeases: [String: [URL]] = [:]
+    private var batchStagingFailure: Error?
     private var availabilityCooldown: CloudKitAvailabilityCooldownStore
     private var engine: (any CloudKitSyncEngineClient)!
     private var retiredEngineID: ObjectIdentifier?
@@ -2354,10 +2355,10 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         }
     }
 
-    private func prepareEngineBatchRecords(
+    private func outgoingRecords(
         pending: [CKSyncEngine.PendingRecordZoneChange],
         outbox: [String: SyncRecord]
-    ) throws -> [String: CKRecord] {
+    ) throws -> [String: SyncRecord] {
         try assertActive()
         if let delegateFailure { throw delegateFailure }
         guard !unexpectedDeletionObserved else {
@@ -2369,9 +2370,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         if !partition.rejected.isEmpty {
             // Recheck every batch: CK may restore a save request after startup.
             // Retire only the request, keeping its unique durable history.
-            engine.remove(
-                pendingRecordZoneChanges: partition.rejected
-            )
+            engine.remove(pendingRecordZoneChanges: partition.rejected)
             if case let .saveRecord(id) = partition.rejected[0],
                let value = outbox[id.recordName] {
                 let error = CloudKitSyncTransportError.snapshotTooLarge(
@@ -2381,34 +2380,37 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 yieldAfterDelegateReturns([.failed(error.localizedDescription)])
             }
         }
-        var records: [String: CKRecord] = [:]
+        var records: [String: SyncRecord] = [:]
+        for change in partition.admitted {
+            guard case let .saveRecord(recordID) = change,
+                  recordID.zoneID == zoneID,
+                  let value = outbox[recordID.recordName] else {
+                continue
+            }
+            records[recordID.recordName] = value
+        }
+        return records
+    }
+
+    /// Stages one record the batch includes. The batch provider cannot
+    /// throw, so the first failure is kept and reported once it is built.
+    private func stageEngineRecord(
+        _ value: SyncRecord, id: CKRecord.ID
+    ) -> CKRecord? {
+        guard batchStagingFailure == nil else { return nil }
         do {
-            for change in partition.admitted {
-                guard case let .saveRecord(recordID) = change,
-                      recordID.zoneID == zoneID,
-                      let value = outbox[recordID.recordName] else {
-                    continue
-                }
-                let assetURL = try assetStaging.retain(value)
-                do {
-                    records[recordID.recordName] = try codec.encode(
-                        value,
-                        id: recordID,
-                        assetURL: assetURL
-                    )
-                    engineAssetLeases[recordID.recordName, default: []]
-                        .append(assetURL)
-                } catch {
-                    assetStaging.release(assetURL, uploadCompleted: false)
-                    throw error
-                }
+            let assetURL = try assetStaging.retain(value)
+            do {
+                let record = try codec.encode(value, id: id, assetURL: assetURL)
+                engineAssetLeases[id.recordName, default: []].append(assetURL)
+                return record
+            } catch {
+                assetStaging.release(assetURL, uploadCompleted: false)
+                throw error
             }
-            return records
         } catch {
-            for id in records.keys {
-                releaseEngineAssetLease(for: id, uploadCompleted: false)
-            }
-            throw error
+            batchStagingFailure = error
+            return nil
         }
     }
 
@@ -2716,34 +2718,45 @@ extension CloudKitSyncTransport {
                 stage: { outbox in
                     guard await self.canOfferOutgoingBatch(syncEngine)
                         else { return [:] }
-                    return try await self.prepareEngineBatchRecords(
+                    return try await self.outgoingRecords(
                         pending: pending,
                         outbox: outbox
                     )
                 },
-                construct: { records in
+                construct: { (records: [String: SyncRecord]) in
+                    // The batch asks only for the records that fit in one
+                    // request, so only those are written to disk.
                     await CKSyncEngine.RecordZoneChangeBatch(
                         pendingChanges: pending
                     ) { recordID in
-                        records[recordID.recordName]
+                        guard let value = records[recordID.recordName] else {
+                            return nil
+                        }
+                        return await self.stageEngineRecord(value, id: recordID)
                     }
+                },
+                leased: { batch in
+                    Set(batch.recordsToSave.map { $0.recordID.recordName })
                 },
                 release: { ids in
                     await self.releaseOutgoingBatchLeases(ids)
                 }
             )
-            guard let prepared else { return nil }
-            // A batch stops at CloudKit's per-request limit. Changes left out
-            // are offered again later and must not keep their staged files.
-            let included = Set(prepared.batch.recordsToSave.map {
-                $0.recordID.recordName
-            })
-            releaseOutgoingBatchLeases(prepared.leasedIDs.subtracting(included))
+            let stagingFailure = batchStagingFailure
+            batchStagingFailure = nil
+            guard let prepared else {
+                if let stagingFailure { throw stagingFailure }
+                return nil
+            }
+            if let stagingFailure {
+                releaseOutgoingBatchLeases(prepared.leasedIDs)
+                throw stagingFailure
+            }
             guard !isRetired, delegateFailure == nil,
                   store.writeHealth.failure == nil,
                   !unexpectedDeletionObserved,
                   syncEngine === engine else {
-                releaseOutgoingBatchLeases(included)
+                releaseOutgoingBatchLeases(prepared.leasedIDs)
                 return nil
             }
             return prepared.batch
