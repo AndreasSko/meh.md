@@ -856,6 +856,10 @@ final class NotebookWorkspace {
             return
         }
         notebookTransport = unavailableWhenRequested(transport)
+        if let cloud = transport as? CloudKitSyncTransport,
+           await cloud.recoveredRetryMetadata {
+            syncEventLog.record("cloud retry metadata recovered")
+        }
         syncHalt = nil
         let generation = transportGeneration
         if automaticSync, let cloud = notebookTransport as? CloudKitSyncTransport {

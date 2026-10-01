@@ -242,6 +242,56 @@ final class CloudKitSyncEngineTests: XCTestCase {
         XCTAssertEqual(try stagedAssetCount("device"), 0)
     }
 
+    func testRetryRecoveryPreservesStateAndPublishesPendingNote() async throws {
+        for damage in ["missing", "invalid cooldown", "invalid deadline"] {
+            let device = "recovery-" + damage.replacingOccurrences(of: " ", with: "-")
+            let transport = try await open(device)
+            _ = try await transport.bootstrap(proposing: try makeCatalog())
+            let note = try makeNote("pending fictional note")
+            server.inject(.failSave(.quotaExceeded) { $0.recordName == note.id })
+            let failed = try await transport.publishBatch([note])
+            XCTAssertNotNil(failed.error)
+            await transport.retire()
+
+            let directory = root.appending(path: device)
+            let stateFile = directory.appending(path: "cloudkit-sync-state.json")
+            var before = try XCTUnwrap(JSONSerialization.jsonObject(
+                with: Data(contentsOf: stateFile)
+            ) as? [String: Any])
+            before["retryNotBefore"] = damage == "invalid deadline"
+                ? "invalid" : Date().timeIntervalSinceReferenceDate + 3_600
+            try JSONSerialization.data(withJSONObject: before).write(to: stateFile)
+            let cooldownFile = directory.appending(path: "cloudkit-availability-retry.json")
+            if FileManager.default.fileExists(atPath: cooldownFile.path) {
+                try FileManager.default.removeItem(at: cooldownFile)
+            }
+            if damage == "invalid cooldown" {
+                try Data("{".utf8).write(to: cooldownFile)
+            }
+
+            let recovered = try await open(device)
+            let didRecover = await recovered.recoveredRetryMetadata
+            XCTAssertTrue(didRecover, damage)
+            var after = try XCTUnwrap(JSONSerialization.jsonObject(
+                with: Data(contentsOf: stateFile)
+            ) as? [String: Any])
+            XCTAssertNil(after["retryNotBefore"])
+            before.removeValue(forKey: "retryNotBefore")
+            after.removeValue(forKey: "retryNotBefore")
+            XCTAssertEqual(before as NSDictionary, after as NSDictionary, damage)
+
+            let published = try await recovered.publishBatch([note])
+            XCTAssertNil(published.error)
+            XCTAssertEqual(published.acknowledgedIDs, [note.id])
+            XCTAssertTrue(server.recordNames.contains(note.id))
+            await recovered.retire()
+            let reopened = try await open(device)
+            let recoveredAgain = await reopened.recoveredRetryMetadata
+            XCTAssertFalse(recoveredAgain, damage)
+            await reopened.retire()
+        }
+    }
+
     // MARK: Helpers
 
     private func open(_ device: String) async throws -> CloudKitSyncTransport {
