@@ -50,6 +50,7 @@ struct CloudKitTransportState: Codable, Equatable {
     var unresolvedRemoteDeletionRecordIDs: Set<String>
     var hasUnexpectedDeletion: Bool
     var retryNotBefore: Date?
+    var recoveredInvalidRetryDeadline = false
 
     init(
         accountRecordName: String,
@@ -110,9 +111,14 @@ struct CloudKitTransportState: Codable, Equatable {
         hasUnexpectedDeletion = try values.decode(
             Bool.self, forKey: .hasUnexpectedDeletion
         )
-        retryNotBefore = try values.decodeIfPresent(
-            Date.self, forKey: .retryNotBefore
-        )
+        do {
+            retryNotBefore = try values.decodeIfPresent(
+                Date.self, forKey: .retryNotBefore
+            )
+        } catch is DecodingError {
+            retryNotBefore = nil
+            recoveredInvalidRetryDeadline = true
+        }
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -1283,12 +1289,46 @@ struct CloudKitAvailabilityCooldownStore {
         var retryNotBefore: Date?
         var anchor: CloudKitRetryThrottle.Anchor?
         var completed: Bool?
+        var recoveredInvalidRetryDeadline = false
+
+        private enum CodingKeys: String, CodingKey {
+            case retryNotBefore, anchor, completed
+        }
+
+        init(
+            retryNotBefore: Date?, anchor: CloudKitRetryThrottle.Anchor?,
+            completed: Bool?
+        ) {
+            self.retryNotBefore = retryNotBefore
+            self.anchor = anchor
+            self.completed = completed
+        }
+
+        init(from decoder: any Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            anchor = try values.decodeIfPresent(
+                CloudKitRetryThrottle.Anchor.self, forKey: .anchor
+            )
+            completed = try values.decodeIfPresent(Bool.self, forKey: .completed)
+            do {
+                retryNotBefore = try values.decodeIfPresent(
+                    Date.self, forKey: .retryNotBefore
+                )
+            } catch let error as DecodingError {
+                // The anchor independently preserves the server's wait.
+                // Its validity is checked before using or persisting it.
+                guard anchor != nil else { throw error }
+                retryNotBefore = nil
+                recoveredInvalidRetryDeadline = true
+            }
+        }
     }
 
     private let fileURL: URL
     private let bootID: String?
     private(set) var throttle: CloudKitRetryThrottle
     private(set) var completed = false
+    private(set) var recoveredRetryMetadata = false
 
     // The old file was atomically renamed shortly after the retry was
     // observed. Its modification time therefore preserves the old clock's
@@ -1337,11 +1377,22 @@ struct CloudKitAvailabilityCooldownStore {
                 anchor: recoveredAnchor, uptime: uptime, bootID: bootID
             )
             completed = state.completed == true
+            recoveredRetryMetadata = state.recoveredInvalidRetryDeadline
             needsPersistence = !completed && persistOnLoad
         } catch CocoaError.fileReadNoSuchFile {
             throttle = CloudKitRetryThrottle(bootID: bootID)
-        } catch let error as CloudKitSyncTransportError {
-            throw error
+        } catch is DecodingError {
+            throttle = CloudKitRetryThrottle(bootID: bootID)
+            completed = true
+            recoveredRetryMetadata = true
+            needsPersistence = persistOnLoad
+        } catch is CloudKitSyncTransportError {
+            // This file contains only retry metadata. Recover it without
+            // discarding any of the account-bound transport state.
+            throttle = CloudKitRetryThrottle(bootID: bootID)
+            completed = true
+            recoveredRetryMetadata = true
+            needsPersistence = persistOnLoad
         } catch {
             throw CloudKitSyncTransportError.corruptState
         }
@@ -1365,12 +1416,21 @@ struct CloudKitAvailabilityCooldownStore {
 
     var notBefore: Date? { throttle.notBefore }
 
-    func reconciledDeadline(
+    mutating func reconciledDeadline(
         saved: Date?, now: Date,
         uptime: TimeInterval
     ) throws -> Date? {
         if throttle.anchor == nil, saved != nil, !completed {
-            throw CloudKitSyncTransportError.unrecoverableRetryDelay
+            // Mark recovery durably before clearing the duplicate deadline.
+            // If that second write fails, a relaunch can finish the repair.
+            try SyncFileIO.replace(
+                JSONEncoder().encode(State(
+                    retryNotBefore: nil, anchor: nil, completed: true
+                )),
+                at: fileURL
+            )
+            completed = true
+            recoveredRetryMetadata = true
         }
         return throttle.deadline(at: now, uptime: uptime)
     }
@@ -1449,6 +1509,7 @@ struct CloudKitAvailabilityCooldownStore {
 public final actor CloudKitSyncTransport: HaltableSyncTransport {
     public nonisolated let scope: String
     public nonisolated let activity: AsyncStream<CloudKitSyncActivity>
+    public private(set) var recoveredRetryMetadata = false
 
     private static let pageSize = 100
 
@@ -1721,8 +1782,13 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         let deadline = try availabilityCooldown.reconciledDeadline(
             saved: saved.retryNotBefore, now: now, uptime: uptime
         )
-        if saved.retryNotBefore != deadline {
-            try await store.update { $0.retryNotBefore = deadline }
+        recoveredRetryMetadata = availabilityCooldown.recoveredRetryMetadata
+            || saved.recoveredInvalidRetryDeadline
+        if saved.retryNotBefore != deadline || saved.recoveredInvalidRetryDeadline {
+            try await store.update {
+                $0.retryNotBefore = deadline
+                $0.recoveredInvalidRetryDeadline = false
+            }
         }
         engine = try engineFactory(
             saved.engineState, self, automaticallySync

@@ -89,7 +89,7 @@ handoff, account changes, and server conflicts.
 
 ## Throttling
 
-Automatic or explicit exchanges do not override Apple's retry deadlines. The
+Automatic or explicit exchanges honor valid saved retry deadlines. The
 adapter persists the longest active retry-after delay, including per-record
 errors, and waits before making further requests. A small availability-only
 file also gates account discovery after app restart; it is never used as proof
@@ -100,6 +100,16 @@ unavailable marker, or a calendar step that changes the marker restarts the
 full saved delay conservatively. The marker stays in local sync state and is
 not sent to CloudKit. Older cooldown files migrate to this format without
 discarding the server delay.
+If the duplicate deadline is damaged but its elapsed-time anchor is valid,
+the adapter preserves the anchor and reconstructs the deadline. If no usable
+retry timing can be decoded or safely migrated, the adapter clears
+only the cooldown and its duplicate deadline, records recovery in the sync
+event log, and retries immediately. Missing cooldown metadata is recovered
+the same way when transport state still contains a retry deadline. Notes,
+pending uploads, account binding, and other sync state remain intact. A new
+server retry delay is persisted and respected normally. Unreadable files,
+failed recovery writes, and corruption elsewhere in transport state still
+stop setup.
 If Apple reports throttling or service unavailability without a usable delay,
 the adapter waits 30 seconds. A failed cooldown write stops further requests
 until the adapter is recreated from durable state.

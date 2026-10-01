@@ -429,7 +429,7 @@ final class CloudKitTransportStateTests: XCTestCase {
             }
         )
         XCTAssertEqual(observed, [20])
-        let afterCompletion = try CloudKitAvailabilityCooldownStore(
+        var afterCompletion = try CloudKitAvailabilityCooldownStore(
             directory: directory, now: Date(timeIntervalSince1970: 1_000),
             uptime: 1_000, bootIDProvider: { "boot-A" }
         )
@@ -562,7 +562,7 @@ final class CloudKitTransportStateTests: XCTestCase {
                 XCTAssertTrue(reopened.completed)
             }
         }
-        let completed = try CloudKitAvailabilityCooldownStore(
+        var completed = try CloudKitAvailabilityCooldownStore(
             directory: directory, now: start, uptime: 10,
             bootIDProvider: { "boot-B" }
         )
@@ -746,7 +746,7 @@ final class CloudKitTransportStateTests: XCTestCase {
 
         XCTAssertEqual(requestCount, 1)
         XCTAssertEqual(sleepCount, 1)
-        let reopened = try CloudKitAvailabilityCooldownStore(
+        var reopened = try CloudKitAvailabilityCooldownStore(
             directory: directory, now: start, uptime: 1_010
         )
         XCTAssertNil(reopened.throttle.remaining(at: now, uptime: uptime))
@@ -764,19 +764,138 @@ final class CloudKitTransportStateTests: XCTestCase {
         XCTAssertFalse(persisted.contains("zone"))
     }
 
-    func testMissingCooldownFileCannotClearSavedRetryDeadline() throws {
-        let missing = try CloudKitAvailabilityCooldownStore(
-            directory: temporaryDirectory(),
+    func testMissingCooldownFileClearsOnlySavedRetryDeadline() throws {
+        let directory = temporaryDirectory()
+        var missing = try CloudKitAvailabilityCooldownStore(
+            directory: directory,
             now: Date(timeIntervalSince1970: 1_000), uptime: 100
         )
-        XCTAssertThrowsError(try missing.reconciledDeadline(
+        XCTAssertNil(try missing.reconciledDeadline(
             saved: Date(timeIntervalSince1970: 2_000),
             now: Date(timeIntervalSince1970: 1_000), uptime: 100
-        )) {
-            XCTAssertEqual(
-                $0 as? CloudKitSyncTransportError,
-                .unrecoverableRetryDelay
+        ))
+        XCTAssertTrue(missing.recoveredRetryMetadata)
+        let reopened = try CloudKitAvailabilityCooldownStore(directory: directory)
+        XCTAssertTrue(reopened.completed)
+        XCTAssertNil(reopened.throttle.anchor)
+        XCTAssertFalse(reopened.recoveredRetryMetadata)
+    }
+
+    func testInvalidCooldownRecoversAndHonorsNextServerDelay() throws {
+        for payload in [
+            "{", "[]", "{\"anchor\":{\"duration\":-1,\"uptime\":100}}",
+            "{\"completed\":true,\"retryNotBefore\":123}",
+            "{\"retryNotBefore\":\"invalid\"}",
+            "{\"retryNotBefore\":0}"
+        ] {
+            let directory = temporaryDirectory()
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true
             )
+            let file = directory.appendingPathComponent(
+                "cloudkit-availability-retry.json"
+            )
+            try Data(payload.utf8).write(to: file)
+            var recovered = try CloudKitAvailabilityCooldownStore(
+                directory: directory, uptime: 100,
+                bootIDProvider: { "test-boot" }
+            )
+            XCTAssertTrue(recovered.completed, payload)
+            XCTAssertTrue(recovered.recoveredRetryMetadata, payload)
+            XCTAssertNil(recovered.notBefore, payload)
+            let now = Date(timeIntervalSince1970: 1_000)
+            try recovered.merge(retryAfter: 30, now: now, uptime: 100)
+            let reopened = try CloudKitAvailabilityCooldownStore(
+                directory: directory, now: now, uptime: 110,
+                bootIDProvider: { "test-boot" }
+            )
+            XCTAssertEqual(reopened.throttle.remaining(at: now, uptime: 110), 20)
+            XCTAssertFalse(reopened.completed)
+        }
+    }
+
+    func testMalformedDuplicateDeadlinePreservesActiveAnchor() async throws {
+        let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        let file = directory.appendingPathComponent(
+            "cloudkit-availability-retry.json"
+        )
+        let damaged = try JSONSerialization.data(withJSONObject: [
+            "anchor": ["duration": 30, "uptime": 100, "bootID": "test-boot"],
+            "retryNotBefore": "invalid"
+        ])
+        try damaged.write(to: file)
+        let now = Date(timeIntervalSince1970: 1_000)
+        let lookup = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: now, uptime: 110,
+            persistOnLoad: false, bootIDProvider: { "test-boot" }
+        )
+        XCTAssertEqual(lookup.throttle.remaining(at: now, uptime: 110), 20)
+        XCTAssertEqual(try Data(contentsOf: file), damaged)
+
+        var recovered = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: now, uptime: 110,
+            bootIDProvider: { "test-boot" }
+        )
+        XCTAssertTrue(recovered.recoveredRetryMetadata)
+        XCTAssertFalse(recovered.completed)
+        XCTAssertEqual(recovered.throttle.anchor?.uptime, 100)
+        XCTAssertEqual(try recovered.reconciledDeadline(
+            saved: now.addingTimeInterval(9_999), now: now, uptime: 110
+        ), now.addingTimeInterval(20))
+        let repaired = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: file)
+        ) as? [String: Any])
+        XCTAssertEqual(repaired["retryNotBefore"] as? Double,
+                       now.addingTimeInterval(20).timeIntervalSinceReferenceDate)
+        let reopened = try CloudKitAvailabilityCooldownStore(
+            directory: directory, now: now, uptime: 115,
+            bootIDProvider: { "test-boot" }
+        )
+        XCTAssertEqual(reopened.throttle.remaining(at: now, uptime: 115), 15)
+        XCTAssertFalse(reopened.recoveredRetryMetadata)
+
+        var uptime = 110.0
+        var waits: [TimeInterval] = []
+        try await recovered.wait(
+            now: { now }, uptime: { uptime },
+            sleep: { interval in
+                waits.append(interval)
+                uptime += interval
+            }
+        )
+        XCTAssertEqual(waits, [20])
+        XCTAssertTrue(recovered.completed)
+    }
+
+    func testInvalidCooldownLookupDoesNotRewriteFile() throws {
+        let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        let file = directory.appendingPathComponent(
+            "cloudkit-availability-retry.json"
+        )
+        let damaged = Data("{".utf8)
+        try damaged.write(to: file)
+        XCTAssertNil(try CloudKitSyncTransport.persistedRetryNotBefore(
+            stateDirectory: directory
+        ))
+        XCTAssertEqual(try Data(contentsOf: file), damaged)
+    }
+
+    func testUnreadableCooldownStillBlocksTransport() throws {
+        let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent("cloudkit-availability-retry.json"),
+            withIntermediateDirectories: true
+        )
+        XCTAssertThrowsError(try CloudKitAvailabilityCooldownStore(
+            directory: directory
+        )) {
+            XCTAssertEqual($0 as? CloudKitSyncTransportError, .corruptState)
         }
     }
 
