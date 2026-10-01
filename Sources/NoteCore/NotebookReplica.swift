@@ -92,6 +92,8 @@ public final class NotebookReplica {
     /// The active destination for global New Note actions. `nil` means Root.
     public private(set) var defaultNewNoteParentID: UUID?
     public private(set) var recentNotes: [NotebookRecentNote] = []
+    /// All eligible recent notes, with pins first and no ordinary-note cap.
+    public private(set) var allRecentNotes: [NotebookRecentNote] = []
     public private(set) var pinnedRecentCount = 0
     public private(set) var hasPendingImport: Bool
     public private(set) var localEditsSuspended = false
@@ -373,6 +375,7 @@ public final class NotebookReplica {
             let next = try catalog.fork()
             try next.setPinnedInRecents(pinned, for: id)
             let previousRecentNotes = self.recentNotes
+            let previousAllRecentNotes = self.allRecentNotes
             let previousPinnedCount = self.pinnedRecentCount
             let previousActivityID = self.latestRecentActivityID
             try self.updateRecentProjection(from: next, placements: self.placements)
@@ -380,6 +383,7 @@ public final class NotebookReplica {
                 try await self.persistCatalog(next)
             } catch {
                 self.recentNotes = previousRecentNotes
+                self.allRecentNotes = previousAllRecentNotes
                 self.pinnedRecentCount = previousPinnedCount
                 self.latestRecentActivityID = previousActivityID
                 throw error
@@ -822,6 +826,49 @@ public final class NotebookReplica {
         try await records().compactMap { record in
             record.kind == .note ? record.snapshot : nil
         }
+    }
+
+    /// Reads a bounded source prefix without opening an editor or recording
+    /// activity. Existing editor text takes precedence over the stored body.
+    /// The full document is decoded transiently, never retained as a session.
+    public func noteTextPrefix(
+        for id: UUID,
+        characterLimit: Int = 1_280
+    ) async throws -> String? {
+        try Task.checkCancellation()
+        await waitForWrites()
+        let notebookID = catalogSnapshot?.notebookID
+        guard characterLimit > 0, placements.contains(where: {
+            $0.item.id == id && $0.item.kind == .note && !$0.isInTrash
+                && !$0.item.isPermanentlyDeleted
+        }) else { return nil }
+        let text: String?
+        if let session = sessions[id] {
+            if let load = sessionLoads[id] { await load.value }
+            text = session.isEditingEnabled
+                ? String(session.text.prefix(characterLimit)) : nil
+        } else if case .current(let snapshot) = await noteStorage(id).load(),
+                  snapshot.noteID == id {
+            let decode = Task.detached(priority: .userInitiated) {
+                try Task.checkCancellation()
+                let document = try NoteDocument(snapshot: snapshot)
+                try Task.checkCancellation()
+                return String(try document.text.prefix(characterLimit))
+            }
+            text = try await withTaskCancellationHandler {
+                try await decode.value
+            } onCancel: {
+                decode.cancel()
+            }
+        } else {
+            text = nil
+        }
+        try Task.checkCancellation()
+        guard notebookID == catalogSnapshot?.notebookID,
+              placements.contains(where: {
+                  $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+              }) else { return nil }
+        return text
     }
 
     /// Capture searchable note text without flushing edits or opening editor
@@ -1384,10 +1431,13 @@ public final class NotebookReplica {
                 < ($1.1.activityOrder ?? 0, $1.1.activityActionID?.uuidString ?? "", $1.0.uuidString)
         }?.0
         pinnedRecentCount = pinned.count
-        recentNotes = pinned.map { NotebookRecentNote(id: $0.0, isPinned: true) }
-            + ordinary.prefix(max(0, 5 - pinned.count)).map {
+        allRecentNotes = pinned.map { NotebookRecentNote(id: $0.0, isPinned: true) }
+            + ordinary.map {
                 NotebookRecentNote(id: $0.0, isPinned: false)
             }
+        // Concurrent pins can exceed the local pin limit and must all remain
+        // visible. Ordinary notes fill the remaining compact slots.
+        recentNotes = Array(allRecentNotes.prefix(max(5, pinned.count)))
     }
 
     private func applyRememberedDeletions() {

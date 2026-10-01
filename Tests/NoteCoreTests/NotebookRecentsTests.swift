@@ -55,6 +55,43 @@ final class NotebookRecentsTests: XCTestCase {
     }
 
     @MainActor
+    func testExpandedHistoryRetainsOlderActivityAndIndependentPins() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "recents-expanded-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replica = NotebookReplica(directory: directory)
+        try await replica.createLocalNotebook()
+        var ids: [UUID] = []
+        for index in 0..<9 {
+            let id = try await replica.createNote(name: "\(index).md")
+            ids.append(id)
+            try await replica.recordRecentActivity(for: id)
+        }
+        let untouched = try await replica.createNote(name: "Untouched.md")
+        XCTAssertEqual(replica.recentNotes.map(\.id), Array(ids.reversed().prefix(5)))
+        XCTAssertEqual(replica.allRecentNotes.map(\.id), Array(ids.reversed()))
+        // A pin without prior activity must also appear in expanded history.
+        try await replica.setPinnedInRecents(true, for: untouched)
+        try await replica.setPinnedInRecents(true, for: ids[0])
+        XCTAssertEqual(replica.allRecentNotes.prefix(2).map(\.id), [untouched, ids[0]])
+        XCTAssertEqual(replica.allRecentNotes.count, 10)
+        XCTAssertEqual(replica.recentNotes.count, 5)
+        XCTAssertEqual(Set(replica.allRecentNotes.map(\.id)).count, 10)
+        try await replica.recordRecentActivity(for: ids[0])
+        XCTAssertEqual(replica.allRecentNotes.prefix(2).map(\.id), [untouched, ids[0]])
+        try await replica.setPinnedInRecents(false, for: ids[0])
+        XCTAssertEqual(replica.allRecentNotes[1].id, ids[0])
+        XCTAssertFalse(replica.allRecentNotes[1].isPinned)
+        try await replica.setTrashed(ids[3], true)
+        XCTAssertFalse(replica.allRecentNotes.contains { $0.id == ids[3] })
+        try await replica.setTrashed(ids[3], false)
+        XCTAssertFalse(replica.allRecentNotes.contains { $0.id == ids[3] })
+        let reloaded = NotebookReplica(directory: directory)
+        try await reloaded.load()
+        XCTAssertEqual(reloaded.allRecentNotes, replica.allRecentNotes)
+    }
+
+    @MainActor
     func testReplicaCapOverflowAndTrashRestore() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "recents-test-\(UUID().uuidString)")
@@ -129,6 +166,7 @@ final class NotebookRecentsTests: XCTestCase {
         try await right.acceptSeed(SyncRecord(catalog: leftSnapshot))
         XCTAssertEqual(left.pinnedRecentCount, 6)
         XCTAssertEqual(left.recentNotes, right.recentNotes)
+        XCTAssertEqual(left.allRecentNotes, right.allRecentNotes)
         XCTAssertFalse(left.canPinInRecents)
         XCTAssertEqual(Set(left.recentNotes.map(\.id)), Set(ids))
     }
@@ -217,6 +255,7 @@ final class NotebookRecentsTests: XCTestCase {
         XCTAssertNotEqual(replica.catalogSnapshot?.heads, previousHeads)
 
         let persistedNotes = replica.recentNotes
+        let persistedAllNotes = replica.allRecentNotes
         let persistedHeads = replica.catalogSnapshot?.heads
         replica.catalogWriteSuspension = { throw InjectedFailure.save }
         do {
@@ -224,6 +263,7 @@ final class NotebookRecentsTests: XCTestCase {
             XCTFail("The injected save failure must escape")
         } catch InjectedFailure.save {}
         XCTAssertEqual(replica.recentNotes, persistedNotes)
+        XCTAssertEqual(replica.allRecentNotes, persistedAllNotes)
         XCTAssertEqual(replica.catalogSnapshot?.heads, persistedHeads)
         XCTAssertTrue(replica.isPinnedInRecents(first))
     }
