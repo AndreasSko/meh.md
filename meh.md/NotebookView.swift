@@ -792,7 +792,15 @@ struct NotebookView: View {
         #if os(iOS)
         row
         #else
-        row.contextMenu {
+        row
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            let id = placement.item.id
+            if replica.isPinnedInRecents(id) || replica.canPinInRecents(id) {
+                recentPinButton(for: id, swipeIcon: true)
+                    .tint(replica.isPinnedInRecents(id) ? .gray : .orange)
+            }
+        }
+        .contextMenu {
             actions(for: placement, allowsCreation: false,
                     allowsShowInFiles: true)
         }
