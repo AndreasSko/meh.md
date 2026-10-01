@@ -14,6 +14,24 @@ final class NoteHistoryUITests: XCTestCase {
 
         North ridge was clear. Valley station was cloudy.
 
+        18 September — North ridge
+        The team recorded a faint light beyond the valley.
+        Trail conditions were dry, with a gentle northern wind.
+        Supplies included water, a notebook, and wool gloves.
+        The return route passed the old fictional shelter.
+
+        19 September — Forest station
+        Clouds lifted shortly after noon above the river.
+        The telescope remained beside the narrow crossing.
+        A quiet observation followed the afternoon walk.
+        We left enough time to return before sunset.
+
+        20 September — Quiet campsite
+        The final scan found three rings above the ridge.
+        We packed the tent after the morning dew dried.
+        The route continued past the hill toward the valley.
+        Tomorrow the observatory will compare these notes.
+
         """
         let addition = "\nNew scan."
         createNote(in: app, title: title, body: firstBody)
@@ -58,9 +76,44 @@ final class NoteHistoryUITests: XCTestCase {
         XCTAssertTrue(previous.exists)
         activate(previous)
         XCTAssertEqual(preview.value as? String, firstBody)
+        activate(app.buttons["note-history-next"])
+        XCTAssertEqual(preview.value as? String, currentBody)
+        activate(previous)
+        XCTAssertEqual(preview.value as? String, firstBody)
         XCTAssertTrue(app.descendants(matching: .any)
             .matching(identifier: "note-history-status").firstMatch.exists)
         capture(app, name: "Aurora Observatory earlier text in History")
+
+        #if os(iOS)
+        let timeline = app.sliders["note-history-timeline"]
+        XCTAssertTrue(timeline.exists)
+        timeline.adjust(toNormalizedSliderPosition: 0)
+        timeline.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)
+        ).press(
+            forDuration: 0.1,
+            thenDragTo: timeline.coordinate(
+                withNormalizedOffset: CGVector(dx: 1.05, dy: 0.5)
+            )
+        )
+        XCTAssertEqual(preview.value as? String, currentBody)
+        activate(previous)
+        XCTAssertEqual(preview.value as? String, firstBody)
+        #endif
+        let detail = app.buttons["note-history-detail-toggle"]
+        XCTAssertTrue(detail.exists)
+        activate(detail)
+        XCTAssertTrue(app.buttons["Overview"].waitForExistence(timeout: 5))
+        XCTAssertEqual(preview.value as? String, firstBody)
+        activate(detail)
+        XCTAssertTrue(app.buttons["More Detail"].waitForExistence(timeout: 5))
+        XCTAssertEqual(preview.value as? String, firstBody)
+
+        #if os(iOS)
+        preview.swipeUp()
+        preview.swipeUp()
+        capture(app, name: "Aurora Observatory final lines above History controls")
+        #endif
 
         #if os(macOS)
         let dateList = app.menuButtons["note-history-date-list"]
@@ -70,11 +123,15 @@ final class NoteHistoryUITests: XCTestCase {
         XCTAssertTrue(dateList.exists)
         #if os(iOS)
         XCTAssertGreaterThanOrEqual(dateList.frame.height, 44)
-        dateList.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)
-        ).tap()
-        XCTAssertTrue(app.buttons["Current version"].waitForExistence(timeout: 5))
+        activate(dateList)
         capture(app, name: "Aurora Observatory dated versions menu")
+        let currentVersion = app.buttons["Current version"]
+        if !currentVersion.exists {
+            let menu = app.collectionViews.firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 5))
+            for _ in 0..<3 where !currentVersion.exists { menu.swipeDown() }
+        }
+        XCTAssertTrue(currentVersion.waitForExistence(timeout: 5))
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.3)).tap()
         #endif
 
@@ -148,9 +205,17 @@ final class NoteHistoryUITests: XCTestCase {
 
     private func makeApp(run: String) -> XCUIApplication {
         let app = XCUIApplication()
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+#if ICLOUD_ENABLED
+        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
+        app.launchEnvironment["MEH_SYNC_URL"] =
+            ProcessInfo.processInfo.environment["MEH_SYNC_TEST_URL"]
+            ?? "http://127.0.0.1:8765"
+        app.launchEnvironment["MEH_SYNC_WORKSPACE"] = run
+#else
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = run
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+#endif
         app.launchArguments += ["-editor.mode", "source"]
         return app
     }

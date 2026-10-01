@@ -65,7 +65,27 @@ final class NotebookSearchUITests: XCTestCase {
         createNote(
             in: app,
             title: "Fictional Field Log",
-            body: "North ridge\n\nA lantern crosses the valley."
+            body: """
+            Fictional Field Log
+
+            18 September — North ridge
+            A lantern crosses the valley before sunrise.
+            Trail conditions: dry stone, light wind.
+            Supplies: water, notebook, wool gloves.
+            Follow the ridge past the old shelter.
+
+            19 September — Forest path
+            The lantern marks the turn toward the river.
+            Cloud cover clears shortly after noon.
+            Record the bridge and the narrow crossing.
+            Leave enough time for the return walk.
+
+            20 September — Quiet campsite
+            A lantern hangs beside the fictional camp.
+            Pack the tent after the morning dew dries.
+            Check the route before climbing the hill.
+            Return to the valley by late afternoon.
+            """
         )
 
         #if os(macOS)
@@ -89,15 +109,57 @@ final class NotebookSearchUITests: XCTestCase {
         capture(app, name: "Native Find in a fictional note")
 #if os(macOS)
         let matchIndicator = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH[c] %@", "1 match")
+            NSPredicate(format: "label BEGINSWITH[c] %@", "3 matches")
         ).firstMatch
 #else
-        let matchIndicator = app.staticTexts["1 of 1"]
+        let matchIndicator = app.staticTexts["1 of 3"]
 #endif
         XCTAssertTrue(
             matchIndicator.waitForExistence(timeout: 5),
             "Expected native Find to report the matching occurrence"
         )
+#if os(iOS)
+        let next = app.buttons["find.nextButton"]
+        let previous = app.buttons["find.previousButton"]
+        next.tap()
+        XCTAssertTrue(app.staticTexts["2 of 3"].waitForExistence(timeout: 5))
+        next.tap()
+        XCTAssertTrue(app.staticTexts["3 of 3"].waitForExistence(timeout: 5))
+        let keyboardVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                let keyboard = app.keyboards.firstMatch
+                return keyboard.exists
+                    && keyboard.frame.minY < app.frame.maxY - 100
+            }, object: app
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [keyboardVisible], timeout: 5), .completed
+        )
+        capture(app, name: "Native Find reveals the last occurrence")
+        XCTAssertGreaterThan(
+            app.textViews["markdown-editor"].frame.maxY, findField.frame.maxY,
+            "The document must extend behind the native Find controls"
+        )
+        previous.tap()
+        XCTAssertTrue(app.staticTexts["2 of 3"].waitForExistence(timeout: 5))
+        app.buttons["find.doneButton"].tap()
+        XCTAssertFalse(app.searchFields["find.searchField"].exists)
+        let editor = app.textViews["markdown-editor"]
+        let originalText = editor.value as? String ?? ""
+        editor.tap()
+        XCTAssertTrue(
+            app.buttons["editor-command-bold"].waitForExistence(timeout: 5),
+            "Writing controls should return after closing Find"
+        )
+        editor.typeText(" Written after Find.")
+        XCTAssertTrue((editor.value as? String ?? "").contains("Written after Find."))
+        XCTAssertEqual(
+            (editor.value as? String ?? "").replacingOccurrences(
+                of: " Written after Find.", with: ""
+            ), originalText
+        )
+        capture(app, name: "Writing resumes after closing native Find")
+#endif
     }
 
 #if os(macOS)
@@ -127,9 +189,17 @@ final class NotebookSearchUITests: XCTestCase {
 
     private func makeApp() -> XCUIApplication {
         let app = XCUIApplication()
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+#if ICLOUD_ENABLED
+        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
+        app.launchEnvironment["MEH_SYNC_URL"] =
+            ProcessInfo.processInfo.environment["MEH_SYNC_TEST_URL"]
+            ?? "http://127.0.0.1:8765"
+        app.launchEnvironment["MEH_SYNC_WORKSPACE"] = "find-\(UUID().uuidString)"
+#else
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+#endif
         app.launchArguments += ["-editor.mode", "source"]
         return app
     }

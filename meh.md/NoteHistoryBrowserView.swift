@@ -104,6 +104,11 @@ struct NoteHistoryBrowserView: View {
                 mode: mode
             )
             .accessibilityIdentifier("note-history-preview")
+            // Fill the area behind the floating controls. The safe-area
+            // inset still keeps the last lines reachable above them.
+            .ignoresSafeArea(.container, edges: .bottom)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             NoteHistoryTimeline(
                 versions: state.versions,
                 overviewNavigationStops: state.overviewNavigationStops,
@@ -235,10 +240,11 @@ private struct NoteHistoryTimeline: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Divider()
             HStack(spacing: 12) {
                 Button { step(backward: true) } label: {
                     Image(systemName: "chevron.left")
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .disabled(showingDetail ? selectedIndex == 0
                           : selectedIndex == overviewStops.first)
@@ -264,6 +270,8 @@ private struct NoteHistoryTimeline: View {
 
                 Button { step(backward: false) } label: {
                     Image(systemName: "chevron.right")
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .disabled(showingDetail ? selectedIndex == versions.count
                           : selectedIndex == overviewStops.last)
@@ -271,9 +279,13 @@ private struct NoteHistoryTimeline: View {
                 .accessibilityIdentifier("note-history-next")
             }
             HStack(spacing: 10) {
-                Button(showingDetail ? "Overview" : "More Detail") {
+                Button {
                     showingDetail.toggle()
                     if showingDetail { detailRange = range(around: selectedIndex) }
+                } label: {
+                    Text(showingDetail ? "Overview" : "More Detail")
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .disabled(versions.count < 2)
                 .accessibilityIdentifier("note-history-detail-toggle")
@@ -300,7 +312,6 @@ private struct NoteHistoryTimeline: View {
                         .lineLimit(1)
                         .padding(.horizontal, 12)
                         .frame(minWidth: 160, maxWidth: 220, minHeight: 44)
-                        .background(.quaternary, in: Capsule())
                         .contentShape(Rectangle())
                 }
                 .accessibilityIdentifier("note-history-date-list")
@@ -310,9 +321,13 @@ private struct NoteHistoryTimeline: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 10)
-        .background(.bar)
+        .buttonStyle(.plain)
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 28))
+        .frame(maxWidth: 520)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
     }
 
     private func step(backward: Bool) {

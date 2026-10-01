@@ -85,9 +85,12 @@ struct NotebookNoteEditor: View {
                 .accessibilityIdentifier("note-save-status")
             }
         }
-        // Let note content scroll beneath the floating top controls.
-        // Keep actionable errors and the keyboard within the bottom safe area.
-        .ignoresSafeArea(.container, edges: ignoredSafeAreaEdges)
+        // Find needs the dimmed document behind its glass keyboard accessory.
+        // UIKit reserves scrolling space; actionable errors keep a safe area.
+        .ignoresSafeArea(
+            navigation.findPresentation.isVisible ? .all : .container,
+            edges: ignoredSafeAreaEdges
+        )
         .onChange(of: session.persistedSnapshot) { _, _ in onPersist() }
         .onDisappear {
             Task { try? await session.flush() }
