@@ -53,6 +53,7 @@ let package = Package(
                 "NotebookQuickActionRequests.swift",
                 "NotebookBackupBackgroundScheduler.swift",
                 "NotebookSettingsView.swift", "NotebookTemplateViews.swift",
+                "NotebookWelcomeView.swift",
                 "NotebookNewNoteButton.swift",
                 "NotebookLinkViews.swift",
                 "NotebookImportView.swift", "NotebookSharedImportView.swift",
@@ -68,6 +69,7 @@ let package = Package(
             ],
             sources: [
                 "NotebookWorkspace.swift",
+                "NotebookWelcomeState.swift",
                 "NotebookIncomingImportRequests.swift",
                 "NotebookSyncIndicator.swift",
                 "NotebookNoteName.swift",
@@ -101,6 +103,7 @@ let package = Package(
                 "NotebookRecentsExpansion.swift",
                 "NotebookMacRecentsExpansion.swift",
                 "NotebookApplicationView.swift", "UnavailableDevelopmentTransport.swift",
+                "NotebookWelcomeView.swift", "NotebookWelcomeState.swift",
                 "NotebookSettingsView.swift",
                 "NotebookTemplateViews.swift",
                 "NotebookNewNoteButton.swift",

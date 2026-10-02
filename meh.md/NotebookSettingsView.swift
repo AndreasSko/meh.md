@@ -11,6 +11,7 @@ struct NotebookSettingsView: View {
     let onImport: (NotebookImportPlan?) async throws -> Void
     let beforeExport: () async throws -> Void
     var onOpenNote: ((UUID) -> Void)? = nil
+    var onShowWelcome: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingReset = false
     @State private var resetScheduled = false
@@ -129,6 +130,10 @@ struct NotebookSettingsView: View {
                         ? "On My iPad" : "On My iPhone"
                     Text("In Files, open \(device) › meh.md. Current notes are in Notebook Copies/Markdown; backups are in Backups. Trash is not included.")
                     #endif
+                }
+                Section("Help") {
+                    Button("Getting Started…", action: onShowWelcome)
+                        .accessibilityIdentifier("notebook-getting-started")
                 }
                 Section("Local Storage") {
                     Button("Reset All Local Data…", role: .destructive) {

@@ -132,6 +132,9 @@ struct NotebookView: View {
     @State private var resumeEditorAfterQuickOpen = false
     @State private var searchLandingPosition: MarkdownEditorPosition?
     @State private var showingImport = false
+    @State private var choosingWelcomeImportSource = false
+    @State private var importingFolder = false
+    @State private var pendingWelcomePresentation = false
     @State private var showingSettings = false
     @State private var showingTemplates = false
     @State private var pendingTemplateNoteID: UUID?
@@ -863,8 +866,19 @@ struct NotebookView: View {
             Text(missingLink?.destination ?? "")
         }
         .notebookMarkdownImporter(
-            isPresented: $showingImport, replica: replica, onImport: importMarkdown
+            isPresented: $showingImport, choosingFolder: importingFolder,
+            replica: replica, onImport: importMarkdown
         )
+        .confirmationDialog("Import Markdown", isPresented: $choosingWelcomeImportSource) {
+            Button("Import Files…") {
+                importingFolder = false
+                showingImport = true
+            }
+            Button("Import Folder…") {
+                importingFolder = true
+                showingImport = true
+            }
+        }
         .sheet(isPresented: $showingTrash, onDismiss: finishTemplatePresentation) {
             NavigationStack {
                 trashView
@@ -885,7 +899,11 @@ struct NotebookView: View {
                                  workspace: workspace ?? NotebookWorkspace.shared,
                                  onImport: importMarkdown,
                                  beforeExport: flushEditor,
-                                 onOpenNote: openTemplateSource)
+                                 onOpenNote: openTemplateSource,
+                                 onShowWelcome: {
+                                     pendingWelcomePresentation = true
+                                     showingSettings = false
+                                 })
         }
         .sheet(item: $sharedImport, onDismiss: finishSharedImport) { request in
             NotebookSharedImportView(plan: request.plan, replica: replica) { parentID in
@@ -934,9 +952,13 @@ struct NotebookView: View {
             resetLinkJourney()
             if selectedID != nil { preferredCompactColumn = .detail }
             busy = false
+            handleWelcomeChoice()
             #if os(iOS)
             handlePendingQuickAction()
             #endif
+        }
+        .onChange(of: workspace?.welcome.requestID, initial: true) { _, _ in
+            handleWelcomeChoice()
         }
         .task(id: navigationState.recentNoteIDs) {
             await navigationState.loadRecentSessions()
@@ -1873,7 +1895,8 @@ struct NotebookView: View {
 
     private func createItem(
         kind: NotebookItemKind, parentID: UUID?,
-        usesDefaultDestination: Bool = false
+        usesDefaultDestination: Bool = false,
+        startsWriting: Bool = false
     ) {
         perform {
             try await flushEditor()
@@ -1894,11 +1917,22 @@ struct NotebookView: View {
                     : replica.createNote(name: name, parentID: parentID))
                 reveal(id)
                 try await selectNote(id)
-                detailEditingID = id
-                detailOriginalName = name
-                detailProposedTitle = NotebookNoteName.title(from: name)
-                detailTitleHeight = 32
-                selectGeneratedTitle = true
+                if startsWriting {
+                    // First use should reach the actual writing surface.
+                    // Focus once the native editor has joined its window.
+                    let incoming = editorNavigation
+                    incoming.hasExplicitVisitDestination = true
+                    incoming.whenAttached { [weak incoming] in
+                        guard let incoming, selectedID == id else { return }
+                        incoming.focusEditor?()
+                    }
+                } else {
+                    detailEditingID = id
+                    detailOriginalName = name
+                    detailProposedTitle = NotebookNoteName.title(from: name)
+                    detailTitleHeight = 32
+                    selectGeneratedTitle = true
+                }
             case .folder:
                 let id = try await replica.createFolder(
                     name: "Untitled Folder", parentID: parentID)
@@ -1946,6 +1980,34 @@ struct NotebookView: View {
         createItem(kind: .note, parentID: nil, usesDefaultDestination: true)
     }
 
+    private func handleWelcomeChoice() {
+        guard restoredNavigation, !busy,
+              let workspace, let choice = workspace.welcome.takeChoice() else { return }
+        switch choice {
+        case .newNote:
+            createItem(kind: .note, parentID: nil,
+                       usesDefaultDestination: true, startsWriting: true)
+        case .examples:
+            perform {
+                try await flushEditor()
+                let id = try await workspace.welcome.installExamples(in: replica)
+                if let parent = replica.placements.first(where: { $0.item.id == id })?.parentID {
+                    expandedIDs.insert(parent)
+                }
+                reveal(id)
+                try await selectNote(id)
+                workspace.contentDidSave(trigger: "example notes added")
+            }
+        case .importNotes:
+            #if os(iOS)
+            choosingWelcomeImportSource = true
+            #else
+            importingFolder = false
+            showingImport = true
+            #endif
+        }
+    }
+
     private func showTemplates() {
         perform {
             try await flushEditor()
@@ -1983,6 +2045,11 @@ struct NotebookView: View {
     }
 
     private func finishTemplatePresentation() {
+        if pendingWelcomePresentation {
+            pendingWelcomePresentation = false
+            workspace?.welcome.show()
+            return
+        }
         openPendingTemplateNote()
         #if os(iOS)
         awaitingQuickActionSheetDismissal = false

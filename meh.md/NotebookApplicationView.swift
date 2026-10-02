@@ -15,7 +15,20 @@ struct NotebookApplicationView: View {
 
     var body: some View {
         Group {
-            if let replica = workspace.replica, replica.catalogSnapshot != nil {
+            if workspace.welcome.isPresented {
+                NotebookWelcomeView(
+                    usesSync: workspace.usesSync,
+                    isReady: workspace.replica?.catalogSnapshot != nil,
+                    isLoading: workspace.isLoading,
+                    failureMessage: workspace.syncFailure.map {
+                        String(localized: $0.message)
+                    } ?? workspace.errorMessage,
+                    canRetry: workspace.canRetrySync,
+                    choose: workspace.welcome.choose,
+                    skip: workspace.welcome.dismiss,
+                    retry: { Task { await workspace.start(manualRetry: true) } }
+                )
+            } else if let replica = workspace.replica, replica.catalogSnapshot != nil {
                 NotebookView(
                     replica: replica,
                     workspace: workspace,
@@ -52,7 +65,16 @@ struct NotebookApplicationView: View {
                 ProgressView("Opening notebook…")
             }
         }
-        .onOpenURL { incomingImports.receive($0) }
+        .onOpenURL {
+            workspace.welcome.dismiss()
+            incomingImports.receive($0)
+        }
+        #if os(iOS)
+        .onChange(of: NotebookQuickActionRequests.shared.pendingActionCount,
+                  initial: true) { _, count in
+            if count > 0 { workspace.welcome.dismiss() }
+        }
+        #endif
         .overlay {
             if incomingImports.readingCount > 0 {
                 ProgressView("Reading Markdown…")
@@ -72,6 +94,7 @@ struct NotebookApplicationView: View {
             if UUID(uuidString: sceneIDString) == nil {
                 sceneIDString = fallbackSceneID.uuidString
             }
+            workspace.welcome.prepare(enabled: workspace.shouldOfferWelcome)
             await workspace.start()
             #if os(iOS)
             NotebookBackupBackgroundScheduler.scheduleNext()
