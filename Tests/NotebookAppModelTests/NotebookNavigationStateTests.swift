@@ -1,5 +1,5 @@
 import Foundation
-import NoteCore
+@testable import NoteCore
 import XCTest
 
 @testable import NotebookAppModel
@@ -215,6 +215,103 @@ final class NotebookNavigationStateTests: XCTestCase {
         XCTAssertEqual(state.recentNoteIDs, [ids[1], ids[5], ids[4], ids[3], ids[2]])
         XCTAssertNil(state.lastNoteID)
         XCTAssertNil(state.selectedID)
+    }
+
+    func testExpandedPreviewsReadOnlyRequestedNotesWithoutOpeningEditors() async throws {
+        let fixture = try await Fixture()
+        var ids: [UUID] = []
+        for index in 0..<9 {
+            let id = try await fixture.replica.createNote(
+                name: "\(index).md", text: "**Fictional** preview \(index)"
+            )
+            ids.append(id)
+            try await fixture.replica.recordRecentActivity(for: id)
+        }
+        // Reload so no editor sessions are held by creation or compact rows.
+        let reader = NotebookReplica(directory: fixture.root)
+        try await reader.load()
+        let state = NotebookNavigationState(replica: reader, store: fixture.store)
+        let revision = reader.searchRevision
+        let heads = reader.catalogSnapshot?.heads
+        await state.loadRecentPreviews(for: [ids[0], ids[1], ids[0], UUID()])
+        XCTAssertEqual(state.allRecentNoteIDs, Array(ids.reversed()))
+        XCTAssertEqual(Set(state.recentPreviewText.keys), Set(ids.prefix(2)))
+        XCTAssertEqual(state.recentPreviewText[ids[0]], "Fictional preview 0")
+        XCTAssertTrue(state.recentSessions.isEmpty)
+        XCTAssertEqual(reader.searchRevision, revision)
+        XCTAssertEqual(reader.catalogSnapshot?.heads, heads)
+        XCTAssertNil(state.selectedID)
+        XCTAssertNil(state.lastNoteID)
+
+        try await reader.setTrashed(ids[0], true)
+        state.refreshAvailability()
+        XCTAssertNil(state.recentPreviewText[ids[0]])
+        await state.loadRecentPreviews(for: [ids[0], ids[1]])
+        XCTAssertEqual(Set(state.recentPreviewText.keys), [ids[1]])
+    }
+
+    func testExpandedPreviewRefreshUsesUnsavedEditorAndRemoteBodies() async throws {
+        let fixture = try await Fixture()
+        let id = try await fixture.replica.createNote(name: "Draft.md", text: "old")
+        try await fixture.replica.recordRecentActivity(for: id)
+        let state = fixture.makeState()
+        await state.loadRecentPreviews(for: [id])
+        XCTAssertEqual(state.recentPreviewText[id], "old")
+        let session = try await fixture.replica.openNote(id)
+        try session.replaceAll(with: "**unsaved** draft")
+        let editedOrder = fixture.replica.allRecentNotes
+        await state.loadRecentPreviews(for: [id])
+        XCTAssertEqual(state.recentPreviewText[id], "unsaved draft")
+        XCTAssertEqual(fixture.replica.allRecentNotes, editedOrder)
+        XCTAssertTrue(state.recentSessions.isEmpty)
+
+        try await session.flush()
+        let remote = try NoteDocument(snapshot: XCTUnwrap(session.currentSnapshot))
+        try remote.replaceAll(with: "remote body")
+        try await fixture.replica.apply(SyncRecord(
+            snapshot: remote.snapshot(),
+            notebookID: XCTUnwrap(fixture.replica.catalogSnapshot).notebookID
+        ))
+        await state.loadRecentPreviews(for: [id])
+        XCTAssertEqual(state.recentPreviewText[id], "remote body")
+        XCTAssertEqual(fixture.replica.allRecentNotes, editedOrder)
+    }
+
+    func testCancelledExpandedPreviewRequestDoesNotPublish() async throws {
+        let fixture = try await Fixture()
+        let id = try await fixture.replica.createNote(name: "Draft.md", text: "draft")
+        try await fixture.replica.recordRecentActivity(for: id)
+        let state = fixture.makeState()
+        let request = Task { await state.loadRecentPreviews(for: [id]) }
+        request.cancel()
+        await request.value
+        XCTAssertTrue(state.recentPreviewText.isEmpty)
+    }
+
+    func testExpandedPreviewRequestsAndCacheStayBounded() async throws {
+        let fixture = try await Fixture()
+        var ids: [UUID] = []
+        for index in 0..<130 {
+            let id = try await fixture.replica.createNote(
+                name: "\(index).md", text: "preview \(index)"
+            )
+            ids.append(id)
+            try await fixture.replica.recordRecentActivity(for: id)
+        }
+        let reader = NotebookReplica(directory: fixture.root)
+        try await reader.load()
+        let state = NotebookNavigationState(replica: reader, store: fixture.store)
+        let revision = reader.searchRevision
+        await state.loadRecentPreviews(for: ids)
+        XCTAssertEqual(Set(state.recentPreviewText.keys), Set(ids.prefix(64)))
+        await state.loadRecentPreviews(for: Array(ids[64..<128]))
+        XCTAssertEqual(state.recentPreviewText.count, 128)
+        await state.loadRecentPreviews(for: Array(ids.suffix(2)))
+        XCTAssertEqual(state.recentPreviewText.count, 128)
+        XCTAssertNil(state.recentPreviewText[ids[0]])
+        XCTAssertNil(state.recentPreviewText[ids[1]])
+        XCTAssertEqual(state.recentPreviewText[ids[129]], "preview 129")
+        XCTAssertEqual(reader.searchRevision, revision)
     }
 
     func testRenameAndMoveKeepLocalIdentifiersButTrashPrunesThem() async throws {

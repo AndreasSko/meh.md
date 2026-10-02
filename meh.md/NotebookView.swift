@@ -19,6 +19,11 @@ private struct NotebookFileReveal: Equatable {
     let token = UUID()
 }
 
+private struct NotebookRecentPreviewRequest: Equatable {
+    let ids: [UUID]
+    let revision: NotebookSearchRevision
+}
+
 private struct NotebookSidebarRow: Identifiable {
     let id: UUID
     let parentID: UUID?
@@ -67,6 +72,8 @@ struct NotebookView: View {
     @State private var bodyFocusRequest = 0
     @State private var errorMessage: String?
     @State private var recentActivityFailureIDs = Set<UUID>()
+    @State private var browsingAllRecents = false
+    @State private var visibleRecentPreviewIDs: [UUID] = []
     @State private var unrecordedEdit = false
     @State private var editingID: UUID?
     @State private var originalName = ""
@@ -146,7 +153,8 @@ struct NotebookView: View {
                         placement: .toolbar, prompt: "Search all notes")
             .searchFocused($searchFocused)
             .overlay(alignment: .bottom) {
-                if !isPhoneLayout && !search.isPresented && !showsSelectionControls {
+                if !isPhoneLayout && !search.isPresented && !showsSelectionControls
+                    && !browsingAllRecents {
                     NotebookSidebarControls(
                         busy: busy,
                         showSettings: { showingSettings = true },
@@ -539,6 +547,26 @@ struct NotebookView: View {
         .task(id: navigationState.recentNoteIDs) {
             await navigationState.loadRecentSessions()
         }
+        .task(id: NotebookRecentPreviewRequest(
+            ids: visibleRecentPreviewIDs,
+            revision: navigationState.recentPreviewRevision
+        )) {
+            guard !visibleRecentPreviewIDs.isEmpty else { return }
+            await navigationState.loadRecentPreviews(for: visibleRecentPreviewIDs)
+        }
+        .onChange(of: search.isPresented) { _, presented in
+            if presented { browsingAllRecents = false }
+        }
+        .onChange(of: fileRevealRequest) { _, request in
+            if request != nil { browsingAllRecents = false }
+        }
+        .onChange(of: selectingItems) { _, selecting in
+            if selecting { browsingAllRecents = false }
+        }
+        .onChange(of: replica.catalogSnapshot?.notebookID) { _, _ in
+            browsingAllRecents = false
+            visibleRecentPreviewIDs = []
+        }
     }
 
     private var applicationWillTerminate: Notification.Name {
@@ -679,7 +707,7 @@ struct NotebookView: View {
         return Font(MarkdownPresentation.headingFont(level: 1, bodyFont: bodyFont))
     }
 
-    private var recentsSection: some View {
+    private func recentsSection(hidesCompactRows: Bool) -> some View {
         Section {
             if navigationState.isRecentsExpanded {
                 if recentPlacements.isEmpty {
@@ -691,30 +719,33 @@ struct NotebookView: View {
                         .background(NotebookRecentCardBackground(position: .only))
                 } else {
                     #if os(iOS)
-                    NotebookRecentUIKitList(
-                        items: recentPlacements.map {
-                            NotebookRecentUIKitItem(
-                                id: $0.item.id,
-                                title: NotebookNoteName.title(from: $0.displayName),
-                                preview: recentPreview(for: $0.item.id),
-                                isCurrent: showsCurrentNote && selectedID == $0.item.id,
-                                isPinned: replica.isPinnedInRecents($0.item.id),
-                                canPin: replica.canPinInRecents($0.item.id)
-                            )
-                        },
-                        rowContent: { id in
-                            if let index = recentPlacements.firstIndex(where: {
-                                $0.item.id == id
-                            }) {
-                                recentRow(recentPlacements[index], index: index,
-                                          count: recentPlacements.count)
-                            }
-                        },
-                        onTogglePin: { id in
-                            setRecentPinned(!replica.isPinnedInRecents(id), for: id)
-                        },
-                        contextMenu: recentUIKitMenu
-                    )
+                    VStack(spacing: 0) {
+                        NotebookRecentUIKitList(
+                            items: Array(allRecentUIKitItems.prefix(recentPlacements.count)),
+                            rowContent: { id in
+                                if let index = recentPlacements.firstIndex(where: {
+                                    $0.item.id == id
+                                }) {
+                                    recentRow(recentPlacements[index], index: index,
+                                              count: recentPlacements.count)
+                                }
+                            },
+                            onTogglePin: { id in
+                                setRecentPinned(!replica.isPinnedInRecents(id), for: id)
+                            },
+                            contextMenu: recentUIKitMenu,
+                            accessibilityHidden: hidesCompactRows
+                        )
+                        if replica.allRecentNotes.count > recentPlacements.count {
+                            NotebookRecentsFooterSpacer()
+                        }
+                    }
+                    .background(NotebookSidebarPalette.recents)
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .opacity(hidesCompactRows ? 0 : 1)
+                    .accessibilityHidden(hidesCompactRows)
+                    .anchorPreference(key: NotebookRecentsAnchorKey.self,
+                                      value: .bounds) { $0 }
                     #else
                     ForEach(Array(recentPlacements.enumerated()), id: \.element.item.id) {
                         index, placement in
@@ -729,6 +760,8 @@ struct NotebookView: View {
                 isExpanded: navigationState.isRecentsExpanded,
                 identifier: "notebook-recents-toggle"
             ) { navigationState.isRecentsExpanded.toggle() }
+            .opacity(hidesCompactRows ? 0 : 1)
+            .accessibilityHidden(hidesCompactRows)
             .textCase(nil)
             .listRowInsets(sidebarSectionInsets)
         }
@@ -764,6 +797,9 @@ struct NotebookView: View {
     ) -> some View {
         let row = Button {
             perform {
+                #if os(iOS)
+                if horizontalSizeClass == .compact { browsingAllRecents = false }
+                #endif
                 try await selectNote(placement.item.id)
             }
         } label: {
@@ -778,6 +814,12 @@ struct NotebookView: View {
         .buttonStyle(.plain)
         .focused($focusedRecentID, equals: placement.item.id)
         .accessibilityIdentifier("notebook-recent-" + placement.item.id.uuidString)
+        .accessibilityValue(
+            [replica.isPinnedInRecents(placement.item.id) ? String(localized: "Pinned") : nil,
+             showsCurrentNote && selectedID == placement.item.id
+                ? String(localized: "Current note") : nil]
+                .compactMap { $0 }.joined(separator: ", ")
+        )
         .notebookRecentPinAccessibilityAction(
             isPinned: replica.isPinnedInRecents(placement.item.id),
             isAvailable: replica.canPinInRecents(placement.item.id)
@@ -809,7 +851,7 @@ struct NotebookView: View {
 
     #if os(iOS)
     private func recentUIKitMenu(for id: UUID) -> UIMenu {
-        guard let placement = recentPlacements.first(where: { $0.item.id == id })
+        guard let placement = replica.placements.first(where: { $0.item.id == id })
         else { return UIMenu(children: []) }
         var menuActions: [UIMenuElement] = [
             UIAction(title: String(localized: "Rename…")) { _ in
@@ -893,7 +935,9 @@ struct NotebookView: View {
     }
 
     private func recentPreview(for id: UUID) -> String {
-        guard let recent = navigationState.recentSessions[id] else { return "Preview unavailable" }
+        guard let recent = navigationState.recentSessions[id] else {
+            return navigationState.recentPreviewText[id] ?? "Preview unavailable"
+        }
         if workspace?.isResetPending == true { return "Restart to finish reset" }
         guard recent.isEditingEnabled else { return "Note unavailable" }
         let preview = NotebookRecentPreview.text(from: recent.text)
@@ -1714,21 +1758,69 @@ struct NotebookView: View {
 
     private var libraryBrowser: some View {
         ScrollViewReader { scrollProxy in
-            libraryList(scrollProxy: scrollProxy)
+            #if os(iOS)
+            NotebookRecentsExpansionHost(
+                items: allRecentUIKitItems,
+                compactCount: recentPlacements.count,
+                isExpanded: $browsingAllRecents,
+                rowContent: { id, index, count in
+                    if let placement = replica.placements.first(where: { $0.item.id == id }) {
+                        recentRow(placement, index: index, count: count)
+                    }
+                },
+                onTogglePin: { id in
+                    setRecentPinned(!replica.isPinnedInRecents(id), for: id)
+                },
+                contextMenu: recentUIKitMenu,
+                onVisibleIDs: { visibleRecentPreviewIDs = $0 },
+                browser: { hidesCompactRows in
+                    libraryList(scrollProxy: scrollProxy, hidesCompactRows: hidesCompactRows)
+                }
+            )
+            #else
+            libraryList(scrollProxy: scrollProxy, hidesCompactRows: false)
+            #endif
         }
     }
 
-    private func libraryList(scrollProxy: ScrollViewProxy) -> some View {
+    #if os(iOS)
+    private var allRecentUIKitItems: [NotebookRecentUIKitItem] {
+        let placements = Dictionary(uniqueKeysWithValues:
+            replica.placements.map { ($0.item.id, $0) })
+        return replica.allRecentNotes.compactMap { recent in
+            guard let placement = placements[recent.id] else { return nil }
+            return NotebookRecentUIKitItem(
+                id: recent.id,
+                title: NotebookNoteName.title(from: placement.displayName),
+                preview: recentPreview(for: recent.id),
+                isCurrent: showsCurrentNote && selectedID == recent.id,
+                isPinned: recent.isPinned,
+                // The full projection already excludes unavailable notes.
+                canPin: replica.canPinInRecents
+            )
+        }
+    }
+    #endif
+
+    private func libraryList(
+        scrollProxy: ScrollViewProxy, hidesCompactRows: Bool
+    ) -> some View {
         List(selection: nativeBrowserSelection) {
-            recentsSection
+            recentsSection(hidesCompactRows: hidesCompactRows)
             Section {
-                if navigationState.isTreeExpanded { activeTree }
+                if navigationState.isTreeExpanded {
+                    activeTree
+                        .opacity(hidesCompactRows ? 0 : 1)
+                        .accessibilityHidden(hidesCompactRows)
+                }
             } header: {
                 NotebookSectionToggle(
                     title: "Files",
                     isExpanded: navigationState.isTreeExpanded,
                     identifier: "notebook-tree-toggle"
                 ) { navigationState.isTreeExpanded.toggle() }
+                .opacity(hidesCompactRows ? 0 : 1)
+                .accessibilityHidden(hidesCompactRows)
                 .textCase(nil)
                 .listRowInsets(sidebarSectionInsets)
             }

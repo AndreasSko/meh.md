@@ -18,17 +18,29 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
     let rowContent: (UUID) -> RowContent
     let onTogglePin: (UUID) -> Void
     let contextMenu: (UUID) -> UIMenu
+    var usesViewport = false
+    var scrollingEnabled = false
+    var accessibilityHidden = false
+    var onVisibleIDs: ([UUID]) -> Void = { _ in }
 
     init(
         items: [NotebookRecentUIKitItem],
         @ViewBuilder rowContent: @escaping (UUID) -> RowContent,
         onTogglePin: @escaping (UUID) -> Void,
-        contextMenu: @escaping (UUID) -> UIMenu
+        contextMenu: @escaping (UUID) -> UIMenu,
+        usesViewport: Bool = false,
+        scrollingEnabled: Bool = false,
+        accessibilityHidden: Bool = false,
+        onVisibleIDs: @escaping ([UUID]) -> Void = { _ in }
     ) {
         self.items = items
         self.rowContent = rowContent
         self.onTogglePin = onTogglePin
         self.contextMenu = contextMenu
+        self.usesViewport = usesViewport
+        self.scrollingEnabled = scrollingEnabled
+        self.accessibilityHidden = accessibilityHidden
+        self.onVisibleIDs = onVisibleIDs
     }
 
     func makeCoordinator() -> Coordinator {
@@ -69,12 +81,27 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
     }
 
     func updateUIView(_ table: RecentTableView, context: Context) {
+        table.accessibilityElementsHidden = accessibilityHidden
+        if table.usesViewport != usesViewport {
+            table.usesViewport = usesViewport
+            table.invalidateIntrinsicContentSize()
+        }
+        table.isScrollEnabled = scrollingEnabled
+        table.showsVerticalScrollIndicator = scrollingEnabled
+        table.onLayout = { [weak table, weak coordinator = context.coordinator] in
+            guard let table else { return }
+            coordinator?.reportVisibleIDs(in: table)
+        }
+        if !usesViewport, table.contentOffset.y != 0 {
+            table.setContentOffset(.zero, animated: false)
+        }
         context.coordinator.update(
             table: table,
             items: items,
             rowContent: rowContent,
             onTogglePin: onTogglePin,
-            contextMenu: contextMenu
+            contextMenu: contextMenu,
+            onVisibleIDs: onVisibleIDs
         )
     }
 
@@ -84,6 +111,9 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
         context: Context
     ) -> CGSize? {
         guard let width = proposal.width, width > 0 else { return nil }
+        if usesViewport {
+            return CGSize(width: width, height: proposal.height ?? 0)
+        }
         // Measuring inside SwiftUI must not synchronously lay out hosted
         // SwiftUI cells. UIKit updates contentSize during its layout pass.
         return CGSize(width: width, height: table.reportedHeight)
@@ -96,17 +126,21 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
         private var rowContent: ((UUID) -> RowContent)?
         private var onTogglePin: ((UUID) -> Void)?
         private var contextMenu: ((UUID) -> UIMenu)?
+        private var onVisibleIDs: (([UUID]) -> Void)?
+        private var reportedIDs: [UUID] = []
 
         func update(
             table: RecentTableView,
             items newItems: [NotebookRecentUIKitItem],
             rowContent: @escaping (UUID) -> RowContent,
             onTogglePin: @escaping (UUID) -> Void,
-            contextMenu: @escaping (UUID) -> UIMenu
+            contextMenu: @escaping (UUID) -> UIMenu,
+            onVisibleIDs: @escaping ([UUID]) -> Void
         ) {
             self.rowContent = rowContent
             self.onTogglePin = onTogglePin
             self.contextMenu = contextMenu
+            self.onVisibleIDs = onVisibleIDs
             guard items != newItems else { return }
 
             let oldItems = itemByID
@@ -129,9 +163,30 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
             table.beginSnapshotUpdate(
                 preservingHeight: !oldIDs.isEmpty && Set(oldIDs) == Set(newIDs)
             )
-            dataSource.apply(snapshot, animatingDifferences: !oldIDs.isEmpty) {
+            dataSource.apply(snapshot, animatingDifferences:
+                !oldIDs.isEmpty && oldIDs.count == newIDs.count) {
                 table.endSnapshotUpdate()
+                self.reportVisibleIDs(in: table)
             }
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard let table = scrollView as? RecentTableView else { return }
+            reportVisibleIDs(in: table)
+        }
+
+        func reportVisibleIDs(in table: RecentTableView) {
+            guard table.usesViewport else { return }
+            let rows = table.indexPathsForVisibleRows?.map(\.row) ?? []
+            guard let first = rows.min(), let last = rows.max() else { return }
+            // Visible index paths can briefly belong to the old snapshot.
+            let lower = min(items.count, max(0, first - 4))
+            let upper = min(items.count, max(lower, last + 9))
+            let ids = Array(items[lower..<upper].map(\.id))
+            guard ids != reportedIDs else { return }
+            reportedIDs = ids
+            // Layout callbacks must not mutate SwiftUI state synchronously.
+            DispatchQueue.main.async { [weak self] in self?.onVisibleIDs?(ids) }
         }
 
         func configure(_ cell: UITableViewCell, for id: UUID) {
@@ -188,6 +243,8 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
 }
 
 final class RecentTableView: UITableView {
+    var usesViewport = false
+    var onLayout: (() -> Void)?
     private var pendingSnapshots = 0
     private var heldHeight: CGFloat?
 
@@ -218,7 +275,13 @@ final class RecentTableView: UITableView {
     }
 
     override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: reportedHeight)
+        CGSize(width: UIView.noIntrinsicMetric,
+               height: usesViewport ? UIView.noIntrinsicMetric : reportedHeight)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?()
     }
 }
 #endif

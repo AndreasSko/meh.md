@@ -14,6 +14,9 @@ final class NotebookNavigationState {
     @ObservationIgnored private var notebookID: UUID?
     @ObservationIgnored private var selectionLoadGeneration = 0
     @ObservationIgnored private var recentLoadGeneration = 0
+    @ObservationIgnored private var recentPreviewLoadGeneration = 0
+    @ObservationIgnored private var cachedRecentPreviewRevision: NotebookSearchRevision?
+    @ObservationIgnored private var recentPreviewCacheOrder: [UUID] = []
     @ObservationIgnored private var isLoadingPreferences = false
     @ObservationIgnored private var hasStoredPreferences = false
 
@@ -22,6 +25,8 @@ final class NotebookNavigationState {
     private(set) var lastNoteID: UUID?
     private(set) var restorationMessage: String?
     private(set) var recentSessions: [UUID: NoteSession] = [:]
+    /// Bounded row excerpts for expanded Recents, without editor sessions.
+    private(set) var recentPreviewText: [UUID: String] = [:]
     var isRecentsExpanded = true { didSet { persistIfReady() } }
     var isTreeExpanded = true { didSet { persistIfReady() } }
     var isTrashExpanded = false { didSet { persistIfReady() } }
@@ -48,6 +53,7 @@ final class NotebookNavigationState {
             notebookID = currentNotebookID
             selectionLoadGeneration += 1
             recentLoadGeneration += 1
+            recentPreviewLoadGeneration += 1
             selectedID = nil
             selectedSession = nil
             recentSessions = [:]
@@ -66,6 +72,8 @@ final class NotebookNavigationState {
 
     /// The shared catalog owns recent ordering; this scene only reads it.
     var recentNoteIDs: [UUID] { replica.recentNotes.map(\.id) }
+    var allRecentNoteIDs: [UUID] { replica.allRecentNotes.map(\.id) }
+    var recentPreviewRevision: NotebookSearchRevision { replica.searchRevision }
 
     /// Installs a note the scene has already flushed and opened successfully.
     /// Trash notes may remain active, but are never remembered in Recents.
@@ -150,12 +158,58 @@ final class NotebookNavigationState {
         let ids = recentNoteIDs
         var loaded: [UUID: NoteSession] = [:]
         for id in ids where recentEligibleNoteIDs.contains(id) {
+            guard !Task.isCancelled, generation == recentLoadGeneration else { return }
             if let session = try? await replica.openNote(id, allowingRecovery: true) {
                 loaded[id] = session
             }
         }
-        guard generation == recentLoadGeneration, ids == recentNoteIDs else { return }
+        guard !Task.isCancelled, generation == recentLoadGeneration,
+              ids == recentNoteIDs else { return }
         recentSessions = loaded
+    }
+
+    /// Request the visible rows plus a small prefetch margin. Work is bounded
+    /// to 64 rows per request; the cache keeps the 128 most recently requested
+    /// excerpts. New viewport requests supersede earlier asynchronous loads.
+    func loadRecentPreviews(for requestedIDs: [UUID]) async {
+        recentPreviewLoadGeneration += 1
+        let generation = recentPreviewLoadGeneration
+        let revision = recentPreviewRevision
+        if cachedRecentPreviewRevision != revision {
+            recentPreviewText = [:]
+            recentPreviewCacheOrder = []
+            cachedRecentPreviewRevision = revision
+        }
+        let available = Set(allRecentNoteIDs)
+        var seen: Set<UUID> = []
+        let ids = requestedIDs.filter {
+            available.contains($0) && seen.insert($0).inserted
+        }.prefix(64)
+        for id in ids {
+            guard !Task.isCancelled, generation == recentPreviewLoadGeneration,
+                  revision == recentPreviewRevision else { return }
+            if recentPreviewText[id] == nil {
+                let source: String?
+                do {
+                    source = try await replica.noteTextPrefix(for: id)
+                } catch {
+                    if Task.isCancelled { return }
+                    continue
+                }
+                guard !Task.isCancelled,
+                      generation == recentPreviewLoadGeneration,
+                      revision == recentPreviewRevision,
+                      Set(allRecentNoteIDs).contains(id) else { return }
+                guard let source else { continue }
+                recentPreviewText[id] = NotebookRecentPreview.text(from: source)
+            }
+            recentPreviewCacheOrder.removeAll { $0 == id }
+            recentPreviewCacheOrder.append(id)
+            while recentPreviewCacheOrder.count > 128 {
+                recentPreviewText[recentPreviewCacheOrder.removeFirst()] = nil
+            }
+            await Task.yield()
+        }
     }
 
     func position(for id: UUID) -> Data? {
@@ -226,6 +280,9 @@ final class NotebookNavigationState {
         isLoadingPreferences = wasLoadingPreferences
         positions = positions.filter { selectableNotes.contains($0.key) }
         recentSessions = recentSessions.filter { recentNoteIDs.contains($0.key) }
+        let allRecentIDs = Set(allRecentNoteIDs)
+        recentPreviewText = recentPreviewText.filter { allRecentIDs.contains($0.key) }
+        recentPreviewCacheOrder.removeAll { !allRecentIDs.contains($0) }
         if lastNoteID.map({ !recentEligibleNotes.contains($0) }) == true {
             lastNoteID = nil
         }
@@ -246,6 +303,9 @@ final class NotebookNavigationState {
         lastNoteID = nil
         restorationMessage = nil
         recentSessions = [:]
+        recentPreviewText = [:]
+        recentPreviewCacheOrder = []
+        cachedRecentPreviewRevision = nil
         isRecentsExpanded = true
         isTreeExpanded = true
         isTrashExpanded = false
