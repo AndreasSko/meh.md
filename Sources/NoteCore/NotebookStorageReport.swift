@@ -1,11 +1,12 @@
 import Foundation
 
 public enum NotebookStorageCategory: String, CaseIterable, Sendable {
-    case notesAndHistory, recoveryCopies, markdownCopies, backups, other
+    case notesAndHistory, attachments, recoveryCopies, markdownCopies, backups, other
 }
 
 public enum NotebookStorageReportError: Error, Sendable {
     case duplicateDocumentID(UUID)
+    case duplicateAttachmentID(UUID)
     case rootOutsideTrustedBoundary(URL)
     case invalidTrustedBoundary(URL)
 }
@@ -29,6 +30,17 @@ public struct NotebookStorageDocument: Sendable, Equatable {
     }
 }
 
+/// Catalog identity and effective trash state, including files not downloaded yet.
+public struct NotebookStorageAttachment: Sendable, Equatable {
+    public let id: UUID
+    public let isInTrash: Bool
+
+    public init(id: UUID, isInTrash: Bool) {
+        self.id = id
+        self.isInTrash = isInTrash
+    }
+}
+
 public struct NotebookStorageDocumentUsage: Sendable, Equatable, Identifiable {
     public let id: UUID
     public let name: String
@@ -47,6 +59,10 @@ public struct NotebookStorageReport: Sendable {
     public let documents: [NotebookStorageDocumentUsage]
     public let activeNoteCount: Int
     public let trashNoteCount: Int
+    public let activeAttachmentCount: Int
+    public let trashAttachmentCount: Int
+    /// Counts managed content files present locally, including empty files.
+    public let residentAttachmentCount: Int
     public let measuredAt: Date
 
     public static func scan(
@@ -54,7 +70,8 @@ public struct NotebookStorageReport: Sendable {
         notebookDirectory: URL,
         markdownCopiesDirectory: URL,
         backupDirectory: URL,
-        documents: [NotebookStorageDocument]
+        documents: [NotebookStorageDocument],
+        attachments: [NotebookStorageAttachment] = []
     ) async throws -> NotebookStorageReport {
         let worker = Task.detached(priority: .utility) {
             try measure(
@@ -62,7 +79,7 @@ public struct NotebookStorageReport: Sendable {
                 notebookDirectory: notebookDirectory,
                 markdownCopiesDirectory: markdownCopiesDirectory,
                 backupDirectory: backupDirectory,
-                documents: documents
+                documents: documents, attachments: attachments
             )
         }
         return try await withTaskCancellationHandler {
@@ -80,7 +97,8 @@ public struct NotebookStorageReport: Sendable {
         notebookDirectory: URL,
         markdownCopiesDirectory: URL,
         backupDirectory: URL,
-        documents: [NotebookStorageDocument]
+        documents: [NotebookStorageDocument],
+        attachments: [NotebookStorageAttachment]
     ) throws -> NotebookStorageReport {
         let manager = FileManager.default
         let boundary = normalizedRoot(trustedBoundary)
@@ -90,6 +108,13 @@ public struct NotebookStorageReport: Sendable {
                 throw NotebookStorageReportError.duplicateDocumentID(document.id)
             }
         }
+        var knownAttachments = Set<UUID>()
+        for attachment in attachments {
+            guard knownAttachments.insert(attachment.id).inserted else {
+                throw NotebookStorageReportError.duplicateAttachmentID(attachment.id)
+            }
+        }
+        var residentAttachments = Set<UUID>()
         let notebook = normalizedRoot(notebookDirectory)
         // Most specific roots win when callers supply overlapping locations.
         let roots: [(url: URL, category: NotebookStorageCategory)] = [
@@ -171,6 +196,12 @@ public struct NotebookStorageReport: Sendable {
                     category = .recoveryCopies
                 }
                 let parts = relative.split(separator: "/")
+                if parts.count == 3, parts[0] == "attachments",
+                   let id = UUID(uuidString: String(parts[1])),
+                   knownAttachments.contains(id), parts[2] == "content" {
+                    category = .attachments
+                    residentAttachments.insert(id)
+                }
                 if parts.count == 3, parts[0] == "notes",
                    let id = UUID(uuidString: String(parts[1])), knownIDs.contains(id) {
                     if parts[2] == "note.automerge" {
@@ -210,6 +241,9 @@ public struct NotebookStorageReport: Sendable {
             documents: usages,
             activeNoteCount: documents.filter { !$0.isInTrash }.count,
             trashNoteCount: documents.filter(\.isInTrash).count,
+            activeAttachmentCount: attachments.filter { !$0.isInTrash }.count,
+            trashAttachmentCount: attachments.filter(\.isInTrash).count,
+            residentAttachmentCount: residentAttachments.count,
             measuredAt: Date()
         )
     }

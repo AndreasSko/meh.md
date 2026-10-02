@@ -8,8 +8,20 @@ boundary. Single-note migration and compatibility sync are no longer active.
 ## Authoritative state
 
 Each note retains its existing Automerge document, including its identity,
-text, and history. A separate Automerge catalog stores note/folder identities,
-names, parents, and trash intent. A catalog is never decoded as a note body.
+text, and history. A separate Automerge catalog stores note, folder, and
+attachment identities, names, parents, ordering, and trash intent. An
+attachment entry also stores its immutable SHA-256 digest and byte count.
+Attachment bytes stay in a separate per-notebook store by item UUID; they are
+never embedded in Automerge or a JSON import journal. A catalog is never
+decoded as a note body.
+
+New catalogs start at schema 1. Adding the first attachment writes schema 2
+with its descriptor; notebooks without attachments remain schema 1. The
+current decoder accepts both versions and a concurrent schema 1/schema 2
+register conflict when attachment metadata is valid. An older client that
+only accepts schema 1 cannot open an upgraded catalog. It must update before
+using that notebook; an unsupported current schema blocks automatic rollback
+to an older catalog copy.
 
 Optional parent-scoped position keys preserve manual sibling order. Legacy
 items without keys retain the previous folders-first alphabetical order until
@@ -41,6 +53,8 @@ lowest stable UUID keeps the unmodified name. Other entries receive a derived
 short-ID suffix; Markdown extensions remain last. Reserve all original names
 before allocating suffixes, and handle suffix collisions deterministically.
 Only the derived name may be shortened to fit the filesystem byte limit.
+Collision names keep ordinary file extensions after the suffix when space
+allows; very long extensions are shortened only in the derived display name.
 
 Reject cycles requested locally. Concurrent folder moves can still form a
 cycle. For display, detach the lowest UUID in each cycle to the root and flag
@@ -54,8 +68,9 @@ parent's rank never supplies position bounds for genuine root children.
 
 ## Trash
 
-Trashing never removes catalog entries or note files. A trashed folder hides
-its descendants by ancestry, including children created concurrently offline.
+Trashing never removes catalog entries, note files, or attachment files. A
+trashed folder hides its descendants by ancestry, including children created
+concurrently offline.
 Restoring it exposes descendants that were not individually trashed.
 
 An individually trashed item under an active parent appears at the Trash
@@ -67,6 +82,7 @@ Concurrent trash and restore favor trash. Each action records fresh intent,
 even when repeating the currently visible state. A restore performed after
 observing the merged trash state resolves that conflict. A note-body edit or
 rename does not implicitly restore a note, and its content remains retained.
+Attachment contents likewise remain available in Trash.
 Moving a child out of a trashed ancestor can recover that child. Restoring an
 individual child whose ancestor remains trashed does not restore the ancestor.
 The eventual UI must explain that distinction.
@@ -78,15 +94,15 @@ The replication core implements durable permanent markers. The confirmed
 actions and cleanup are now implemented; see the
 [permanent deletion contract](notebook-permanent-deletion.md).
 
-Record a permanent marker for every confirmed note/folder identity. Permanent
-deletion wins over subsequent offline edits and restores of that identity.
+Record a permanent marker for every confirmed note, folder, or attachment
+identity. Permanent deletion wins over subsequent offline edits and restores.
 Keep deletion IDs so an old device cannot resurrect the deleted content.
 
-Once the deletion intent is durable, retry removal of note documents, local
-recovery files, managed Markdown copies, retained import jobs, and cloud
-snapshots. Other devices clean up when they reconnect. Replayed or late uploads
-must not undo the
-marker and must remain eligible for cleanup.
+Once the deletion intent is durable, retry removal of note documents,
+attachment contents and transfer/preview files, local recovery files,
+managed Markdown copies, retained import jobs, and cloud contents. Other
+devices clean up when they reconnect. Replayed or late uploads must not undo
+the marker and must remain eligible for cleanup.
 
 Empty Trash targets the identities included in the confirmation. A previously
 unseen note created offline inside a permanently deleted folder is retained
@@ -96,10 +112,13 @@ The actions are exposed together with marker durability and retryable cleanup.
 ## Files and recovery
 
 The catalog uses `catalog.automerge` and `catalog.previous.automerge`.
-Each note uses the existing note-file store under `notes/<UUID>/`. Saves
-validate identity and history before replacing an existing valid document.
-The shared file-writing primitive syncs temporary data before replacement and
-syncs the directory before acknowledging completion.
+Each note uses the existing note-file store under `notes/<UUID>/`.
+Attachments use `attachments/<UUID>/` for immutable contents and a manifest.
+Temporary transfer and preview files use UUID-scoped directories under
+`attachment-transfers/` and `attachment-previews/`. Note saves validate
+identity and history before replacing an existing valid document. Attachment
+stores verify immutable content against their manifests. File writes sync
+temporary data before publication and sync the directory before completion.
 
 Corruption or missing current data with a valid previous file requires an
 explicit recovery choice. Recovery retains damaged bytes and rejects stale

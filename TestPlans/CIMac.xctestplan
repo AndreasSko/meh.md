@@ -7,13 +7,20 @@
     }
   ],
   "defaultOptions": {
+    "environmentVariableEntries": [
+      {
+        "key": "MEH_MAC_ATTACHMENT_DROP_UI",
+        "value": "1",
+        "isEnabled": true
+      }
+    ],
     "testTimeoutsEnabled": true,
     "defaultTestExecutionTimeAllowance": 1800,
     "maximumTestExecutionTimeAllowance": 2700,
     "testExecutionOrdering": "lexical",
     "preferredScreenCaptureFormat": "video",
-    "uiTestingScreenshotsLifetime": "deleteOnSuccess",
-    "userAttachmentLifetime": "deleteOnSuccess"
+    "uiTestingScreenshotsLifetime": "keepAlways",
+    "userAttachmentLifetime": "keepAlways"
   },
   "testTargets": [
     {
@@ -30,7 +37,9 @@
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
         "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote",
         "NotebookReleaseMenuUITests/testFileMenuPickersAndNewWindowPreserveWriting",
-        "NotebookReleaseMenuUITests/testSelectionCommandsRespectEditorAndTitleFocus"
+        "NotebookReleaseMenuUITests/testSelectionCommandsRespectEditorAndTitleFocus",
+        "NotebookMacAttachmentDropUITests/testFinderFolderDropAndInternalMoveSurviveRelaunch",
+        "NotebookMacAttachmentDropUITests/testInlinePDFPreviewPreservesNoteSourceAcrossSelection"
       ]
     }
   ],

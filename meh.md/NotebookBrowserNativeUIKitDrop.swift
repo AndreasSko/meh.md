@@ -86,6 +86,31 @@ struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
             interaction.state.hover(nil, expand: interaction.expand)
         }
 
+        private func fileType(_ provider: NSItemProvider) -> String? {
+            let types = provider.registeredTypeIdentifiers
+            if types.contains(UTType.fileURL.identifier), provider.canLoadObject(ofClass: NSURL.self) {
+                return UTType.fileURL.identifier
+            }
+            if let folder = types.first(where: { UTType($0)?.conforms(to: .folder) == true }) {
+                return folder
+            }
+            // A named file representation excludes bare text or image payloads.
+            guard let name = provider.suggestedName, !name.isEmpty else { return nil }
+            return types.first { identifier in
+                guard let type = UTType(identifier) else { return false }
+                return type.conforms(to: .data) && !type.conforms(to: .url)
+            }
+        }
+
+        private func canHandleExternal(_ session: any UIDropSession) -> Bool {
+            interaction.state.drag == nil && !session.items.isEmpty
+                && session.items.allSatisfy {
+                    !$0.itemProvider.hasItemConformingToTypeIdentifier(
+                        UTType.mehNotebookItem.identifier
+                    ) && fileType($0.itemProvider) != nil
+                }
+        }
+
         private func canHandle(_ session: any UIDropSession) -> Bool {
             session.localDragSession != nil
                 && interaction.state.drag != nil
@@ -105,7 +130,7 @@ struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
         func collectionView(
             _ collectionView: UICollectionView, canHandle session: any UIDropSession
         ) -> Bool {
-            canHandle(session)
+            canHandle(session) || canHandleExternal(session)
         }
 
         func collectionView(
@@ -113,6 +138,12 @@ struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
             dropSessionDidUpdate session: any UIDropSession,
             withDestinationIndexPath destinationIndexPath: IndexPath?
         ) -> UICollectionViewDropProposal {
+            if canHandleExternal(session) {
+                let target = location(session).flatMap(interaction.resolveExternal)
+                return UICollectionViewDropProposal(
+                    operation: target == nil ? .forbidden : .copy, intent: .unspecified
+                )
+            }
             let target = canHandle(session) ? location(session).flatMap(interaction.resolve) : nil
             interaction.state.hover(target, expand: interaction.expand)
             return UICollectionViewDropProposal(
@@ -124,6 +155,47 @@ struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
             _ collectionView: UICollectionView,
             performDropWith coordinator: any UICollectionViewDropCoordinator
         ) {
+            if canHandleExternal(coordinator.session),
+               let point = location(coordinator.session),
+               let target = interaction.resolveExternal(point) {
+                let accepted = AcceptedExternalDrop(
+                    count: coordinator.session.items.count,
+                    target: target, interaction: interaction
+                )
+                let staging = interaction.stagingDirectory
+                for item in coordinator.session.items {
+                    guard let identifier = fileType(item.itemProvider) else {
+                        accepted.complete(.failure(CocoaError(.fileReadUnsupportedScheme)))
+                        continue
+                    }
+                    let preferredName = identifier == UTType.fileURL.identifier
+                        ? nil : item.itemProvider.suggestedName
+                    let complete: (URL?, Error?) -> Void = { url, error in
+                        let result: Result<URL, Error>
+                        do {
+                            if let error { throw error }
+                            guard let url else { throw CocoaError(.fileReadUnknown) }
+                            let scoped = url.startAccessingSecurityScopedResource()
+                            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                            let copy = try NotebookBrowserFileStaging.copy(
+                                url, into: staging, preferredName: preferredName
+                            )
+                            result = .success(copy)
+                        } catch { result = .failure(error) }
+                        Task { @MainActor in accepted.complete(result) }
+                    }
+                    if identifier == UTType.fileURL.identifier {
+                        _ = item.itemProvider.loadObject(ofClass: NSURL.self) { object, error in
+                            complete((object as? NSURL).map { $0 as URL }, error)
+                        }
+                    } else {
+                        item.itemProvider.loadFileRepresentation(
+                            forTypeIdentifier: identifier, completionHandler: complete
+                        )
+                    }
+                }
+                return
+            }
             guard canHandle(coordinator.session), let drag = interaction.state.drag,
                   let point = location(coordinator.session),
                   let target = interaction.resolve(point),
@@ -175,6 +247,39 @@ struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
             dropSessionDidEnd session: any UIDropSession
         ) {
             interaction.state.hover(nil, expand: interaction.expand)
+        }
+    }
+
+    @MainActor
+    private final class AcceptedExternalDrop {
+        var remaining: Int
+        var urls: [URL] = []
+        var failure: Error?
+        let target: NotebookBrowserExternalDropTarget
+        let interaction: NotebookBrowserDropInteraction
+
+        init(count: Int, target: NotebookBrowserExternalDropTarget,
+             interaction: NotebookBrowserDropInteraction) {
+            remaining = count
+            self.target = target
+            self.interaction = interaction
+        }
+
+        func complete(_ result: Result<URL, Error>) {
+            switch result {
+            case .success(let url): urls.append(url)
+            case .failure(let error): failure = failure ?? error
+            }
+            remaining -= 1
+            guard remaining == 0 else { return }
+            if failure != nil || !interaction.acceptsExternalCompletion() {
+                urls.forEach {
+                    try? FileManager.default.removeItem(at: $0.deletingLastPathComponent())
+                }
+                if let failure, interaction.acceptsExternalCompletion() {
+                    interaction.externalFailure(failure)
+                }
+            } else { interaction.importExternal(urls, target) }
         }
     }
 

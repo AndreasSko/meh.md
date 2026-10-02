@@ -34,6 +34,23 @@ final class NotebookImportUITests: XCTestCase {
         app?.terminate()
     }
 
+    func testBrowserImportMenuAndPrimaryNewNoteAction() {
+        let plus = app.buttons["notebook-new-item"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 15))
+        plus.press(forDuration: 1)
+        let importFiles = app.buttons["Import Files…"]
+        XCTAssertTrue(importFiles.waitForExistence(timeout: 5))
+        importFiles.tap()
+        XCTAssertTrue(button(["Browse", "Durchsuchen"]).waitForExistence(timeout: 15))
+        let cancel = button(["Cancel", "Abbrechen"])
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        cancel.tap()
+        XCTAssertTrue(plus.waitForExistence(timeout: 5))
+        XCTAssertEqual(noteTitles, [])
+        plus.tap()
+        XCTAssertTrue(app.textViews.firstMatch.waitForExistence(timeout: 10))
+    }
+
     func testFilesCompleteAfterDismissalAndCancelDoesNotReimport() {
         openSettings()
         openPicker(folder: false)
@@ -48,9 +65,8 @@ final class NotebookImportUITests: XCTestCase {
         capture("import-files-selected")
         pickerOpenButton.tap()
         assertCompletionAfterDismissal()
-        app.buttons["OK"].tap()
         app.buttons["Done"].tap()
-        XCTAssertEqual(noteTitles, ["First", "Second"])
+        assertNoteTitles(["First", "Second"])
         capture("import-files-at-root")
 
         openSettings()
@@ -63,7 +79,7 @@ final class NotebookImportUITests: XCTestCase {
         XCTAssertTrue(app.buttons["notebook-import"].waitForExistence(timeout: 5))
         XCTAssertFalse(completionAlert.waitForExistence(timeout: 3))
         app.buttons["Done"].tap()
-        XCTAssertEqual(noteTitles, ["First", "Second"])
+        assertNoteTitles(["First", "Second"])
         capture("import-cancel-preserves-notes")
     }
 
@@ -76,7 +92,7 @@ final class NotebookImportUITests: XCTestCase {
         invalid.tap()
         pickerOpenButton.tap()
         let error = app.alerts.containing(
-            .staticText, identifier: "Couldn’t Import Markdown"
+            .staticText, identifier: "Couldn’t Import Files"
         ).firstMatch
         XCTAssertTrue(error.waitForExistence(timeout: 15))
         XCTAssertFalse(pickerOpenButton.exists)
@@ -98,9 +114,8 @@ final class NotebookImportUITests: XCTestCase {
         folder.tap()
         pickerOpenButton.tap()
         assertCompletionAfterDismissal()
-        app.buttons["OK"].tap()
         app.buttons["Done"].tap()
-        XCTAssertEqual(noteTitles, ["Child", "Folder"])
+        assertNoteTitles(["Child", "Folder"])
         capture("import-folder-at-root")
     }
 
@@ -115,7 +130,8 @@ final class NotebookImportUITests: XCTestCase {
 
     private func openPicker(folder: Bool) {
         app.buttons["notebook-import"].tap()
-        let choice = app.buttons[folder ? "Import Folder…" : "Import Files…"]
+        let choice = app.popovers.buttons[folder ? "Import Folder…" : "Import Files…"]
+            .firstMatch
         XCTAssertTrue(choice.waitForExistence(timeout: 5))
         capture("import-source-choice")
         choice.tap()
@@ -159,9 +175,23 @@ final class NotebookImportUITests: XCTestCase {
     private func assertCompletionAfterDismissal() {
         // Regresses native auto-dismissal firing SwiftUI onDismiss before the
         // picker delivers its URLs, which silently lost successful selections.
-        XCTAssertTrue(completionAlert.waitForExistence(timeout: 15))
-        XCTAssertFalse(pickerOpenButton.exists)
-        capture("import-completion-after-dismissal")
+        XCTAssertTrue(pickerOpenButton.waitForNonExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["notebook-import"].waitForExistence(timeout: 15))
+        let progress = app.descendants(matching: .any)["notebook-import-progress"]
+        XCTAssertTrue(progress.waitForNonExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["Done"].isEnabled)
+        XCTAssertFalse(app.buttons["notebook-confirm-import"].exists)
+        XCTAssertFalse(completionAlert.exists)
+        capture("import-directly-after-dismissal")
+    }
+
+    private func assertNoteTitles(_ expected: [String]) {
+        let imported = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.noteTitles == expected
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [imported], timeout: 30), .completed)
+        XCTAssertFalse(app.buttons["notebook-confirm-import"].exists)
+        XCTAssertFalse(completionAlert.exists)
     }
 
     private var noteTitles: [String] {

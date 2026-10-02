@@ -49,18 +49,29 @@ struct CloudKitNotebookFormatGate: Equatable {
         )
     }
 
-    func requireSupported() throws {
-        try NotebookSyncFormat.requireSupported(minimumReaderVersion)
-        try NotebookSyncFormat.requireSupported(minimumWriterVersion)
-        try NotebookSyncFormat.requireSupported(catalogFormatVersion)
+    func requireSupported(
+        maximumVersion: UInt64 = NotebookSyncFormat.supportedVersion
+    ) throws {
+        let required = max(
+            minimumReaderVersion,
+            minimumWriterVersion,
+            catalogFormatVersion
+        )
+        if required > maximumVersion {
+            throw SyncError.updateRequired(requiredVersion: required)
+        }
     }
 
     /// Mutate a fetched record, retaining its CloudKit change tag. The
     /// publication ID forces even an ordinary write to advance that tag.
     func publish(on record: CKRecord, catalogVersion: UInt64?,
-                 snapshotID: String?) throws {
+                 snapshotID: String?,
+                 maximumVersion: UInt64 = NotebookSyncFormat.supportedVersion)
+        throws {
         let version = max(catalogFormatVersion, catalogVersion ?? 1)
-        try NotebookSyncFormat.requireSupported(version)
+        guard version <= maximumVersion else {
+            throw SyncError.updateRequired(requiredVersion: version)
+        }
         record[Self.readerKey] = NSNumber(value: version)
         record[Self.writerKey] = NSNumber(value: version)
         record[Self.catalogKey] = NSNumber(value: version)

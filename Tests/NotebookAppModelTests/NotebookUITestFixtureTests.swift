@@ -21,6 +21,7 @@ final class NotebookUITestFixtureTests: XCTestCase {
             let children = replica.orderedChildren(parentID: nil).map(\.item)
             let expected: [String]
             switch fixture {
+            case .attachmentBrowser: expected = ["Attachments Demo"]
             case .storageLarge: expected = ["Field journals"]
             case .historyRestore: expected = ["Recovery Sketch.md"]
             case .writing: expected = ["Fictional field notes.md", "Save boundary.md"]
@@ -35,6 +36,23 @@ final class NotebookUITestFixtureTests: XCTestCase {
                 } + ["Journeys"]
             }
             XCTAssertEqual(children.map(\.name), expected)
+            if fixture == .attachmentBrowser {
+                let descriptors = try replica.attachmentDescriptors()
+                XCTAssertEqual(descriptors.count, 2)
+                XCTAssertEqual(try replica.attachmentDescriptors(
+                    includeTrashed: false).count, 1)
+                for descriptor in descriptors {
+                    let url = try await replica.attachmentFileURL(for: descriptor.id)
+                    let bytes = try Data(contentsOf: url)
+                    if replica.placements.first(where: {
+                        $0.item.id == descriptor.id
+                    })?.item.name == "Discarded sample.bin" {
+                        XCTAssertEqual(bytes, Data(repeating: 0xA5, count: 4096))
+                    } else {
+                        XCTAssertTrue(bytes.starts(with: Data("%PDF-1.4".utf8)))
+                    }
+                }
+            }
             if fixture == .storageLarge {
                 let activeNotes = replica.placements.filter {
                     $0.item.kind == .note && !$0.isInTrash

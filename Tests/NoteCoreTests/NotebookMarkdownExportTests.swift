@@ -209,4 +209,22 @@ final class NotebookMarkdownExportTests: XCTestCase {
         }
     }
 
+    func testMixedFolderExportsOnlyMarkdown() throws {
+        let catalog = try NotebookCatalogDocument()
+        let folder = try catalog.add(kind: .folder, name: "Project")
+        let note = try NoteDocument(text: "# Notes\n")
+        try catalog.add(id: note.noteID, kind: .note, name: "Notes.md",
+                        parentID: folder)
+        try catalog.add(kind: .attachment, name: "Diagram.pdf", parentID: folder,
+                        attachment: NotebookAttachmentContent(
+                            sha256: String(repeating: "a", count: 64),
+                            byteCount: 200_000_000))
+        let exported = try NotebookMarkdownExport.makeWrapper(
+            placements: catalog.placements(), notes: [note.snapshot()],
+            selectedIDs: [folder])
+        let files = try XCTUnwrap(exported.fileWrappers?["Project"]?.fileWrappers)
+        XCTAssertEqual(Set(files.keys), ["Notes.md"])
+        XCTAssertEqual(files["Notes.md"]?.regularFileContents,
+                       Data("# Notes\n".utf8))
+    }
 }

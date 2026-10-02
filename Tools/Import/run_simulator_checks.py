@@ -138,8 +138,8 @@ def run() -> None:
                     "xcrun", "xcresulttool", "get", "test-results", "summary",
                     "--path", str(result),
                 ))
-                if summary.get("passedTests") != 3 or summary.get("skippedTests") != 0:
-                    raise RuntimeError("Expected three passing import tests with no skips")
+                if summary.get("passedTests") != 4 or summary.get("skippedTests") != 0:
+                    raise RuntimeError("Expected four passing import tests with no skips")
                 command(
                     "xcrun", "xcresulttool", "export", "attachments", "--path", str(result),
                     "--output-path", str(output / "screenshots"),

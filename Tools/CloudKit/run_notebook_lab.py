@@ -146,7 +146,8 @@ def main():
     parser.add_argument("evidence", type=Path)
     parser.add_argument("--phase", choices=[
         "account", "exchange", "offline-join", "offline-ui-seed",
-        "offline-ui-verify", "publish", "receive", "edit", "verify", "cleanup"
+        "offline-ui-verify", "publish", "receive", "edit", "verify", "cleanup",
+        "attachments", "attachments-local", "attachments-download"
     ], required=True)
     parser.add_argument("--allow-development-cloud", action="store_true")
     parser.add_argument("--run-id", type=uuid.UUID)
@@ -154,9 +155,10 @@ def main():
     args = parser.parse_args()
     if not args.allow_development_cloud:
         parser.error("Explicit --allow-development-cloud is required")
-    if not 10 <= args.timeout <= 300:
-        parser.error("Timeout must be between 10 and 300 seconds")
-    if args.phase in ("receive", "edit", "verify", "offline-ui-verify") and args.run_id is None:
+    maximum_timeout = 1200 if args.phase.startswith("attachments") else 300
+    if not 10 <= args.timeout <= maximum_timeout:
+        parser.error(f"Timeout must be between 10 and {maximum_timeout} seconds")
+    if args.phase in ("receive", "edit", "verify", "offline-ui-verify", "attachments-download") and args.run_id is None:
         parser.error("Follow-up phases require the original --run-id")
     executable, symbol_file = verify(args.app.resolve())
     # A fresh run prevents touching earlier lab data, let alone app notebooks.
@@ -164,7 +166,7 @@ def main():
     args.evidence.mkdir(parents=True, exist_ok=False)
     metadata = {
         "run_id": run, "phase": args.phase,
-        "zone": "meh-md-notebook-lab-v2-" + run if args.phase != "account" else None,
+        "zone": "meh-md-notebook-lab-v2-" + run if args.phase not in ("account", "attachments-local") else None,
         "source_revision": command("git", "rev-parse", "HEAD").stdout.decode().strip(),
         "working_tree": command("git", "-c", "core.fsmonitor=false", "status", "--short").stdout.decode(),
         "binary_sha256": hashlib.sha256(symbol_file.read_bytes()).hexdigest(),

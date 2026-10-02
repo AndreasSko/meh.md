@@ -34,7 +34,7 @@ final class NotebookStorageReportTests: XCTestCase {
         let unnamedReport = try await scan(root, documents: [])
         XCTAssertEqual(report.totalBytes, 180)
         XCTAssertEqual(report.totalBytes, unnamedReport.totalBytes)
-        XCTAssertEqual(report.categories.map(\.byteCount), [30, 78, 0, 0, 72])
+        XCTAssertEqual(report.categories.map(\.byteCount), [30, 0, 78, 0, 0, 72])
         XCTAssertEqual(report.documents.map(\.id), [first, second])
         XCTAssertEqual(report.documents.map(\.totalBytes), [65, 20])
         XCTAssertEqual(report.documents.first?.currentAndHistoryBytes, 10)
@@ -115,7 +115,7 @@ final class NotebookStorageReportTests: XCTestCase {
             backupDirectory: root.appending(path: "notebook/backups"), documents: []
         )
         XCTAssertEqual(report.totalBytes, 23)
-        XCTAssertEqual(report.categories.map(\.byteCount), [0, 0, 5, 7, 11])
+        XCTAssertEqual(report.categories.map(\.byteCount), [0, 0, 0, 5, 7, 11])
     }
 
     func testEqualSizesSortByPathThenIdentityAndKeepZeroSizeNotes() async throws {
@@ -140,7 +140,7 @@ final class NotebookStorageReportTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let report = try await scan(root, documents: [])
         XCTAssertEqual(report.totalBytes, 0)
-        XCTAssertEqual(report.categories.count, 5)
+        XCTAssertEqual(report.categories.count, 6)
         XCTAssertTrue(report.documents.isEmpty)
     }
 
@@ -190,7 +190,7 @@ final class NotebookStorageReportTests: XCTestCase {
             backupDirectory: root, documents: []
         )
         XCTAssertEqual(report.totalBytes, 9)
-        XCTAssertEqual(report.categories.map(\.byteCount), [0, 0, 0, 9, 0])
+        XCTAssertEqual(report.categories.map(\.byteCount), [0, 0, 0, 0, 9, 0])
     }
 
     func testRootOutsideTrustedBoundaryIsRejected() async throws {
@@ -207,6 +207,85 @@ final class NotebookStorageReportTests: XCTestCase {
             XCTFail("Requests must stay within the trusted boundary")
         } catch NotebookStorageReportError.rootOutsideTrustedBoundary(let url) {
             XCTAssertEqual(url.standardizedFileURL.path, root.standardizedFileURL.path)
+        }
+    }
+
+    func testAttachmentsMeasureResidentContentsAndKeepOverheadSeparate() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let active = UUID(), trashed = UUID(), remote = UUID(), empty = UUID()
+        let orphan = UUID()
+        try write(root, "notebook/attachments/\(active)/content", bytes: 11)
+        try write(root, "notebook/attachments/\(active)/manifest.json", bytes: 7)
+        try write(root, "notebook/attachments/\(trashed)/content", bytes: 13)
+        try write(root, "notebook/attachments/\(empty)/content", bytes: 0)
+        try write(root, "notebook/attachments/\(orphan)/content", bytes: 17)
+        try write(root, "notebook/attachments/.stage-test/content", bytes: 19)
+        try write(root, "notebook/attachments/\(active)/quarantine/content", bytes: 23)
+        let report = try await NotebookStorageReport.scan(
+            trustedBoundary: root,
+            notebookDirectory: root.appending(path: "notebook"),
+            markdownCopiesDirectory: root.appending(path: "copies"),
+            backupDirectory: root.appending(path: "backups"), documents: [],
+            attachments: [
+                .init(id: active, isInTrash: false),
+                .init(id: trashed, isInTrash: true),
+                .init(id: remote, isInTrash: false),
+                .init(id: empty, isInTrash: false)
+            ]
+        )
+        XCTAssertEqual(report.totalBytes, 90)
+        XCTAssertEqual(report.categories.map(\.byteCount), [0, 24, 0, 0, 0, 66])
+        XCTAssertEqual(report.activeAttachmentCount, 3)
+        XCTAssertEqual(report.trashAttachmentCount, 1)
+        XCTAssertEqual(report.residentAttachmentCount, 3)
+        XCTAssertEqual(report.activeNoteCount, 0)
+        XCTAssertTrue(report.documents.isEmpty)
+    }
+
+    func testAttachmentSymlinksAreNotResidentAndSpecificRootsWin() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let linked = UUID(), copied = UUID()
+        try write(root, "outside/content", bytes: 100)
+        try write(root, "notebook/attachments/\(linked)/manifest.json", bytes: 7)
+        try write(root, "notebook/attachments/\(copied)/content", bytes: 11)
+        try FileManager.default.createSymbolicLink(
+            at: root.appending(path: "notebook/attachments/\(linked)/content"),
+            withDestinationURL: root.appending(path: "outside/content")
+        )
+        let report = try await NotebookStorageReport.scan(
+            trustedBoundary: root,
+            notebookDirectory: root.appending(path: "notebook"),
+            markdownCopiesDirectory: root.appending(path: "notebook/attachments/\(copied)"),
+            backupDirectory: root.appending(path: "backups"), documents: [],
+            attachments: [
+                .init(id: linked, isInTrash: false),
+                .init(id: copied, isInTrash: false)
+            ]
+        )
+        XCTAssertEqual(report.totalBytes, 18)
+        XCTAssertEqual(report.categories.map(\.byteCount), [0, 0, 0, 11, 0, 7])
+        XCTAssertEqual(report.residentAttachmentCount, 0)
+        XCTAssertEqual(report.activeAttachmentCount, 2)
+    }
+
+    func testDuplicateAttachmentIdentityIsRejected() async throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let attachment = NotebookStorageAttachment(id: UUID(), isInTrash: false)
+        do {
+            _ = try await NotebookStorageReport.scan(
+                trustedBoundary: root,
+                notebookDirectory: root.appending(path: "notebook"),
+                markdownCopiesDirectory: root.appending(path: "copies"),
+                backupDirectory: root.appending(path: "backups"), documents: [],
+                attachments: [attachment, attachment]
+            )
+            XCTFail("Duplicate identities must not inflate attachment counts")
+        } catch NotebookStorageReportError.duplicateAttachmentID(let id) {
+            XCTAssertEqual(id, attachment.id)
         }
     }
 

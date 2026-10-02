@@ -1,3 +1,4 @@
+import Automerge
 import CloudKit
 import Foundation
 import XCTest
@@ -124,6 +125,64 @@ final class NotebookOfflineJoinTests: XCTestCase {
         XCTAssertEqual(reopened.orderedChildren(parentID: folder).map(\.item.id), [first, noteID, old])
         let reopenedBody = try await reopened.openNote(noteID)
         XCTAssertEqual(reopenedBody.text, session.text)
+    }
+
+    func testOfflineAttachmentJoinsSchemaOneCloudWithoutEmbeddingBytes() async throws {
+        let transport = InMemorySyncTransport(scope: "offline-attachment-join")
+        let remote = NotebookReplica(directory: directory())
+        let remoteSync = NotebookSyncCoordinator(replica: remote, transport: transport)
+        await remoteSync.synchronize()
+        let remoteNote = try await remote.createNote(
+            name: "Cloud.md", text: "Existing cloud body")
+        await remoteSync.synchronize()
+        assertSuccess(remoteSync)
+        let canonical = try XCTUnwrap(remote.catalogSnapshot)
+        XCTAssertEqual(try NotebookSyncFormat.version(of: Document(canonical.data)), 1)
+
+        let local = NotebookReplica(directory: directory())
+        try await local.createNotebookForSync()
+        let localNote = try await local.createNote(
+            name: "Offline.md", text: "Existing offline body")
+        let sourceRoot = directory()
+        try FileManager.default.createDirectory(
+            at: sourceRoot, withIntermediateDirectories: true)
+        let source = sourceRoot.appending(path: "Fictional.bin")
+        let bytes = Data((0..<100_000).map { UInt8($0 % 251) })
+        try bytes.write(to: source)
+        let plan = try await NotebookImportScanner(
+            attachmentStore: local.attachmentStore).scan(urls: [source])
+        let descriptor = try XCTUnwrap(plan.entries.first?.attachment)
+        try await local.importMarkdown(plan)
+        let offline = try XCTUnwrap(local.catalogSnapshot)
+        XCTAssertEqual(try NotebookSyncFormat.version(of: Document(offline.data)), 2)
+        let localSession = try await local.openNote(localNote)
+        let originalBody = localSession.currentSnapshot
+        let sync = NotebookSyncCoordinator(replica: local, transport: transport)
+
+        await sync.synchronize()
+
+        assertSuccess(sync)
+        let joined = try XCTUnwrap(local.catalogSnapshot)
+        XCTAssertEqual(joined.notebookID, canonical.notebookID)
+        XCTAssertEqual(try NotebookSyncFormat.version(of: Document(joined.data)), 2)
+        XCTAssertEqual(try local.attachmentDescriptor(for: descriptor.id), descriptor)
+        XCTAssertEqual(localSession.currentSnapshot, originalBody)
+        let cloudBody = try await local.openNote(remoteNote)
+        XCTAssertEqual(cloudBody.text, "Existing cloud body")
+        let localFile = try await local.attachmentFileURL(for: descriptor.id)
+        XCTAssertEqual(try Data(contentsOf: localFile), bytes)
+        XCTAssertLessThan(joined.data.count, bytes.count)
+        XCTAssertNil(joined.data.range(of: bytes))
+
+        await remoteSync.synchronize()
+        assertSuccess(remoteSync)
+        XCTAssertEqual(try remote.attachmentDescriptor(for: descriptor.id), descriptor)
+        let receivedNote = try await remote.openNote(localNote)
+        XCTAssertEqual(receivedNote.currentSnapshot?.heads, originalBody?.heads)
+        do {
+            _ = try await remote.attachmentFileURL(for: descriptor.id)
+            XCTFail("Catalog synchronization must leave attachment bytes on demand")
+        } catch NotebookAttachmentError.missing {}
     }
 
     func testTwoIndependentOfflineDevicesConvergeInEitherConnectionOrder() async throws {

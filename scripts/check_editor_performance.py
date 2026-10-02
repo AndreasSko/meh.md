@@ -483,6 +483,55 @@ def check_paired_reports(current: Any, references: Any, size_kb: int = 500,
     return errors
 
 
+def check_environment_fallback(current, baseline, recorded, *, base_commit,
+                               current_commit, size_kb=500, mode="livePreview",
+                               context="standard", host="notebook", shape="standard"):
+    """Allow inherited runner drift only after absolute and paired guards."""
+    options = dict(size_kb=size_kb, mode=mode, context=context, host=host, shape=shape)
+    errors = check_paired_reports(current, baseline, **options)
+    if errors:
+        return errors
+    environment = None
+    for label, reports, commit in (("current", current, current_commit),
+                                    ("baseline", baseline, base_commit)):
+        if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            errors.append(f"{label}: expected commit must be a full SHA")
+        for index, report in enumerate(reports, 1):
+            if report.get("checkout_commit") != commit or report.get("checkout_dirty") is not False:
+                errors.append(f"{label} run {index}: clean checkout identity does not match")
+            fields = ("device", "system", "compiler_optimization", "compiler_debug_info",
+                      "compilation_conditions", "simulator_udid")
+            identity = tuple(report.get(field) for field in fields)
+            if any(not value for value in identity):
+                errors.append(f"{label} run {index}: environment metadata is missing")
+            if report.get("compiler_optimization") != "-O":
+                errors.append(f"{label} run {index}: optimized probe required")
+            conditions = report.get("compilation_conditions")
+            if not isinstance(conditions, list) or "ICLOUD_DEV" not in conditions:
+                errors.append(f"{label} run {index}: iCloud Dev probe required")
+            if environment is None:
+                environment = identity
+            elif identity != environment:
+                errors.append(f"{label} run {index}: paired environment does not match")
+    # Validate the frozen report and its identity before interpreting failure
+    # as drift. A malformed reference or changed fixture is never a fallback.
+    structural = check_report(recorded, **options)
+    if structural or errors:
+        return structural + errors
+    fixture_fields = ("utf8_bytes", "utf16_length", "fixture_sha256")
+    if any(tuple(report.get(field) for field in fixture_fields) !=
+           tuple(recorded.get(field) for field in fixture_fields) for report in baseline):
+        structural.append("baseline fixture does not match recorded reference")
+    # The recorded comparison must fail only for relative timing; absolute
+    # validation has already passed for all six measured reports above.
+    recorded_errors = check_paired_reports(baseline, [recorded] * 3, **options)
+    if structural:
+        return structural
+    if not recorded_errors:
+        return ["baseline passes recorded reference; candidate failure remains blocking"]
+    return []
+
+
 # Captured run 37954100461: fictional 500 KB notebook fixture and frozen source.
 # Keep this identity independent of the fixture file used by CI.
 NEGATIVE_CONTROL_IDENTITY = {
@@ -522,6 +571,9 @@ def main() -> int:
     parser.add_argument("--baseline-report", type=Path)
     parser.add_argument("--reference-report", type=Path)
     parser.add_argument("--recorded-reference", action="store_true")
+    parser.add_argument("--environment-fallback", action="store_true")
+    parser.add_argument("--expected-base-commit")
+    parser.add_argument("--expected-current-commit")
     parser.add_argument("--current-report", type=Path, action="append")
     parser.add_argument("--paired-current-report", type=Path, action="append")
     parser.add_argument("--paired-reference-report", type=Path, action="append")
@@ -536,6 +588,11 @@ def main() -> int:
                     if args.baseline_report else None)
         reference = (json.loads(args.reference_report.read_text(encoding="utf-8"))
                      if args.reference_report else None)
+        if args.environment_fallback:
+            if args.recorded_reference or args.current_report or args.reference_report or args.baseline_report:
+                raise ValueError("environment fallback requires only paired reports")
+            reference = json.loads((Path(__file__).parent /
+                                    "fixtures/performance/native-reference-af516.json").read_text())
         if args.current_report and not args.recorded_reference:
             raise ValueError("current reports require the recorded baseline")
         if args.recorded_reference:
@@ -555,19 +612,31 @@ def main() -> int:
         print(f"Cannot read performance report: {error}", file=sys.stderr)
         return 2
     errors = check_report(
-        report, args.size_kb, args.mode, args.context, args.host, args.shape, baseline, reference=None if args.recorded_reference else reference
+        report, args.size_kb, args.mode, args.context, args.host, args.shape, baseline, reference=None if (args.recorded_reference or args.environment_fallback) else reference
     )
     if args.current_report or args.paired_current_report or args.paired_reference_report:
         paths = (args.current_report or args.paired_current_report or []) + (args.paired_reference_report or [])
         if len({path.resolve() for path in paths}) != len(paths):
             errors.append("paired comparison requires distinct report files")
-        errors += check_paired_reports(
-            current_runs, reference_runs, args.size_kb, args.mode,
-            args.context, args.host, args.shape)
+        if args.environment_fallback:
+            errors += check_environment_fallback(
+                current_runs, reference_runs, reference,
+                base_commit=args.expected_base_commit,
+                current_commit=args.expected_current_commit,
+                size_kb=args.size_kb, mode=args.mode, context=args.context,
+                host=args.host, shape=args.shape)
+        else:
+            errors += check_paired_reports(
+                current_runs, reference_runs, args.size_kb, args.mode,
+                args.context, args.host, args.shape)
+    elif args.environment_fallback:
+        errors.append("environment fallback requires six paired reports")
     if errors:
         for error in errors:
             print(f"FAIL: {error}", file=sys.stderr)
         return 1
+    if args.environment_fallback:
+        print("DIAGNOSTIC: baseline also fails recorded reference; paired guards pass")
     if current_runs and reference_runs:
         for metric in REFERENCE_METRICS:
             current_median = statistics.median(

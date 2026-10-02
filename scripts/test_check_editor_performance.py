@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from check_editor_performance import COUNTS, check_report, check_paired_reports, check_negative_control
+from check_editor_performance import COUNTS, check_report, check_paired_reports, check_negative_control, check_environment_fallback
 
 
 def valid_report(size=500, context="standard", shape="standard"):
@@ -64,6 +64,101 @@ def set_samples(report, action, suffix, samples):
 
 
 class CheckEditorPerformanceTests(unittest.TestCase):
+    def environment_reports(self):
+        recorded = valid_report()
+        baseline = [copy.deepcopy(recorded) for _ in range(3)]
+        current = copy.deepcopy(baseline)
+        for reports, commit in ((baseline, "b" * 40), (current, "c" * 40)):
+            for report in reports:
+                report.update(checkout_commit=commit, checkout_dirty=False,
+                              device="iPhone19,2", system="27.0",
+                              compiler_optimization="-O", compiler_debug_info="-g",
+                              compilation_conditions=["ICLOUD_DEV"],
+                              simulator_udid="owned-simulator")
+                set_samples(report, "typing", "to_idle_ms", [300] * 3 + [20] * 18)
+        return current, baseline, recorded
+
+    def fallback_errors(self, current, baseline, recorded):
+        return check_environment_fallback(current, baseline, recorded,
+                                          base_commit="b" * 40,
+                                          current_commit="c" * 40, host="editor")
+
+    def test_environment_fallback_accepts_shared_drift_with_all_guards(self):
+        current, baseline, recorded = self.environment_reports()
+        self.assertTrue(check_paired_reports(current, [recorded] * 3))
+        self.assertEqual(self.fallback_errors(current, baseline, recorded), [])
+
+    def test_environment_fallback_rejects_cold_regression_with_stable_warm(self):
+        current, baseline, recorded = self.environment_reports()
+        for report in current:
+            set_samples(report, "typing", "to_idle_ms", [600] * 3 + [20] * 18)
+        errors = self.fallback_errors(current, baseline, recorded)
+        self.assertTrue(any("cold_typing_max_to_idle_ms" in e for e in errors))
+        self.assertTrue(any("cold_typing_total_to_idle_ms" in e for e in errors))
+
+    def test_environment_fallback_rejects_base_that_passes_recorded(self):
+        current, baseline, recorded = self.environment_reports()
+        for report in baseline:
+            set_samples(report, "typing", "to_idle_ms", [70] * 3 + [20] * 18)
+        for report in current:
+            set_samples(report, "typing", "to_idle_ms", [90] * 3 + [20] * 18)
+        self.assertEqual(check_paired_reports(current, baseline), [])
+        self.assertTrue(any("baseline passes recorded reference" in e
+                            for e in self.fallback_errors(current, baseline, recorded)))
+
+    def test_environment_fallback_rejects_missing_mismatched_metadata(self):
+        for field, value in (("system", "28.0"), ("device", None),
+                             ("simulator_udid", "another-simulator"),
+                             ("checkout_commit", "d" * 40),
+                             ("checkout_dirty", True), ("fixture_sha256", "d" * 64),
+                             ("compilation_conditions", ["ICLOUD_ENABLED"])):
+            current, baseline, recorded = self.environment_reports()
+            current[0][field] = value
+            with self.subTest(field=field):
+                self.assertTrue(self.fallback_errors(current, baseline, recorded))
+        current, baseline, recorded = self.environment_reports()
+        self.assertTrue(self.fallback_errors(current[:2], baseline, recorded))
+        self.assertTrue(self.fallback_errors(current, baseline, None))
+
+    def test_environment_fallback_cli_requires_complete_provenance(self):
+        frozen = json.loads((Path(__file__).parent /
+                             "fixtures/performance/native-reference-af516.json").read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for index in range(6):
+                report = copy.deepcopy(frozen)
+                report.update(checkout_commit=("c" if index < 3 else "b") * 40,
+                              checkout_dirty=False, simulator_udid="owned-simulator")
+                set_samples(report, "typing", "to_idle_ms",
+                            [1400, 400, 200] + report["measurements"]["typing_to_idle_ms"][3:])
+                path = Path(directory) / f"paired-{index}.json"
+                path.write_text(json.dumps(report))
+                paths.append(path)
+            command = [sys.executable, str(Path(__file__).with_name("check_editor_performance.py")),
+                       str(paths[0]), "--size-kb", "500", "--host", "notebook",
+                       "--context", "standard", "--environment-fallback",
+                       "--expected-base-commit", "b" * 40,
+                       "--expected-current-commit", "c" * 40]
+            for path in paths[:3]:
+                command += ["--paired-current-report", str(path)]
+            for path in paths[3:]:
+                command += ["--paired-reference-report", str(path)]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            broken = json.loads(paths[-1].read_text())
+            broken.pop("system")
+            paths[-1].write_text(json.dumps(broken))
+            self.assertEqual(subprocess.run(command, capture_output=True).returncode, 1)
+            paths[-1].unlink()
+            self.assertEqual(subprocess.run(command, capture_output=True).returncode, 2)
+
+    def test_environment_fallback_preserves_absolute_caps(self):
+        current, baseline, recorded = self.environment_reports()
+        for reports in (current, baseline):
+            for report in reports:
+                set_samples(report, "typing", "to_idle_ms", [2300] + [20] * 20)
+        self.assertTrue(self.fallback_errors(current, baseline, recorded))
+
     def test_accepts_complete_report_within_budget(self):
         self.assertEqual(check_report(valid_report(), 500), [])
 

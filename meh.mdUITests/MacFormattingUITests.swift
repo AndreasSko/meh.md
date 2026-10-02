@@ -142,8 +142,12 @@ final class MacFormattingUITests: XCTestCase {
         let window = app.windows.firstMatch
         let titleBar = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
             .withOffset(CGVector(dx: 0, dy: 12))
-        titleBar.press(forDuration: 0.1, thenDragTo: titleBar
+        titleBar.click(forDuration: 0.15, thenDragTo: titleBar
             .withOffset(CGVector(dx: 0, dy: 220 - window.frame.minY)))
+        let positioned = NSPredicate { _, _ in window.frame.minY >= 200 }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: positioned, object: window
+        )], timeout: 5), .completed, "Native window drag must reach below the menu bar")
         let sync = element(app, "notebook-sync-details")
         XCTAssertTrue(sync.isHittable)
         XCTAssertGreaterThanOrEqual(sync.frame.minY, 200)

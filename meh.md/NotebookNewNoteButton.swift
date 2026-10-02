@@ -9,6 +9,8 @@ struct NotebookNewNoteButton: UIViewRepresentable {
     let onNewNote: () -> Void
     let onNewFromTemplate: () -> Void
     let onNewFolder: () -> Void
+    let onImportFiles: () -> Void
+    let onImportFolder: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -25,7 +27,7 @@ struct NotebookNewNoteButton: UIViewRepresentable {
         button.preferredMenuElementOrder = .fixed
         button.accessibilityLabel = String(localized: "New Note")
         button.accessibilityHint = String(
-            localized: "Touch and hold for note and folder options."
+            localized: "Touch and hold for note, folder, and import options."
         )
         button.accessibilityIdentifier = "notebook-new-item"
         button.addTarget(context.coordinator, action: #selector(Coordinator.createNote),
@@ -51,6 +53,8 @@ struct NotebookNewNoteButton: UIViewRepresentable {
         coordinator.onNewNote = onNewNote
         coordinator.onNewFromTemplate = onNewFromTemplate
         coordinator.onNewFolder = onNewFolder
+        coordinator.onImportFiles = onImportFiles
+        coordinator.onImportFolder = onImportFolder
         button.isEnabled = isEnabled
         let attributes: UIMenuElement.Attributes = isEnabled ? [] : .disabled
         button.menu = UIMenu(children: [
@@ -71,6 +75,20 @@ struct NotebookNewNoteButton: UIViewRepresentable {
                      identifier: UIAction.Identifier("notebook-menu-new-folder"),
                      attributes: attributes) { [weak coordinator] _ in
                 coordinator?.createFolder()
+            },
+            UIAction(title: String(localized: "Import Files…"),
+                     image: UIImage(systemName: "square.and.arrow.down"),
+                     identifier: UIAction.Identifier("notebook-import-files"),
+                     attributes: attributes) { [weak coordinator] _ in
+                guard coordinator?.isEnabled == true else { return }
+                coordinator?.onImportFiles?()
+            },
+            UIAction(title: String(localized: "Import Folder…"),
+                     image: UIImage(systemName: "folder"),
+                     identifier: UIAction.Identifier("notebook-import-folder"),
+                     attributes: attributes) { [weak coordinator] _ in
+                guard coordinator?.isEnabled == true else { return }
+                coordinator?.onImportFolder?()
             },
         ])
         button.accessibilityCustomActions = [
@@ -98,6 +116,8 @@ struct NotebookNewNoteButton: UIViewRepresentable {
         var onNewNote: (() -> Void)?
         var onNewFromTemplate: (() -> Void)?
         var onNewFolder: (() -> Void)?
+        var onImportFiles: (() -> Void)?
+        var onImportFolder: (() -> Void)?
         var feedback: UIImpactFeedbackGenerator?
 
         @objc func createNote() {

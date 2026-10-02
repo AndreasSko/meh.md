@@ -225,6 +225,8 @@ public actor NotebookMarkdownPublisher {
                 }
                 let relative = path.isEmpty ? name : path + "/" + name
                 switch placement.item.kind {
+                case .attachment:
+                    continue
                 case .folder:
                     plan.append(
                         PlannedFile(

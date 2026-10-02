@@ -190,7 +190,7 @@ struct NotebookBrowserAppKitDropSurface: NSViewRepresentable {
         }
 
         override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-            draggingUpdated(sender) == .move
+            !draggingUpdated(sender).isEmpty
         }
 
         override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
@@ -208,6 +208,90 @@ struct NotebookBrowserAppKitDropSurface: NSViewRepresentable {
 
         override func draggingEnded(_ sender: any NSDraggingInfo) {
             interaction?.state.reset()
+        }
+    }
+
+}
+
+/// Finder imports use SwiftUI's destination so the native List keeps its
+/// own data source, selection, and context-menu integration.
+struct NotebookBrowserAppKitFileDrop: DropDelegate {
+    let interaction: NotebookBrowserDropInteraction
+
+    private func target(_ info: DropInfo) -> NotebookBrowserExternalDropTarget? {
+        guard interaction.state.drag == nil,
+              let surface = interaction.state.dropSurface,
+              let content = surface.window?.contentView else { return nil }
+        let point = content.convert(info.location, from: surface)
+        return interaction.resolveExternal(CGPoint(
+            x: point.x,
+            y: content.isFlipped ? point.y : content.bounds.height - point.y
+        ))
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        info.hasItemsConforming(to: [UTType.fileURL]) && target(info) != nil
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: validateDrop(info: info) ? .copy : .cancel)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard let target = target(info) else { return false }
+        let providers = info.itemProviders(for: [UTType.fileURL])
+        guard !providers.isEmpty else { return false }
+        let accepted = AcceptedFiles(count: providers.count, target: target,
+                                     interaction: interaction)
+        let staging = interaction.stagingDirectory
+        for provider in providers {
+            _ = provider.loadObject(ofClass: NSURL.self) { object, error in
+                let result: Result<URL, Error>
+                do {
+                    if let error { throw error }
+                    guard let url = (object as? NSURL).map({ $0 as URL }) else {
+                        throw CocoaError(.fileReadUnknown)
+                    }
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    result = .success(try NotebookBrowserFileStaging.copy(url, into: staging))
+                } catch { result = .failure(error) }
+                Task { @MainActor in accepted.complete(result) }
+            }
+        }
+        return true
+    }
+
+    @MainActor
+    private final class AcceptedFiles {
+        private var remaining: Int
+        private var urls: [URL] = []
+        private var failure: Error?
+        private let target: NotebookBrowserExternalDropTarget
+        private let interaction: NotebookBrowserDropInteraction
+
+        init(count: Int, target: NotebookBrowserExternalDropTarget,
+             interaction: NotebookBrowserDropInteraction) {
+            remaining = count
+            self.target = target
+            self.interaction = interaction
+        }
+
+        func complete(_ result: Result<URL, Error>) {
+            switch result {
+            case .success(let url): urls.append(url)
+            case .failure(let error): failure = failure ?? error
+            }
+            remaining -= 1
+            guard remaining == 0 else { return }
+            if failure != nil || !interaction.acceptsExternalCompletion() {
+                for url in urls {
+                    try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+                }
+                if let failure, interaction.acceptsExternalCompletion() {
+                    interaction.externalFailure(failure)
+                }
+            } else { interaction.importExternal(urls, target) }
         }
     }
 }

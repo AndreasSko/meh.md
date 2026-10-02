@@ -44,12 +44,13 @@ trap cleanup EXIT
 
 run_case() {
   local label="$1" size="$2" mode="$3" context="$4" shape="$5"
-  local source_root="$repo_root"
+  local source_root="${6:-$repo_root}"
+  local case_cache="${7:-$app_cache_root}"
   local report="$evidence_root/${label}.json"
   local log="$evidence_root/${label}.log"
   printf 'Running %s: %s KB, %s, context=%s\n' "$label" "$size" "$mode" "$context"
   set +e
-  EDITOR_PERFORMANCE_APP_CACHE="$app_cache_root" \
+  EDITOR_PERFORMANCE_APP_CACHE="$case_cache" \
     EDITOR_PERFORMANCE_HOST=notebook \
     EDITOR_PERFORMANCE_CONTEXT="$context" \
     EDITOR_PERFORMANCE_SHAPE="$shape" \
@@ -84,6 +85,79 @@ record_case() {
     return 0
   fi
 }
+# A failed frozen comparison can reflect inherited host/runtime drift. Keep
+# it blocking unless the PR base also fails and an alternating paired replay
+# preserves every absolute, warm, and cold guard on the same owned simulator.
+run_environment_fallback() {
+  [[ "${GITHUB_EVENT_NAME:-}" == pull_request && -f "${GITHUB_EVENT_PATH:-}" ]] || return 1
+  local base_sha current_sha work_root base_root base_cache
+  base_sha="$(python3 - "$GITHUB_EVENT_PATH" <<'PYBASE'
+import json, re, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))["pull_request"]["base"]["sha"]
+if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+    raise SystemExit("Missing valid PR base SHA")
+print(value)
+PYBASE
+  )" || return 1
+  current_sha="$(git -C "$repo_root" rev-parse HEAD)" || return 1
+  git -C "$repo_root" cat-file -e "$base_sha^{commit}" || return 1
+  work_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/editor-paired-baseline.XXXXXX")" || return 1
+  base_root="$work_root/base"
+  base_cache="$work_root/app-cache"
+  # Clone locally to retain exact provenance without changing the PR checkout.
+  if ! git clone --shared --no-checkout "$repo_root" "$base_root" \
+       > "$evidence_root/paired-setup.log" 2>&1 ||
+     ! git -C "$base_root" checkout --detach "$base_sha" \
+       >> "$evidence_root/paired-setup.log" 2>&1; then
+    rm -rf "$work_root"
+    return 1
+  fi
+  printf '%s\n' "$base_sha" > "$evidence_root/paired-base-commit.txt"
+  local label source_root cache_root
+  for label in current base; do
+    source_root="$repo_root"; cache_root="$app_cache_root"
+    if [[ "$label" == base ]]; then source_root="$base_root"; cache_root="$base_cache"; fi
+    if ! EDITOR_PERFORMANCE_APP_CACHE="$cache_root" \
+      EDITOR_PERFORMANCE_BUILD_ONLY=1 EDITOR_PERFORMANCE_HOST=notebook \
+      "$source_root/scripts/run_editor_performance_check.sh" \
+      "$sim_udid" working-tree livePreview 500 \
+      > "$evidence_root/paired-$label-build.log" 2>&1; then
+      rm -rf "$work_root"
+      return 1
+    fi
+  done
+  local trial order base_arguments=() paired_arguments=()
+  for trial in 1 2 3; do
+    order="base current"
+    [[ "$trial" != 2 ]] || order="current base"
+    for label in $order; do
+      source_root="$repo_root"; cache_root="$app_cache_root"
+      if [[ "$label" == base ]]; then source_root="$base_root"; cache_root="$base_cache"; fi
+      if ! run_case "paired-$label-$trial" 500 livePreview standard standard \
+          "$source_root" "$cache_root"; then
+        rm -rf "$work_root"
+        return 1
+      fi
+    done
+    base_arguments+=(--current-report "$evidence_root/paired-base-$trial.json")
+    paired_arguments+=(--paired-current-report "$evidence_root/paired-current-$trial.json"
+                       --paired-reference-report "$evidence_root/paired-base-$trial.json")
+  done
+  rm -rf "$work_root"
+  # Preserve the base's original-reference result, including its failure.
+  local base_status=0
+  python3 "$repo_root/scripts/check_editor_performance.py" \
+    "$evidence_root/paired-base-1.json" --size-kb 500 --host notebook \
+    --context standard --recorded-reference "${base_arguments[@]}" \
+    > "$evidence_root/base-recorded-comparison.log" 2>&1 || base_status=$?
+  [[ "$base_status" == 1 ]] || return 1
+  python3 "$repo_root/scripts/check_editor_performance.py" \
+    "$evidence_root/paired-current-1.json" --size-kb 500 --host notebook \
+    --context standard --environment-fallback --expected-base-commit "$base_sha" \
+    --expected-current-commit "$current_sha" "${paired_arguments[@]}" \
+    2>&1 | tee "$evidence_root/paired-comparison.log"
+}
+
 current_arguments=()
 for run in 1 2 3; do
   label="standard-500kb-$run"
@@ -94,7 +168,9 @@ if ! python3 "$repo_root/scripts/check_editor_performance.py" \
   "$evidence_root/standard-500kb-1.json" --size-kb 500 --host notebook \
   --context standard --recorded-reference "${current_arguments[@]}" \
   2>&1 | tee "$evidence_root/recorded-comparison.log"; then
-  failed_cases+=("recorded baseline comparison")
+  if ! run_environment_fallback; then
+    failed_cases+=("recorded baseline comparison")
+  fi
 fi
 record_case mixed-50kb 50 livePreview mixed standard
 record_case nearby-table-50kb 50 livePreview standard nearby-table

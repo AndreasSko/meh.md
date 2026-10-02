@@ -146,6 +146,12 @@ final class MarkdownEditorPositionTests: XCTestCase {
             verticalScrollOffset(in: originalView), originalOffset, accuracy: 1
         )
         let position = try XCTUnwrap(captureNavigation.capturePosition?())
+        if expectedOffset == -52 {
+            XCTAssertEqual(
+                position.scrollAnchor, 0,
+                "Native title space still shows the first character; captured \(position)"
+            )
+        }
         original.tearDown()
 
         let restoreNavigation = MarkdownEditorNavigation()

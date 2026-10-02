@@ -5,6 +5,20 @@ import XCTest
 @testable import NoteCore
 
 final class NotebookOrderingTests: XCTestCase {
+    func testLegacyMixedFilesSortAlphabeticallyAfterFolders() throws {
+        let catalog = try NotebookCatalogDocument()
+        let content = try NotebookAttachmentContent(
+            sha256: String(repeating: "a", count: 64), byteCount: 1
+        )
+        let zebra = try catalog.add(kind: .attachment, name: "Zebra.pdf",
+                                    attachment: content)
+        let alpha = try catalog.add(kind: .note, name: "Alpha.md")
+        let folder = try catalog.add(kind: .folder, name: "Folder")
+        let legacy = try removingOrderMetadata(from: catalog)
+        XCTAssertEqual(try legacy.orderedChildren(parentID: nil, inTrash: false)
+            .map(\.item.id), [folder, alpha, zebra])
+    }
+
     func testLegacyCatalogUsesAlphabeticalFoldersFirstFallback() throws {
         let catalog = try NotebookCatalogDocument()
         let note = try catalog.add(kind: .note, name: "A.md")

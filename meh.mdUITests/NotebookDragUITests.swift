@@ -272,7 +272,11 @@ final class NotebookDragUITests: XCTestCase {
         )).firstMatch
         scrollDown(until: movedTitle, in: app)
         XCTAssertTrue(first.exists, "The dropped note must remain in the notebook")
+        #if os(macOS)
+        openLongListSource(sourceTitleID: sourceTitleID, in: app)
+        #else
         activate(movedTitle)
+        #endif
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         XCTAssertEqual(editor.value as? String,
@@ -351,6 +355,13 @@ final class NotebookDragUITests: XCTestCase {
             XCTFail("Placement inspection requires this test's UUID-owned fixture")
             return ""
         }
+        #if os(macOS)
+        openLongListSource(sourceTitleID: sourceTitleID, in: app)
+        let actions = app.menuButtons["notebook-note-actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        activate(actions)
+        activate(menuAction("Move…", in: app))
+        #else
         let sourceTitle = app.staticTexts[sourceTitleID]
         if !sourceTitle.exists || !sourceTitle.isHittable {
             scrollBrowserToStart(in: app)
@@ -364,6 +375,7 @@ final class NotebookDragUITests: XCTestCase {
                       "The cached source identity must resolve after native scrolling")
         openContextMenu(on: source, in: app)
         activate(menuAction("Move…", in: app))
+        #endif
         let location = app.descendants(matching: .any)
             .matching(identifier: "notebook-move-path").firstMatch
         XCTAssertTrue(location.waitForExistence(timeout: 5))
@@ -383,8 +395,45 @@ final class NotebookDragUITests: XCTestCase {
                        "The edge drop must have a real fictional fixture parent")
         activate(app.buttons["notebook-cancel-move"])
         XCTAssertTrue(location.waitForNonExistence(timeout: 5))
+        #if os(macOS)
+        scrollDown(until: app.staticTexts[sourceTitleID], in: app)
+        #endif
         return path
     }
+
+    #if os(macOS)
+    private func openLongListSource(sourceTitleID: String, in app: XCUIApplication) {
+        let prefix = "notebook-sidebar-title-"
+        XCTAssertTrue(sourceTitleID.hasPrefix(prefix))
+        let id = String(sourceTitleID.dropFirst(prefix.count))
+        XCTAssertNotNil(UUID(uuidString: id))
+        app.typeKey("o", modifierFlags: [.command, .shift])
+        let query = app.textFields["quick-open-query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 5))
+        query.click()
+        query.typeKey("a", modifierFlags: .command)
+        query.typeText("01 Field observation")
+        let result = app.buttons["quick-result-" + id]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        let results = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "quick-result-"
+        )).allElementsBoundByIndex
+        XCTAssertEqual(results.map(\.identifier), [result.identifier],
+                       "Return must open the sole result with the cached source ID")
+        // macOS can report an invalid AX click frame for a native List button.
+        // Use Quick Open's real keyboard action after checking its exact result.
+        query.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(query.waitForNonExistence(timeout: 5))
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let opened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            editor.value as? String
+                == "# Fictional observation 1\n\nSample voyage notes.\n"
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 5), .completed,
+                       "Quick Open must resolve the cached source identity and literal Markdown")
+    }
+    #endif
 
     private struct EdgeDropNeighbors: Equatable {
         let previousID: String?
@@ -694,20 +743,49 @@ final class NotebookDragUITests: XCTestCase {
 
     #if os(macOS)
     private func revealMacDragSource(_ source: XCUIElement, in app: XCUIApplication) {
-        // AX can report a partially visible row as hittable while its chosen
-        // midpoint is covered by the pinned Files header. Reveal the whole
-        // source using ordinary scrolling before clicking or holding it.
+        // AX hittability can include clipped rows. Check the actual native
+        // gesture points; the floating controls leave the centre accessible.
         let list = macSidebar(in: app)
         for _ in 0..<8 {
             let frame = source.frame
             let viewport = list.frame
             let header = app.buttons["notebook-tree-toggle"].frame
             let top = max(viewport.minY, header.maxY)
-            if !frame.isEmpty, frame.minY >= top, frame.maxY <= viewport.maxY,
+            let titleFrame = title(of: source, in: app).frame
+            let dragPoint = CGPoint(x: frame.minX + frame.width * 0.6, y: frame.midY)
+            let titlePoint = CGPoint(x: titleFrame.midX, y: titleFrame.midY)
+            if !frame.isEmpty, !titleFrame.isEmpty,
+               macSidebarPointIsVisible(dragPoint, in: app, viewport: viewport),
+               macSidebarPointIsVisible(titlePoint, in: app, viewport: viewport),
                source.isHittable { return }
             scrollMacBrowser(list, by: frame.minY < top ? 300 : -300, in: app)
         }
-        XCTFail("The drag source must be fully visible after bounded scrolling")
+        let diagnostic = XCTAttachment(string:
+            "source=\(source.frame) title=\(title(of: source, in: app).frame) "
+                + "viewport=\(list.frame) "
+                + "settings=\(app.buttons["notebook-settings"].frame) "
+                + "trash=\(app.buttons["notebook-trash-toggle"].frame)")
+        diagnostic.name = "Native source reveal geometry"
+        diagnostic.lifetime = .keepAlways
+        add(diagnostic)
+        capture(app, "Native source remains obstructed after bounded scrolling")
+        XCTFail("The native gesture points must be visible outside header and controls")
+    }
+
+    private func macSidebarPointIsVisible(
+        _ point: CGPoint, in app: XCUIApplication, viewport: CGRect
+    ) -> Bool {
+        guard point.x.isFinite, point.y.isFinite, viewport.contains(point),
+              point.y > app.buttons["notebook-tree-toggle"].frame.maxY else {
+            return false
+        }
+        for identifier in ["notebook-settings", "notebook-trash-toggle"] {
+            let button = app.buttons[identifier]
+            if button.exists, button.isHittable, button.frame.contains(point) {
+                return false
+            }
+        }
+        return true
     }
 
     private func macSidebar(in app: XCUIApplication) -> XCUIElement {
@@ -754,9 +832,29 @@ final class NotebookDragUITests: XCTestCase {
 
     private func openContextMenu(on row: XCUIElement, in app: XCUIApplication) {
         #if os(macOS)
-        activate(title(of: row, in: app))
+        revealMacDragSource(row, in: app)
+        let label = title(of: row, in: app)
+        let window = app.windows.firstMatch
+        let frame = label.frame
+        guard !frame.isEmpty, frame.minX.isFinite, frame.minY.isFinite,
+              frame.maxX.isFinite, frame.maxY.isFinite,
+              window.frame.contains(CGPoint(x: frame.midX, y: frame.midY)),
+              macSidebarPointIsVisible(
+                CGPoint(x: frame.midX, y: frame.midY),
+                in: app, viewport: macSidebar(in: app).frame
+              ) else {
+            XCTFail("The context-menu source must have a visible finite title frame")
+            return
+        }
+        // Virtualized outline groups can resolve an infinite AX hit point
+        // after edge scrolling. Target the visible title through the window.
+        let origin = window.frame.origin
+        let point = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.midX - origin.x,
+                                 dy: frame.midY - origin.y))
+        point.click()
         assertSelection([row], in: app)
-        row.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)).rightClick()
+        point.rightClick()
         #else
         if app.descendants(matching: .any)["notebook-trash-view"].exists {
             row.press(forDuration: 1.0)

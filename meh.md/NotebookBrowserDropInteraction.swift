@@ -110,8 +110,17 @@ final class NotebookBrowserDragState {
 
 /// One destination resolves both insertion edges and folder centers. It never
 /// changes the catalog while the pointer is moving through the hierarchy.
+struct NotebookBrowserExternalDropTarget {
+    let parentID: UUID?
+}
+
 struct NotebookBrowserDropInteraction {
     let state: NotebookBrowserDragState
+    let stagingDirectory: URL
+    let acceptsExternalCompletion: () -> Bool
+    let resolveExternal: (CGPoint) -> NotebookBrowserExternalDropTarget?
+    let importExternal: ([URL], NotebookBrowserExternalDropTarget) -> Void
+    let externalFailure: (Error) -> Void
     let resolve: (CGPoint) -> NotebookBrowserDropTarget?
     let expand: (UUID?) -> Void
     let commit: (NotebookBrowserDrag, NotebookBrowserDropTarget) -> Void

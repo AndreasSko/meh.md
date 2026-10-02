@@ -5,10 +5,12 @@ public struct NotebookMarkdownBackup: Equatable, Sendable {
     public let url: URL
     public let createdAt: Date
     public let noteCount: Int
+    public let attachmentCount: Int
     public let notebookID: UUID
 }
 
 public enum NotebookMarkdownBackupError: Error, Equatable, LocalizedError {
+    case backupInProgress
     case invalidRetentionCount
     case invalidCatalog
     case reservedName
@@ -16,6 +18,8 @@ public enum NotebookMarkdownBackupError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
+        case .backupInProgress:
+            "A backup is already being prepared."
         case .invalidRetentionCount:
             "Keep at least one backup."
         case .invalidCatalog:
@@ -37,6 +41,7 @@ public actor NotebookMarkdownBackupStore {
     private static let stagePrefix = ".meh-backup-stage-"
     private static let backupPrefix = "Backup-"
     private let fileManager = FileManager.default
+    private var isCreatingBackup = false
 
     public init(directory: URL) {
         self.directory = directory
@@ -46,12 +51,14 @@ public actor NotebookMarkdownBackupStore {
         catalog: NotebookCatalogSnapshot,
         placements: [NotebookPlacement],
         notes: [NoteSnapshot],
+        attachmentStore: NotebookAttachmentStore? = nil,
         retentionCount: Int
-    ) throws -> NotebookMarkdownBackup {
-        try createBackup(
+    ) async throws -> NotebookMarkdownBackup {
+        try await createBackup(
             catalog: catalog,
             placements: placements,
             notes: notes,
+            attachmentStore: attachmentStore,
             retentionCount: retentionCount,
             createdAt: Date()
         )
@@ -61,9 +68,15 @@ public actor NotebookMarkdownBackupStore {
         catalog: NotebookCatalogSnapshot,
         placements: [NotebookPlacement],
         notes: [NoteSnapshot],
+        attachmentStore: NotebookAttachmentStore? = nil,
         retentionCount: Int,
         createdAt: Date
-    ) throws -> NotebookMarkdownBackup {
+    ) async throws -> NotebookMarkdownBackup {
+        guard !isCreatingBackup else {
+            throw NotebookMarkdownBackupError.backupInProgress
+        }
+        isCreatingBackup = true
+        defer { isCreatingBackup = false }
         guard retentionCount > 0 else {
             throw NotebookMarkdownBackupError.invalidRetentionCount
         }
@@ -78,18 +91,17 @@ public actor NotebookMarkdownBackupStore {
         }
 
         let active = placements.filter { !$0.isInTrash }
-        let selectedIDs = Set(active.map { $0.item.id })
-        let wrapper = try NotebookMarkdownExport.makeWrapper(
-            placements: placements,
-            notes: notes,
-            selectedIDs: selectedIDs,
-            preserveSource: true
+        let tree = try makeTree(
+            placements: active, notes: notes,
+            includeAttachments: attachmentStore != nil
         )
-        guard !(wrapper.fileWrappers ?? [:]).keys.contains(where: {
+        guard !tree.keys.contains(where: {
             NotebookName.collisionKey($0) == NotebookName.collisionKey(Self.markerName)
         }) else {
             throw NotebookMarkdownBackupError.reservedName
         }
+        let attachmentCount = attachmentStore == nil ? 0
+            : active.filter { $0.item.kind == .attachment }.count
         let noteCount = active.filter { $0.item.kind == .note }.count
         let identifier = UUID()
         let marker = BackupMarker(
@@ -97,7 +109,8 @@ public actor NotebookMarkdownBackupStore {
             id: identifier,
             notebookID: catalog.notebookID,
             createdAt: createdAt,
-            noteCount: noteCount
+            noteCount: noteCount,
+            attachmentCount: attachmentCount
         )
         let name = Self.backupPrefix + Self.timestamp(createdAt)
             + "-" + identifier.uuidString
@@ -108,13 +121,16 @@ public actor NotebookMarkdownBackupStore {
         try fileManager.createDirectory(at: stage, withIntermediateDirectories: false)
         do {
             try Task.checkCancellation()
-            try write(wrapper, at: stage)
+            try await write(tree, at: stage, attachmentStore: attachmentStore)
             let markerData = try JSONEncoder().encode(marker)
             try DurableFileIO.writeAndSync(
                 markerData,
                 to: stage.appending(path: Self.markerName)
             )
-            try verify(wrapper, at: stage, markerData: markerData)
+            try await verify(tree, at: stage, attachmentStore: attachmentStore, includesMarker: true)
+            guard try Data(contentsOf: stage.appending(path: Self.markerName)) == markerData else {
+                throw NotebookMarkdownBackupError.verificationFailed
+            }
             try DurableFileIO.syncDirectory(stage)
             try Task.checkCancellation()
             try rename(stage, to: destination)
@@ -128,6 +144,7 @@ public actor NotebookMarkdownBackupStore {
             url: destination,
             createdAt: createdAt,
             noteCount: noteCount,
+            attachmentCount: attachmentCount,
             notebookID: catalog.notebookID
         )
         try Task.checkCancellation()
@@ -137,6 +154,9 @@ public actor NotebookMarkdownBackupStore {
 
     /// Applies a changed limit without creating a new backup.
     public func enforceRetention(notebookID: UUID, keeping count: Int) throws {
+        guard !isCreatingBackup else {
+            throw NotebookMarkdownBackupError.backupInProgress
+        }
         guard count > 0 else {
             throw NotebookMarkdownBackupError.invalidRetentionCount
         }
@@ -171,6 +191,7 @@ public actor NotebookMarkdownBackupStore {
                 url: directory.appending(path: url.lastPathComponent),
                 createdAt: marker.createdAt,
                 noteCount: marker.noteCount,
+                attachmentCount: marker.attachmentCount,
                 notebookID: marker.notebookID
             )
         }.sorted {
@@ -209,37 +230,98 @@ public actor NotebookMarkdownBackupStore {
         }
     }
 
-    private func write(_ wrapper: FileWrapper, at root: URL) throws {
-        for (name, child) in wrapper.fileWrappers ?? [:] {
+    private indirect enum Entry {
+        case folder([String: Entry])
+        case note(Data)
+        case attachment(NotebookAttachmentDescriptor)
+    }
+
+    private func makeTree(
+        placements: [NotebookPlacement], notes: [NoteSnapshot],
+        includeAttachments: Bool
+    ) throws -> [String: Entry] {
+        let children = Dictionary(grouping: placements, by: \.parentID)
+        let snapshots = Dictionary(grouping: notes, by: \.noteID)
+        func build(_ parent: UUID?) throws -> [String: Entry] {
+            var entries: [String: Entry] = [:]
+            var used = Set<String>()
+            for placement in (children[parent] ?? []).sorted(by: {
+                $0.item.id.uuidString < $1.item.id.uuidString
+            }) {
+                let id = placement.item.id
+                var name = placement.displayName
+                let entry: Entry
+                switch placement.item.kind {
+                case .folder:
+                    entry = .folder(try build(id))
+                case .note:
+                    guard let matches = snapshots[id], matches.count == 1 else {
+                        throw NotebookMarkdownPublisherError.missingNote(id)
+                    }
+                    let document = try NoteDocument(snapshot: matches[0])
+                    entry = .note(Data(try document.text.utf8))
+                    if !name.lowercased().hasSuffix(".md")
+                        && !name.lowercased().hasSuffix(".markdown") {
+                        name += ".md"
+                    }
+                case .attachment:
+                    guard includeAttachments else { continue }
+                    guard let content = placement.item.attachment else {
+                        throw NotebookMarkdownBackupError.invalidCatalog
+                    }
+                    entry = .attachment(.init(id: id, content: content))
+                }
+                let original = name
+                var attempt = 0
+                while used.contains(NotebookName.collisionKey(name))
+                    || name.utf8.count > 255 {
+                    attempt += 1
+                    name = NotebookName.collisionName(original, id: id, attempt: attempt)
+                }
+                try NotebookName.validate(name)
+                used.insert(NotebookName.collisionKey(name))
+                entries[name] = entry
+            }
+            return entries
+        }
+        return try build(nil)
+    }
+
+    private func write(
+        _ entries: [String: Entry], at root: URL,
+        attachmentStore: NotebookAttachmentStore?
+    ) async throws {
+        for (name, entry) in entries {
             try Task.checkCancellation()
             let url = root.appending(path: name)
-            if child.isDirectory {
-                try fileManager.createDirectory(
-                    at: url,
-                    withIntermediateDirectories: false
-                )
-                try write(child, at: url)
+            switch entry {
+            case .folder(let children):
+                try fileManager.createDirectory(at: url, withIntermediateDirectories: false)
+                try await write(children, at: url, attachmentStore: attachmentStore)
                 try DurableFileIO.syncDirectory(url)
-            } else if child.isRegularFile, let data = child.regularFileContents {
+            case .note(let data):
                 try DurableFileIO.writeAndSync(data, to: url)
-            } else {
-                throw NotebookMarkdownBackupError.verificationFailed
+            case .attachment(let descriptor):
+                guard let attachmentStore else {
+                    throw NotebookMarkdownBackupError.verificationFailed
+                }
+                try await attachmentStore.export(descriptor, to: url)
             }
         }
     }
 
     private func verify(
-        _ wrapper: FileWrapper,
-        at root: URL,
-        markerData: Data
-    ) throws {
-        let expectedNames = Set((wrapper.fileWrappers ?? [:]).keys)
-            .union([Self.markerName])
-        let actualNames = Set(try fileManager.contentsOfDirectory(atPath: root.path))
-        guard actualNames == expectedNames else {
+        _ entries: [String: Entry], at root: URL,
+        attachmentStore: NotebookAttachmentStore?, includesMarker: Bool = false
+    ) async throws {
+        var expectedNames = Set(entries.keys)
+        if includesMarker {
+            expectedNames.insert(Self.markerName)
+        }
+        guard Set(try fileManager.contentsOfDirectory(atPath: root.path)) == expectedNames else {
             throw NotebookMarkdownBackupError.verificationFailed
         }
-        for (name, child) in wrapper.fileWrappers ?? [:] {
+        for (name, entry) in entries {
             try Task.checkCancellation()
             let url = root.appending(path: name)
             let values = try url.resourceValues(
@@ -248,49 +330,23 @@ public actor NotebookMarkdownBackupStore {
             guard values.isSymbolicLink != true else {
                 throw NotebookMarkdownBackupError.verificationFailed
             }
-            if child.isDirectory {
+            switch entry {
+            case .folder(let children):
                 guard values.isDirectory == true else {
                     throw NotebookMarkdownBackupError.verificationFailed
                 }
-                try verifyContents(child, at: url)
-            } else {
-                guard values.isRegularFile == true,
-                      try Data(contentsOf: url) == child.regularFileContents else {
+                try await verify(children, at: url, attachmentStore: attachmentStore)
+            case .note(let data):
+                guard values.isRegularFile == true, try Data(contentsOf: url) == data else {
                     throw NotebookMarkdownBackupError.verificationFailed
                 }
-            }
-        }
-        guard try Data(contentsOf: root.appending(path: Self.markerName))
-            == markerData else {
-            throw NotebookMarkdownBackupError.verificationFailed
-        }
-    }
-
-    private func verifyContents(_ wrapper: FileWrapper, at root: URL) throws {
-        let expectedNames = Set((wrapper.fileWrappers ?? [:]).keys)
-        let actualNames = Set(try fileManager.contentsOfDirectory(atPath: root.path))
-        guard actualNames == expectedNames else {
-            throw NotebookMarkdownBackupError.verificationFailed
-        }
-        for (name, child) in wrapper.fileWrappers ?? [:] {
-            try Task.checkCancellation()
-            let url = root.appending(path: name)
-            let values = try url.resourceValues(
-                forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
-            )
-            guard values.isSymbolicLink != true else {
-                throw NotebookMarkdownBackupError.verificationFailed
-            }
-            if child.isDirectory {
-                guard values.isDirectory == true else {
+            case .attachment(let descriptor):
+                guard values.isRegularFile == true, let attachmentStore else {
                     throw NotebookMarkdownBackupError.verificationFailed
                 }
-                try verifyContents(child, at: url)
-            } else {
-                guard values.isRegularFile == true,
-                      try Data(contentsOf: url) == child.regularFileContents else {
-                    throw NotebookMarkdownBackupError.verificationFailed
-                }
+                try await attachmentStore.verifyExternalFile(
+                    at: url, expectedContent: descriptor.content
+                )
             }
         }
     }
@@ -320,4 +376,25 @@ private struct BackupMarker: Codable {
     let notebookID: UUID
     let createdAt: Date
     let noteCount: Int
+    let attachmentCount: Int
+
+    init(version: Int, id: UUID, notebookID: UUID, createdAt: Date,
+         noteCount: Int, attachmentCount: Int) {
+        self.version = version
+        self.id = id
+        self.notebookID = notebookID
+        self.createdAt = createdAt
+        self.noteCount = noteCount
+        self.attachmentCount = attachmentCount
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        id = try values.decode(UUID.self, forKey: .id)
+        notebookID = try values.decode(UUID.self, forKey: .notebookID)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        noteCount = try values.decode(Int.self, forKey: .noteCount)
+        attachmentCount = try values.decodeIfPresent(Int.self, forKey: .attachmentCount) ?? 0
+    }
 }
