@@ -981,6 +981,101 @@ enum MarkdownPresentation {
         }
     }
 
+    static func exportAttributedString(
+        text: String,
+        result: MarkdownSyntaxResult,
+        bodyFont: PlatformFont,
+        previewRanges: MarkdownLivePreviewRanges,
+        tableLayout: MarkdownTableLayout?
+    ) -> NSMutableAttributedString {
+        let source = text as NSString
+        let fullRange = NSRange(location: 0, length: source.length)
+        let value = NSMutableAttributedString(string: text)
+        guard fullRange.length > 0 else { return value }
+        value.addAttribute(.font, value: bodyFont, range: fullRange)
+        value.addAttribute(.foregroundColor, value: primaryTextColor,
+                           range: fullRange)
+        value.addAttribute(.paragraphStyle,
+                           value: bodyParagraphStyle(for: bodyFont),
+                           range: fullRange)
+        for run in result.fontRuns {
+            value.addAttribute(.font, value: layoutFont(for: run, bodyFont: bodyFont),
+                               range: run.range)
+            if run.traits.contains(.italic) {
+                let font = layoutFont(for: run, bodyFont: bodyFont)
+                if !hasItalicTrait(font) {
+                    value.addAttribute(.obliqueness, value: 0.18,
+                                       range: run.range)
+                }
+            }
+        }
+        let markerFont = PlatformFont.monospacedSystemFont(
+            ofSize: bodyFont.pointSize, weight: .regular
+        )
+        for span in result.spans {
+            guard case .taskMarker = span.role else { continue }
+            value.addAttribute(.font, value: markerFont, range: span.range)
+        }
+        let taskParagraphs = Set(result.spans.compactMap { span -> Int? in
+            guard case .taskMarker = span.role else { return nil }
+            return source.paragraphRange(for: span.range).location
+        })
+        for run in result.paragraphRuns {
+            let isTask = taskParagraphs.contains(run.range.location)
+            value.addAttribute(.paragraphStyle,
+                               value: paragraphStyle(for: run, text: source,
+                                                     bodyFont: bodyFont,
+                                                     isTask: isTask),
+                               range: run.range)
+        }
+        for span in result.spans {
+            value.addAttributes(renderingAttributes(for: span, in: result),
+                                range: span.range)
+        }
+        for range in previewRanges.collapsed {
+            value.addAttributes([
+                .font: fontWithSize(bodyFont, size: MarkdownLivePreview.collapsedFontSize),
+                .foregroundColor: PlatformColor.clear,
+                .kern: -MarkdownLivePreview.collapsedFontSize,
+            ], range: range)
+        }
+        for range in previewRanges.transparent {
+            value.addAttribute(.foregroundColor, value: PlatformColor.clear,
+                               range: range)
+        }
+        tableLayout?.apply(to: value, sourceRange: fullRange)
+        return value
+    }
+
+    static func drawExportBlockDecoration(
+        _ kind: BlockDecoration.Kind,
+        in rect: CGRect,
+        context: CGContext
+    ) {
+        draw(BlockDecoration(kind: kind, rect: rect), in: rect, context: context)
+    }
+
+    static func drawExportListBullet(in rect: CGRect, context: CGContext) {
+        drawListBullets([ListBulletDecoration(rect: rect)], offset: .zero,
+                        dirtyRect: rect, context: context)
+    }
+
+    static func drawExportTaskCheckbox(
+        in rect: CGRect,
+        checked: Bool,
+        context: CGContext
+    ) {
+        drawTaskCheckboxes(
+            [TaskCheckboxDecoration(
+                range: NSRange(location: 0, length: 0),
+                rect: rect, checked: checked
+            )],
+            offset: .zero,
+            dirtyRect: rect,
+            context: context
+        )
+    }
+
     private static func applyLayoutAttributes(
         to textStorage: NSTextStorage,
         text: String,
