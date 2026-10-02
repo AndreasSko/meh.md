@@ -191,6 +191,21 @@ enum MarkdownLivePreview {
         )
     }
 
+    static func needsTableVisibilityRefresh(
+        in text: NSString,
+        result: MarkdownSyntaxResult,
+        from previous: MarkdownLivePreviewSnapshot,
+        to next: MarkdownLivePreviewSnapshot
+    ) -> Bool {
+        result.tables.contains { table in
+            let wasRendered = canRender(table, snapshot: previous)
+                && conceals(table.range, in: text, snapshot: previous)
+            let willRender = canRender(table, snapshot: next)
+                && conceals(table.range, in: text, snapshot: next)
+            return wasRendered != willRender
+        }
+    }
+
     static func activeParagraphRange(
         in text: NSString,
         selection: NSRange
