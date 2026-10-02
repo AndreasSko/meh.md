@@ -100,6 +100,7 @@ struct NotebookView: View {
     @State private var showingSettings = false
     @State private var showingTrash = false
     @State private var showingTextSize = false
+    @State private var sharedFile: NotebookSharedFile?
     @State private var historyBrowser: NoteHistoryBrowserState?
     @State private var isLoadingHistory = false
     @State private var historyLoadTask: Task<Void, Never>?
@@ -392,6 +393,14 @@ struct NotebookView: View {
                             #endif
                             ToolbarItem {
                                 Menu {
+                                    Button {
+                                        shareMarkdown()
+                                    } label: {
+                                        Label("Share Markdown…", systemImage: "square.and.arrow.up")
+                                    }
+                                    .disabled(!session.isEditingEnabled || busy)
+                                    .accessibilityIdentifier("notebook-share-markdown")
+                                    Divider()
                                     Button("Find in Note…") { showFind() }
                                         .disabled(!session.isEditingEnabled)
                                         .accessibilityIdentifier("notebook-find")
@@ -426,6 +435,9 @@ struct NotebookView: View {
                                     Label("Note Actions", systemImage: "ellipsis.circle")
                                 }
                                 .accessibilityIdentifier("notebook-note-actions")
+                                #if os(macOS)
+                                .background(NotebookSharePicker(file: $sharedFile))
+                                #endif
                                 .popover(isPresented: $showingTextSize) {
                                     EditorTextSizeControl(
                                         fontSize: $editorFontSize,
@@ -583,6 +595,11 @@ struct NotebookView: View {
             .frame(minWidth: 400, idealWidth: 560, minHeight: 360, idealHeight: 540)
             #endif
         }
+        #if os(iOS)
+        .sheet(item: $sharedFile) { file in
+            NotebookShareSheet(file: file)
+        }
+        #endif
         .sheet(isPresented: $showingSettings) {
             NotebookSettingsView(replica: replica,
                                  workspace: workspace ?? NotebookWorkspace.shared,
@@ -2255,6 +2272,18 @@ struct NotebookView: View {
         }
         navigation.revealSearchMatch?(match)
         searchLandingPosition = navigation.capturePosition?()
+    }
+
+    private func shareMarkdown() {
+        guard let session, let noteID = selectedID else { return }
+        perform {
+            try await flushEditor()
+            guard selectedID == noteID, session.isEditingEnabled,
+                  let placement = selectedPlacement else { return }
+            sharedFile = try NotebookSharedFile.markdown(
+                text: session.text, filename: placement.displayName
+            )
+        }
     }
 
     private func flushEditor() async throws {
