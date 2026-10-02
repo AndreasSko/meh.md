@@ -10,6 +10,7 @@ struct NotebookSettingsView: View {
     let workspace: NotebookWorkspace
     let onImport: (NotebookImportPlan?) async throws -> Void
     let beforeExport: () async throws -> Void
+    var onOpenNote: ((UUID) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingReset = false
     @State private var resetScheduled = false
@@ -44,6 +45,16 @@ struct NotebookSettingsView: View {
                     Text("New Notes")
                 } footer: {
                     Text("New notes are saved in this folder.")
+                }
+                Section {
+                    NavigationLink {
+                        NotebookTemplatesSettingsView(
+                            replica: replica, onOpenNote: onOpenNote
+                        )
+                    } label: {
+                        Label("Templates", systemImage: "doc.on.doc")
+                    }
+                    .accessibilityIdentifier("notebook-templates-settings")
                 }
                 Section("Markdown") {
                     Button("Import Markdown…") {

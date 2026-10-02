@@ -23,6 +23,14 @@
 			<key>UIApplicationShortcutItemIconSymbolName</key>
 			<string>square.and.pencil</string>
 		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>new-from-template</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>New from Template</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>doc.on.doc</string>
+		</dict>
 	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
