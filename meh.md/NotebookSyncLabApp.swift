@@ -109,7 +109,7 @@ private struct NotebookSyncLabView: View {
               let rawRun = environment["MEH_SYNC_LAB_RUN"],
               let runID = UUID(uuidString: rawRun),
               let phase = environment["MEH_SYNC_LAB_PHASE"],
-              ["account", "exchange", "publish", "receive", "edit", "verify"]
+              ["account", "exchange", "offline-join", "publish", "receive", "edit", "verify"]
                 .contains(phase) else {
             update("Stopped: explicit lab launch configuration required")
             return
@@ -232,6 +232,48 @@ private struct NotebookSyncLabView: View {
                         throw LabError.convergenceFailed
                     }
                 }
+            } else if phase == "offline-join" {
+                let source = NotebookReplica(directory: root.appending(path: "source/notebook"))
+                let destination = NotebookReplica(directory: root.appending(path: "destination/notebook"))
+                try await source.createNotebookForSync()
+                try await destination.createNotebookForSync()
+                let cloudID = try await source.createNote(name: "Cloud example.md", text: "# Cloud example\n")
+                let localID = try await destination.createNote(name: "Offline example.md", text: "# Offline example\r\n")
+                let local = try await destination.openNote(localID)
+                let originalHeads = local.currentSnapshot?.heads
+                let publisher = NotebookMarkdownPublisher(directory: root.appending(path: "copies"))
+                try await publisher.publish(catalog: destination.catalogSnapshot!,
+                    placements: destination.placements, notes: destination.persistedNoteSnapshots())
+                let sourceTransport = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container, stateDirectory: root.appending(path: "source/transport"), runID: runID)
+                let destinationTransport = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container, stateDirectory: root.appending(path: "destination/transport"), runID: runID)
+                transports = ["source": sourceTransport, "destination": destinationTransport]
+                let sourceSync = NotebookSyncCoordinator(replica: source, transport: sourceTransport)
+                let destinationSync = NotebookSyncCoordinator(replica: destination, transport: destinationTransport)
+                try await measure("offline_first_cloud") { try await synchronize(sourceSync) }
+                try await measure("offline_existing_cloud") { try await synchronize(destinationSync) }
+                try await measure("offline_convergence") { try await synchronize(sourceSync) }
+                try await destination.prepareMarkdownCopiesForFirstSync(publisher)
+                try await publisher.publish(catalog: destination.catalogSnapshot!,
+                    placements: destination.placements, notes: destination.persistedNoteSnapshots())
+                let uploaded = try await source.openNote(localID)
+                guard source.catalogSnapshot?.notebookID == destination.catalogSnapshot?.notebookID,
+                      Set(source.placements.map { $0.item.id }) == [localID, cloudID],
+                      Set(destination.placements.map { $0.item.id }) == [localID, cloudID],
+                      uploaded.text == local.text, uploaded.currentSnapshot?.heads == originalHeads,
+                      try Data(contentsOf: publisher.directory.appending(path: "Markdown/Offline example.md"))
+                        == Data("# Offline example\r\n".utf8) else { throw LabError.convergenceFailed }
+                let reopened = NotebookReplica(directory: destination.directory)
+                try await reopened.load()
+                try await synchronize(NotebookSyncCoordinator(replica: reopened, transport: destinationTransport))
+                guard Set(reopened.placements.map { $0.item.id }) == [localID, cloudID] else {
+                    throw LabError.convergenceFailed
+                }
+                report.noteID = localID
+                report.expectedText = local.text
+                report.observedText = uploaded.text
+                report.observedHeadsCount = uploaded.currentSnapshot?.heads.count
             } else if phase == "publish" {
                 let source = NotebookReplica(directory: sourceRoot.appending(path: "notebook"))
                 try await measure("create_source_fixture") {
