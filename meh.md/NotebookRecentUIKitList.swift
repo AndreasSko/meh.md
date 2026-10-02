@@ -17,6 +17,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
     let items: [NotebookRecentUIKitItem]
     let rowContent: (UUID) -> RowContent
     let onTogglePin: (UUID) -> Void
+    let onTrash: (UUID, @escaping (Bool) -> Void) -> Void
     let contextMenu: (UUID) -> UIMenu
     var usesViewport = false
     var scrollingEnabled = false
@@ -27,6 +28,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
         items: [NotebookRecentUIKitItem],
         @ViewBuilder rowContent: @escaping (UUID) -> RowContent,
         onTogglePin: @escaping (UUID) -> Void,
+        onTrash: @escaping (UUID, @escaping (Bool) -> Void) -> Void,
         contextMenu: @escaping (UUID) -> UIMenu,
         usesViewport: Bool = false,
         scrollingEnabled: Bool = false,
@@ -36,6 +38,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
         self.items = items
         self.rowContent = rowContent
         self.onTogglePin = onTogglePin
+        self.onTrash = onTrash
         self.contextMenu = contextMenu
         self.usesViewport = usesViewport
         self.scrollingEnabled = scrollingEnabled
@@ -100,6 +103,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
             items: items,
             rowContent: rowContent,
             onTogglePin: onTogglePin,
+            onTrash: onTrash,
             contextMenu: contextMenu,
             onVisibleIDs: onVisibleIDs
         )
@@ -125,6 +129,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
         private var itemByID: [UUID: NotebookRecentUIKitItem] = [:]
         private var rowContent: ((UUID) -> RowContent)?
         private var onTogglePin: ((UUID) -> Void)?
+        private var onTrash: ((UUID, @escaping (Bool) -> Void) -> Void)?
         private var contextMenu: ((UUID) -> UIMenu)?
         private var onVisibleIDs: (([UUID]) -> Void)?
         private var reportedIDs: [UUID] = []
@@ -134,11 +139,13 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
             items newItems: [NotebookRecentUIKitItem],
             rowContent: @escaping (UUID) -> RowContent,
             onTogglePin: @escaping (UUID) -> Void,
+            onTrash: @escaping (UUID, @escaping (Bool) -> Void) -> Void,
             contextMenu: @escaping (UUID) -> UIMenu,
             onVisibleIDs: @escaping ([UUID]) -> Void
         ) {
             self.rowContent = rowContent
             self.onTogglePin = onTogglePin
+            self.onTrash = onTrash
             self.contextMenu = contextMenu
             self.onVisibleIDs = onVisibleIDs
             guard items != newItems else { return }
@@ -202,7 +209,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
 
         func tableView(
             _ tableView: UITableView,
-            trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath
+            leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath
         ) -> UISwipeActionsConfiguration? {
             guard let id = dataSource?.itemIdentifier(for: indexPath),
                   let item = itemByID[id], item.isPinned || item.canPin
@@ -222,6 +229,34 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
             action.backgroundColor = item.isPinned ? .systemGray : .systemOrange
             let configuration = UISwipeActionsConfiguration(actions: [action])
             configuration.performsFirstActionWithFullSwipe = true
+            return configuration
+        }
+
+        func tableView(
+            _ tableView: UITableView,
+            trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath
+        ) -> UISwipeActionsConfiguration? {
+            guard let id = dataSource?.itemIdentifier(for: indexPath),
+                  itemByID[id] != nil else { return nil }
+
+            let action = UIContextualAction(
+                style: .destructive, title: String(localized: "Trash")
+            ) { [weak self] _, _, completion in
+                guard let onTrash = self?.onTrash else {
+                    completion(false)
+                    return
+                }
+                // UIKit must receive success only after the note was saved
+                // and moved to Trash, including any editor flush.
+                onTrash(id, completion)
+            }
+            let image = UIImage(systemName: "trash")
+            image?.accessibilityLabel = String(localized: "Move to Trash")
+            action.image = image
+            let configuration = UISwipeActionsConfiguration(actions: [action])
+            // Moving the familiar pin gesture must not turn a remembered
+            // full swipe into deletion. Trash always requires a button tap.
+            configuration.performsFirstActionWithFullSwipe = false
             return configuration
         }
 

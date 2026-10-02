@@ -81,6 +81,19 @@ drawer expansion as well as when system pointing-device preferences change.
 Expansion resets are corrected synchronously to prevent a wide scrollbar
 from flashing during the animation.
 
+## Row actions
+
+In compact and expanded Recents, swipe toward the leading edge (left in
+left-to-right layouts) to reveal the red Trash action. It requires a tap;
+a full swipe does not trash a note. Swipe the other way to Pin or Unpin,
+including the existing full-swipe shortcut. These are native UIKit actions
+on iPhone and iPad, and SwiftUI List actions on Mac.
+
+Trash flushes the open editor and uses the existing recoverable Trash and
+browser Undo operation. UIKit receives success only after that operation
+finishes; a busy browser or failed save reports failure. VoiceOver also
+offers Move to Trash. Trashing remains available when the pin limit is full.
+
 ## Verification
 
 Focused model tests cover full and compact ordering, pin rollback, Trash,
@@ -101,3 +114,5 @@ drawer implementation in an offscreen native window without changing focus.
 It covers repeated opening, scrolling, resizing and native style resets.
 It checks the style throughout the animation and immediately after a reset.
 It also compares both row edges using the actual shared note-row view.
+The iPhone Recents tests also check both swipe directions, full-swipe safety,
+and restoring notes from Trash after using compact or expanded Recents.

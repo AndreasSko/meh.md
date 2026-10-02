@@ -26,6 +26,7 @@ struct NotebookRecentsExpansionHost<Browser: View, Row: View>: View {
     @Binding var isExpanded: Bool
     @ViewBuilder let rowContent: (UUID, Int, Int) -> Row
     let onTogglePin: (UUID) -> Void
+    let onTrash: (UUID, @escaping (Bool) -> Void) -> Void
     let contextMenu: (UUID) -> UIMenu
     let onVisibleIDs: ([UUID]) -> Void
     @ViewBuilder let browser: (Bool) -> Browser
@@ -48,6 +49,7 @@ struct NotebookRecentsExpansionHost<Browser: View, Row: View>: View {
                         availableSize: geometry.size,
                         isExpanded: $isExpanded, isPulling: $isPulling,
                         rowContent: rowContent, onTogglePin: onTogglePin,
+                        onTrash: onTrash,
                         contextMenu: contextMenu,
                         onVisibleIDs: onVisibleIDs
                     )
@@ -80,6 +82,7 @@ private struct NotebookRecentsSurface<Row: View>: View {
     @Binding var isPulling: Bool
     let rowContent: (UUID, Int, Int) -> Row
     let onTogglePin: (UUID) -> Void
+    let onTrash: (UUID, @escaping (Bool) -> Void) -> Void
     let contextMenu: (UUID) -> UIMenu
     let onVisibleIDs: ([UUID]) -> Void
 
@@ -147,7 +150,8 @@ private struct NotebookRecentsSurface<Row: View>: View {
                             rowContent(id, index, items.count)
                         }
                     },
-                    onTogglePin: onTogglePin, contextMenu: contextMenu,
+                    onTogglePin: onTogglePin, onTrash: onTrash,
+                    contextMenu: contextMenu,
                     usesViewport: true,
                     scrollingEnabled: isExpanded && !isPulling,
                     accessibilityHidden: !isExpanded || isPulling,

@@ -772,6 +772,9 @@ struct NotebookView: View {
                             onTogglePin: { id in
                                 setRecentPinned(!replica.isPinnedInRecents(id), for: id)
                             },
+                            onTrash: { id, completion in
+                                trashItems([id], onCompletion: completion)
+                            },
                             contextMenu: recentUIKitMenu,
                             accessibilityHidden: hidesCompactRows
                         )
@@ -912,6 +915,9 @@ struct NotebookView: View {
             setRecentPinned(!replica.isPinnedInRecents(placement.item.id),
                             for: placement.item.id)
         }
+        .accessibilityAction(named: Text("Move to Trash")) {
+            trashItems([placement.item.id])
+        }
         .background(NotebookRecentCardBackground(
             position: recentCardPosition(index: index, count: count)
         ).opacity(showsCardBackground ? 1 : 0))
@@ -920,12 +926,20 @@ struct NotebookView: View {
         row
         #else
         row
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
             let id = placement.item.id
             if replica.isPinnedInRecents(id) || replica.canPinInRecents(id) {
                 recentPinButton(for: id, swipeIcon: true)
                     .tint(replica.isPinnedInRecents(id) ? .gray : .orange)
             }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                trashItems([placement.item.id])
+            } label: {
+                Label("Trash", systemImage: "trash")
+            }
+            .accessibilityIdentifier("notebook-recent-swipe-trash")
         }
         .contextMenu {
             actions(for: placement, allowsCreation: false,
@@ -1745,14 +1759,16 @@ struct NotebookView: View {
         }
     }
 
-    private func trashItems(_ ids: [UUID]) {
-        perform {
+    private func trashItems(
+        _ ids: [UUID], onCompletion: @escaping (Bool) -> Void = { _ in }
+    ) {
+        perform({
             try await flushEditor()
             browserUndo = try await replica.trashItems(ids)
             browserRedo = nil
             browserSelection.clear()
             selectingItems = false
-        }
+        }, onCompletion: onCompletion)
     }
 
     private func undoBrowserChange(redo: Bool) {
@@ -1855,6 +1871,9 @@ struct NotebookView: View {
                 },
                 onTogglePin: { id in
                     setRecentPinned(!replica.isPinnedInRecents(id), for: id)
+                },
+                onTrash: { id, completion in
+                    trashItems([id], onCompletion: completion)
                 },
                 contextMenu: recentUIKitMenu,
                 onVisibleIDs: { visibleRecentPreviewIDs = $0 },
@@ -2357,9 +2376,13 @@ struct NotebookView: View {
 
     private func perform(
         _ operation: @escaping @MainActor () async throws -> Void,
-        onSuccess: @escaping @MainActor () -> Void = {}
+        onSuccess: @escaping @MainActor () -> Void = {},
+        onCompletion: @escaping @MainActor (Bool) -> Void = { _ in }
     ) {
-        guard !busy else { return }
+        guard !busy else {
+            onCompletion(false)
+            return
+        }
         busy = true
         Task { @MainActor in
             var succeeded = false
@@ -2377,6 +2400,7 @@ struct NotebookView: View {
             editorNavigation.resumeEditing?()
             busy = false
             if succeeded { onSuccess() }
+            onCompletion(succeeded)
         }
     }
 }
