@@ -142,6 +142,7 @@ struct NotebookSyncDetailsView: View {
                    case .failed(let error) = workspace.sync?.status {
                     Text(error).font(.caption)
                 }
+                NotebookAttachmentSyncStatusSection(workspace: workspace)
                 Text("Progress counts saved revisions acknowledged by the sync service. Other devices receive them when they synchronize.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Sync Event Log") { showingEventLog = true }
@@ -170,6 +171,73 @@ struct NotebookSyncDetailsView: View {
             return "Last sync: \(date.formatted(date: .omitted, time: .standard))"
         }
         return "No completed sync in this session"
+    }
+}
+
+private struct NotebookAttachmentSyncStatusSection: View {
+    let workspace: NotebookWorkspace
+
+    var body: some View {
+        if hasAttachmentState {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Files").font(.subheadline).fontWeight(.semibold)
+                if workspace.isSyncUpdateRequired {
+                    Text("File transfers will resume after updating meh.md.")
+                } else if let error = workspace.attachmentErrorMessage {
+                    Text(error).font(.caption).foregroundStyle(.orange)
+                        .accessibilityIdentifier("attachment-sync-error")
+                }
+                if workspace.isSyncUpdateRequired {
+                    EmptyView()
+                } else if let transfers = workspace.attachmentTransfers {
+                    let statuses = Array(transfers.statuses.values)
+                    let uploading = statuses.filter {
+                        if case .uploading = $0 { return true }
+                        return false
+                    }.count
+                    let downloading = statuses.filter {
+                        if case .downloading = $0 { return true }
+                        return false
+                    }.count
+                    let waiting = transfers.pendingUploadCount
+                    let failed = statuses.filter {
+                        if case .failed = $0 { return true }
+                        return false
+                    }.count
+                    if uploading > 0 { Text("Uploading: \(uploading)") }
+                    if downloading > 0 { Text("Downloading: \(downloading)") }
+                    if waiting > 0 { Text("Waiting to upload: \(waiting)") }
+                    if failed > 0 { Text("Transfers needing attention: \(failed)") }
+                    if uploading == 0 && downloading == 0 && waiting == 0
+                        && failed == 0 && workspace.attachmentErrorMessage == nil {
+                        Text("Files are up to date")
+                    }
+                    if failed > 0 || workspace.attachmentErrorMessage != nil {
+                        Button("Retry File Transfers") {
+                            Task { await workspace.retryAttachments() }
+                        }
+                        .accessibilityIdentifier("attachment-sync-retry")
+                    }
+                } else if workspace.isPreparingAttachmentTransfers {
+                    ProgressView("Checking file sync…")
+                } else if workspace.usesSync {
+                    Text("File sync is being prepared")
+                } else {
+                    Text("File sync is not enabled")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var hasAttachmentState: Bool {
+        workspace.replica?.placements.contains(where: {
+            $0.item.kind == .attachment
+        }) == true
+            || workspace.attachmentTransfers != nil
+            || workspace.attachmentErrorMessage != nil
+            || workspace.isPreparingAttachmentTransfers
     }
 }
 
@@ -203,6 +271,16 @@ private struct NotebookSyncPresentation {
             }
             return workspace.showSyncCheck ? "Checking for changes…" : nil
         }
+        if workspace.attachmentErrorMessage != nil {
+            return "File sync paused · open for details"
+        }
+        if workspace.isPreparingAttachmentTransfers {
+            return "Checking file sync…"
+        }
+        if workspace.attachmentTransfers?.isSyncing == true {
+            return "Syncing files…"
+        }
+        if hasPendingFileTransfers { return "Files waiting to sync" }
         if workspace.syncSetupError != nil { return "Sync paused · open for details" }
         if case .failed = workspace.sync?.status { return "Sync paused · open for details" }
         if workspace.notificationRegistrationError != nil {
@@ -229,12 +307,15 @@ private struct NotebookSyncPresentation {
         else { pending = false }
         return NotebookSyncIndicator(
             isEnabled: workspace.usesSync,
-            isSyncing: workspace.isSyncing,
+            isSyncing: workspace.isSyncing
+                || workspace.isPreparingAttachmentTransfers
+                || workspace.attachmentTransfers?.isSyncing == true,
             isRetryPaused: retryDeadline != nil || workspace.isSyncUpdateRequired,
             hasError: workspace.isSyncUpdateRequired || failed
                 || workspace.syncSetupError != nil
-                || workspace.notificationRegistrationError != nil,
-            hasPendingChanges: pending
+                || workspace.notificationRegistrationError != nil
+                || workspace.attachmentErrorMessage != nil,
+            hasPendingChanges: pending || hasPendingFileTransfers
         )
     }
 
@@ -247,7 +328,9 @@ private struct NotebookSyncPresentation {
     }
 
     var showsActivity: Bool {
-        workspace.isSyncing && retryDeadline == nil && !workspace.isSyncUpdateRequired
+        (workspace.isSyncing || workspace.isPreparingAttachmentTransfers
+            || workspace.attachmentTransfers?.isSyncing == true)
+            && retryDeadline == nil && !workspace.isSyncUpdateRequired
     }
 
     var accessibilityLabel: String {
@@ -265,12 +348,23 @@ private struct NotebookSyncPresentation {
         if retryDeadline != nil || workspace.syncSetupError != nil {
             return "Paused"
         }
+        if workspace.attachmentErrorMessage != nil { return "File transfer error" }
         if case .failed = workspace.sync?.status { return "Error" }
         if workspace.notificationRegistrationError != nil {
             return "Automatic sync notifications unavailable"
         }
         if case .pending = workspace.sync?.status { return "Waiting to sync" }
+        if hasPendingFileTransfers { return "Files waiting to sync" }
         return lastSyncAccessibilityValue
+    }
+
+    private var hasPendingFileTransfers: Bool {
+        workspace.attachmentTransfers?.statuses.values.contains { status in
+            switch status {
+            case .uploading, .downloading, .failed: true
+            case .available, .uploaded: false
+            }
+        } == true || (workspace.attachmentTransfers?.pendingUploadCount ?? 0) > 0
     }
 
     private var lastSyncAccessibilityValue: String {

@@ -273,7 +273,7 @@ final class NotebookCatalogStorageTests: XCTestCase {
         try document.put(
             obj: .ROOT,
             key: "schemaVersion",
-            value: .Uint(2)
+            value: .Uint(99)
         )
         return document.save()
     }

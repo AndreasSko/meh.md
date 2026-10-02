@@ -33,6 +33,7 @@ private struct NotebookMarkdownImporter: ViewModifier {
     #endif
     @State private var errorMessage: String?
     @State private var completionMessage: String?
+    @State private var pendingAttachmentPlan: NotebookImportPlan?
 
     func body(content: Content) -> some View {
         content
@@ -40,7 +41,7 @@ private struct NotebookMarkdownImporter: ViewModifier {
             .interactiveDismissDisabled(working)
             .overlay {
                 if working {
-                    ProgressView("Importing Markdown…")
+                    ProgressView("Importing Files…")
                         .padding(24)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                         .accessibilityIdentifier("notebook-import-progress")
@@ -75,9 +76,28 @@ private struct NotebookMarkdownImporter: ViewModifier {
                 Button("Set Aside and Choose Again…") { setAsideAndChoose() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Resume the saved copy without selecting the source again. You can also set it aside for recovery and choose new files. Notes already imported keep their edits and placement. Importing the same files again may create duplicates.")
+                Text("Resume the saved copy without selecting the source again. You can also set it aside for recovery and choose new files. Items already imported keep their edits and placement. Importing the same files again may create duplicates.")
             }
-            .alert("Couldn’t Import Markdown", isPresented: Binding(
+            .confirmationDialog("Import Files?", isPresented: Binding(
+                get: { pendingAttachmentPlan != nil },
+                set: { if !$0 { discardPendingPlan() } }
+            ), titleVisibility: .visible) {
+                Button("Import") {
+                    guard let plan = pendingAttachmentPlan else { return }
+                    pendingAttachmentPlan = nil
+                    apply(plan)
+                }
+                .accessibilityIdentifier("notebook-confirm-import")
+                Button("Cancel", role: .cancel) { discardPendingPlan() }
+            } message: {
+                if let pendingAttachmentPlan {
+                    let notes = pendingAttachmentPlan.entries.filter { $0.kind == .note }.count
+                    let files = pendingAttachmentPlan.entries.filter { $0.kind == .attachment }.count
+                    let folders = pendingAttachmentPlan.entries.filter { $0.kind == .folder }.count
+                    Text("Add \(notes) notes, \(files) files, and \(folders) folders to your notebook. Original files stay unchanged. Adding files upgrades this notebook. Older apps will pause syncing until updated.")
+                }
+            }
+            .alert("Couldn’t Import Files", isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
             )) {
@@ -93,23 +113,20 @@ private struct NotebookMarkdownImporter: ViewModifier {
             } message: {
                 Text(completionMessage ?? "")
             }
-    }
-
-    private var markdownType: UTType {
-        UTType(importedAs: "net.daringfireball.markdown", conformingTo: .plainText)
+            .onDisappear { discardPendingPlan() }
     }
 
     #if os(macOS)
     private func chooseOnMac() {
         let panel = NSOpenPanel()
-        panel.title = String(localized: "Import Markdown")
+        panel.title = String(localized: "Import Files")
         panel.prompt = String(localized: "Import")
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         panel.canCreateDirectories = false
         panel.resolvesAliases = false
-        panel.allowedContentTypes = [markdownType, .folder]
+        panel.allowedContentTypes = [.item, .folder]
         let completion: (NSApplication.ModalResponse) -> Void = { response in
             if response == .OK { importSelection(.success(panel.urls)) }
         }
@@ -139,22 +156,61 @@ private struct NotebookMarkdownImporter: ViewModifier {
                     working = false
                 }
                 do {
-                    let plan = try await NotebookImportScanner().scan(urls: urls)
+                    let scanner = NotebookImportScanner(
+                        attachmentStore: replica.attachmentStore
+                    )
+                    let plan = try await scanner.scan(urls: urls)
                     guard !plan.entries.isEmpty else {
-                        errorMessage = String(localized: "No Markdown files or ordinary folders were found. Hidden items, links, packages, and other file types are skipped.")
+                        try? await scanner.discard(plan: plan)
+                        errorMessage = String(localized: "No visible files or ordinary folders were found. Hidden items, links, and packages are skipped.")
                         return
                     }
-                    try await onImport(plan)
-                    if plan.skippedPaths.isEmpty {
-                        completionMessage = String(localized: "The selected files and folders were added at the top level of your notebook.")
+                    if plan.entries.contains(where: { $0.kind == .attachment }) {
+                        pendingAttachmentPlan = plan
                     } else {
-                        completionMessage = String(localized: "The selected files and folders were added at the top level of your notebook. \(plan.skippedPaths.count) items were skipped. Only visible Markdown files and ordinary folders are imported; hidden items, links, packages, and other file types are skipped.")
+                        await apply(plan)
                     }
                 } catch {
                     errorMessage = error.localizedDescription
                 }
             }
         }
+    }
+
+    private func apply(_ plan: NotebookImportPlan) {
+        working = true
+        Task { @MainActor in
+            await apply(plan)
+            working = false
+        }
+    }
+
+    private func apply(_ plan: NotebookImportPlan) async {
+        do {
+            try await onImport(plan)
+            if plan.skippedPaths.isEmpty {
+                completionMessage = String(localized: "The selected files and folders were added to your notebook.")
+            } else {
+                completionMessage = String(localized: "The selected files and folders were added to your notebook. \(plan.skippedPaths.count) hidden items, links, or packages were skipped.")
+            }
+        } catch {
+            if !replica.hasPendingImport {
+                let scanner = NotebookImportScanner(
+                    attachmentStore: replica.attachmentStore
+                )
+                try? await scanner.discard(plan: plan)
+            }
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func discardPendingPlan() {
+        guard let plan = pendingAttachmentPlan else { return }
+        pendingAttachmentPlan = nil
+        let scanner = NotebookImportScanner(
+            attachmentStore: replica.attachmentStore
+        )
+        Task { try? await scanner.discard(plan: plan) }
     }
 
     private func resume() {
@@ -194,11 +250,8 @@ private struct NotebookMarkdownDocumentPicker: UIViewControllerRepresentable {
     let onCancel: () -> Void
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let markdown = UTType(
-            importedAs: "net.daringfireball.markdown", conformingTo: .plainText
-        )
         let picker = UIDocumentPickerViewController(
-            forOpeningContentTypes: choosingFolders ? [.folder] : [markdown],
+            forOpeningContentTypes: choosingFolders ? [.folder] : [.item],
             asCopy: false
         )
         picker.allowsMultipleSelection = !choosingFolders

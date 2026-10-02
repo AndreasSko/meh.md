@@ -6,9 +6,10 @@ is a separate, confirmed action.
 
 ## Interaction
 
-- A trashed note or folder has a **Delete Permanently…** action.
-- Expanded Trash offers **Empty Trash…**, also available from its context menu.
-- Confirmation shows note/folder counts and the first few names. A folder
+- A trashed note, attachment, or folder has a **Delete Permanently…** action.
+- Expanded Trash offers **Empty Trash…**, also available from its context
+  menu.
+- Confirmation shows note/file/folder counts and the first few names. A folder
   selection includes its currently known descendants, even when collapsed.
 - Confirmation captures exact identities. It never expands to include items
   that arrive while the confirmation is open. If a selected item has been
@@ -29,21 +30,25 @@ root. Deleting the folder does not authorize deleting previously unseen
 children. Such a child can be moved to another folder normally.
 
 Local cleanup drains in-flight note writes before removing note directories,
-including previous and recovery files. It also removes deleted bodies from
-retained import jobs and the notebook bootstrap proposal. Startup and later
-refreshes retry interrupted cleanup. Filesystem errors remain visible, while
-durable deletion markers can still synchronize.
+including previous and recovery files. It removes the deleted attachment's
+immutable body under `attachments/<UUID>/`, plus its UUID-scoped temporary
+files under `attachment-transfers/` and `attachment-previews/`. Deleted
+entries and their descriptors are scrubbed from retained import jobs; deleted
+note bodies are removed from the notebook bootstrap proposal. Startup and
+later refreshes retry interrupted cleanup. Filesystem errors remain visible,
+while durable deletion markers can still synchronize.
 
 Managed Markdown publication removes deleted output and old staging
 generations through its existing interruption-recovery mechanism. A copy
 publication failure stays visible until it can be retried safely.
 
 The sync service must acknowledge a catalog containing the deletion markers
-before remote body cleanup starts. Cleanup retains all catalog records and
-canonical notebook identity. Stable cursor positions survive removed body
-records. Late uploads cannot restore the notebook item and remain subject to
-cleanup. Remote failures are reported through sync status and the event log;
-they do not reverse permanent intent.
+before remote body cleanup starts. Note bodies and attachment contents use
+separate cleanup paths. Remote attachment deletion replaces its asset with a
+tombstone at the same record identity, so a late upload cannot recreate it.
+Cleanup retains catalog records and canonical notebook identity. Stable
+cursor positions survive removed note-body records. Remote failures do not
+reverse permanent intent; attachment cleanup remains retryable.
 
 ## Development compatibility cut
 

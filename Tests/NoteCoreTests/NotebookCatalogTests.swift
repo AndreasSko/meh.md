@@ -59,6 +59,62 @@ final class NotebookCatalogTests: XCTestCase {
         XCTAssertEqual(try merged.defaultNewNoteParentID(), inbox)
     }
 
+    func testFirstAttachmentUpgradesSchemaAndPreservesConcurrentHistory() throws {
+        let base = try NotebookCatalogDocument()
+        let left = try base.fork()
+        let right = try base.fork()
+        let content = try NotebookAttachmentContent(
+            sha256: String(repeating: "a", count: 64), byteCount: 42
+        )
+        try left.add(id: low, kind: .attachment, name: "picture.jpeg",
+                     attachment: content)
+        try right.add(id: high, kind: .note, name: "readme.md")
+        try assertConvergence(left, right)
+        XCTAssertEqual(try left.items().first { $0.id == low }?.attachment,
+                       content)
+        let raw = try Document(left.snapshot().data)
+        XCTAssertTrue(try raw.getAll(obj: .ROOT, key: "schemaVersion")
+            .contains(.Scalar(.Uint(2))))
+
+        // The old schema-one decoder must reject the upgraded snapshot.
+        XCTAssertNotEqual(try raw.getAll(obj: .ROOT, key: "schemaVersion"),
+                          [.Scalar(.Uint(1))])
+        let unchanged = try Document(base.snapshot().data)
+        XCTAssertEqual(try unchanged.getAll(obj: .ROOT, key: "schemaVersion"),
+                       [.Scalar(.Uint(1))])
+        let staleWriter = unchanged.fork()
+        try staleWriter.put(obj: .ROOT, key: "schemaVersion", value: .Uint(3))
+        try staleWriter.put(obj: .ROOT, key: "schemaVersion", value: .Uint(1))
+        let merged = try Document(left.snapshot().data)
+        try merged.merge(other: staleWriter)
+        XCTAssertEqual(try merged.getAll(obj: .ROOT, key: "schemaVersion"),
+                       [.Scalar(.Uint(1)), .Scalar(.Uint(2))])
+        XCTAssertEqual(try NotebookCatalogDocument(serializedData: merged.save())
+            .items().first { $0.id == low }?.attachment, content)
+    }
+
+    func testAttachmentMetadataConflictRejectsMerge() throws {
+        let base = try NotebookCatalogDocument()
+        let first = try base.fork()
+        let second = try base.fork()
+        try first.add(id: low, kind: .attachment, name: "same.bin",
+            attachment: NotebookAttachmentContent(
+                sha256: String(repeating: "a", count: 64), byteCount: 1))
+        try second.add(id: low, kind: .attachment, name: "same.bin",
+            attachment: NotebookAttachmentContent(
+                sha256: String(repeating: "b", count: 64), byteCount: 1))
+        XCTAssertThrowsError(try first.merge(second))
+    }
+
+    func testLongUnicodeAttachmentExtensionGetsSafeCollisionName() throws {
+        let name = "a." + String(repeating: "界", count: 84)
+        try NotebookName.validate(name)
+        let display = NotebookName.collisionName(name, id: low)
+        XCTAssertTrue(display.hasPrefix("a ("))
+        XCTAssertLessThanOrEqual(display.utf8.count, 255)
+        try NotebookName.validate(display)
+    }
+
     func testRoundTripPreservesStableIDsAndHistory() throws {
         let catalog = try NotebookCatalogDocument()
         let folder = try catalog.add(kind: .folder, name: "Café")

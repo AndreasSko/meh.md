@@ -333,9 +333,11 @@ struct NotebookTrashView: View {
 
     private func deletionMessage(_ selection: NotebookDeletionSelection) -> String {
         let notes = selection.items.filter { $0.kind == .note }.count
-        let folders = selection.items.count - notes
+        let files = selection.items.filter { $0.kind == .attachment }.count
+        let folders = selection.items.filter { $0.kind == .folder }.count
         let counts = [
             notes > 0 ? "\(notes) \(notes == 1 ? "note" : "notes")" : nil,
+            files > 0 ? "\(files) \(files == 1 ? "file" : "files")" : nil,
             folders > 0 ? "\(folders) \(folders == 1 ? "folder" : "folders")" : nil,
         ].compactMap { $0 }.joined(separator: " and ")
         let names = selection.items.prefix(5).map(\.name).joined(separator: ", ")
@@ -446,7 +448,7 @@ private struct NotebookTrashItemRow: View {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.caption)
             }
-            Label(title, systemImage: placement.item.kind == .folder ? "folder" : "note.text")
+            Label(title, systemImage: icon)
             Spacer(minLength: 0)
         }
         .frame(minHeight: 44)
@@ -459,10 +461,22 @@ private struct NotebookTrashItemRow: View {
             : placement.displayName
     }
 
+    private var icon: String {
+        switch placement.item.kind {
+        case .folder: "folder"
+        case .note: "note.text"
+        case .attachment: "doc"
+        }
+    }
+
     private var itemIdentifier: String {
-        (placement.item.kind == .note
-            ? "notebook-sidebar-note-" : "notebook-sidebar-folder-")
-            + placement.item.id.uuidString
+        let prefix: String
+        switch placement.item.kind {
+        case .folder: prefix = "notebook-sidebar-folder-"
+        case .note: prefix = "notebook-sidebar-note-"
+        case .attachment: prefix = "notebook-sidebar-attachment-"
+        }
+        return prefix + placement.item.id.uuidString
     }
 }
 

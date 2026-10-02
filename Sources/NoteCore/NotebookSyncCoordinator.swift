@@ -55,6 +55,17 @@ public final class NotebookSyncCoordinator {
         return replica.catalogSnapshot?.notebookID == notebookID
     }
 
+    /// Large-file cleanup is scheduled separately, after its catalog markers
+    /// have been acknowledged by the normal notebook exchange.
+    public func acknowledgedAttachmentDeletions() throws -> Set<UUID> {
+        guard let snapshot = replica.catalogSnapshot else { return [] }
+        let state = try loadState()
+        let key = "catalog:\(snapshot.notebookID.uuidString)"
+        guard state.acknowledgedHeads[key] == snapshot.heads else { return [] }
+        return Set(try NotebookCatalogDocument(snapshot: snapshot).items()
+            .filter { $0.kind == .attachment && $0.isPermanentlyDeleted }.map(\.id))
+    }
+
     public func synchronize() async {
         guard !inFlight else { return }
         let startedAt = Date()

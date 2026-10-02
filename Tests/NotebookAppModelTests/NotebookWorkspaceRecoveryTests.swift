@@ -6,6 +6,51 @@ import XCTest
 
 @MainActor
 final class NotebookWorkspaceRecoveryTests: XCTestCase {
+    func testUpdateRequirementStopsFileTransfersWithoutDeletingLocalFile() async throws {
+        let factory = RecoveryTransportFactory()
+        let original = HaltableRecordingTransport(
+            scope: "future-files", remoteStore: factory.remoteStore
+        )
+        let attachmentTransport = InMemoryAttachmentTransport(
+            scope: "future-files", store: InMemoryAttachmentStore()
+        )
+        let workspace = makeWorkspace(
+            transport: original, factory: factory,
+            attachmentTransport: attachmentTransport
+        )
+        await workspace.start()
+        let replica = try XCTUnwrap(workspace.replica)
+        let source = workspace.directory.deletingLastPathComponent()
+            .appending(path: "example.pdf")
+        try Data("fictional PDF".utf8).write(to: source)
+        let plan = try await NotebookImportScanner(
+            attachmentStore: replica.attachmentStore
+        ).scan(urls: [source])
+        let descriptor = try XCTUnwrap(plan.entries.first?.attachment)
+        try await replica.importMarkdown(plan)
+        await workspace.refresh(manual: true)
+        try await waitUntil { workspace.attachmentTransfers != nil }
+        let active = try XCTUnwrap(workspace.attachmentTransfers)
+        let localURL = try await workspace.prepareAttachment(descriptor.id)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: localURL.path))
+
+        await original.setHalt(
+            .updateRequired,
+            underlyingError: SyncError.updateRequired(requiredVersion: 3),
+            recoverable: false
+        )
+        await workspace.refresh(manual: true)
+        XCTAssertTrue(workspace.isSyncUpdateRequired)
+        XCTAssertNil(workspace.attachmentTransfers)
+        let stillLocalURL = try await workspace.prepareAttachment(descriptor.id)
+        XCTAssertEqual(stillLocalURL, localURL)
+        await active.synchronize(force: true)
+        do {
+            _ = try await active.prepareAttachment(descriptor.id)
+            XCTFail("The stopped file coordinator accepted a download")
+        } catch is CancellationError {}
+    }
+
     func testUpdateRequirementPausesRetriesButKeepsLocalEdits() async throws {
         let factory = RecoveryTransportFactory()
         let original = HaltableRecordingTransport(
@@ -295,7 +340,8 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
 
     private func makeWorkspace(
         transport: any SyncTransport,
-        factory: RecoveryTransportFactory
+        factory: RecoveryTransportFactory,
+        attachmentTransport: (any NotebookAttachmentTransport)? = nil
     ) -> NotebookWorkspace {
         let root = FileManager.default.temporaryDirectory.appending(
             path: "sync-recovery-\(UUID().uuidString)"
@@ -310,7 +356,8 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
             mode: .development(URL(string: "http://127.0.0.1")!, "recovery"),
             transportFactory: { expectedScope in
                 try await factory.makeTransport(expectedScope: expectedScope)
-            }
+            },
+            attachmentTransport: attachmentTransport
         )
     }
 

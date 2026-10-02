@@ -88,7 +88,7 @@ public enum NotebookOrdering {
         _ left: NotebookPlacement,
         _ right: NotebookPlacement
     ) -> Bool {
-        if left.item.kind != right.item.kind {
+        if (left.item.kind == .folder) != (right.item.kind == .folder) {
             return left.item.kind == .folder
         }
         let order = left.displayName.localizedStandardCompare(right.displayName)
