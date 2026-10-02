@@ -37,6 +37,9 @@ struct NotebookSearchResults: View {
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, 16)
+                    #if os(macOS)
+                    .background(NotebookMacOverlayScrollbar())
+                    #endif
                 }
                 .scrollPosition($scrollPosition)
             }
@@ -198,6 +201,16 @@ final class NotebookRecentCommandState {
     var selectedNoteID: UUID?
     var errorMessage: String?
 
+    #if os(macOS)
+    var browseAllRequest = 0
+    var canBrowseAll = false
+    var isBrowsingAll = false
+
+    var browseCommandTitle: LocalizedStringKey {
+        isBrowsingAll ? "Back to Files" : "Browse All Recents"
+    }
+    #endif
+
     init(replica: NotebookReplica) {
         self.replica = replica
     }
@@ -229,7 +242,7 @@ final class NotebookRecentCommandState {
     }
 
     private var targetNoteID: UUID? {
-        let recentIDs = Set(replica.recentNotes.map(\.id))
+        let recentIDs = Set(replica.allRecentNotes.map(\.id))
         if let focusedNoteID, recentIDs.contains(focusedNoteID) {
             return focusedNoteID
         }
@@ -280,6 +293,14 @@ struct NotebookRecentCommands: Commands {
 
     var body: some Commands {
         CommandMenu("Recents") {
+            #if os(macOS)
+            Button(recents?.browseCommandTitle ?? "Browse All Recents") {
+                recents?.browseAllRequest += 1
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(recents?.canBrowseAll != true && recents?.isBrowsingAll != true)
+            Divider()
+            #endif
             Button(recents?.commandTitle ?? "Pin in Recents") {
                 recents?.togglePin()
             }

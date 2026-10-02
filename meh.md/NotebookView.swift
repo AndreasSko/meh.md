@@ -91,6 +91,10 @@ struct NotebookView: View {
     @State private var selectingItems = false
     @FocusState private var browserFocused: Bool
     @FocusState private var focusedRecentID: UUID?
+    #if os(macOS)
+        @FocusState private var recentsMoreFocused: Bool
+        @FocusState private var recentsHeaderFocused: Bool
+    #endif
     @State private var movingNotebookID: UUID?
     @State private var browserUndo: NotebookBrowserUndo?
     @State private var browserRedo: NotebookBrowserUndo?
@@ -152,6 +156,9 @@ struct NotebookView: View {
             .searchable(text: $search.query, isPresented: $search.isPresented,
                         placement: .toolbar, prompt: "Search all notes")
             .searchFocused($searchFocused)
+            #if os(macOS)
+            .scrollIndicators(.automatic)
+            #endif
             .overlay(alignment: .bottom) {
                 if !isPhoneLayout && !search.isPresented && !showsSelectionControls
                     && !browsingAllRecents {
@@ -411,6 +418,21 @@ struct NotebookView: View {
                 recentCommands.errorMessage = nil
             }
         }
+        #if os(macOS)
+        .onChange(of: recentCommands.browseAllRequest) { _, _ in
+            if browsingAllRecents {
+                collapseMacRecents()
+            } else if hasMoreRecents {
+                browsingAllRecents = true
+            }
+        }
+        .onChange(of: hasMoreRecents, initial: true) { _, available in
+            recentCommands.canBrowseAll = available
+        }
+        .onChange(of: browsingAllRecents) { _, expanded in
+            recentCommands.isBrowsingAll = expanded
+        }
+        #endif
         .task(id: searchTaskID) {
             // Warm once in the background; don't rescan on every editor
             // keystroke while search is closed.
@@ -709,6 +731,17 @@ struct NotebookView: View {
 
     private func recentsSection(hidesCompactRows: Bool) -> some View {
         Section {
+            #if os(macOS)
+            NotebookMacRecentsCompactHeader(
+                isExpanded: navigationState.isRecentsExpanded
+            ) { navigationState.isRecentsExpanded.toggle() }
+            .focused($recentsHeaderFocused)
+            .background(NotebookRecentCardBackground(
+                position: navigationState.isRecentsExpanded ? .first : .only
+            ))
+            .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
+                              value: .bounds) { [$0] }
+            #endif
             if navigationState.isRecentsExpanded {
                 if recentPlacements.isEmpty {
                     Text("Notes you edit or rename appear here.")
@@ -716,7 +749,13 @@ struct NotebookView: View {
                         .foregroundStyle(.secondary)
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        #if os(macOS)
+                        .background(NotebookRecentCardBackground(position: .last))
+                        .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
+                                          value: .bounds) { [$0] }
+                        #else
                         .background(NotebookRecentCardBackground(position: .only))
+                        #endif
                 } else {
                     #if os(iOS)
                     VStack(spacing: 0) {
@@ -749,12 +788,35 @@ struct NotebookView: View {
                     #else
                     ForEach(Array(recentPlacements.enumerated()), id: \.element.item.id) {
                         index, placement in
-                        recentRow(placement, index: index, count: recentPlacements.count)
+                        recentRow(placement, index: index + 1,
+                                  count: recentPlacements.count + 1 + (hasMoreRecents ? 1 : 0))
+                            .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
+                                              value: .bounds) { [$0] }
+                    }
+                    if hasMoreRecents {
+                        Button {
+                            browsingAllRecents = true
+                        } label: {
+                            Label("More", systemImage: "chevron.down")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .focused($recentsMoreFocused)
+                        .accessibilityLabel("Browse all recent notes")
+                        .accessibilityIdentifier("notebook-recents-more")
+                        .background(NotebookRecentCardBackground(position: .last))
+                        .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
+                                          value: .bounds) { [$0] }
                     }
                     #endif
                 }
             }
         } header: {
+            #if os(iOS)
             NotebookSectionToggle(
                 title: "Recents",
                 isExpanded: navigationState.isRecentsExpanded,
@@ -764,6 +826,7 @@ struct NotebookView: View {
             .accessibilityHidden(hidesCompactRows)
             .textCase(nil)
             .listRowInsets(sidebarSectionInsets)
+            #endif
         }
         .selectionDisabled()
         .listRowSeparator(.hidden)
@@ -789,11 +852,33 @@ struct NotebookView: View {
         }
     }
 
+    private var hasMoreRecents: Bool {
+        replica.allRecentNotes.count > recentPlacements.count
+    }
+
+    #if os(macOS)
+    private var allRecentPlacements: [NotebookPlacement] {
+        let placements = Dictionary(uniqueKeysWithValues:
+            replica.placements.map { ($0.item.id, $0) })
+        return replica.allRecentNotes.compactMap { placements[$0.id] }
+    }
+
+    private func collapseMacRecents() {
+        browsingAllRecents = false
+        if navigationState.isRecentsExpanded && hasMoreRecents {
+            recentsMoreFocused = true
+        } else {
+            recentsHeaderFocused = true
+        }
+    }
+    #endif
+
     @ViewBuilder
     private func recentRow(
         _ placement: NotebookPlacement,
         index: Int,
-        count: Int
+        count: Int,
+        showsCardBackground: Bool = true
     ) -> some View {
         let row = Button {
             perform {
@@ -829,7 +914,7 @@ struct NotebookView: View {
         }
         .background(NotebookRecentCardBackground(
             position: recentCardPosition(index: index, count: count)
-        ))
+        ).opacity(showsCardBackground ? 1 : 0))
 
         #if os(iOS)
         row
@@ -1778,7 +1863,26 @@ struct NotebookView: View {
                 }
             )
             #else
-            libraryList(scrollProxy: scrollProxy, hidesCompactRows: false)
+            NotebookMacRecentsExpansionHost(
+                items: allRecentPlacements,
+                selectedNoteID: selectedID,
+                isExpanded: $browsingAllRecents,
+                onSelect: { id in
+                    guard id != selectedID else { return }
+                    perform { try await selectNote(id) }
+                },
+                onCollapse: collapseMacRecents,
+                onVisibleIDs: { visibleRecentPreviewIDs = $0 },
+                rowContent: { placement, index, count in
+                    // The card supplies the fill. Opaque row backgrounds would
+                    // hide native selection while its text turns white.
+                    recentRow(placement, index: index, count: count,
+                              showsCardBackground: false)
+                },
+                browser: {
+                    libraryList(scrollProxy: scrollProxy, hidesCompactRows: false)
+                }
+            )
             #endif
         }
     }
