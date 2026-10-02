@@ -39,7 +39,9 @@ struct MarkdownTableLayout {
         result: MarkdownSyntaxResult,
         hiddenRanges: [NSRange],
         bodyFont: PlatformFont,
-        width: CGFloat
+        width: CGFloat,
+        activeCell: MarkdownTableCellEditing.Target? = nil,
+        activeColumnWidths: [CGFloat]? = nil
     ) -> MarkdownTableLayout {
         let source = text as NSString
         let presentation = MarkdownRenderingPresentation(result: result, hiddenRanges: [])
@@ -58,6 +60,19 @@ struct MarkdownTableLayout {
                         : NSRange(location: row.range.location, length: 0)
                     var spans: [MarkdownStyleSpan] = []
                     presentation.forEachSpan(intersecting: range) { spans.append($0) }
+                    if activeCell?.tableRange == table.range,
+                       activeCell?.row == index, activeCell?.column == column {
+                        let style = NSMutableParagraphStyle()
+                        switch alignment {
+                        case .left: style.alignment = .left
+                        case .center: style.alignment = .center
+                        case .right: style.alignment = .right
+                        }
+                        return NSAttributedString(
+                            string: source.substring(with: activeCell!.contentRange),
+                            attributes: [.font: bodyFont, .paragraphStyle: style]
+                        )
+                    }
                     return cellText(
                         range: range, source: source, result: result, spans: spans,
                         bodyFont: bodyFont, alignment: alignment,
@@ -65,10 +80,13 @@ struct MarkdownTableLayout {
                     )
                 }
             }
-            let columnWidths = widths(
+            let calculatedWidths = widths(
                 for: styledRows, viewportWidth: viewportWidth,
                 fontSize: bodyFont.pointSize, padding: padding
             )
+            let columnWidths = activeCell?.tableRange == table.range
+                && activeColumnWidths?.count == calculatedWidths.count
+                ? activeColumnWidths! : calculatedWidths
             let contentWidth = columnWidths.reduce(0, +)
             let overflows = contentWidth > viewportWidth + 0.5
             for (index, row) in sourceRows.enumerated() {
@@ -267,7 +285,8 @@ struct MarkdownTableLayout {
         origin: CGPoint,
         lineFragmentPadding: CGFloat,
         context: CGContext,
-        horizontalOffsets: [NSRange: CGFloat] = [:]
+        horizontalOffsets: [NSRange: CGFloat] = [:],
+        activeCell: MarkdownTableCellEditing.Target? = nil
     ) {
         guard let manager = layoutManager.textContentManager else { return }
         let location = manager.offset(
@@ -326,7 +345,9 @@ struct MarkdownTableLayout {
                                   height: row.height - 2 * padding - indicatorHeight)
             context.saveGState()
             context.clip(to: cellRect)
-            cell.draw(with: cellRect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+            if activeCell?.rowRange != row.range || activeCell?.column != index {
+                cell.draw(with: cellRect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+            }
             context.restoreGState()
             columnX += columnWidth
         }

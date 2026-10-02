@@ -361,6 +361,10 @@ final class MarkdownTextView: NSTextView {
     }
 
     override func becomeFirstResponder() -> Bool {
+        if !markdownCellController.forwarding,
+           undoManager?.isUndoing != true, undoManager?.isRedoing != true {
+            markdownCellController.end()
+        }
         let accepted = super.becomeFirstResponder()
         if accepted { markdownDidBeginEditing?() }
         return accepted
@@ -529,6 +533,9 @@ final class MarkdownTextView: NSTextView {
 
     @discardableResult
     func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
+        if markdownCellController.isActive, !markdownCellController.forwarding {
+            return markdownCellController.perform(command)
+        }
         guard isEditable, !hasMarkedText() else { return false }
         if command == .link, let request = markdownLinkNavigation?.requestLink {
             request(string, selectedRange())
@@ -573,6 +580,7 @@ final class MarkdownTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        markdownCellController.end()
         let point = convert(event.locationInWindow, from: nil)
         if let checkbox = MarkdownPresentation.taskCheckbox(at: point, in: self) {
             toggleMarkdownTask(at: checkbox.range.location)
@@ -856,6 +864,10 @@ struct MarkdownEditor: NSViewRepresentable {
         }
 
         func attachNavigation(to textView: MarkdownTextView) {
+            textView.markdownCellController.onCompositionEnded = { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.update(parent: self.parent, textView: textView)
+            }
             installDestinationHighlightRendering(in: textView)
             textView.markdownDidBeginEditing = { [weak self] in
                 self?.positionRestoreGeneration &+= 1
@@ -873,7 +885,9 @@ struct MarkdownEditor: NSViewRepresentable {
             let navigation = parent.navigation
             parent.navigation?.prepareToLeave = { [weak self, weak textView] in
                 guard let self, let textView else { return true }
-                guard !textView.hasMarkedText() else { return false }
+                guard !textView.hasMarkedText(),
+                      !textView.markdownCellController.hasMarkedText else { return false }
+                textView.markdownCellController.end()
                 self.synchronizeBinding(from: textView)
                 guard !self.hasUncommittedText else { return false }
                 textView.isEditable = false
@@ -898,10 +912,12 @@ struct MarkdownEditor: NSViewRepresentable {
             parent.navigation?.captureHasEditingFocus = { [weak textView] in
                 guard let textView else { return false }
                 return textView.window?.firstResponder === textView
+                    || textView.markdownCellController.hasFocus
             }
             parent.navigation?.showFind = { [weak self, weak textView] in
                 guard let self, let textView else { return }
                 self.clearDestinationHighlight(in: textView)
+                textView.markdownCellController.end(focusSource: true)
                 let sender = NSMenuItem()
                 sender.tag = NSTextFinder.Action.showFindInterface.rawValue
                 textView.performFindPanelAction(sender)
@@ -937,7 +953,10 @@ struct MarkdownEditor: NSViewRepresentable {
                 if nativeView.window != nil { parent.navigation?.didAttach() }
             }
             textView.isEditable = !parent.isReadOnly
-            guard !textView.hasMarkedText() else { return }
+            guard !textView.hasMarkedText(),
+                  !((textView as? MarkdownTextView)?.markdownCellController.hasMarkedText ?? false)
+            else { return }
+            (textView as? MarkdownTextView)?.markdownCellController.synchronize(mode: parent.mode)
 
             let fontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
@@ -1047,6 +1066,7 @@ struct MarkdownEditor: NSViewRepresentable {
             guard !textView.hasMarkedText(),
                   let range = pendingSearchMatch else { return }
             pendingSearchMatch = nil
+            (textView as? MarkdownTextView)?.markdownCellController.end()
             let selection = textView.string.clampedSelection(range)
             if textView.window?.firstResponder === textView {
                 textView.window?.makeFirstResponder(nil)
@@ -1525,6 +1545,10 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     }
 
     override func becomeFirstResponder() -> Bool {
+        if markdownCellController.hasFocus, !markdownCellController.forwarding,
+           undoManager?.isUndoing != true, undoManager?.isRedoing != true {
+            markdownCellController.end()
+        }
         let accepted = super.becomeFirstResponder()
         markdownState.linkPointer?.invalidate()
         return accepted
@@ -1734,6 +1758,9 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 
     @discardableResult
     func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
+        if markdownCellController.isActive, !markdownCellController.forwarding {
+            return markdownCellController.perform(command)
+        }
         guard isEditable, markedTextRange == nil,
               !markdownState.isApplyingCommand else { return false }
         if command == .link, let request = markdownLinkNavigation?.requestLink {
@@ -1765,6 +1792,9 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         }
         // UIKit programmatic insertion does not consistently notify delegates.
         delegate?.textViewDidChange?(self)
+        if command == .insertTable {
+            markdownCellController.activateSourceSelection()
+        }
         return true
     }
 
@@ -1852,13 +1882,19 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         if text == "\n", markdownLinkNavigation?.hasLinkCompletion == true,
            markedTextRange == nil,
            markdownLinkNavigation?.completionCommand?("accept") == true { return }
-        if !markdownState.isApplyingCommand, !markdownState.isPasting {
+        if !markdownState.isApplyingCommand, !markdownState.isPasting,
+           !markdownCellController.forwarding {
             if text == "\t", performMarkdownCommand(.tableNextCell) { return }
             let command: MarkdownEditingCommand? = text == "\n"
                 ? .continueLine : (text == "\t" ? .indent : nil)
             if let command, performMarkdownCommand(command) { return }
         }
         super.insertText(text)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if !markdownCellController.forwarding { markdownCellController.end() }
+        super.touchesBegan(touches, with: event)
     }
 
     override func paste(_ sender: Any?) {
@@ -2240,6 +2276,10 @@ struct MarkdownEditor: UIViewRepresentable {
         func attachNavigation(to textView: MarkdownTextView) {
             textView.installMarkdownKeyboardToolbar(navigation: parent.navigation)
             textView.markdownFindPresentation = parent.navigation?.findPresentation
+            textView.markdownCellController.onCompositionEnded = { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.update(parent: self.parent, textView: textView)
+            }
             installDestinationHighlightRendering(in: textView)
             textView.markdownDidLayout = { [weak self, weak textView] in
                 guard let self, let textView else { return }
@@ -2253,7 +2293,9 @@ struct MarkdownEditor: UIViewRepresentable {
             let navigation = parent.navigation
             parent.navigation?.prepareToLeave = { [weak self, weak textView] in
                 guard let self, let textView else { return true }
-                guard textView.markedTextRange == nil else { return false }
+                guard textView.markedTextRange == nil,
+                      !textView.markdownCellController.hasMarkedText else { return false }
+                textView.markdownCellController.end()
                 self.textViewDidChange(textView)
                 guard !self.hasUncommittedText else { return false }
                 textView.isEditable = false
@@ -2277,12 +2319,14 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             parent.navigation?.captureHasEditingFocus = { [weak textView] in
                 textView?.isFirstResponder == true
+                    || textView?.markdownCellController.hasFocus == true
             }
             parent.navigation?.showFind = { [weak self, weak textView] in
                 guard let self, let textView else { return }
                 self.clearDestinationHighlight(in: textView)
                 // The find navigator owns keyboard input while it is visible.
                 // Resigning first removes the Markdown writing accessory.
+                textView.markdownCellController.end()
                 _ = textView.resignFirstResponder()
                 textView.findInteraction?.presentFindNavigator(
                     showingReplace: false
@@ -2344,7 +2388,10 @@ struct MarkdownEditor: UIViewRepresentable {
                 if nativeView.window != nil { parent.navigation?.didAttach() }
             }
             textView.isEditable = !parent.isReadOnly
-            guard textView.markedTextRange == nil else { return }
+            guard textView.markedTextRange == nil,
+                  !((textView as? MarkdownTextView)?.markdownCellController.hasMarkedText ?? false)
+            else { return }
+            (textView as? MarkdownTextView)?.markdownCellController.synchronize(mode: parent.mode)
 
             let fontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
@@ -2489,6 +2536,7 @@ struct MarkdownEditor: UIViewRepresentable {
             guard textView.markedTextRange == nil,
                   let range = pendingSearchMatch else { return }
             pendingSearchMatch = nil
+            (textView as? MarkdownTextView)?.markdownCellController.end()
             let selection = textView.text.clampedSelection(range)
             if textView.window?.endEditing(false) != true {
                 _ = textView.resignFirstResponder()

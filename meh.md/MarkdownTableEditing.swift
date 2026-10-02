@@ -120,7 +120,6 @@ enum MarkdownTableEditing {
         for table in tables {
             let count = table.header.cells.count
             guard count > 0,
-                  table.rows.allSatisfy({ $0.cells.count <= count }),
                   selection.location >= table.range.location,
                   NSMaxRange(selection) <= NSMaxRange(table.range),
                   (selection.location < NSMaxRange(table.range)
@@ -139,7 +138,7 @@ enum MarkdownTableEditing {
                     guard let column = row.cells.firstIndex(where: {
                         selection.location >= $0.location
                             && NSMaxRange(selection) <= NSMaxRange($0)
-                    }) else { return nil }
+                    }), column < count else { return nil }
                     return Position(table: table, row: rowIndex,
                                     column: column, selection: selection)
                 }
@@ -149,8 +148,9 @@ enum MarkdownTableEditing {
                     index == row.cells.count - 1
                         || caret < row.cells[index + 1].location
                 })?.offset ?? 0
+                guard column < count else { return nil }
                 return Position(table: table, row: rowIndex,
-                                column: min(column, count - 1),
+                                column: column,
                                 selection: selection)
             }
         }
@@ -266,7 +266,7 @@ enum MarkdownTableEditing {
         guard !delete || count > 1 else { return nil }
         var cells = ([table.header] + table.rows).map { row in
             row.cells.map { source.substring(with: $0) }
-                + Array(repeating: "", count: count - row.cells.count)
+                + Array(repeating: "", count: max(0, count - row.cells.count))
         }
         var alignments = table.alignments
         if delete {

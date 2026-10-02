@@ -1,14 +1,11 @@
 import XCTest
 
 #if os(iOS)
+@MainActor
 final class MarkdownTableUITests: XCTestCase {
-    func testTableMenuCaptureAtCurrentTextSize() {
+    func testTableIconDirectlyInsertsAndThenOpensCellActions() {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchArguments += ["-editor.mode", "livePreview"]
+        let app = isolatedApplication()
         app.launch()
 
         let newNote = app.buttons["notebook-new-item"].firstMatch
@@ -20,37 +17,31 @@ final class MarkdownTableUITests: XCTestCase {
         title.typeText("\n")
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        app.buttons["notebook-note-actions"].tap()
+        app.buttons["Live Preview"].tap()
         editor.tap()
         editor.typeText("A fictional coastal itinerary.")
         let insertTable = toolbarCommand("editor-command-insert-table", in: app)
-        XCTAssertTrue(insertTable.exists)
-        capture(app, name: "Keyboard bar at current text size")
-
+        XCTAssertEqual(insertTable.label, "Insert Table")
+        XCTAssertTrue(insertTable.isHittable)
         insertTable.tap()
         XCTAssertTrue(waitForSource(editor) { $0.contains("| Column 1 | Column 2 |") })
-        for identifier in [
-            "editor-command-table-row-above", "editor-command-table-row-below",
-            "editor-command-table-column-before", "editor-command-table-column-after",
-            "editor-command-table-align-left", "editor-command-table-align-center",
-            "editor-command-table-align-right", "editor-command-table-next-cell",
-            "editor-command-table-previous-cell", "editor-command-table-delete-row",
-            "editor-command-table-delete-column",
-        ] {
-            XCTAssertTrue(
-                toolbarCommand(identifier, in: app).exists,
-                "Expected contextual table command \(identifier)"
-            )
-        }
-        capture(app, name: "Contextual table commands at current text size")
+        let insertedSource = editor.value as? String
+        let cellEditor = app.textViews["markdown.table.cell.editor"]
+        XCTAssertTrue(cellEditor.waitForExistence(timeout: 5))
+        XCTAssertEqual(cellEditor.value as? String, "Column 1")
+        XCTAssertTrue(cellEditor.isHittable)
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        XCTAssertEqual(app.buttons["editor-table-menu"].label, "Table")
+        toolbarCommand("editor-command-table-next-cell", in: app).tap()
+        XCTAssertEqual(cellEditor.value as? String, "Column 2")
+        XCTAssertEqual(editor.value as? String, insertedSource)
+        capture(app, name: "Table icon inserted a table and opened cell actions")
     }
 
     func testTableCommandsEditLiteralMarkdown() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchArguments += ["-editor.mode", "livePreview"]
+        let app = isolatedApplication()
         app.launch()
 
         let newNote = app.buttons["notebook-new-item"].firstMatch
@@ -62,6 +53,8 @@ final class MarkdownTableUITests: XCTestCase {
         title.typeText("\n")
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        app.buttons["notebook-note-actions"].tap()
+        app.buttons["Live Preview"].tap()
         editor.tap()
         editor.typeText("A fictional coastal itinerary.")
 
@@ -72,11 +65,13 @@ final class MarkdownTableUITests: XCTestCase {
         XCTAssertTrue(inserted.contains("| --- | --- |"))
         capture(app, name: "New table with selected header")
 
-        // The inserted header is selected so typing names it directly.
-        editor.typeText("Activity")
+        // The inserted header is selected in the native cell editor.
+        let cellEditor = app.textViews["markdown.table.cell.editor"]
+        XCTAssertTrue(cellEditor.waitForExistence(timeout: 5))
+        cellEditor.typeText("Activity")
         XCTAssertTrue(waitForSource(editor) { $0.contains("| Activity | Column 2 |") })
         toolbarCommand("editor-command-table-next-cell", in: app).tap()
-        editor.typeText("When")
+        cellEditor.typeText("When")
         XCTAssertTrue(waitForSource(editor) { $0.contains("| Activity | When |") })
         capture(app, name: "Next Cell selects the header contents")
 
@@ -103,7 +98,7 @@ final class MarkdownTableUITests: XCTestCase {
         let beforeDelete = try XCTUnwrap(editor.value as? String)
 
         toolbarCommand("editor-command-table-delete-column", in: app).tap()
-        let delete = app.buttons["Delete"].firstMatch
+        let delete = app.buttons["Delete Column"].firstMatch
         XCTAssertTrue(delete.waitForExistence(timeout: 5))
         capture(app, name: "Confirm deletion of table column")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
@@ -122,11 +117,7 @@ final class MarkdownTableUITests: XCTestCase {
 
     func testTablePreviewAndSourceEditingKeepMarkdown() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchArguments += ["-editor.mode", "livePreview"]
+        let app = isolatedApplication()
         app.launch()
         let newNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
@@ -137,6 +128,8 @@ final class MarkdownTableUITests: XCTestCase {
         title.typeText("\n")
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        app.buttons["notebook-note-actions"].tap()
+        app.buttons["Live Preview"].tap()
         editor.tap()
         let source = """
         | Activity | Time | Status |
@@ -161,8 +154,8 @@ final class MarkdownTableUITests: XCTestCase {
         XCTAssertTrue(bodyCell.label.contains("Coastal walk"))
         XCTAssertTrue(editor.exists, "The native Markdown source editor remains available")
 
-        // A native hit inside the first few table rows must enter ordinary
-        // source editing. The complete source remains the accessibility value.
+        // A hit inside a rendered cell opens its native editor. The full
+        // source remains available as the source editor accessibility value.
         let noteTitle = app.buttons["note-title"]
         XCTAssertTrue(noteTitle.waitForExistence(timeout: 5))
         editor.coordinate(withNormalizedOffset: .zero).withOffset(
@@ -171,8 +164,10 @@ final class MarkdownTableUITests: XCTestCase {
         ).tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         XCTAssertEqual(editor.value as? String, source)
-        capture(app, name: "Table revealed for editing")
-        editor.typeText("!")
+        let cellEditor = app.textViews["markdown.table.cell.editor"]
+        XCTAssertTrue(cellEditor.waitForExistence(timeout: 5))
+        capture(app, name: "Table remains rendered during cell editing")
+        cellEditor.typeText("!")
         let edited = try XCTUnwrap(editor.value as? String)
         XCTAssertEqual(edited.replacingOccurrences(of: "!", with: ""), source)
         XCTAssertEqual(edited.utf16.count, source.utf16.count + 1)
@@ -185,22 +180,61 @@ final class MarkdownTableUITests: XCTestCase {
         add(attachment)
     }
 
+    private func isolatedApplication() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
+        app.launchEnvironment["MEH_SYNC_URL"] = "http://127.0.0.1:18888"
+        app.launchEnvironment["MEH_SYNC_WORKSPACE"] = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        return app
+    }
+
     @discardableResult
-    private func toolbarCommand(
-        _ identifier: String,
-        in app: XCUIApplication
-    ) -> XCUIElement {
-        let command = app.buttons[identifier].firstMatch
+    private func toolbarCommand(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        let titles: [String: String] = [
+            "editor-command-insert-table": "Insert Table",
+            "editor-command-table-row-above": "Add Row Above",
+            "editor-command-table-row-below": "Add Row Below",
+            "editor-command-table-column-before": "Add Column Left",
+            "editor-command-table-column-after": "Add Column Right",
+            "editor-command-table-next-cell": "Next Cell",
+            "editor-command-table-previous-cell": "Previous Cell",
+            "editor-command-table-delete-row": "Delete Row…",
+            "editor-command-table-delete-column": "Delete Column…",
+            "editor-command-table-align-left": "Align Left",
+            "editor-command-table-align-center": "Align Center",
+            "editor-command-table-align-right": "Align Right",
+        ]
+        let title = titles[identifier] ?? identifier
+        let action = app.buttons[title].firstMatch
+        if action.exists { return action }
+        let menu = app.buttons["editor-table-menu"].firstMatch
+        let nativeMenu = app.collectionViews.allElementsBoundByIndex.first {
+            $0.identifier != "editor-keyboard-toolbar" && $0.frame.width > 100
+                && $0.buttons.count > 0
+        }
+        if nativeMenu != nil {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        }
         let toolbar = app.collectionViews["editor-keyboard-toolbar"]
         XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
-        for _ in 0..<4 where !command.isHittable {
-            toolbar.swipeRight()
+        for _ in 0..<4 where !menu.isHittable { toolbar.swipeRight() }
+        for _ in 0..<8 where !menu.isHittable { toolbar.swipeLeft() }
+        XCTAssertTrue(menu.isHittable)
+        if identifier == "editor-command-insert-table" { return menu }
+        menu.tap()
+        let group: String?
+        if identifier.contains("table-align-") { group = "Column Alignment" }
+        else if identifier.contains("table-row-") || identifier == "editor-command-table-delete-row" { group = "Row" }
+        else if identifier.contains("table-column-") || identifier == "editor-command-table-delete-column" { group = "Column" }
+        else { group = nil }
+        if let group {
+            let submenu = app.buttons[group].firstMatch
+            XCTAssertTrue(submenu.waitForExistence(timeout: 5))
+            submenu.tap()
         }
-        for _ in 0..<8 where !command.isHittable {
-            toolbar.swipeLeft()
-        }
-        XCTAssertTrue(command.isHittable, "Could not reveal \(identifier)")
-        return command
+        XCTAssertTrue(action.waitForExistence(timeout: 5), "Missing Table action \(title)")
+        return action
     }
 
     private func command(_ identifier: String, in app: XCUIApplication) -> XCUIElement {

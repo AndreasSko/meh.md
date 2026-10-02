@@ -74,21 +74,45 @@ final class MarkdownTablePresentationTests: XCTestCase {
         })
     }
 
-    func testExtraBodyCellKeepsLiteralSourceVisible() throws {
-        let source = "| A | B |\n| --- | --- |\n| one | two | extra |\n\nOutside"
-        let parsed = MarkdownSyntax.parse(source)
-        let tableRange = try XCTUnwrap(parsed.tables.first?.range)
-        let hidden = MarkdownLivePreview.hiddenRanges(
-            in: source, result: parsed,
-            snapshot: MarkdownLivePreviewSnapshot(
-                mode: .livePreview,
-                selection: (source as NSString).range(of: "Outside"),
-                tableWidth: 400
+    func testExcessBodyCellsRenderAtHeaderWidthWithoutChangingSource() throws {
+        for tail in ["|  ||  |  |", "| two | extra 🪐 | a\\|b |"] {
+            let source = "| A | B |\n| --- | --- |\n| one "
+                + tail + "\n\nOutside"
+            let parsed = MarkdownSyntax.parse(source)
+            let table = try XCTUnwrap(parsed.tables.first)
+            XCTAssertGreaterThan(table.rows[0].cells.count, 2)
+            let hidden = MarkdownLivePreview.hiddenRanges(
+                in: source, result: parsed,
+                snapshot: MarkdownLivePreviewSnapshot(
+                    mode: .livePreview,
+                    selection: (source as NSString).range(of: "Outside"),
+                    tableWidth: 400
+                )
             )
-        )
-        XCTAssertTrue(hidden.allSatisfy {
-            NSIntersectionRange($0, tableRange).length == 0
-        })
+            XCTAssertTrue(hidden.contains {
+                $0.location <= table.range.location
+                    && NSMaxRange($0) >= NSMaxRange(table.range)
+            })
+            let layout = MarkdownTableLayout.make(
+                text: source, result: parsed, hiddenRanges: hidden,
+                bodyFont: MarkdownPresentation.editorBodyFont, width: 400
+            )
+            XCTAssertEqual(layout.rows.count, 2)
+            XCTAssertEqual(layout.rows[1].cells.count, 2)
+            XCTAssertEqual(layout.rows[1].cells[0].string, "one")
+            XCTAssertEqual(layout.rows[1].cells[1].string,
+                           tail.contains("two") ? "two" : "")
+            XCTAssertEqual((source as NSString).substring(
+                with: table.rows[0].range), "| one " + tail + "\n")
+            let sourceHidden = MarkdownLivePreview.hiddenRanges(
+                in: source, result: parsed,
+                snapshot: MarkdownLivePreviewSnapshot(
+                    mode: .source, selection: NSRange(location: 0, length: 0),
+                    tableWidth: 400
+                )
+            )
+            XCTAssertTrue(sourceHidden.isEmpty)
+        }
     }
 
     func testSelectionAcrossTablesRevealsBothButLeavesOtherTableRendered() throws {

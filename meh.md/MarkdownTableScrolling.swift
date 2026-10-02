@@ -160,6 +160,7 @@ private final class MarkdownTableOverlayController: NSObject {
             overlay.updateMarkdownTableAccessibility()
         }
         textView.updateMarkdownTableAccessibilityNavigation()
+        textView.markdownCellController.updateGeometry()
     }
 
     private func geometryKey(in textView: MarkdownTextView) -> MarkdownTableGeometryKey? {
@@ -336,6 +337,7 @@ final class MarkdownTableScrollOverlay: NSScrollView {
             elasticHorizontalOffset, for: tableRange
         )
         markdownTextView.invalidateMarkdownTableDrawing(for: tableRange)
+        markdownTextView.markdownCellController.didScroll(offset: elasticHorizontalOffset, tableRange: tableRange)
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -392,6 +394,9 @@ final class MarkdownTableScrollOverlay: NSScrollView {
               tableRows[row].cells.indices.contains(column) else { return false }
         let sourceRows = [source.header] + source.rows
         guard sourceRows.indices.contains(row) else { return false }
+        if textView.markdownCellController.begin(tableRange: tableRange, row: row, column: column) {
+            return true
+        }
         let location = sourceRows[row].cells.indices.contains(column)
             ? sourceRows[row].cells[column].location
             : sourceRows[row].range.location
@@ -409,7 +414,12 @@ final class MarkdownTableScrollOverlay: NSScrollView {
         var columnX: CGFloat = 0
         for (column, width) in tableRows[row].columnWidths.enumerated() {
             if x < columnX + width || column == tableRows[row].columnWidths.count - 1 {
-                revealMarkdownTableCell(row: row, column: column)
+                if let textView = markdownTextView {
+                    let ownerPoint = textView.convert(point, from: documentView)
+                    _ = textView.markdownCellController.begin(
+                        tableRange: tableRange, row: row, column: column, point: ownerPoint
+                    )
+                }
                 return
             }
             columnX += width
@@ -493,6 +503,7 @@ final class MarkdownTableScrollOverlay: UIScrollView, UIScrollViewDelegate {
             elasticHorizontalOffset, for: tableRange
         )
         markdownTextView.invalidateMarkdownTableDrawing(for: tableRange)
+        markdownTextView.markdownCellController.didScroll(offset: elasticHorizontalOffset, tableRange: tableRange)
     }
 
     override func gestureRecognizerShouldBegin(
@@ -552,6 +563,9 @@ final class MarkdownTableScrollOverlay: UIScrollView, UIScrollViewDelegate {
               tableRows[row].cells.indices.contains(column) else { return false }
         let sourceRows = [source.header] + source.rows
         guard sourceRows.indices.contains(row) else { return false }
+        if textView.markdownCellController.begin(tableRange: tableRange, row: row, column: column) {
+            return true
+        }
         let location = sourceRows[row].cells.indices.contains(column)
             ? sourceRows[row].cells[column].location
             : sourceRows[row].range.location
@@ -570,7 +584,12 @@ final class MarkdownTableScrollOverlay: UIScrollView, UIScrollViewDelegate {
         var columnX: CGFloat = 0
         for (column, width) in tableRows[row].columnWidths.enumerated() {
             if x < columnX + width || column == tableRows[row].columnWidths.count - 1 {
-                revealMarkdownTableCell(row: row, column: column)
+                if let textView = markdownTextView {
+                    let ownerPoint = textView.convert(point, from: contentView)
+                    _ = textView.markdownCellController.begin(
+                        tableRange: tableRange, row: row, column: column, point: ownerPoint
+                    )
+                }
                 return
             }
             columnX += width

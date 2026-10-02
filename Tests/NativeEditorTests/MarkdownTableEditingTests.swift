@@ -114,7 +114,7 @@ final class MarkdownTableEditingTests: XCTestCase {
         XCTAssertFalse(remaining.contains("🪐"))
     }
 
-    func testOptionalPipesMissingCellsAndExtraCellsSafety() throws {
+    func testOptionalPipesMissingCellsAndExtraCellsPreserved() throws {
         let text = "One | Two\n:--- | ---:\nonly one\n"
         let cell = (text as NSString).range(of: "only one")
         let change = try XCTUnwrap(MarkdownTableEditing.change(
@@ -128,12 +128,137 @@ final class MarkdownTableEditingTests: XCTestCase {
 
         let extra = "| A | B |\n| --- | --- |\n| x | y | z |\n"
         let x = (extra as NSString).range(of: "x")
-        XCTAssertNil(MarkdownTableEditing.change(
+        let inserted = try XCTUnwrap(MarkdownTableEditing.change(
             for: .tableColumnAfter, text: extra, selection: x
         ))
-        XCTAssertFalse(MarkdownTableEditing.availableCommands(
+        let expanded = apply(inserted, to: extra)
+        let expandedTable = try XCTUnwrap(
+            MarkdownSyntax.parse(expanded).tables.first
+        )
+        XCTAssertEqual(expandedTable.header.cells.count, 3)
+        XCTAssertEqual(expandedTable.rows[0].cells.count, 4)
+        XCTAssertTrue(expanded.contains("| x |  | y | z |\n"))
+        XCTAssertTrue(MarkdownTableEditing.availableCommands(
             text: extra, selection: x
         ).contains(.tableColumnAfter))
+    }
+
+    func testOverflowColumnChangesPreserveEveryRemainingCellByte() throws {
+        let prefix = "Before 🪐\r\n\r\n"
+        let suffix = "\r\nAfter cafe\u{301}"
+        let text = prefix + "| A | B |\r\n| :--- | ---: |\r\n"
+            + "| café | visible | cafe\u{301} | a\\|b | 🪐 |\r\n"
+            + "| short |\r\n" + suffix
+        let visible = (text as NSString).range(of: "visible")
+        let existing = ["café", "visible", "cafe\u{301}", "a\\|b", "🪐"]
+        let cases: [(MarkdownEditingCommand, [String])] = [
+            (.tableColumnBefore, [existing[0], ""] + Array(existing.dropFirst())),
+            (.tableColumnAfter, Array(existing.prefix(2)) + [""]
+                + Array(existing.dropFirst(2))),
+            (.tableDeleteColumn, [existing[0]] + Array(existing.dropFirst(2))),
+        ]
+        for (command, expected) in cases {
+            let change = try XCTUnwrap(MarkdownTableEditing.change(
+                for: command, text: text, selection: visible
+            ))
+            let result = apply(change, to: text)
+            let table = try XCTUnwrap(MarkdownSyntax.parse(result).tables.first)
+            let actual = table.rows[0].cells.map {
+                (result as NSString).substring(with: $0)
+            }
+            XCTAssertEqual(actual.map { Array($0.utf8) },
+                           expected.map { Array($0.utf8) }, "\(command)")
+            let columns = command == .tableDeleteColumn ? 1 : 3
+            XCTAssertEqual(table.header.cells.count, columns)
+            XCTAssertEqual(table.rows[1].cells.count, columns)
+            let expectedAlignments: [MarkdownTableAlignment]
+            switch command {
+            case .tableDeleteColumn: expectedAlignments = [.left]
+            case .tableColumnAfter: expectedAlignments = [.left, .right, .left]
+            default: expectedAlignments = [.left, .left, .right]
+            }
+            XCTAssertEqual(table.alignments, expectedAlignments)
+            XCTAssertTrue(result.hasPrefix(prefix))
+            XCTAssertTrue(result.hasSuffix(suffix))
+            XCTAssertFalse(result.replacingOccurrences(of: "\r\n", with: "")
+                .contains("\n"))
+        }
+    }
+
+    func testOverflowCellsRejectSelectionsAndCarets() throws {
+        let text = "| A | B |\n| --- | --- |\n| x | y | extra |  |\n"
+        let table = try XCTUnwrap(MarkdownSyntax.parse(text).tables.first)
+        let overflow = table.rows[0].cells[2]
+        let emptyOverflow = table.rows[0].cells[3]
+        let selections = [
+            overflow,
+            NSRange(location: overflow.location, length: 0),
+            NSRange(location: NSMaxRange(overflow), length: 0),
+            NSRange(location: emptyOverflow.location, length: 0),
+        ]
+        for selection in selections {
+            XCTAssertTrue(MarkdownTableEditing.availableCommands(
+                text: text, selection: selection
+            ).isEmpty)
+            XCTAssertNil(MarkdownTableEditing.currentAlignment(
+                text: text, selection: selection
+            ))
+            for command: MarkdownEditingCommand in [
+                .tableColumnAfter, .tableDeleteColumn, .tableAlignRight,
+                .tableNextCell, .tablePreviousCell, .tableRowBelow,
+            ] {
+                XCTAssertNil(MarkdownTableEditing.change(
+                    for: command, text: text, selection: selection
+                ))
+            }
+        }
+    }
+
+    func testVisibleOverflowRowSupportsNavigationAlignmentAndRowChanges() throws {
+        let text = "| Column 1 | Column 2 |\n| --- | --- |\n"
+            + "|  TEs T |  ||  |  |\n| later | row |\n"
+        let table = try XCTUnwrap(MarkdownSyntax.parse(text).tables.first)
+        let first = table.rows[0].cells[0]
+        let second = table.rows[0].cells[1]
+        let next = try XCTUnwrap(MarkdownTableEditing.change(
+            for: .tableNextCell, text: text, selection: first
+        ))
+        XCTAssertEqual(next.selection, second)
+        XCTAssertEqual(apply(next, to: text), text)
+        let nextRow = try XCTUnwrap(MarkdownTableEditing.change(
+            for: .tableNextCell, text: text, selection: second
+        ))
+        XCTAssertEqual(nextRow.selection, table.rows[1].cells[0])
+        XCTAssertEqual(apply(nextRow, to: text), text)
+        let previous = try XCTUnwrap(MarkdownTableEditing.change(
+            for: .tablePreviousCell, text: text, selection: nextRow.selection
+        ))
+        XCTAssertEqual(previous.selection, second)
+
+        let aligned = try XCTUnwrap(MarkdownTableEditing.change(
+            for: .tableAlignCenter, text: text, selection: first
+        ))
+        let alignedText = apply(aligned, to: text)
+        XCTAssertEqual(aligned.range, table.delimiterRange)
+        XCTAssertTrue(alignedText.hasSuffix(
+            "|  TEs T |  ||  |  |\n| later | row |\n"
+        ))
+        XCTAssertEqual(MarkdownTableEditing.currentAlignment(
+            text: alignedText, selection: aligned.selection
+        ), .center)
+
+        let added = try XCTUnwrap(MarkdownTableEditing.change(
+            for: .tableRowBelow, text: text, selection: first
+        ))
+        XCTAssertTrue(apply(added, to: text).contains(
+            "|  TEs T |  ||  |  |\n|  |  |\n| later | row |\n"
+        ))
+        let deleted = try XCTUnwrap(MarkdownTableEditing.change(
+            for: .tableDeleteRow, text: text,
+            selection: table.rows[1].cells[0]
+        ))
+        XCTAssertEqual(apply(deleted, to: text),
+                       (text as NSString).substring(to: table.rows[1].range.location))
     }
 
     func testColumnChangeKeepsCRLFAndEscapedCellText() throws {

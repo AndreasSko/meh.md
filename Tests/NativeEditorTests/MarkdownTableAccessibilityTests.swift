@@ -93,7 +93,7 @@ final class MarkdownTableAccessibilityTests: XCTestCase {
         XCTAssertTrue(firstCell.accessibilityPerformPress())
         XCTAssertEqual(view.string, source)
         XCTAssertEqual(view.selectedRange().location,
-                       (source as NSString).range(of: "One").location)
+                       NSMaxRange((source as NSString).range(of: "One")))
         XCTAssertFalse(view.undoManager?.canUndo == true)
     }
 #endif
