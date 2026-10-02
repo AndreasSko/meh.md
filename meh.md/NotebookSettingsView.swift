@@ -14,6 +14,8 @@ struct NotebookSettingsView: View {
     @State private var confirmingReset = false
     @State private var resetScheduled = false
     @State private var importing = false
+    @State private var choosingImportSource = false
+    @State private var importingFolder = false
     @State private var saving = false
     @State private var preparing = false
     @State private var document: MarkdownExportDocument?
@@ -44,8 +46,28 @@ struct NotebookSettingsView: View {
                     Text("New notes are saved in this folder.")
                 }
                 Section("Markdown") {
-                    Button("Import Markdown…") { importing = true }
+                    Button("Import Markdown…") {
+                        #if os(iOS)
+                        choosingImportSource = true
+                        #else
+                        importing = true
+                        #endif
+                    }
                         .accessibilityIdentifier("notebook-import")
+                        #if os(iOS)
+                        .confirmationDialog(
+                            "Import Markdown", isPresented: $choosingImportSource
+                        ) {
+                            Button("Import Files…") {
+                                importingFolder = false
+                                importing = true
+                            }
+                            Button("Import Folder…") {
+                                importingFolder = true
+                                importing = true
+                            }
+                        }
+                        #endif
                     Button("Export All Notes…") { exportAll() }
                         .accessibilityIdentifier("notebook-export")
                     if preparing { ProgressView("Preparing Markdown…") }
@@ -141,9 +163,10 @@ struct NotebookSettingsView: View {
         } message: {
             Text("Quit and reopen meh.md to complete the reset. Any changes made before restarting will also be discarded.")
         }
-        .sheet(isPresented: $importing) {
-            NotebookImportView(replica: replica, onImport: onImport)
-        }
+        .notebookMarkdownImporter(
+            isPresented: $importing, choosingFolder: importingFolder,
+            replica: replica, onImport: onImport
+        )
         .fileExporter(isPresented: $saving, document: document,
                       contentType: .folder, defaultFilename: "meh.md Export") { result in
             document = nil

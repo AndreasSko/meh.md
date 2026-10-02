@@ -829,9 +829,9 @@ struct NotebookView: View {
         } message: {
             Text(missingLink?.destination ?? "")
         }
-        .sheet(isPresented: $showingImport) {
-            NotebookImportView(replica: replica, onImport: importMarkdown)
-        }
+        .notebookMarkdownImporter(
+            isPresented: $showingImport, replica: replica, onImport: importMarkdown
+        )
         .sheet(isPresented: $showingTrash) {
             NavigationStack {
                 trashView

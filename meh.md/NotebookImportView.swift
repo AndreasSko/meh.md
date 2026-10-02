@@ -1,160 +1,242 @@
 import NoteCore
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
-struct NotebookImportView: View {
+extension View {
+    func notebookMarkdownImporter(
+        isPresented: Binding<Bool>,
+        choosingFolder: Bool = false,
+        replica: NotebookReplica,
+        onImport: @escaping (NotebookImportPlan?) async throws -> Void
+    ) -> some View {
+        modifier(NotebookMarkdownImporter(
+            isPresented: isPresented, choosingFolder: choosingFolder,
+            replica: replica, onImport: onImport
+        ))
+    }
+}
+
+private struct NotebookMarkdownImporter: ViewModifier {
+    @Binding var isPresented: Bool
+    let choosingFolder: Bool
     let replica: NotebookReplica
     let onImport: (NotebookImportPlan?) async throws -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var plan: NotebookImportPlan?
-    @State private var choosingFiles = false
-    @State private var choosingFolder = false
-    @State private var preparing = false
-    @State private var importing = false
-    @State private var settingAside = false
-    @State private var confirmingSetAside = false
-    @State private var importWasSetAside = false
+    @State private var working = false
+    @State private var recovering = false
+    #if os(iOS)
+    @State private var picking = false
+    #endif
     @State private var errorMessage: String?
-    @State private var preparation: Task<Void, Never>?
+    @State private var completionMessage: String?
 
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Copy Markdown files into your notebook. Folder structure and text are preserved; your source files stay unchanged.")
-                    if settingAside {
-                        ProgressView("Setting import aside…")
-                    } else if importing {
-                        ProgressView("Importing into notebook…")
-                    } else if replica.hasPendingImport {
-                        Label("An interrupted import is ready to resume.", systemImage: "arrow.clockwise")
-                        Text("Resume the saved copy without selecting the source again. Notes already imported keep their edits and placement.")
-                        Button("Resume Import") { apply(nil) }
-                            .accessibilityIdentifier("notebook-resume-import")
-                        Button("Set Aside…") { confirmingSetAside = true }
-                    } else if preparing {
-                        ProgressView("Reading Markdown files…")
-                    } else if let plan {
-                        Text("\(noteCount(plan)) notes · \(folderCount(plan)) folders")
-                            .font(.headline)
-                            .accessibilityIdentifier("notebook-import-summary")
-                        Text("These will be added at the top level of your notebook. Matching names stay separate; existing notes are never replaced.")
-                        ForEach(plan.entries.filter { $0.parentID == nil }, id: \.id) { entry in
-                            Label(entry.name, systemImage: entry.kind == .folder ? "folder" : "doc.text")
-                        }
-                        if !plan.skippedPaths.isEmpty {
-                            DisclosureGroup("\(plan.skippedPaths.count) skipped items") {
-                                Text("Only visible Markdown files and ordinary folders are imported. Hidden items, links, packages, and other file types are skipped.")
-                                ForEach(Array(plan.skippedPaths.enumerated()), id: \.offset) { _, path in
-                                    Text(path).font(.caption).textSelection(.enabled)
-                                }
-                            }
-                        }
-                        HStack {
-                            Button("Choose Again") { self.plan = nil }
-                            Spacer()
-                            Button("Import") { apply(plan) }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(plan.entries.isEmpty)
-                                .accessibilityIdentifier("notebook-confirm-import")
-                        }
-                    } else {
-                        if importWasSetAside {
-                            Text("The interrupted import is kept for recovery. You can choose files again.")
-                        }
-                        HStack {
-                            Button("Choose Files…") { choosingFiles = true }
-                            Button("Choose Folder…") { choosingFolder = true }
-                        }
-                    }
-                    if let errorMessage {
-                        Text(errorMessage).foregroundStyle(.red)
-                            .textSelection(.enabled)
-                    }
-                }
-                .padding(20)
-                .disabled(importing || settingAside)
-            }
-            .navigationTitle("Import Markdown")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { preparation?.cancel(); dismiss() }
-                        .disabled(importing || settingAside)
+    func body(content: Content) -> some View {
+        content
+            .disabled(working)
+            .interactiveDismissDisabled(working)
+            .overlay {
+                if working {
+                    ProgressView("Importing Markdown…")
+                        .padding(24)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                        .accessibilityIdentifier("notebook-import-progress")
                 }
             }
-        }
-        #if os(macOS)
-        .frame(minWidth: 480, idealWidth: 520, minHeight: 360, idealHeight: 480)
-        #endif
-        .interactiveDismissDisabled(importing || settingAside)
-        .fileImporter(isPresented: $choosingFiles, allowedContentTypes: [.item],
-                      allowsMultipleSelection: true, onCompletion: prepare)
-        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder],
-                      allowsMultipleSelection: false, onCompletion: prepare)
-        .onDisappear { preparation?.cancel() }
-        .confirmationDialog("Set Aside Interrupted Import?",
-                            isPresented: $confirmingSetAside, titleVisibility: .visible) {
-            Button("Set Aside Import") { setAside() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The saved import will be kept for recovery. Notes already imported stay unchanged. Starting a new import of the same files may create duplicates.")
-        }
+            #if os(iOS)
+            .sheet(isPresented: $picking) {
+                NotebookMarkdownDocumentPicker(choosingFolders: choosingFolder) { urls in
+                    picking = false
+                    importSelection(.success(urls))
+                } onCancel: {
+                    picking = false
+                }
+            }
+            #endif
+            .onChange(of: isPresented, initial: true) { _, presented in
+                guard presented else { return }
+                isPresented = false
+                if replica.hasPendingImport {
+                    recovering = true
+                } else {
+                    #if os(macOS)
+                    chooseOnMac()
+                    #else
+                    picking = true
+                    #endif
+                }
+            }
+            .alert("Interrupted Import", isPresented: $recovering) {
+                Button("Resume Import") { resume() }
+                    .accessibilityIdentifier("notebook-resume-import")
+                Button("Set Aside and Choose Again…") { setAsideAndChoose() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Resume the saved copy without selecting the source again. You can also set it aside for recovery and choose new files. Notes already imported keep their edits and placement. Importing the same files again may create duplicates.")
+            }
+            .alert("Couldn’t Import Markdown", isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "")
+            }
+            .alert("Import Complete", isPresented: Binding(
+                get: { completionMessage != nil },
+                set: { if !$0 { completionMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(completionMessage ?? "")
+            }
     }
 
-    private func prepare(_ result: Result<[URL], Error>) {
-        errorMessage = nil
+    private var markdownType: UTType {
+        UTType(importedAs: "net.daringfireball.markdown", conformingTo: .plainText)
+    }
+
+    #if os(macOS)
+    private func chooseOnMac() {
+        let panel = NSOpenPanel()
+        panel.title = String(localized: "Import Markdown")
+        panel.prompt = String(localized: "Import")
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.canCreateDirectories = false
+        panel.resolvesAliases = false
+        panel.allowedContentTypes = [markdownType, .folder]
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            if response == .OK { importSelection(.success(panel.urls)) }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            panel.begin(completionHandler: completion)
+        }
+    }
+    #endif
+
+    private func importSelection(_ result: Result<[URL], Error>) {
         switch result {
-        case .failure(let error): errorMessage = error.localizedDescription
+        case .failure(let error):
+            let cocoaError = error as NSError
+            if cocoaError.domain != NSCocoaErrorDomain
+                || cocoaError.code != CocoaError.userCancelled.rawValue {
+                errorMessage = error.localizedDescription
+            }
         case .success(let urls):
-            preparing = true
-            preparation = Task { @MainActor in
+            guard !urls.isEmpty, !working else { return }
+            working = true
+            Task { @MainActor in
                 let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
                 defer {
                     scoped.forEach { $0.stopAccessingSecurityScopedResource() }
-                    preparing = false
+                    working = false
                 }
                 do {
-                    let result = try await NotebookImportScanner().scan(urls: urls)
-                    try Task.checkCancellation()
-                    plan = result
-                } catch is CancellationError {
-                    return
-                } catch { errorMessage = error.localizedDescription }
+                    let plan = try await NotebookImportScanner().scan(urls: urls)
+                    guard !plan.entries.isEmpty else {
+                        errorMessage = String(localized: "No Markdown files or ordinary folders were found. Hidden items, links, packages, and other file types are skipped.")
+                        return
+                    }
+                    try await onImport(plan)
+                    if plan.skippedPaths.isEmpty {
+                        completionMessage = String(localized: "The selected files and folders were added at the top level of your notebook.")
+                    } else {
+                        completionMessage = String(localized: "The selected files and folders were added at the top level of your notebook. \(plan.skippedPaths.count) items were skipped. Only visible Markdown files and ordinary folders are imported; hidden items, links, packages, and other file types are skipped.")
+                    }
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
             }
         }
     }
 
-    private func apply(_ plan: NotebookImportPlan?) {
-        guard !importing else { return }
-        importing = true
-        errorMessage = nil
+    private func resume() {
+        guard !working else { return }
+        working = true
         Task { @MainActor in
-            defer { importing = false }
+            defer { working = false }
             do {
-                try await onImport(plan)
-                dismiss()
-            } catch { errorMessage = error.localizedDescription }
+                try await onImport(nil)
+                completionMessage = String(localized: "The interrupted import is complete.")
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
-    private func setAside() {
-        guard !importing, !settingAside else { return }
-        settingAside = true
+    private func setAsideAndChoose() {
+        guard !working else { return }
+        working = true
         Task { @MainActor in
-            defer { settingAside = false }
+            defer { working = false }
             do {
                 _ = try await replica.setAsidePendingImport()
-                plan = nil
-                errorMessage = nil
-                importWasSetAside = true
-            } catch { errorMessage = error.localizedDescription }
+                isPresented = true
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
+}
 
-    private func noteCount(_ plan: NotebookImportPlan) -> Int {
-        plan.entries.filter { $0.kind == .note }.count
+#if os(iOS)
+/// Each presentation creates the native picker for the chosen source kind.
+private struct NotebookMarkdownDocumentPicker: UIViewControllerRepresentable {
+    let choosingFolders: Bool
+    let onSelection: ([URL]) -> Void
+    let onCancel: () -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let markdown = UTType(
+            importedAs: "net.daringfireball.markdown", conformingTo: .plainText
+        )
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: choosingFolders ? [.folder] : [markdown],
+            asCopy: false
+        )
+        picker.allowsMultipleSelection = !choosingFolders
+        picker.shouldShowFileExtensions = true
+        picker.delegate = context.coordinator
+        return picker
     }
-    private func folderCount(_ plan: NotebookImportPlan) -> Int {
-        plan.entries.filter { $0.kind == .folder }.count
+
+    func updateUIViewController(
+        _ picker: UIDocumentPickerViewController, context: Context
+    ) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onSelection: onSelection, onCancel: onCancel)
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onSelection: ([URL]) -> Void
+        let onCancel: () -> Void
+
+        init(onSelection: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void) {
+            self.onSelection = onSelection
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(
+            _ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]
+        ) {
+            // The native picker dismisses itself. SwiftUI's sheet onDismiss
+            // can miss that transition, so deliver URLs after UIKit closes it.
+            controller.dismiss(animated: true) {
+                self.onSelection(urls)
+            }
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
+        }
     }
 }
+#endif
