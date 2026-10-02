@@ -4,6 +4,20 @@ import XCTest
 @testable import NoteCore
 
 final class SyncFailurePresentationTests: XCTestCase {
+    func testNewerNotebookRequiresAppUpdateWithoutRetryGuidance() {
+        let presentation = SyncFailurePresentation(
+            error: SyncError.updateRequired(requiredVersion: 3),
+            retryWillOccurAutomatically: true
+        )
+        XCTAssertEqual(String(localized: presentation.title), "Update required")
+        XCTAssertEqual(
+            String(localized: presentation.message),
+            "Update meh.md to resume iCloud sync. You can keep editing your notes on this device."
+        )
+        XCTAssertEqual(presentation.retryDisposition, .unavailable)
+        XCTAssertNil(presentation.actionHint)
+    }
+
     func testCancellationAllowsManualRetry() {
         for automaticRetry in [false, true] {
             let presentation = SyncFailurePresentation(

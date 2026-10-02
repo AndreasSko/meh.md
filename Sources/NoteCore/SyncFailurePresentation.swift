@@ -87,6 +87,12 @@ public struct SyncFailurePresentation: Equatable, Sendable {
 
         if let error = error as? SyncError {
             switch error {
+            case .updateRequired:
+                return Failure(
+                    "Update required",
+                    "Update meh.md to resume iCloud sync. You can keep editing your notes on this device.",
+                    disposition: .unavailable
+                )
             case .scopeChanged:
                 return Failure(
                     "Sync paused",

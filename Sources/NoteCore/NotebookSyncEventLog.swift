@@ -75,6 +75,7 @@ public final class NotebookSyncEventLog {
             case .scopeChanged: return "SyncError.scopeChanged"
             case .invalidCursor: return "SyncError.invalidCursor"
             case .localSaveRequired: return "SyncError.localSaveRequired"
+            case .updateRequired: return "SyncError.updateRequired"
             case .unavailable: return "SyncError.unavailable"
             }
         }

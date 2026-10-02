@@ -128,18 +128,23 @@ final class NotebookCatalogDocument {
         self.notebookID = notebookID
     }
 
-    convenience init(snapshot: NotebookCatalogSnapshot) throws {
-        try self.init(serializedData: snapshot.data)
+    convenience init(snapshot: NotebookCatalogSnapshot, forSync: Bool = false) throws {
+        let document = try Document(snapshot.data)
+        if forSync { try NotebookSyncFormat.validateIdentity(of: document, snapshot: snapshot) }
+        try self.init(validating: document, forSync: forSync)
         guard notebookID == snapshot.notebookID, heads == snapshot.heads else {
             throw NotebookCatalogError.identityMismatch
         }
     }
 
-    convenience init(serializedData: Data) throws {
-        try self.init(validating: Document(serializedData))
+    convenience init(serializedData: Data, forSync: Bool = false) throws {
+        try self.init(validating: Document(serializedData), forSync: forSync)
     }
 
-    private init(validating document: Document) throws {
+    private init(validating document: Document, forSync: Bool = false) throws {
+        if forSync {
+            try NotebookSyncFormat.requireSupported(NotebookSyncFormat.version(of: document))
+        }
         guard try document.getAll(obj: .ROOT, key: "schemaVersion") == [.Scalar(.Uint(1))] else {
             throw NotebookCatalogError.unsupportedSchemaVersion
         }

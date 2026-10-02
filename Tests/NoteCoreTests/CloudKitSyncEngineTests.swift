@@ -55,7 +55,7 @@ final class CloudKitSyncEngineTests: XCTestCase {
         XCTAssertEqual(result.acknowledgedIDs, [note.id])
     }
 
-    func testConflictIsAcknowledgedWithoutAnotherRequest() async throws {
+    func testConflictIsAcknowledgedFromServerRecord() async throws {
         let note = try makeNote("shared")
         let first = try await open("device-a")
         _ = try await first.bootstrap(proposing: try makeCatalog())
@@ -63,9 +63,8 @@ final class CloudKitSyncEngineTests: XCTestCase {
         let second = try await open("device-b")
         _ = try await second.bootstrap(proposing: try makeCatalog())
 
-        // The conflict carries the server record. Reading it again from
-        // inside the engine callback could stall on a retry cooldown.
-        server.inject(.failNextRead)
+        // The publication first reads the canonical format gate. The
+        // immutable snapshot conflict itself carries the server record.
         let result = try await second.publishBatch([note])
         XCTAssertNil(result.error)
         XCTAssertEqual(result.acknowledgedIDs, [note.id])
