@@ -111,7 +111,15 @@ struct NotebookSyncDetailsView: View {
                     Text("Last activity: \(progress.lastProgressAt.formatted(date: .omitted, time: .standard))")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if let failure = workspace.syncFailure {
+                if workspace.isSyncUpdateRequired {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Update required").font(.headline)
+                        Text("Update meh.md to resume iCloud sync. You can keep editing your notes on this device.")
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.callout)
+                    .accessibilityIdentifier("sync-update-required")
+                } else if let failure = workspace.syncFailure {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(failure.title).font(.headline)
                         Text(failure.message)
@@ -138,13 +146,15 @@ struct NotebookSyncDetailsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Sync Event Log") { showingEventLog = true }
                     .accessibilityIdentifier("notebook-sync-event-log")
-                Button(workspace.syncHalt?.isRecoverable == true
-                       ? "Retry Sync" : "Sync Now") {
-                    Task { await workspace.refresh(manual: true) }
+                if !workspace.isSyncUpdateRequired {
+                    Button(workspace.syncHalt?.isRecoverable == true
+                           ? "Retry Sync" : "Sync Now") {
+                        Task { await workspace.refresh(manual: true) }
+                    }
+                        .disabled(workspace.isRefreshing || !workspace.usesSync
+                                  || !workspace.canRetrySync)
+                        .accessibilityIdentifier("sync-now")
                 }
-                    .disabled(workspace.isRefreshing || !workspace.usesSync
-                              || !workspace.canRetrySync)
-                    .accessibilityIdentifier("sync-now")
             }
             .padding(20)
             .frame(idealWidth: 340, maxWidth: 420)
@@ -174,6 +184,7 @@ private struct NotebookSyncPresentation {
 
     var summary: String? {
         guard workspace.usesSync else { return "Sync not enabled" }
+        if workspace.isSyncUpdateRequired { return "Sync paused · update required" }
         if let deadline = retryDeadline {
             let seconds = max(1, Int(ceil(deadline.timeIntervalSince(now))))
             return "Sync paused · retry available in \(seconds)s"
@@ -202,7 +213,8 @@ private struct NotebookSyncPresentation {
     }
 
     var fraction: Double? {
-        guard workspace.isSyncing, retryDeadline == nil,
+        guard workspace.isSyncing, !workspace.isSyncUpdateRequired,
+              retryDeadline == nil,
               let progress = workspace.sync?.progress, progress.phase == .uploadingNotes,
               progress.totalNotes > 0 else { return nil }
         return min(1, max(0, Double(progress.completedNotes) / Double(progress.totalNotes)))
@@ -218,8 +230,9 @@ private struct NotebookSyncPresentation {
         return NotebookSyncIndicator(
             isEnabled: workspace.usesSync,
             isSyncing: workspace.isSyncing,
-            isRetryPaused: retryDeadline != nil,
-            hasError: failed || workspace.syncSetupError != nil
+            isRetryPaused: retryDeadline != nil || workspace.isSyncUpdateRequired,
+            hasError: workspace.isSyncUpdateRequired || failed
+                || workspace.syncSetupError != nil
                 || workspace.notificationRegistrationError != nil,
             hasPendingChanges: pending
         )
@@ -234,7 +247,7 @@ private struct NotebookSyncPresentation {
     }
 
     var showsActivity: Bool {
-        workspace.isSyncing && retryDeadline == nil
+        workspace.isSyncing && retryDeadline == nil && !workspace.isSyncUpdateRequired
     }
 
     var accessibilityLabel: String {
@@ -244,6 +257,7 @@ private struct NotebookSyncPresentation {
 
     var accessibilityValue: String {
         guard workspace.usesSync else { return "Not enabled" }
+        if workspace.isSyncUpdateRequired { return "Update required" }
         if let fraction {
             return "\(Int((fraction * 100).rounded())) percent complete"
         }
