@@ -75,39 +75,53 @@ public actor NotebookImportScanner {
             let name = selection.url.lastPathComponent
             if shouldSkip(selection.values, name: name) {
                 skippedPaths.append(name)
-            } else if selection.values.isDirectory == true {
-                let folderID = UUID()
-                try validate(name: name, path: name)
-                entries.append(
-                    NotebookImportEntry(
-                        id: folderID,
-                        kind: .folder,
-                        name: name,
-                        parentID: nil,
-                        text: nil,
-                        createdAt: selection.values.creationDate,
-                        modifiedAt: selection.values.contentModificationDate
-                    )
-                )
-                try scanDirectory(
-                    selection.url,
-                    parentID: folderID,
-                    relativePath: name,
-                    entries: &entries,
-                    skippedPaths: &skippedPaths
-                )
-            } else if selection.values.isRegularFile == true,
-                isMarkdown(selection.url)
-            {
-                try appendNote(
-                    at: selection.url,
-                    parentID: nil,
-                    relativePath: name,
-                    entries: &entries
-                )
-            } else {
-                skippedPaths.append(name)
+                continue
             }
+            var coordinationError: NSError?
+            var scanningError: Error?
+            // File providers may download or move the source during handoff.
+            // Coordinate the complete read before releasing its scoped URL.
+            NSFileCoordinator().coordinate(
+                readingItemAt: selection.url, options: [], error: &coordinationError
+            ) { coordinatedURL in
+                do {
+                    if selection.values.isDirectory == true {
+                        let folderID = UUID()
+                        try validate(name: name, path: name)
+                        entries.append(
+                            NotebookImportEntry(
+                                id: folderID,
+                                kind: .folder,
+                                name: name,
+                                parentID: nil,
+                                text: nil,
+                                createdAt: selection.values.creationDate,
+                                modifiedAt: selection.values.contentModificationDate
+                            )
+                        )
+                        try scanDirectory(
+                            coordinatedURL,
+                            parentID: folderID,
+                            relativePath: name,
+                            entries: &entries,
+                            skippedPaths: &skippedPaths
+                        )
+                    } else if selection.values.isRegularFile == true,
+                        isMarkdown(coordinatedURL)
+                    {
+                        try appendNote(
+                            at: coordinatedURL,
+                            parentID: nil,
+                            relativePath: name,
+                            entries: &entries
+                        )
+                    } else {
+                        skippedPaths.append(name)
+                    }
+                } catch { scanningError = error }
+            }
+            if let coordinationError { throw coordinationError }
+            if let scanningError { throw scanningError }
         }
 
         return NotebookImportPlan(
