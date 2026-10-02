@@ -160,6 +160,85 @@ final class NotebookCatalogDocument {
         _ = try recentStates()
         _ = try legacyMigration()
         _ = try historicalLinkLocations()
+        _ = try templateMetadata()
+    }
+
+    /// Optional flat registers are readable by older catalogs and merge
+    /// independently when devices configure different sources or fields.
+    func templateMetadata() throws -> NotebookTemplateMetadata {
+        var result = NotebookTemplateMetadata()
+        for key in document.keys(obj: .ROOT).sorted() where key.hasPrefix("template.") {
+            let parts = key.split(separator: ".")
+            guard parts.count == 3,
+                  let id = UUID(uuidString: String(parts[2])),
+                  id.uuidString == parts[2] else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            let field = String(parts[1])
+            for value in try document.getAll(obj: .ROOT, key: key) {
+                switch (field, value) {
+                case ("source", .Scalar(.Boolean)): break
+                case ("destination", .Scalar(.Null)), ("filename", .Scalar(.Null)): break
+                case ("destination", .Scalar(.String(let value)))
+                    where value == "root" || UUID(uuidString: value)?.uuidString == value: break
+                case ("filename", .Scalar(.String(let pattern))):
+                    do {
+                        _ = try NotebookTemplateFilename.preview(
+                            pattern: pattern, templateName: "a.md")
+                    } catch { throw NotebookCatalogError.invalidDocument }
+                default: throw NotebookCatalogError.invalidDocument
+                }
+            }
+            let winner = try document.get(obj: .ROOT, key: key)
+            var settings = result.settings[id] ?? NotebookTemplateSettings()
+            switch (field, winner) {
+            case ("source", .Scalar(.Boolean(true))): result.sources.insert(id)
+            case ("destination", .Scalar(.String("root"))): settings.destination = .root
+            case ("destination", .Scalar(.String(let value))):
+                settings.destination = .folder(UUID(uuidString: value)!)
+            case ("filename", .Scalar(.String(let pattern))): settings.filenamePattern = pattern
+            default: break
+            }
+            result.settings[id] = settings
+        }
+        return result
+    }
+
+    func setTemplateSource(_ id: UUID, enabled: Bool) throws {
+        guard try placements().contains(where: {
+            $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+        }) else { throw NotebookTemplateError.sourceUnavailable }
+        try document.put(obj: .ROOT, key: "template.source.\(id.uuidString)",
+                         value: .Boolean(enabled))
+    }
+
+    func setTemplateSettings(_ settings: NotebookTemplateSettings, for id: UUID) throws {
+        guard let item = try placements().first(where: {
+            $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+        }) else { throw NotebookTemplateError.sourceUnavailable }
+        if let pattern = settings.filenamePattern {
+            _ = try NotebookTemplateFilename.preview(pattern: pattern, templateName: item.item.name)
+        }
+        let destination: ScalarValue
+        switch settings.destination {
+        case .inherit: destination = .Null
+        case .root: destination = .String("root")
+        case .folder(let folderID):
+            guard try placements().contains(where: {
+                $0.item.id == folderID && $0.item.kind == .folder && !$0.isInTrash
+                    && !$0.item.isPermanentlyDeleted
+            }) else { throw NotebookTemplateError.destinationUnavailable }
+            destination = .String(folderID.uuidString)
+        }
+        let previous = try templateMetadata().settings[id] ?? NotebookTemplateSettings()
+        if settings.destination != previous.destination {
+            try document.put(obj: .ROOT, key: "template.destination.\(id.uuidString)",
+                             value: destination)
+        }
+        if settings.filenamePattern != previous.filenamePattern {
+            try document.put(obj: .ROOT, key: "template.filename.\(id.uuidString)",
+                             value: settings.filenamePattern.map { .String($0) } ?? .Null)
+        }
     }
 
     private struct LinkLocationRecord: Codable {

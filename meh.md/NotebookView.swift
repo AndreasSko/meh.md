@@ -133,6 +133,8 @@ struct NotebookView: View {
     @State private var searchLandingPosition: MarkdownEditorPosition?
     @State private var showingImport = false
     @State private var showingSettings = false
+    @State private var showingTemplates = false
+    @State private var pendingTemplateNoteID: UUID?
     @State private var showingTrash = false
     @State private var showingTextSize = false
     @State private var historyBrowser: NoteHistoryBrowserState?
@@ -188,6 +190,8 @@ struct NotebookView: View {
     #if os(iOS)
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
         @State private var quickActionRequests = NotebookQuickActionRequests.shared
+        @State private var pendingTemplateQuickAction = false
+        @State private var awaitingQuickActionSheetDismissal = false
         @State private var browserScrollView = NotebookBrowserScrollReference()
         @State private var browserViewport: NotebookBrowserViewport?
         @State private var browserReturnViewport: NotebookBrowserViewport?
@@ -465,13 +469,7 @@ struct NotebookView: View {
                             #if os(iOS)
                             if horizontalSizeClass == .compact {
                                 ToolbarItem {
-                                    Button {
-                                        createDefaultNote()
-                                    } label: {
-                                        Label("New Note", systemImage: "plus")
-                                    }
-                                    .disabled(busy)
-                                    .accessibilityIdentifier("notebook-new-item")
+                                    libraryNewNote
                                 }
                             }
                             #endif
@@ -789,11 +787,14 @@ struct NotebookView: View {
             if phase != .active { rememberEditorPosition() }
         }
         #if os(iOS)
-        .onChange(of: quickActionRequests.pendingNewNotes, initial: true) { _, _ in
-            handlePendingNewNoteAction()
+        .onChange(of: quickActionRequests.pendingActionCount, initial: true) { _, _ in
+            handlePendingQuickAction()
         }
         .onChange(of: busy) { _, isBusy in
-            if !isBusy { handlePendingNewNoteAction() }
+            if !isBusy { handlePendingQuickAction() }
+        }
+        .onChange(of: deletionSelection) { _, selection in
+            if selection == nil { handlePendingQuickAction() }
         }
         #endif
         .onDisappear {
@@ -864,7 +865,7 @@ struct NotebookView: View {
         .notebookMarkdownImporter(
             isPresented: $showingImport, replica: replica, onImport: importMarkdown
         )
-        .sheet(isPresented: $showingTrash, onDismiss: presentSharedImport) {
+        .sheet(isPresented: $showingTrash, onDismiss: finishTemplatePresentation) {
             NavigationStack {
                 trashView
             }
@@ -872,11 +873,19 @@ struct NotebookView: View {
             .frame(minWidth: 400, idealWidth: 560, minHeight: 360, idealHeight: 540)
             #endif
         }
-        .sheet(isPresented: $showingSettings, onDismiss: presentSharedImport) {
+        .sheet(isPresented: $showingTemplates, onDismiss: finishTemplatePresentation) {
+            NotebookTemplatePicker(
+                replica: replica,
+                onCreate: createTemplateNote,
+                onOpenNote: openTemplateSource
+            )
+        }
+        .sheet(isPresented: $showingSettings, onDismiss: finishTemplatePresentation) {
             NotebookSettingsView(replica: replica,
                                  workspace: workspace ?? NotebookWorkspace.shared,
                                  onImport: importMarkdown,
-                                 beforeExport: flushEditor)
+                                 beforeExport: flushEditor,
+                                 onOpenNote: openTemplateSource)
         }
         .sheet(item: $sharedImport, onDismiss: finishSharedImport) { request in
             NotebookSharedImportView(plan: request.plan, replica: replica) { parentID in
@@ -887,6 +896,7 @@ struct NotebookView: View {
             guard incomingImports?.requests.first != nil else { return }
             if showingSettings { showingSettings = false }
             else if showingTrash { showingTrash = false }
+            else if showingTemplates, !busy { showingTemplates = false }
             else { presentSharedImport() }
         }
         .onChange(of: busy) { _, busy in
@@ -925,7 +935,7 @@ struct NotebookView: View {
             if selectedID != nil { preferredCompactColumn = .detail }
             busy = false
             #if os(iOS)
-            handlePendingNewNoteAction()
+            handlePendingQuickAction()
             #endif
         }
         .task(id: navigationState.recentNoteIDs) {
@@ -1340,6 +1350,15 @@ struct NotebookView: View {
             setRecentPinned(!pinned, for: id)
         })
         menuActions.append(UIAction(
+            title: replica.isTemplateSource(id)
+                ? String(localized: "Stop Using as Template")
+                : String(localized: "Use as Template"),
+            image: UIImage(systemName: "doc.on.doc"),
+            attributes: busy ? .disabled : []
+        ) { _ in
+            setTemplateSource(id, enabled: !replica.isTemplateSource(id))
+        })
+        menuActions.append(UIAction(
             title: String(localized: "Move to Trash"),
             attributes: .destructive
         ) { _ in
@@ -1732,6 +1751,7 @@ struct NotebookView: View {
     private func creationActions(parentID: UUID?) -> some View {
         Button("New Note") { createItem(kind: .note, parentID: parentID) }
             .disabled(busy)
+        templateCreationButton
         Button("New Folder") { createItem(kind: .folder, parentID: parentID) }
             .disabled(busy)
     }
@@ -1756,6 +1776,19 @@ struct NotebookView: View {
             Divider()
         }
         if allowsRename { Button("Rename…") { beginRenaming(placement) } }
+        if !placement.isInTrash {
+            let registered = replica.isTemplateSource(placement.item.id)
+            let title: LocalizedStringKey = placement.item.kind == .folder
+                ? (registered ? "Stop Using as Template Folder" : "Use as Template Folder")
+                : (registered ? "Stop Using as Template" : "Use as Template")
+            Button {
+                setTemplateSource(placement.item.id, enabled: !registered)
+            } label: {
+                Label(title, systemImage: "doc.on.doc")
+            }
+            .disabled(busy)
+            .accessibilityIdentifier("notebook-use-as-template-\(placement.item.id)")
+        }
         Button("Move…") {
             beginMoving([placement.item.id], fromTrash: placement.isInTrash)
         }
@@ -1875,15 +1908,96 @@ struct NotebookView: View {
     }
 
     #if os(iOS)
-    private func handlePendingNewNoteAction() {
-        guard restoredNavigation, !busy, quickActionRequests.takeNewNote()
-        else { return }
-        createDefaultNote()
+    private func handlePendingQuickAction() {
+        guard restoredNavigation, !busy else { return }
+        if pendingTemplateQuickAction {
+            presentPendingTemplateQuickAction()
+            return
+        }
+        guard let action = quickActionRequests.takeNextAction() else { return }
+        switch action {
+        case .newNote: createDefaultNote()
+        case .newFromTemplate:
+            pendingTemplateQuickAction = true
+            presentPendingTemplateQuickAction()
+        }
+    }
+
+    private func presentPendingTemplateQuickAction() {
+        guard pendingTemplateQuickAction, !busy, !awaitingQuickActionSheetDismissal,
+              deletionSelection == nil else { return }
+        if showingTemplates {
+            pendingTemplateQuickAction = false
+            return
+        }
+        if showingSettings || showingTrash {
+            // Present only after SwiftUI has completed the existing dismissal.
+            awaitingQuickActionSheetDismissal = true
+            showingSettings = false
+            showingTrash = false
+            return
+        }
+        pendingTemplateQuickAction = false
+        showTemplates()
     }
     #endif
 
     private func createDefaultNote() {
         createItem(kind: .note, parentID: nil, usesDefaultDestination: true)
+    }
+
+    private func showTemplates() {
+        perform {
+            try await flushEditor()
+            showingTemplates = true
+        }
+    }
+
+    private func setTemplateSource(_ id: UUID, enabled: Bool) {
+        perform {
+            try await flushEditor()
+            try await replica.setTemplateSource(id, enabled: enabled)
+        }
+    }
+
+    private func createTemplateNote(_ sourceID: UUID) async throws {
+        guard !busy else { throw NotebookReplicaError.busy }
+        busy = true
+        defer { busy = false }
+        try await flushEditor()
+        let id = try await replica.createNoteFromTemplate(sourceID)
+        if showingTemplates {
+            pendingTemplateNoteID = id
+        } else {
+            // A completed write must still open its note if presentation
+            // ended while storage was saving; never leave a stale route.
+            reveal(id)
+            try await selectNote(id)
+        }
+    }
+
+    private func openTemplateSource(_ id: UUID) {
+        pendingTemplateNoteID = id
+        showingSettings = false
+        showingTemplates = false
+    }
+
+    private func finishTemplatePresentation() {
+        openPendingTemplateNote()
+        #if os(iOS)
+        awaitingQuickActionSheetDismissal = false
+        handlePendingQuickAction()
+        #endif
+        presentSharedImport()
+    }
+
+    private func openPendingTemplateNote() {
+        guard let id = pendingTemplateNoteID else { return }
+        pendingTemplateNoteID = nil
+        perform {
+            reveal(id)
+            try await selectNote(id)
+        }
     }
 
     private func setDefaultNewNoteParentID(_ id: UUID?) {
@@ -2211,7 +2325,7 @@ struct NotebookView: View {
     }
 
     private func presentSharedImport() {
-        guard sharedImportID == nil, !busy, !showingSettings, !showingTrash,
+        guard sharedImportID == nil, !busy, !showingSettings, !showingTemplates, !showingTrash,
               !showingImport, movingIDs.isEmpty, !replica.hasPendingImport,
               let request = incomingImports?.requests.first else { return }
         sharedImportID = request.id
@@ -2512,11 +2626,33 @@ struct NotebookView: View {
     #endif
 
     private var libraryNewNote: some View {
-        Button { createDefaultNote() } label: {
+        #if os(iOS)
+        NotebookNewNoteButton(
+            isEnabled: !busy, onNewNote: createDefaultNote,
+            onNewFromTemplate: showTemplates
+        )
+        .frame(width: 44, height: 44)
+        #else
+        Menu {
+            Button("New Note") { createDefaultNote() }
+            templateCreationButton
+        } label: {
             Label("New Note", systemImage: "plus")
+        } primaryAction: {
+            createDefaultNote()
         }
         .disabled(busy)
         .accessibilityIdentifier("notebook-new-item")
+        .accessibilityLabel("New Note")
+        #endif
+    }
+
+    private var templateCreationButton: some View {
+        Button(action: showTemplates) {
+            Label("New from Template…", systemImage: "doc.on.doc")
+        }
+        .disabled(busy)
+        .accessibilityIdentifier("notebook-new-from-template")
     }
 
     private var applicationMenu: some View {
@@ -2535,6 +2671,7 @@ struct NotebookView: View {
             .accessibilityIdentifier("notebook-select-items")
             sortMenu(parentID: nil, label: "Sort Files Once")
                 .accessibilityIdentifier("notebook-sort-root")
+            templateCreationButton
             Button("New Folder") { createItem(kind: .folder, parentID: nil) }
             browserUndoActions
             Divider()
@@ -2578,7 +2715,7 @@ struct NotebookView: View {
     }
 
     private func showQuickOpen() {
-        guard !busy, !search.showingQuickOpen, !showingSettings,
+        guard !busy, !search.showingQuickOpen, !showingSettings, !showingTemplates,
               !showingTrash, !showingImport else { return }
         resumeEditorAfterQuickOpen = editorNavigation.captureHasEditingFocus?() == true
         // Commit native marked-text safely before moving focus to the picker.

@@ -32,6 +32,8 @@ and the evidence collected along the way.
 
 - [Notebook core](notebook-core-contract.md): identity, folders, and Trash.
 - [Local search](notebook-search.md): matching, Quick Open, and native Find.
+- [Note templates](notebook-templates.md): reusable notes, recursive template
+  folders, and destination and filename defaults.
 - [Navigation and preview](notebook-navigation-preview.md): app interaction
   and the isolated Debug workspace.
 - [Markdown import](notebook-import-contract.md): source-preserving import.

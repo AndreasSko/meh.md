@@ -91,6 +91,9 @@ public final class NotebookReplica {
     public private(set) var placements: [NotebookPlacement] = []
     /// The active destination for global New Note actions. `nil` means Root.
     public private(set) var defaultNewNoteParentID: UUID?
+    public private(set) var templateSources: [NotebookTemplateSource] = []
+    public private(set) var templates: [NotebookTemplate] = []
+    private var storedTemplateSettings: [UUID: NotebookTemplateSettings] = [:]
     public private(set) var recentNotes: [NotebookRecentNote] = []
     /// All eligible recent notes, with pins first and no ordinary-note cap.
     public private(set) var allRecentNotes: [NotebookRecentNote] = []
@@ -240,6 +243,89 @@ public final class NotebookReplica {
         try await load()
         guard catalog == nil else { return }
         try await saveCatalog(NotebookCatalogDocument())
+    }
+
+    public func templateSettings(for id: UUID) -> NotebookTemplateSettings {
+        storedTemplateSettings[id] ?? NotebookTemplateSettings()
+    }
+
+    public func isTemplateSource(_ id: UUID) -> Bool {
+        templateSources.contains { $0.id == id }
+    }
+
+    public func setTemplateSource(_ id: UUID, enabled: Bool) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.setTemplateSource(id, enabled: enabled)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    public func setTemplateSettings(_ settings: NotebookTemplateSettings, for id: UUID) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.setTemplateSettings(settings, for: id)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    public func createNoteFromTemplate(
+        _ id: UUID, name: String? = nil,
+        destination: NotebookTemplateDestination? = nil
+    ) async throws -> UUID {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            try self.ensureAlive(id)
+            // The durable deletion ledger may be newer than the catalog after
+            // a failed catalog save. Recheck eligibility against visible items.
+            let eligible = try catalog.templateMetadata().projection(self.placements).templates
+            guard let template = eligible.first(where: { $0.id == id }) else {
+                throw NotebookTemplateError.sourceUnavailable
+            }
+            let text: String
+            if let session = self.sessions[id] {
+                if let load = self.sessionLoads[id] { await load.value }
+                guard session.isEditingEnabled, let snapshot = session.currentSnapshot,
+                      snapshot.noteID == id else { throw NotebookReplicaError.noteUnavailable(id) }
+                text = try NoteDocument(snapshot: snapshot).text
+            } else {
+                switch await self.noteStorage(id).load() {
+                case .current(let snapshot) where snapshot.noteID == id:
+                    text = try NoteDocument(snapshot: snapshot).text
+                default: throw NotebookReplicaError.noteUnavailable(id)
+                }
+            }
+            let parentID: UUID?
+            switch destination ?? template.effectiveSettings.destination {
+            case .inherit: parentID = try catalog.defaultNewNoteParentID()
+            case .root: parentID = nil
+            case .folder(let folderID):
+                guard self.placements.contains(where: {
+                    $0.item.id == folderID && $0.item.kind == .folder && !$0.isInTrash
+                        && !$0.item.isPermanentlyDeleted
+                }) else { throw NotebookTemplateError.destinationUnavailable }
+                parentID = folderID
+            }
+            let proposedName: String
+            if let name {
+                proposedName = try NotebookTemplateFilename.literal(name)
+            } else {
+                proposedName = try NotebookTemplateFilename.preview(
+                    pattern: template.effectiveSettings.filenamePattern,
+                    templateName: template.name)
+            }
+            let existing = self.placements.filter { !$0.isInTrash && $0.parentID == parentID }
+                .flatMap { [$0.item.name, $0.displayName] }
+            let uniqueName = NotebookTemplateFilename.unique(proposedName, existing: existing)
+            let note = try NoteDocument(text: text)
+            let next = try catalog.fork()
+            try next.add(id: note.noteID, kind: .note, name: uniqueName, parentID: parentID)
+            try await self.noteStorage(note.noteID).save(note.snapshot())
+            try await self.persistCatalog(next)
+            return note.noteID
+        }
     }
 
     public func createNote(name: String, text: String = "", parentID: UUID? = nil) async throws
@@ -1517,6 +1603,11 @@ public final class NotebookReplica {
         catalogSnapshot = snapshot
         linkLocationHistory = try document.historicalLinkLocations()
         placements = nextPlacements
+        let templateMetadata = try document.templateMetadata()
+        let templateProjection = templateMetadata.projection(nextPlacements)
+        templateSources = templateProjection.sources
+        templates = templateProjection.templates
+        storedTemplateSettings = templateMetadata.settings
         defaultNewNoteParentID = try document.defaultNewNoteParentID()
         try updateRecentProjection(from: document, placements: nextPlacements)
         searchBodyGeneration &+= 1
@@ -1567,6 +1658,13 @@ public final class NotebookReplica {
     private func applyRememberedDeletions() {
         for id in rememberedDeletions { sessions[id]?.markPermanentlyDeleted() }
         placements.removeAll { rememberedDeletions.contains($0.item.id) }
+        // Refresh even if recording the catalog marker subsequently fails.
+        // Removing a registered ancestor also removes its inherited templates.
+        let metadata = NotebookTemplateMetadata(
+            sources: Set(templateSources.map(\.id)), settings: storedTemplateSettings)
+        let projection = metadata.projection(placements)
+        templateSources = projection.sources
+        templates = projection.templates
         searchBodyGeneration &+= 1
     }
 
