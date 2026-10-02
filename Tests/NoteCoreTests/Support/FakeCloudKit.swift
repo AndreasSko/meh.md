@@ -23,6 +23,9 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         case failSave(CKError.Code, matching: @Sendable (CKRecord.ID) -> Bool)
         /// The next direct record read fails with `networkFailure`.
         case failNextRead
+        /// A future client wins its control CAS after this device reads the
+        /// old tag but before the device's atomic publication is validated.
+        case advanceCanonicalBeforeSave(requiredVersion: UInt64)
         /// The next engine send stores its batch, then the app dies before
         /// the sent-changes event is delivered.
         case crashAfterServerSave
@@ -49,6 +52,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     private var faults: [Fault] = []
     private var isOffline = false
     private var engines: [FakeSyncEngine] = []
+    private let changeTagKey = "fakeServerChangeTag"
 
     init(directory: URL) throws {
         assetDirectory = directory.appending(path: "fake-cloudkit-assets")
@@ -161,24 +165,102 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         deleteResults: [CKRecord.ID: Result<Void, any Error>]
     ) {
         try checkReachable()
-        var saveResults: [CKRecord.ID: Result<CKRecord, any Error>] = [:]
-        for record in recordsToSave {
-            saveResults[record.recordID] = try store(record)
-                .mapError { $0 as any Error }
+        let advance = takeFault { item in
+            if case .advanceCanonicalBeforeSave = item { return true }
+            return false
         }
-        let deleteResults = locked {
-            Dictionary(uniqueKeysWithValues: recordIDsToDelete.map { id in
-                guard records.removeValue(forKey: id) != nil else {
-                    return (id, Result<Void, any Error>.failure(
-                        CKError(.unknownItem)
+        let fault = takeFault { item in
+            guard case let .failSave(_, matching) = item else { return false }
+            return recordsToSave.contains { matching($0.recordID) }
+        }
+        return try locked {
+            if case let .advanceCanonicalBeforeSave(version)? = advance {
+                let canonicalID = CKRecord.ID(
+                    recordName: CloudKitTransportMode.notebook.bootstrapName,
+                    zoneID: zoneID
+                )
+                if let existing = records[canonicalID] {
+                    let advanced = existing.copy() as! CKRecord
+                    advanced[CloudKitNotebookFormatGate.readerKey] =
+                        NSNumber(value: version)
+                    advanced[CloudKitNotebookFormatGate.writerKey] =
+                        NSNumber(value: version)
+                    advanced[CloudKitNotebookFormatGate.catalogKey] =
+                        NSNumber(value: version)
+                    advanced[CloudKitNotebookFormatGate.migrationKey] =
+                        String(repeating: "d", count: 64)
+                    advanced[changeTagKey] = UUID().uuidString
+                    records[canonicalID] = advanced
+                    sequence += 1
+                    changes.append(Change(
+                        sequence: sequence, recordID: canonicalID
                     ))
                 }
+            }
+            var failures: [CKRecord.ID: CKError] = [:]
+            for record in recordsToSave {
+                if case let .failSave(code, matching)? = fault,
+                   matching(record.recordID) {
+                    failures[record.recordID] = CKError(code)
+                } else if !zoneExists || record.recordID.zoneID != zoneID {
+                    failures[record.recordID] = CKError(.zoneNotFound)
+                } else if let existing = records[record.recordID],
+                          savePolicy == .ifServerRecordUnchanged,
+                          (record[changeTagKey] as? String) !=
+                            (existing[changeTagKey] as? String) {
+                    failures[record.recordID] = CKError(
+                        .serverRecordChanged,
+                        userInfo: [CKRecordChangedErrorServerRecordKey:
+                            try serverCopy(of: existing)]
+                    )
+                }
+            }
+            for id in recordIDsToDelete where records[id] == nil {
+                failures[id] = CKError(.unknownItem)
+            }
+            if atomically && !failures.isEmpty {
+                let saves = Dictionary(uniqueKeysWithValues:
+                    recordsToSave.map { record in
+                        (record.recordID, Result<CKRecord, any Error>.failure(
+                            failures[record.recordID] ?? CKError(.batchRequestFailed)
+                        ))
+                    })
+                let deletes = Dictionary(uniqueKeysWithValues:
+                    recordIDsToDelete.map { id in
+                        (id, Result<Void, any Error>.failure(
+                            failures[id] ?? CKError(.batchRequestFailed)
+                        ))
+                    })
+                return (saves, deletes)
+            }
+            var saves: [CKRecord.ID: Result<CKRecord, any Error>] = [:]
+            for record in recordsToSave {
+                if let error = failures[record.recordID] {
+                    saves[record.recordID] = .failure(error)
+                    continue
+                }
+                let stored = try retainAssets(of: record)
+                stored[changeTagKey] = UUID().uuidString
+                records[record.recordID] = stored
                 sequence += 1
-                changes.append(Change(sequence: sequence, recordID: id))
-                return (id, .success(()))
-            })
+                changes.append(Change(
+                    sequence: sequence, recordID: record.recordID
+                ))
+                saves[record.recordID] = .success(try serverCopy(of: stored))
+            }
+            var deletes: [CKRecord.ID: Result<Void, any Error>] = [:]
+            for id in recordIDsToDelete {
+                if let error = failures[id] {
+                    deletes[id] = .failure(error)
+                } else {
+                    records.removeValue(forKey: id)
+                    sequence += 1
+                    changes.append(Change(sequence: sequence, recordID: id))
+                    deletes[id] = .success(())
+                }
+            }
+            return (saves, deletes)
         }
-        return (saveResults, deleteResults)
     }
 
     func recordZones(
@@ -242,10 +324,9 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
             guard zoneExists, record.recordID.zoneID == zoneID else {
                 return .failure(CKError(.zoneNotFound))
             }
-            if let existing = records[record.recordID] {
-                // The transport always sends records without system fields,
-                // so an existing record is a conflict, as with CloudKit's
-                // default `ifServerRecordUnchanged` policy.
+            if let existing = records[record.recordID],
+               (record[changeTagKey] as? String) !=
+                (existing[changeTagKey] as? String) {
                 return .failure(CKError(
                     .serverRecordChanged,
                     userInfo: [
@@ -255,6 +336,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
                 ))
             }
             let stored = try retainAssets(of: record)
+            stored[changeTagKey] = UUID().uuidString
             records[record.recordID] = stored
             sequence += 1
             changes.append(Change(sequence: sequence, recordID: record.recordID))
@@ -397,25 +479,47 @@ final class FakeSyncEngine: @unchecked Sendable, CloudKitSyncEngineClient {
                     pending: pending, from: self
                   ),
                   !batch.recordsToSave.isEmpty else { break }
+            let allowed = Set(pending.compactMap { change ->
+                CKRecord.ID? in
+                guard case let .saveRecord(id) = change else {
+                    return nil
+                }
+                return id
+            })
+            guard batch.recordsToSave.allSatisfy({
+                allowed.contains($0.recordID)
+            }), batch.recordIDsToDelete.allSatisfy({
+                allowed.contains($0)
+            }) else { throw SyncError.invalidRecord }
             let crashes = server.takeFault {
                 if case .crashAfterServerSave = $0 { return true }
                 return false
             } != nil
+            let results = try await server.modifyRecords(
+                saving: batch.recordsToSave,
+                deleting: batch.recordIDsToDelete,
+                savePolicy: .ifServerRecordUnchanged,
+                atomically: batch.atomicByZone
+            )
             var saved: [CKRecord] = []
             var failed: [CloudKitFailedRecordSave] = []
             for record in batch.recordsToSave {
-                switch try server.store(record) {
+                guard let result = results.saveResults[record.recordID] else {
+                    throw CKError(.internalError)
+                }
+                switch result {
                 case let .success(serverRecord):
                     saved.append(serverRecord)
                     remove(pendingRecordZoneChanges: [.saveRecord(record.recordID)])
                 case let .failure(error):
-                    failed.append(.init(record: record, error: error))
-                    if Self.transientCodes.contains(error.code) {
-                        transientError = transientError ?? error
-                    } else {
-                        remove(
-                            pendingRecordZoneChanges: [.saveRecord(record.recordID)]
-                        )
+                    guard let cloudError = error as? CKError else { throw error }
+                    failed.append(.init(record: record, error: cloudError))
+                    if Self.transientCodes.contains(cloudError.code) {
+                        transientError = transientError ?? cloudError
+                    } else if cloudError.code != .batchRequestFailed {
+                        remove(pendingRecordZoneChanges: [
+                            .saveRecord(record.recordID)
+                        ])
                     }
                 }
             }

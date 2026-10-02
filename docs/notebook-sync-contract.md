@@ -29,6 +29,13 @@ Version 1 clients cannot consume these catalog records. CloudKit transport
 state rejects reuse across protocol modes; account/workspace scope changes
 fail before exchanging notebook data.
 
+The catalog data format is independent of that record protocol. The
+[upgrade safety release](notebook-upgrade-safety.md) retains catalog format 1
+and introduces a conditional CloudKit publication boundary for future
+upgrades. Devices running this release pause sync with **Update required**
+when the remote notebook needs a newer reader, while existing local notes
+remain editable. Pending edits and history survive the pause.
+
 ## Local durability and exchange ordering
 
 `NotebookReplica` stores the catalog and ID-based note files. It loads editor
