@@ -34,7 +34,9 @@ and the evidence collected along the way.
 - [Local search](notebook-search.md): matching, Quick Open, and native Find.
 - [Navigation and preview](notebook-navigation-preview.md): app interaction
   and the isolated Debug workspace.
-- [Markdown import](notebook-import-contract.md): source-preserving import.
+- [File import](notebook-import-contract.md): source-preserving mixed import.
+- [Attachments](attachment-storage.md): large files beside notes, preview,
+  export, and independent CloudKit transfers.
 - [Markdown copies](markdown-copy-contract.md): portable, one-way output.
 - [Markdown backups](markdown-backups.md): local schedule and retention.
 - [Local durability](durability-contract.md): per-note save and recovery rules.

@@ -74,6 +74,39 @@ let notebookTransport = try await CloudKitSyncTransport.makeNotebook(
 )
 ```
 
+Attachments use a second private-database transport. Create it only after the
+notebook transport has identified the iCloud account, and pass that account's
+record name to the attachment factory:
+
+```swift
+let attachmentTransport = try await CloudKitAttachmentTransport.make(
+    containerIdentifier: "iCloud.de.andreas-sk.meh-md",
+    expectedUserRecordName: notebookAccountRecordName
+)
+```
+
+Its scope contains the container, private database, account record name, and
+separate zone `meh-md-attachments-v1`. The factory and each transfer check the
+current account. Attachment work has its own durable progress and retry state;
+a failed large-file transfer does not hold up Markdown or catalog exchange.
+
+The attachment zone uses record type `NotebookAttachmentV1`. Each record has a
+deterministic ID made from the notebook UUID and attachment UUID. The fields
+are `notebookID` (String), `attachmentID` (String), `sha256` (String),
+`byteCount` (Int64), `deleted` (Int64), and `asset` (CKAsset). Live records
+have `deleted = 0` and a file-backed asset. A permanent deletion saves
+`deleted = 1` at the same ID and clears the asset. This prevents a late upload
+from recreating the file. Downloads fetch an individual record only when its
+file is opened, then verify metadata, checksum, and size before publishing it
+locally. Upload retries fetch and verify an existing complete record before
+accepting it as already uploaded.
+
+The new record schema still needs Production deployment in CloudKit Console.
+The transport creates each account's zone at runtime. Local codec tests and
+unsigned builds do not establish that
+Production attachment transfers work; use signed cross-device builds to check
+upload, on-demand download, retry, and permanent deletion.
+
 The iCloud Dev scheme needs no launch variables. A fresh installation must be
 online to join the canonical version 2 notebook; setup failure offers a retry.
 An established activated notebook opens before account discovery completes and

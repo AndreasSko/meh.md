@@ -138,6 +138,7 @@ struct NotebookView: View {
     @State private var historyBrowser: NoteHistoryBrowserState?
     @State private var isLoadingHistory = false
     @State private var historyLoadTask: Task<Void, Never>?
+    @State private var selectedAttachmentID: UUID?
     @AppStorage("editor.fontSize") private var editorFontSize = 17.0
     @AppStorage("editor.fontFamily") private var editorFontFamilyRaw =
         EditorFontFamily.system.rawValue
@@ -320,7 +321,30 @@ struct NotebookView: View {
 
     private var notebookDetail: some View {
             Group {
-                if let session, let selectedID {
+                if let selectedAttachmentID,
+                   let placement = replica.placements.first(where: {
+                       $0.item.id == selectedAttachmentID
+                   }) {
+                    NotebookAttachmentView(
+                        placement: placement,
+                        replica: replica,
+                        prepareFile: { id in
+                            if let workspace {
+                                return try await workspace.prepareAttachment(id)
+                            }
+                            return try await replica.attachmentFileURL(for: id)
+                        },
+                        rename: { beginRenaming(placement) },
+                        move: { beginMoving([placement.item.id],
+                                            fromTrash: placement.isInTrash) },
+                        trash: { changeTrash(placement, trashed: true) },
+                        restore: { changeTrash(placement, trashed: false) },
+                        transferStatus: workspace?.attachmentTransfers?
+                            .statuses[selectedAttachmentID],
+                        transferError: workspace?.attachmentErrorMessage
+                    )
+                    .id(selectedAttachmentID)
+                } else if let session, let selectedID {
                     VStack(spacing: 0) {
                         if !session.isEditingEnabled,
                            let placement = selectedPlacement {
@@ -617,22 +641,27 @@ struct NotebookView: View {
     #if os(iOS)
     private func compactLinkScreen(_ route: NotebookLinkRoute?,
                                    isCurrent: Bool) -> some View {
-        let title = route.flatMap { route in
+        let routePlacement = route.flatMap { route in
             replica.placements.first { $0.item.id == route.noteID }
-        }.map { NotebookNoteName.title(from: $0.displayName) } ?? ""
+        }
+        let title = routePlacement.map {
+            $0.item.kind == .attachment
+                ? $0.displayName : NotebookNoteName.title(from: $0.displayName)
+        } ?? ""
         // Opening the incoming session can publish before the route changes.
         // A departing screen must keep its own preview throughout that gap.
         let showsLiveEditor = isCurrent && route?.noteID == selectedID
+        let showsLiveAttachment = isCurrent && route?.noteID == selectedAttachmentID
         let isRestoring = session?.isEditingEnabled == true
             && (route.map { restoringLinkRouteID == $0.id } ?? false)
         return ZStack {
-            if showsLiveEditor {
+            if showsLiveEditor || showsLiveAttachment {
                 notebookDetail
                     .opacity(isRestoring ? 0 : 1)
                     .allowsHitTesting(!isRestoring)
             }
             if let route, let preview = linkVisitPreviews[route.id],
-               !showsLiveEditor || isRestoring {
+               !(showsLiveEditor || showsLiveAttachment) || isRestoring {
                 NotebookPreviousLinkView(
                     text: preview.text, position: preview.position, title: title,
                     viewportInsets: preview.viewportInsets, titleHeight: preview.titleHeight,
@@ -642,7 +671,7 @@ struct NotebookView: View {
                     mode: editorMode
                 )
                 .transition(.identity)
-            } else if !showsLiveEditor {
+            } else if !(showsLiveEditor || showsLiveAttachment) {
                 Color(uiColor: .systemBackground)
             }
         }
@@ -764,6 +793,7 @@ struct NotebookView: View {
             workspace?.contentDidSave(trigger: "catalog snapshot changed")
             navigationState.refreshAvailability()
             if previous?.notebookID != current?.notebookID {
+                selectedAttachmentID = nil
                 search.clear()
                 links.clear()
                 resetLinkJourney()
@@ -780,6 +810,12 @@ struct NotebookView: View {
                 browserRedo = nil
             } else {
                 browserSelection.prune(to: activeBrowserIDs)
+                if let selectedAttachmentID,
+                   !replica.placements.contains(where: {
+                       $0.item.id == selectedAttachmentID
+                   }) {
+                    self.selectedAttachmentID = nil
+                }
             }
         }
         .onChange(of: replica.linkMaintenanceIssueMessage) { _, message in
@@ -1550,7 +1586,12 @@ struct NotebookView: View {
             },
             onOpenNote: { id in
                 showingTrash = false
-                perform { try await selectNote(id) }
+                if replica.placements.first(where: { $0.item.id == id })?
+                    .item.kind == .attachment {
+                    perform { try await selectAttachment(id) }
+                } else {
+                    perform { try await selectNote(id) }
+                }
             }
         )
     }
@@ -1614,8 +1655,8 @@ struct NotebookView: View {
                             .accessibilityIdentifier("notebook-sidebar-title-" + row.id.uuidString)
                     } icon: {
                         Image(systemName: placement.item.kind == .folder
-                            ? (replica.defaultNewNoteParentID == row.id ? "tray" : "folder")
-                            : "note.text")
+                            && replica.defaultNewNoteParentID == row.id
+                            ? "tray" : icon(for: placement.item.kind))
                     }
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1663,8 +1704,7 @@ struct NotebookView: View {
                 highlightedFileID == row.id ? "Revealed in Files" : ""
             )
             .accessibilityIdentifier(
-                (placement.item.kind == .note
-                    ? "notebook-sidebar-note-" : "notebook-sidebar-folder-") + row.id.uuidString)
+                rowIdentifier(for: placement.item.kind) + row.id.uuidString)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 if !selectingItems, editingID == nil {
                     Button(role: .destructive) { trashItems([row.id]) } label: {
@@ -1683,7 +1723,11 @@ struct NotebookView: View {
             return
         }
         perform {
-            try await selectNote(placement.item.id)
+            switch placement.item.kind {
+            case .note: try await selectNote(placement.item.id)
+            case .attachment: try await selectAttachment(placement.item.id)
+            case .folder: break
+            }
         }
     }
 
@@ -1870,6 +1914,8 @@ struct NotebookView: View {
                 let id = try await replica.createFolder(
                     name: "Untitled Folder", parentID: parentID)
                 beginRenaming(id: id, name: "Untitled Folder")
+            case .attachment:
+                break
             }
         }
     }
@@ -2021,9 +2067,11 @@ struct NotebookView: View {
 
     private func deletionMessage(_ selection: NotebookDeletionSelection) -> String {
         let notes = selection.items.filter { $0.kind == .note }.count
-        let folders = selection.items.count - notes
+        let files = selection.items.filter { $0.kind == .attachment }.count
+        let folders = selection.items.filter { $0.kind == .folder }.count
         let counts = [
             notes > 0 ? "\(notes) \(notes == 1 ? "note" : "notes")" : nil,
+            files > 0 ? "\(files) \(files == 1 ? "file" : "files")" : nil,
             folders > 0 ? "\(folders) \(folders == 1 ? "folder" : "folders")" : nil,
         ].compactMap { $0 }.joined(separator: " and ")
         let names = selection.items.prefix(5).map(\.name).joined(separator: ", ")
@@ -2152,6 +2200,10 @@ struct NotebookView: View {
             try await flushEditor()
             browserUndo = try await replica.trashItems(ids)
             browserRedo = nil
+            if let selectedAttachmentID, ids.contains(selectedAttachmentID) {
+                self.selectedAttachmentID = nil
+                preferredCompactColumn = .sidebar
+            }
             browserSelection.clear()
             selectingItems = false
         }, onCompletion: onCompletion)
@@ -3229,6 +3281,7 @@ struct NotebookView: View {
         _ id: UUID, revealDetail: Bool = true, searchVisit: Bool = false,
         linkVisit: Bool = false
     ) async throws {
+        selectedAttachmentID = nil
         if id != selectedID {
             try await flushEditor()
             searchDestinationID = nil
@@ -3261,6 +3314,39 @@ struct NotebookView: View {
         if selectedID == id, !linkVisit { resetLinkJourney() }
         if revealDetail, preferredCompactColumn != .detail {
             preferredCompactColumn = .detail
+        }
+    }
+
+    private func selectAttachment(_ id: UUID) async throws {
+        try await flushEditor()
+        guard replica.placements.contains(where: {
+            $0.item.id == id && $0.item.kind == .attachment
+        }) else { return }
+        selectedAttachmentID = id
+        #if os(iOS)
+        if usesCompactLinkNavigation {
+            resetLinkJourney()
+            let route = NotebookLinkRoute(noteID: id)
+            linkRootRoute = route
+            activeLinkRouteID = route.id
+        }
+        #endif
+        preferredCompactColumn = .detail
+    }
+
+    private func icon(for kind: NotebookItemKind) -> String {
+        switch kind {
+        case .folder: "folder"
+        case .note: "note.text"
+        case .attachment: "doc"
+        }
+    }
+
+    private func rowIdentifier(for kind: NotebookItemKind) -> String {
+        switch kind {
+        case .folder: "notebook-sidebar-folder-"
+        case .note: "notebook-sidebar-note-"
+        case .attachment: "notebook-sidebar-attachment-"
         }
     }
 

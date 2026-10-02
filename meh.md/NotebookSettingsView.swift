@@ -45,8 +45,8 @@ struct NotebookSettingsView: View {
                 } footer: {
                     Text("New notes are saved in this folder.")
                 }
-                Section("Markdown") {
-                    Button("Import Markdown…") {
+                Section("Files") {
+                    Button("Import Files…") {
                         #if os(iOS)
                         choosingImportSource = true
                         #else
@@ -56,7 +56,7 @@ struct NotebookSettingsView: View {
                         .accessibilityIdentifier("notebook-import")
                         #if os(iOS)
                         .confirmationDialog(
-                            "Import Markdown", isPresented: $choosingImportSource
+                            "Import Files", isPresented: $choosingImportSource
                         ) {
                             Button("Import Files…") {
                                 importingFolder = false
@@ -125,7 +125,7 @@ struct NotebookSettingsView: View {
                     }
                     .foregroundStyle(.red)
                     .disabled(preparing || saving || resetScheduled)
-                    Text("Removes local notes, settings, and sync data on the next launch. Unsynced changes will be lost. iCloud data and backups are kept.")
+                    Text("Removes local notes, files, settings, and sync data on the next launch. Unsynced changes will be lost. iCloud data and backups are kept.")
                         .font(.footnote)
                 }
             }
@@ -152,7 +152,7 @@ struct NotebookSettingsView: View {
                 resetScheduled = true
             }
         } message: {
-            Text("This cannot be undone. All local notes, including unsynced changes, settings, and sync history will be removed when you reopen the app. Local backups and notes already in iCloud are kept.")
+            Text("This cannot be undone. Local notes and files, including unsynced changes, settings, and sync history will be removed when you reopen the app. Export anything you need first. Local backups and items already in iCloud are kept.")
         }
         .alert("Reset Scheduled", isPresented: $resetScheduled) {
             #if os(macOS)

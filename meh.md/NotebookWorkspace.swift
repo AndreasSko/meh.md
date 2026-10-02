@@ -71,6 +71,19 @@ final class NotebookWorkspace {
 
     private(set) var replica: NotebookReplica?
     private(set) var sync: NotebookSyncCoordinator?
+    private(set) var attachmentTransfers: NotebookAttachmentSyncCoordinator?
+    private(set) var isPreparingAttachmentTransfers = false
+    private var attachmentTransport: (any NotebookAttachmentTransport)?
+    private var attachmentSetupError: String?
+    private var attachmentRefresh: Task<Void, Never>?
+    private var attachmentPreparation: Task<NotebookAttachmentSyncCoordinator, Error>?
+    private var attachmentAccountGeneration = 0
+    private var needsAttachmentRefresh = false
+    private var attachmentSetupRetry: Task<Void, Never>?
+    private var attachmentSetupRetryPolicy = NotebookSyncRetryPolicy()
+    var attachmentErrorMessage: String? {
+        attachmentSetupError ?? attachmentTransfers?.errorMessage
+    }
     private(set) var errorMessage: String?
     private(set) var syncSetupError: String?
     private(set) var syncFailure: SyncFailurePresentation?
@@ -269,7 +282,8 @@ final class NotebookWorkspace {
          transport: (any SyncTransport)?,
          automaticSync: Bool, mode: Mode? = nil,
          syncSchedule: NotebookSyncSchedule = NotebookSyncSchedule(),
-         transportFactory: (@MainActor (String?) async throws -> any SyncTransport)? = nil) {
+         transportFactory: (@MainActor (String?) async throws -> any SyncTransport)? = nil,
+         attachmentTransport: (any NotebookAttachmentTransport)? = nil) {
         self.directory = directory
         self.syncSchedule = syncSchedule
         self.documentsDirectory = documentsDirectory
@@ -277,6 +291,7 @@ final class NotebookWorkspace {
         self.mode = mode ?? .development(URL(string: "http://127.0.0.1")!, "model-test")
         notebookTransport = transport
         self.transportFactory = transportFactory
+        self.attachmentTransport = attachmentTransport
     }
 
     private static let backupFrequencyKey = "meh.md.backupFrequency"
@@ -431,6 +446,12 @@ final class NotebookWorkspace {
                 // Existing catalogs are visible before account discovery or
                 // any network request, so offline reopening remains useful.
                 replica = loaded
+                #if DEBUG
+                if isPreview,
+                   environmentAttachmentFixtureEnabled {
+                    try await createAttachmentFixture(in: loaded)
+                }
+                #endif
             }
             #if DEBUG
             if isPreviewUpdateRequirementFixture {
@@ -461,6 +482,49 @@ final class NotebookWorkspace {
     func recoverCatalog() async {
         await recover(.catalog)
     }
+
+    #if DEBUG
+    private var environmentAttachmentFixtureEnabled: Bool {
+        ProcessInfo.processInfo.environment["MEH_NOTEBOOK_ATTACHMENT_TEST"] == "1"
+    }
+
+    /// Disposable UI-test content is isolated by MEH_NOTEBOOK_PREVIEW_RUN.
+    private func createAttachmentFixture(in replica: NotebookReplica) async throws {
+        guard replica.placements.isEmpty else { return }
+        let folder = try await replica.createFolder(name: "Attachments Demo")
+        _ = try await replica.createNote(
+            name: "Notes.md", text: "# Project notes\n\nA fictional attachment example.\n",
+            parentID: folder)
+        let source = replica.directory.appending(path: "Diagram.pdf")
+        defer { try? FileManager.default.removeItem(at: source) }
+        let stream = "BT /F1 24 Tf 50 140 Td (Fictional diagram) Tj ET"
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 240] "
+                + "/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Length \(stream.utf8.count) >>\nstream\n\(stream)\nendstream",
+        ]
+        var pdf = "%PDF-1.4\n"
+        var offsets = [0]
+        for (index, object) in objects.enumerated() {
+            offsets.append(pdf.utf8.count)
+            pdf += "\(index + 1) 0 obj\n\(object)\nendobj\n"
+        }
+        let xref = pdf.utf8.count
+        pdf += "xref\n0 6\n0000000000 65535 f \n"
+        for offset in offsets.dropFirst() {
+            pdf += String(format: "%010d 00000 n \n", offset)
+        }
+        pdf += "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n\(xref)\n%%EOF\n"
+        try Data(pdf.utf8).write(to: source)
+        let plan = try await NotebookImportScanner(
+            attachmentStore: replica.attachmentStore).scan(urls: [source])
+        try await replica.importMarkdown(plan)
+        for entry in plan.entries { try await replica.move(entry.id, to: folder) }
+    }
+    #endif
 
     func recoverPendingIssue() async {
         guard let recoveryAction else { return }
@@ -514,6 +578,7 @@ final class NotebookWorkspace {
     func localStorageResetWasScheduled() {
         guard !isResetPending else { return }
         isResetPending = true
+        stopAttachmentTransfers()
         replica?.suspendLocalEditsForPendingReset()
         scheduledRefresh?.cancel()
         scheduledRefresh = nil
@@ -764,6 +829,9 @@ final class NotebookWorkspace {
                 plannedRetryDelay = nil
                 if automaticSync, sync?.status == .pending { needsAnotherRefresh = true }
             }
+            if hasBinding, !isSyncUpdateRequired {
+                scheduleAttachmentTransfers(force: manual)
+            }
             endSyncPresentation()
             syncEventLog.record("refresh ended", counts: [
                 "duration_ms": Int(Date().timeIntervalSince(refreshStarted) * 1_000)
@@ -826,6 +894,7 @@ final class NotebookWorkspace {
     private func recordUpdateRequirement(from error: any Error) {
         guard let syncError = error as? SyncError,
               case .updateRequired(let version) = syncError else { return }
+        if syncUpdateRequiredVersion == nil { stopAttachmentTransfers() }
         syncUpdateRequiredVersion = version
         scheduledRefresh?.cancel()
         scheduledRefresh = nil
@@ -938,7 +1007,169 @@ final class NotebookWorkspace {
         }
     }
 
+    private func prepareAttachmentCoordinator() async throws {
+        guard !isResetPending else { throw NotebookReplicaError.resetPending }
+        if isSyncUpdateRequired {
+            throw SyncError.updateRequired(requiredVersion: syncUpdateRequiredVersion ?? 2)
+        }
+        guard attachmentTransfers == nil, let replica else { return }
+        let generation = attachmentAccountGeneration
+        if let attachmentPreparation {
+            let prepared = try await attachmentPreparation.value
+            guard generation == attachmentAccountGeneration else {
+                prepared.stop()
+                throw NotebookAttachmentTransferError.accountChanged
+            }
+            try Task.checkCancellation()
+            attachmentTransfers = prepared
+            return
+        }
+        guard try sync?.hasDurableBinding() == true else {
+            throw SyncError.unavailable("Connect this notebook to iCloud before downloading files.")
+        }
+        let task = Task { @MainActor in
+            if attachmentTransport == nil {
+                guard case .cloud = mode,
+                      let cloud = notebookTransport as? CloudKitSyncTransport else {
+                    throw SyncError.unavailable(
+                        "Attachment transfers are unavailable with the local test service.")
+                }
+                let components = cloud.scope.split(separator: "/")
+                guard components.count == 4, components[1] == "private" else {
+                    throw SyncError.scopeChanged
+                }
+                let transport = try await CloudKitAttachmentTransport.make(
+                    containerIdentifier: String(components[0]),
+                    expectedUserRecordName: String(components[2]),
+                    notebookZoneName: cloud.notebookZoneName)
+                try Task.checkCancellation()
+                guard generation == attachmentAccountGeneration else {
+                    throw NotebookAttachmentTransferError.accountChanged
+                }
+                attachmentTransport = transport
+            }
+            try Task.checkCancellation()
+            guard let attachmentTransport else {
+                throw SyncError.unavailable("Attachment transfers are unavailable.")
+            }
+            return try NotebookAttachmentSyncCoordinator(
+                replica: replica, transport: attachmentTransport)
+        }
+        attachmentPreparation = task
+        isPreparingAttachmentTransfers = true
+        defer {
+            if generation == attachmentAccountGeneration {
+                attachmentPreparation = nil
+                isPreparingAttachmentTransfers = false
+            }
+        }
+        let prepared = try await task.value
+        guard generation == attachmentAccountGeneration else {
+            prepared.stop()
+            throw NotebookAttachmentTransferError.accountChanged
+        }
+        try Task.checkCancellation()
+        attachmentTransfers = prepared
+        attachmentSetupError = nil
+        attachmentSetupRetryPolicy.reset()
+        attachmentSetupRetry?.cancel()
+    }
+
+    private func scheduleAttachmentTransfers(force: Bool) {
+        guard !isResetPending, !isSyncUpdateRequired else { return }
+        guard let replica else { return }
+        let deletions = (try? sync?.acknowledgedAttachmentDeletions()) ?? []
+        guard (try? replica.attachmentDescriptors().isEmpty) == false
+            || !deletions.isEmpty else { return }
+        if attachmentRefresh != nil {
+            needsAttachmentRefresh = true
+            return
+        }
+        let generation = attachmentAccountGeneration
+        attachmentRefresh = Task { @MainActor [self] in
+            defer {
+                if generation == attachmentAccountGeneration {
+                    attachmentRefresh = nil
+                }
+            }
+            repeat {
+                needsAttachmentRefresh = false
+                do {
+                    try Task.checkCancellation()
+                    guard !isSyncUpdateRequired else { return }
+                    try await prepareAttachmentCoordinator()
+                    guard !isSyncUpdateRequired else { return }
+                    await attachmentTransfers?.synchronize(
+                        confirmedDeletedIDs:
+                            (try? sync?.acknowledgedAttachmentDeletions()) ?? [],
+                        force: force)
+                } catch {
+                    guard generation == attachmentAccountGeneration,
+                          !Task.isCancelled else { return }
+                    attachmentSetupError = error.localizedDescription
+                    let retryError: any Error =
+                        error as? NotebookAttachmentTransferError == .accountUnavailable
+                        ? SyncError.unavailable(error.localizedDescription) : error
+                    if let date = attachmentSetupRetryPolicy.retryDate(for: retryError, now: Date()) {
+                        attachmentSetupRetry?.cancel()
+                        attachmentSetupRetry = Task { @MainActor [weak self] in
+                            do { try await Task.sleep(for: .seconds(max(0, date.timeIntervalSinceNow))) }
+                            catch { return }
+                            self?.scheduleAttachmentTransfers(force: false)
+                        }
+                    }
+                    return
+                }
+            } while needsAttachmentRefresh && !Task.isCancelled
+        }
+    }
+
+    func prepareAttachment(_ id: UUID) async throws -> URL {
+        guard !isResetPending else { throw NotebookReplicaError.resetPending }
+        guard let replica else { throw NotebookReplicaError.notJoined }
+        do { return try await replica.attachmentFileURL(for: id) }
+        catch NotebookAttachmentError.missing { }
+        if isSyncUpdateRequired {
+            throw SyncError.updateRequired(requiredVersion: syncUpdateRequiredVersion ?? 2)
+        }
+        try await prepareAttachmentCoordinator()
+        guard let attachmentTransfers else {
+            throw SyncError.unavailable("Attachment downloads are unavailable.")
+        }
+        return try await attachmentTransfers.prepareAttachment(id)
+    }
+
+    func retryAttachments() async {
+        guard !isResetPending, !isSyncUpdateRequired else { return }
+        let generation = attachmentAccountGeneration
+        do {
+            try await prepareAttachmentCoordinator()
+            await attachmentTransfers?.synchronize(
+                confirmedDeletedIDs: (try? sync?.acknowledgedAttachmentDeletions()) ?? [],
+                force: true)
+        } catch {
+            if generation == attachmentAccountGeneration {
+                attachmentSetupError = error.localizedDescription
+            }
+        }
+    }
+
     private(set) var searchScopeGeneration = 0
+
+    private func stopAttachmentTransfers() {
+        attachmentAccountGeneration &+= 1
+        attachmentTransfers?.stop()
+        attachmentTransfers = nil
+        attachmentTransport = nil
+        attachmentRefresh?.cancel()
+        attachmentRefresh = nil
+        needsAttachmentRefresh = false
+        attachmentPreparation?.cancel()
+        attachmentPreparation = nil
+        isPreparingAttachmentTransfers = false
+        attachmentSetupRetry?.cancel()
+        attachmentSetupRetry = nil
+    }
 
     func receiveCloudActivity(
         _ activity: CloudKitSyncActivity, generation: UUID? = nil
@@ -953,6 +1184,8 @@ final class NotebookWorkspace {
             syncEventLog.record("cloud background uploads acknowledged",
                                 counts: ["records": count])
         case .accountChanged:
+            stopAttachmentTransfers()
+            attachmentSetupError = "The iCloud account changed. Attachment transfers are paused."
             searchScopeGeneration += 1
             syncEventLog.record("cloud account changed")
         case .failed(let message):

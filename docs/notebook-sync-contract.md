@@ -30,11 +30,19 @@ state rejects reuse across protocol modes; account/workspace scope changes
 fail before exchanging notebook data.
 
 The catalog data format is independent of that record protocol. The
-[upgrade safety release](notebook-upgrade-safety.md) retains catalog format 1
-and introduces a conditional CloudKit publication boundary for future
-upgrades. Devices running this release pause sync with **Update required**
-when the remote notebook needs a newer reader, while existing local notes
-remain editable. Pending edits and history survive the pause.
+[upgrade safety release](notebook-upgrade-safety.md) introduced a conditional
+CloudKit publication boundary while retaining catalog format 1. Attachment
+support writes format 2 on first import and atomically publishes its catalog
+with that version requirement. Devices running the prerequisite pause sync
+with **Update required** while existing local notes remain editable. Updating
+the app resumes merging and publication of retained local edits.
+
+Attachments have their own CloudKit zone, `meh-md-attachments-v1`, and record
+type, `NotebookAttachmentV1`. The deterministic record ID combines notebook
+and attachment UUIDs. The envelope stores those UUIDs, SHA-256, byte count,
+deletion marker, and a file-backed `CKAsset`. The asset bytes never enter an
+Automerge snapshot or the catalog. The attachment transport binds to the same
+iCloud account as the notebook transport and checks that binding on transfer.
 
 ## Local durability and exchange ordering
 
@@ -48,6 +56,13 @@ persists applied document heads before advancing a download cursor. A local
 rollback invalidates progress and replays history. Upload acknowledgements
 cover only the captured heads; edits made during an upload remain pending.
 Bodies upload before catalog references, but download works in either order.
+
+Attachment metadata can arrive with the catalog before its bytes are uploaded.
+The receiver leaves the file absent until the user opens it. That request
+fetches the single CloudKit record, verifies its identity and bytes, and
+publishes a durable local copy. Uploads, requested downloads, and their retry
+deadlines are tracked separately from Markdown exchange. Losing an upload
+acknowledgement causes a retry against the same immutable record identity.
 
 A body received before its catalog entry is retained and included in recovery
 checkpoints, but is not uploaded until listed. This prevents accidental
@@ -72,6 +87,16 @@ inbox/outbox copies, and remote note snapshots. An independent local ledger
 survives catalog recovery. Cloud cleanup follows acknowledged catalog markers
 and preserves cursor positions. Delete Permanently and Empty Trash expose
 this contract with confirmation and retryable failures.
+
+Attachment cleanup waits for an acknowledged catalog deletion marker. It
+saves a tombstone in the attachment record's original identity and removes
+the asset. Conditional CloudKit saves make the tombstone win against a late
+create or retry. Clients reject uploads and downloads for tombstoned IDs.
+Local transfer staging and copied attachment bytes are removed during local
+permanent-deletion cleanup.
+
+The attachment record schema has not yet been deployed to Production. Codec
+and in-memory transfer tests do not prove live CloudKit delivery or deletion.
 
 ## Stage 2 verification record
 

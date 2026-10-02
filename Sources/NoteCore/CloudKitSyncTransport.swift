@@ -839,12 +839,32 @@ enum CloudKitBootstrapZoneRetry {
 struct CloudKitRecordCodec: @unchecked Sendable {
     let mode: CloudKitTransportMode
     let zoneID: CKRecordZone.ID
+    let maximumSupportedFormatVersion: UInt64
+
+    init(
+        mode: CloudKitTransportMode,
+        zoneID: CKRecordZone.ID,
+        maximumSupportedFormatVersion: UInt64 =
+            NotebookSyncFormat.supportedVersion
+    ) {
+        self.mode = mode
+        self.zoneID = zoneID
+        self.maximumSupportedFormatVersion = maximumSupportedFormatVersion
+    }
 
     func encode(
         _ value: SyncRecord,
         id: CKRecord.ID,
         assetURL: URL
     ) throws -> CKRecord {
+        if mode == .notebook, value.kind == .catalog,
+           maximumSupportedFormatVersion <
+                NotebookSyncFormat.supportedVersion {
+            let version = try NotebookSyncFormat.version(of: value)
+            if version > maximumSupportedFormatVersion {
+                throw SyncError.updateRequired(requiredVersion: version)
+            }
+        }
         try mode.validate(
             value,
             bootstrap: id.recordName == mode.bootstrapName
@@ -986,6 +1006,14 @@ struct CloudKitRecordCodec: @unchecked Sendable {
         }
         guard value.id == id else {
             throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        if mode == .notebook, value.kind == .catalog,
+           maximumSupportedFormatVersion <
+                NotebookSyncFormat.supportedVersion {
+            let version = try NotebookSyncFormat.version(of: value)
+            if version > maximumSupportedFormatVersion {
+                throw SyncError.updateRequired(requiredVersion: version)
+            }
         }
         if validateSnapshot {
             do {
@@ -1527,6 +1555,7 @@ struct CloudKitAvailabilityCooldownStore {
 @available(macOS 14.0, iOS 17.0, *)
 public final actor CloudKitSyncTransport: HaltableSyncTransport {
     public nonisolated let scope: String
+    public nonisolated let notebookZoneName: String
     public nonisolated let activity: AsyncStream<CloudKitSyncActivity>
     public private(set) var recoveredRetryMetadata = false
 
@@ -1538,6 +1567,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private let expectedUserRecordID: CKRecord.ID
     private let zoneID: CKRecordZone.ID
     private let mode: CloudKitTransportMode
+    private let maximumSupportedFormatVersion: UInt64
     private let codec: CloudKitRecordCodec
     private let store: CloudKitTransportStateStore
     private let eventCommitter: CloudKitEventCommitter
@@ -1634,7 +1664,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     static func makeNotebook(
         services: CloudKitServices,
         containerIdentifier: String,
-        stateDirectory: URL
+        stateDirectory: URL,
+        maximumSupportedFormatVersion: UInt64 =
+            NotebookSyncFormat.supportedVersion
     ) async throws -> CloudKitSyncTransport {
         try await make(
             containerIdentifier: containerIdentifier,
@@ -1642,6 +1674,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             zoneName: CloudKitTransportMode.notebook.zoneName,
             mode: .notebook,
             automaticallySync: false,
+            maximumSupportedFormatVersion: maximumSupportedFormatVersion,
             services: services
         )
     }
@@ -1655,6 +1688,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         expectedScope: String? = nil,
         expectedNotebookID: UUID? = nil,
         labRunID: UUID? = nil,
+        maximumSupportedFormatVersion: UInt64 =
+            NotebookSyncFormat.supportedVersion,
         services: CloudKitServices? = nil
     ) async throws -> CloudKitSyncTransport {
         if let labRunID {
@@ -1726,7 +1761,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             store: store,
             availabilityCooldown: availabilityCooldown,
             mode: mode,
-            automaticallySync: automaticallySync
+            automaticallySync: automaticallySync,
+            maximumSupportedFormatVersion: maximumSupportedFormatVersion
         )
         try await transport.initialize()
         #if DEBUG
@@ -1759,7 +1795,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         store: CloudKitTransportStateStore,
         availabilityCooldown: CloudKitAvailabilityCooldownStore,
         mode: CloudKitTransportMode,
-        automaticallySync: Bool
+        automaticallySync: Bool,
+        maximumSupportedFormatVersion: UInt64
     ) {
         account = services.account
         database = services.database
@@ -1767,8 +1804,13 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         expectedUserRecordID = userRecordID
         let zoneID = CKRecordZone.ID(zoneName: zoneName)
         self.zoneID = zoneID
+        notebookZoneName = zoneName
         self.mode = mode
-        codec = CloudKitRecordCodec(mode: mode, zoneID: zoneID)
+        self.maximumSupportedFormatVersion = maximumSupportedFormatVersion
+        codec = CloudKitRecordCodec(
+            mode: mode, zoneID: zoneID,
+            maximumSupportedFormatVersion: maximumSupportedFormatVersion
+        )
         self.store = store
         eventCommitter = CloudKitEventCommitter(store: store)
         let activityChannel = CloudKitSyncActivityChannel()
@@ -1870,6 +1912,16 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         let proposal = try bootstrapValidationCache.validate(
             record, mode: mode
         )
+        if mode == .notebook,
+           maximumSupportedFormatVersion <
+                NotebookSyncFormat.supportedVersion {
+            let version = try NotebookSyncFormat.version(
+                of: proposal.record
+            )
+            if version > maximumSupportedFormatVersion {
+                throw SyncError.updateRequired(requiredVersion: version)
+            }
+        }
         try await verifyAccount()
         let recordID = CKRecord.ID(
             recordName: mode.bootstrapName, zoneID: zoneID
@@ -1885,7 +1937,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             if mode == .notebook {
                 do {
                     try CloudKitNotebookFormatGate.read(existing)
-                        .requireSupported()
+                        .requireSupported(
+                            maximumVersion: maximumSupportedFormatVersion
+                        )
                 } catch let error as SyncError {
                     latchFailure(error)
                     throw error
@@ -1897,6 +1951,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             try await store.update { try $0.appendToInbox(canonical) }
             return canonical.record
         } catch let error as CKError where error.code == .unknownItem {
+            let proposalFormatVersion = try NotebookSyncFormat.version(
+                of: proposal.record
+            )
             let assetURL = try assetStaging.retain(proposal.record)
             var uploadCompleted = false
             defer {
@@ -1914,8 +1971,13 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                     minimumWriterVersion: 1,
                     catalogFormatVersion: 1,
                     migrationSnapshotID: nil
-                ).publish(on: cloudRecord, catalogVersion: nil,
-                          snapshotID: nil)
+                ).publish(
+                    on: cloudRecord,
+                    catalogVersion: proposalFormatVersion,
+                    snapshotID: proposalFormatVersion > 1
+                        ? proposal.record.id : nil,
+                    maximumVersion: maximumSupportedFormatVersion
+                )
             }
             do {
                 _ = try await CloudKitBootstrapZoneRetry.perform {
@@ -1937,7 +1999,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 if mode == .notebook {
                     do {
                         try CloudKitNotebookFormatGate.read(server)
-                            .requireSupported()
+                            .requireSupported(
+                                maximumVersion: maximumSupportedFormatVersion
+                            )
                     } catch let error as SyncError {
                         latchFailure(error)
                         throw error
@@ -1974,6 +2038,16 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             try record.validate()
             guard record.protocolVersion == mode.protocolVersion else {
                 throw SyncError.invalidRecord
+            }
+            if mode == .notebook, record.kind == .catalog,
+               maximumSupportedFormatVersion <
+                    NotebookSyncFormat.supportedVersion {
+                let version = try NotebookSyncFormat.version(of: record)
+                if version > maximumSupportedFormatVersion {
+                    throw SyncError.updateRequired(
+                        requiredVersion: version
+                    )
+                }
             }
         }
         try await verifyAccount()
@@ -2470,7 +2544,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         }
         do {
             let gate = try CloudKitNotebookFormatGate.read(record)
-            try gate.requireSupported()
+            try gate.requireSupported(
+                maximumVersion: maximumSupportedFormatVersion
+            )
             return gate
         } catch {
             latchFailure(error)
@@ -2501,7 +2577,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             throw CloudKitSyncTransportError.unexpectedDeletion
         }
         let gate = try CloudKitNotebookFormatGate.read(canonical)
-        try gate.requireSupported()
+        try gate.requireSupported(
+            maximumVersion: maximumSupportedFormatVersion
+        )
         // Retain the seed CKAsset before CloudKit reclaims its temporary URL.
         let seed = try codec.decode(canonical)
         let seedURL = try assetStaging.retain(seed)
@@ -2516,7 +2594,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             try gate.publish(
                 on: canonical,
                 catalogVersion: candidate?.version,
-                snapshotID: candidate?.id
+                snapshotID: candidate?.id,
+                maximumVersion: maximumSupportedFormatVersion
             )
             try await verifyAccount()
             engineAssetLeases[canonicalID.recordName, default: []]
@@ -2562,7 +2641,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                    let server = cloud.serverRecord {
                     do {
                         try CloudKitNotebookFormatGate.read(server)
-                            .requireSupported()
+                            .requireSupported(
+                                maximumVersion: maximumSupportedFormatVersion
+                            )
                     } catch {
                         latchFailure(error)
                         throw error
@@ -2763,7 +2844,9 @@ extension CloudKitSyncTransport {
                         canonical.recordID.zoneID == zoneID &&
                         canonical.recordID.recordName == mode.bootstrapName {
                         try CloudKitNotebookFormatGate.read(canonical)
-                            .requireSupported()
+                            .requireSupported(
+                                maximumVersion: maximumSupportedFormatVersion
+                            )
                     }
                 }
                 let targetDeletions = deletions.filter {
@@ -2862,7 +2945,9 @@ extension CloudKitSyncTransport {
                            let server = failure.error.serverRecord {
                             let gate = try CloudKitNotebookFormatGate
                                 .read(server)
-                            try gate.requireSupported()
+                            try gate.requireSupported(
+                                maximumVersion: maximumSupportedFormatVersion
+                            )
                             // An ordinary competing publication is benign.
                             // Keep the durable outbox for a fresh CAS batch.
                             syncEngine.add(pendingRecordZoneChanges: [

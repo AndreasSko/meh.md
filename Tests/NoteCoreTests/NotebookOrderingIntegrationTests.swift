@@ -5,6 +5,33 @@ import XCTest
 
 @MainActor
 final class NotebookOrderingIntegrationTests: XCTestCase {
+    func testExplicitNameSortMixesNotesAndAttachments() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let sourceDirectory = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        let source = sourceDirectory.appending(path: "Alpha.pdf")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: sourceDirectory)
+        }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let note = try await replica.createNote(name: "Zeta.md")
+        try FileManager.default.createDirectory(at: sourceDirectory,
+            withIntermediateDirectories: true)
+        try Data([1, 2, 3]).write(to: source)
+        let plan = try await NotebookImportScanner(
+            attachmentStore: replica.attachmentStore).scan(urls: [source])
+        let attachment = try XCTUnwrap(plan.entries.first?.id)
+        try await replica.importMarkdown(plan)
+        try await replica.sortChildren(parentID: nil, by: .nameAscending)
+        XCTAssertEqual(replica.orderedChildren(parentID: nil).map(\.item.id),
+            [attachment, note])
+        try await replica.sortChildren(parentID: nil, by: .nameDescending)
+        XCTAssertEqual(replica.orderedChildren(parentID: nil).map(\.item.id),
+            [note, attachment])
+    }
+
     func testSortingAndMovesPreserveBodiesAcrossReloadAndSync() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

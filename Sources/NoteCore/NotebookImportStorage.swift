@@ -50,7 +50,16 @@ struct NotebookImportJournal: Codable, Equatable {
     let destinationParentID: UUID?
 
     var isSupported: Bool {
-        (schemaVersion == 1 && destinationParentID == nil) || schemaVersion == 2
+        switch schemaVersion {
+        case 1:
+            return destinationParentID == nil && !plan.entries.contains {
+                $0.kind == .attachment || $0.attachment != nil
+            }
+        case 2:
+            return true
+        default:
+            return false
+        }
     }
 
     init(
@@ -59,8 +68,10 @@ struct NotebookImportJournal: Codable, Equatable {
         snapshots: [NoteSnapshot],
         destinationParentID: UUID? = nil
     ) {
-        // Older builds must not resume a destination import at the root.
-        schemaVersion = destinationParentID == nil ? 1 : 2
+        // Older builds must not resume attachment or destination imports.
+        schemaVersion = destinationParentID != nil
+            || plan.entries.contains { $0.kind == .attachment || $0.attachment != nil }
+            ? 2 : 1
         self.notebookID = notebookID
         self.plan = plan
         self.snapshots = snapshots
@@ -261,7 +272,8 @@ struct NotebookImportStorage {
                 },
                 text: entry.text,
                 createdAt: entry.createdAt,
-                modifiedAt: entry.modifiedAt
+                modifiedAt: entry.modifiedAt,
+                attachment: entry.attachment
             )
         }
         let retainedSnapshots = journal.snapshots.filter {

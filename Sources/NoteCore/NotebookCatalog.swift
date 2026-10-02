@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 public enum NotebookItemKind: String, Codable, Sendable {
-    case note, folder
+    case note, folder, attachment
 }
 
 public struct NotebookCatalogSnapshot: Equatable, Sendable {
@@ -47,6 +47,25 @@ public struct NotebookItem: Equatable, Sendable {
     public let isPermanentlyDeleted: Bool
     /// Origin scope for links imported together. Absent on pre-link catalogs.
     public let importRootID: UUID?
+    public let attachment: NotebookAttachmentContent?
+
+    public init(
+        id: UUID, kind: NotebookItemKind, name: String,
+        parentID: UUID?, orderKey: NotebookOrderKey?,
+        isTrashed: Bool, isPermanentlyDeleted: Bool,
+        importRootID: UUID? = nil,
+        attachment: NotebookAttachmentContent? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.name = name
+        self.parentID = parentID
+        self.orderKey = orderKey
+        self.isTrashed = isTrashed
+        self.isPermanentlyDeleted = isPermanentlyDeleted
+        self.importRootID = importRootID
+        self.attachment = attachment
+    }
 }
 
 public struct NotebookPlacement: Equatable, Sendable {
@@ -145,7 +164,9 @@ final class NotebookCatalogDocument {
         if forSync {
             try NotebookSyncFormat.requireSupported(NotebookSyncFormat.version(of: document))
         }
-        guard try document.getAll(obj: .ROOT, key: "schemaVersion") == [.Scalar(.Uint(1))] else {
+        let versions = try document.getAll(obj: .ROOT, key: "schemaVersion")
+        guard !versions.isEmpty,
+            versions.allSatisfy({ $0 == .Scalar(.Uint(1)) || $0 == .Scalar(.Uint(2)) }) else {
             throw NotebookCatalogError.unsupportedSchemaVersion
         }
         guard try document.getAll(obj: .ROOT, key: "kind") == [.Scalar(.String("notebookCatalog"))],
@@ -506,9 +527,13 @@ final class NotebookCatalogDocument {
     }
 
     @discardableResult
-    func add(id: UUID = UUID(), kind: NotebookItemKind, name: String, parentID: UUID? = nil) throws
+    func add(id: UUID = UUID(), kind: NotebookItemKind, name: String, parentID: UUID? = nil,
+             attachment: NotebookAttachmentContent? = nil) throws
         -> UUID
     {
+        guard (kind == .attachment) == (attachment != nil) else {
+            throw NotebookCatalogError.invalidDocument
+        }
         try NotebookName.validate(name)
         guard try document.get(obj: itemsObject, key: id.uuidString) == nil else {
             throw NotebookCatalogError.duplicateIdentity
@@ -523,6 +548,9 @@ final class NotebookCatalogDocument {
         )
         let item = try document.putObject(obj: itemsObject, key: id.uuidString, ty: .Map)
         try document.put(obj: item, key: "kind", value: .String(kind.rawValue))
+        if let attachment {
+            try writeAttachment(attachment, to: item)
+        }
         try document.put(obj: item, key: "name", value: .String(name))
         try document.put(
             obj: item, key: "parent", value: parentID.map { .String($0.uuidString) } ?? .Null)
@@ -535,6 +563,21 @@ final class NotebookCatalogDocument {
         }
         try writeOrder(order, parentID: parentID, object: item)
         return id
+    }
+
+    private func writeAttachment(
+        _ content: NotebookAttachmentContent, to object: ObjId
+    ) throws {
+        // A schema-one notebook stays readable by older clients until its
+        // first attachment is published. The same branch writes both fields.
+        try document.put(obj: .ROOT, key: "schemaVersion", value: .Uint(2))
+        try document.put(
+            obj: object, key: "attachmentSHA256", value: .String(content.sha256)
+        )
+        try document.put(
+            obj: object, key: "attachmentByteCount",
+            value: .Uint(UInt64(content.byteCount))
+        )
     }
 
     /// Builds an import on an isolated fork after validating the complete
@@ -555,9 +598,11 @@ final class NotebookCatalogDocument {
                 throw NotebookImportError.invalidPlan
             }
             switch entry.kind {
-            case .folder where entry.text != nil:
+            case .folder where entry.text != nil || entry.attachment != nil:
                 throw NotebookImportError.invalidPlan
-            case .note where entry.text == nil:
+            case .note where entry.text == nil || entry.attachment != nil:
+                throw NotebookImportError.invalidPlan
+            case .attachment where entry.text != nil || entry.attachment?.id != entry.id:
                 throw NotebookImportError.invalidPlan
             default:
                 break
@@ -593,6 +638,9 @@ final class NotebookCatalogDocument {
                 key: "kind",
                 value: .String(entry.kind.rawValue)
             )
+            if let attachment = entry.attachment {
+                try candidate.writeAttachment(attachment.content, to: item)
+            }
             try candidate.document.put(
                 obj: item,
                 key: "name",
@@ -1069,7 +1117,9 @@ final class NotebookCatalogDocument {
     }
 
     private func decodeItems() throws -> [ItemEntry] {
-        try document.keys(obj: itemsObject).sorted().map { key in
+        let versions = try document.getAll(obj: .ROOT, key: "schemaVersion")
+        let allowsAttachments = versions.contains(.Scalar(.Uint(2)))
+        return try document.keys(obj: itemsObject).sorted().map { key in
             guard let id = UUID(uuidString: key), key == id.uuidString,
                 try document.getAll(obj: itemsObject, key: key).count == 1
             else {
@@ -1081,6 +1131,26 @@ final class NotebookCatalogDocument {
                 try document.getAll(obj: object, key: "kind").count == 1
             else {
                 throw NotebookCatalogError.invalidDocument
+            }
+            let attachmentValues = try document.getAll(obj: object, key: "attachmentSHA256")
+            let sizeValues = try document.getAll(obj: object, key: "attachmentByteCount")
+            let attachment: NotebookAttachmentContent?
+            if kind == .attachment {
+                guard allowsAttachments, attachmentValues.count == 1,
+                    sizeValues.count == 1,
+                    case .Scalar(.String(let hash)) = attachmentValues.first,
+                    case .Scalar(.Uint(let size)) = sizeValues.first,
+                    size <= Int64.max,
+                    let content = try? NotebookAttachmentContent(
+                        sha256: hash, byteCount: Int64(size)) else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+                attachment = content
+            } else {
+                guard attachmentValues.isEmpty, sizeValues.isEmpty else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+                attachment = nil
             }
             let names = try document.getAll(obj: object, key: "name")
             for value in names {
@@ -1141,7 +1211,8 @@ final class NotebookCatalogDocument {
                     id: id, kind: kind, name: name,
                     parentID: parentID, orderKey: order.key, isTrashed: trashed,
                     isPermanentlyDeleted: !deleted.isEmpty,
-                    importRootID: try readImportRootID(object)), issues
+                    importRootID: try readImportRootID(object),
+                    attachment: attachment), issues
             )
         }
     }

@@ -70,22 +70,29 @@ enum NotebookName {
             extensionLength = 9
         } else if lowercased.hasSuffix(".md") {
             extensionLength = 3
+        } else if let dot = name.lastIndex(of: "."), dot != name.startIndex {
+            extensionLength = name.distance(from: dot, to: name.endIndex)
         } else {
             extensionLength = 0
         }
 
-        let markdownExtension = String(name.suffix(extensionLength))
+        var fileExtension = String(name.suffix(extensionLength))
         var stem = String(name.dropLast(extensionLength))
         let shortID = id.uuidString.prefix(8)
         let suffix =
             attempt > 1
             ? " (\(shortID)-\(attempt))"
             : " (\(shortID))"
-        let stemByteLimit = 255 - suffix.utf8.count - markdownExtension.utf8.count
+        let minimumStemBytes = stem.first?.utf8.count ?? 0
+        let extensionByteLimit = 255 - suffix.utf8.count - minimumStemBytes
+        while fileExtension.utf8.count > extensionByteLimit {
+            fileExtension.removeLast()
+        }
+        let stemByteLimit = 255 - suffix.utf8.count - fileExtension.utf8.count
 
         while stem.utf8.count > stemByteLimit {
             stem.removeLast()
         }
-        return stem + suffix + markdownExtension
+        return stem + suffix + fileExtension
     }
 }

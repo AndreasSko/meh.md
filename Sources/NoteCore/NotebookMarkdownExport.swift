@@ -11,7 +11,9 @@ public enum NotebookMarkdownExport {
         selectedIDs: Set<UUID>, originalLinkNotes: [NotebookLinkNote]? = nil,
         preserveSource: Bool = false
     ) throws -> FileWrapper {
-        let active = placements.filter { !$0.isInTrash }
+        let active = placements.filter {
+            !$0.isInTrash && $0.item.kind != .attachment
+        }
         var children = Dictionary(grouping: active, by: \.parentID)
         for parent in children.keys {
             children[parent]!.sort { $0.item.id.uuidString < $1.item.id.uuidString }

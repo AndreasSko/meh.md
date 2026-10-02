@@ -76,7 +76,7 @@ final class NotebookImportUITests: XCTestCase {
         invalid.tap()
         pickerOpenButton.tap()
         let error = app.alerts.containing(
-            .staticText, identifier: "Couldn’t Import Markdown"
+            .staticText, identifier: "Couldn’t Import Files"
         ).firstMatch
         XCTAssertTrue(error.waitForExistence(timeout: 15))
         XCTAssertFalse(pickerOpenButton.exists)

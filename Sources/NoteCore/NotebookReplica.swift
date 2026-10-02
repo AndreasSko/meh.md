@@ -87,6 +87,7 @@ public final class NotebookReplica {
     }
 
     public let directory: URL
+    public let attachmentStore: NotebookAttachmentStore
     public private(set) var catalogSnapshot: NotebookCatalogSnapshot?
     public private(set) var placements: [NotebookPlacement] = []
     /// The active destination for global New Note actions. `nil` means Root.
@@ -171,6 +172,9 @@ public final class NotebookReplica {
 
     public init(directory: URL) {
         self.directory = directory
+        attachmentStore = NotebookAttachmentStore(
+            directory: directory.appending(path: "attachments")
+        )
         storage = NotebookCatalogStorage(directory: directory)
         importStorage = NotebookImportStorage(directory: directory)
         deletionStorage = NotebookDeletionStorage(directory: directory)
@@ -223,7 +227,7 @@ public final class NotebookReplica {
         }
         hasPendingImport = importStorage.hasPendingImport
         loaded = true
-        tryBestEffortDeletionCleanup()
+        await tryBestEffortDeletionCleanup()
     }
 
     public var deletedIDs: Set<UUID> {
@@ -290,6 +294,76 @@ public final class NotebookReplica {
         let id = try next.add(kind: .folder, name: name, parentID: parentID)
         try await saveCatalog(next)
         return id
+    }
+
+    public func attachmentDescriptor(
+        for id: UUID
+    ) throws -> NotebookAttachmentDescriptor {
+        guard let catalog else { throw NotebookReplicaError.notJoined }
+        if try deletedIDs.contains(id) {
+            throw NotebookReplicaError.permanentlyDeleted(id)
+        }
+        guard let item = try catalog.items().first(where: { $0.id == id }),
+            item.kind == .attachment, let content = item.attachment else {
+            throw NotebookCatalogError.itemNotFound
+        }
+        return NotebookAttachmentDescriptor(id: id, content: content)
+    }
+
+    public func attachmentDescriptors(
+        includeTrashed: Bool = true
+    ) throws -> [NotebookAttachmentDescriptor] {
+        guard catalog != nil else { throw NotebookReplicaError.notJoined }
+        return try placements.compactMap { placement in
+            guard placement.item.kind == .attachment,
+                includeTrashed || !placement.isInTrash else { return nil }
+            return try attachmentDescriptor(for: placement.item.id)
+        }
+    }
+
+    public func attachmentFileURL(for id: UUID) async throws -> URL {
+        let descriptor = try attachmentDescriptor(for: id)
+        let url = try await attachmentStore.verifiedFileURL(for: descriptor)
+        _ = try attachmentDescriptor(for: id)
+        return url
+    }
+
+    public func acceptAttachmentFile(
+        at url: URL, descriptor: NotebookAttachmentDescriptor
+    ) async throws {
+        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
+        let expected = try attachmentDescriptor(for: descriptor.id)
+        guard expected == descriptor else {
+            throw NotebookAttachmentError.identityConflict(descriptor.id)
+        }
+        do {
+            _ = try await attachmentStore.storeFile(
+                at: url, attachmentID: descriptor.id,
+                expectedContent: descriptor.content
+            )
+        } catch {
+            if (try? deletedIDs.contains(descriptor.id)) == true {
+                let store = attachmentStore
+                let id = descriptor.id
+                try? await Task.detached { try await store.remove(id: id) }.value
+            }
+            throw error
+        }
+        do {
+            guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
+            guard try attachmentDescriptor(for: descriptor.id) == descriptor else {
+                throw NotebookAttachmentError.identityConflict(descriptor.id)
+            }
+        } catch {
+            if (try? deletedIDs.contains(descriptor.id)) == true {
+                let id = descriptor.id
+                let store = attachmentStore
+                try? await Task.detached {
+                    try await store.remove(id: id)
+                }.value
+            }
+            throw error
+        }
     }
 
     public func importMarkdown(
@@ -521,10 +595,10 @@ public final class NotebookReplica {
                 }
             }
             let sorted = children.sorted { left, right in
-                if left.item.kind != right.item.kind {
+                if (left.item.kind == .folder) != (right.item.kind == .folder) {
                     return left.item.kind == .folder
                 }
-                if left.item.kind == .note {
+                if left.item.kind != .folder {
                     let leftDate: Date?
                     let rightDate: Date?
                     switch order {
@@ -762,7 +836,7 @@ public final class NotebookReplica {
             try await self.persistCatalog(next)
             try self.deletionFaultInjector?(.catalogSaved)
             await self.drainDeletedSessions(selection.ids)
-            self.tryBestEffortDeletionCleanup()
+            await self.tryBestEffortDeletionCleanup()
         }
     }
 
@@ -777,7 +851,7 @@ public final class NotebookReplica {
                 }
                 try await self.reconcileDeletionLedgerIntoCatalog()
                 await self.drainDeletedSessions(self.rememberedDeletions)
-                try self.performDeletionCleanup()
+                try await self.performDeletionCleanup()
                 self.deletionCleanupErrorMessage = nil
             } catch {
                 self.deletionCleanupErrorMessage = Self.message(for: error)
@@ -863,7 +937,7 @@ public final class NotebookReplica {
         ))
         try await persistCatalog(NotebookCatalogDocument(snapshot: snapshot))
         loaded = true
-        tryBestEffortDeletionCleanup()
+        await tryBestEffortDeletionCleanup()
     }
 
     public func persistedNoteSnapshots() async throws -> [NoteSnapshot] {
@@ -1063,7 +1137,7 @@ public final class NotebookReplica {
         }
         let deleted = try deletedIDs
         await drainDeletedSessions(deleted)
-        tryBestEffortDeletionCleanup()
+        await tryBestEffortDeletionCleanup()
     }
 
     /// Called only while the catalog write guard spans the storage await.
@@ -1223,7 +1297,7 @@ public final class NotebookReplica {
             self.applyRememberedDeletions()
             try await self.reconcileDeletionLedgerIntoCatalog()
             await self.drainDeletedSessions(self.rememberedDeletions)
-            self.tryBestEffortDeletionCleanup()
+            await self.tryBestEffortDeletionCleanup()
         }
     }
 
@@ -1262,9 +1336,11 @@ public final class NotebookReplica {
                 throw NotebookImportError.invalidPlan
             }
             switch entry.kind {
-            case .folder where entry.text != nil:
+            case .folder where entry.text != nil || entry.attachment != nil:
                 throw NotebookImportError.invalidPlan
-            case .note where entry.text == nil:
+            case .note where entry.text == nil || entry.attachment != nil:
+                throw NotebookImportError.invalidPlan
+            case .attachment where entry.text != nil || entry.attachment?.id != entry.id:
                 throw NotebookImportError.invalidPlan
             default:
                 break
@@ -1344,6 +1420,10 @@ public final class NotebookReplica {
                 guard existing[entry.id]?.kind == entry.kind else {
                     throw NotebookImportError.identityConflict(entry.id)
                 }
+                if entry.kind == .attachment,
+                    existing[entry.id]?.attachment != entry.attachment?.content {
+                    throw NotebookImportError.identityConflict(entry.id)
+                }
             }
             for entry in journal.plan.entries where entry.kind == .note {
                 guard let item = existing[entry.id],
@@ -1359,6 +1439,10 @@ public final class NotebookReplica {
                 }
                 try await verifyImportedBody(staged, id: entry.id)
             }
+            try await verifyImportedAttachments(
+                in: journal.plan,
+                skipping: Set(existing.values.filter(\.isPermanentlyDeleted).map(\.id))
+            )
             try install(latest.snapshot())
             try importStorage.remove()
             hasPendingImport = false
@@ -1383,6 +1467,7 @@ public final class NotebookReplica {
             }
         }
 
+        try await verifyImportedAttachments(in: journal.plan)
         let next = try latest.forkAddingImportEntries(
             journal.plan.entries, destinationParentID: journal.destinationParentID
         )
@@ -1395,6 +1480,19 @@ public final class NotebookReplica {
         try importFaultInjector?(.catalogSaved)
         try importStorage.remove()
         hasPendingImport = false
+    }
+
+    private func verifyImportedAttachments(
+        in plan: NotebookImportPlan,
+        skipping deleted: Set<UUID> = []
+    ) async throws {
+        for entry in plan.entries where entry.kind == .attachment
+            && !deleted.contains(entry.id) {
+            guard let descriptor = entry.attachment else {
+                throw NotebookImportError.corruptJournal
+            }
+            _ = try await attachmentStore.verifiedFileURL(for: descriptor)
+        }
     }
 
     private func verifyImportedBody(
@@ -1581,16 +1679,16 @@ public final class NotebookReplica {
         }
     }
 
-    private func tryBestEffortDeletionCleanup() {
+    private func tryBestEffortDeletionCleanup() async {
         do {
-            try performDeletionCleanup()
+            try await performDeletionCleanup()
             deletionCleanupErrorMessage = nil
         } catch {
             deletionCleanupErrorMessage = Self.message(for: error)
         }
     }
 
-    private func performDeletionCleanup() throws {
+    private func performDeletionCleanup() async throws {
         guard !rememberedDeletions.isEmpty,
             let notebookID = catalog?.notebookID
         else { return }
@@ -1598,6 +1696,17 @@ public final class NotebookReplica {
             rememberedDeletions,
             afterStage: { try deletionFaultInjector?($0) }
         )
+        for id in rememberedDeletions.sorted(by: { $0.uuidString < $1.uuidString }) {
+            try await attachmentStore.remove(id: id)
+            for name in ["attachment-transfers", "attachment-previews"] {
+                let transfers = directory.appending(path: name)
+                let owned = transfers.appending(path: id.uuidString)
+                if FileManager.default.fileExists(atPath: owned.path) {
+                    try FileManager.default.removeItem(at: owned)
+                    try DurableFileIO.syncDirectory(transfers)
+                }
+            }
+        }
         for id in rememberedDeletions {
             sessions[id] = nil
             sessionLoads[id] = nil
