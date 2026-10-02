@@ -30,6 +30,7 @@ and the evidence collected along the way.
 
 ## Notebook behavior and contracts
 
+- [Getting started](getting-started.md): optional welcome and example notes.
 - [Notebook core](notebook-core-contract.md): identity, folders, and Trash.
 - [Local search](notebook-search.md): matching, Quick Open, and native Find.
 - [Note templates](notebook-templates.md): reusable notes, recursive template
