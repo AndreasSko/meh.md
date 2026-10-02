@@ -6,6 +6,55 @@ import XCTest
 
 @MainActor
 final class NotebookWorkspaceRecoveryTests: XCTestCase {
+    func testUpdateRequirementPausesRetriesButKeepsLocalEdits() async throws {
+        let factory = RecoveryTransportFactory()
+        let original = HaltableRecordingTransport(
+            scope: "future-format", remoteStore: factory.remoteStore
+        )
+        let workspace = makeWorkspace(transport: original, factory: factory)
+        await workspace.start()
+        let coordinator = try XCTUnwrap(workspace.sync)
+        let replica = try XCTUnwrap(workspace.replica)
+        let fetchCount = await original.fetchCount
+        let publishCount = await original.publishCount
+        let syncStateURL = workspace.directory.appending(path: "notebook-sync-state.json")
+        let stateBeforePause = try Data(contentsOf: syncStateURL)
+        await original.setHalt(
+            .updateRequired,
+            underlyingError: SyncError.updateRequired(requiredVersion: 3),
+            recoverable: false
+        )
+
+        await workspace.refresh(manual: false)
+        XCTAssertTrue(workspace.isSyncUpdateRequired)
+        XCTAssertEqual(workspace.syncUpdateRequiredVersion, 3)
+        XCTAssertEqual(workspace.syncHalt?.reason, .updateRequired)
+        XCTAssertEqual(workspace.syncFailure?.retryDisposition, .unavailable)
+        XCTAssertFalse(workspace.canRetrySync)
+        XCTAssertNil(workspace.syncRetryNotBefore)
+
+        let noteID = try await replica.createNote(
+            name: "local-after-update.md", text: "kept on this device"
+        )
+        let session = try await replica.openNote(noteID)
+        try session.replaceAll(with: "latest local edit")
+        try await session.flush()
+        workspace.contentDidSave()
+        await workspace.refresh(manual: true)
+        XCTAssertEqual(factory.creationCount, 0)
+        XCTAssertTrue(workspace.sync === coordinator)
+        let laterFetchCount = await original.fetchCount
+        let laterPublishCount = await original.publishCount
+        XCTAssertEqual(laterFetchCount, fetchCount)
+        XCTAssertEqual(laterPublishCount, publishCount)
+        XCTAssertEqual(try Data(contentsOf: syncStateURL), stateBeforePause)
+
+        let reopened = NotebookReplica(directory: workspace.directory)
+        try await reopened.load()
+        let reopenedSession = try await reopened.openNote(noteID)
+        XCTAssertEqual(reopenedSession.text, "latest local edit")
+    }
+
     func testCancelledRefreshAllowsManualRetryWithoutReconstruction() async throws {
         let factory = RecoveryTransportFactory()
         let original = HaltableRecordingTransport(

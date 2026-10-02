@@ -47,6 +47,9 @@ public struct SyncRecord: Codable, Equatable, Sendable {
     }
 
     public func validate() throws {
+        guard id == Self.digest(snapshot: snapshot, kind: kind, notebookID: notebookID) else {
+            throw SyncError.invalidRecord
+        }
         switch protocolVersion {
         case 1:
             guard kind == .note, notebookID == nil else { throw SyncError.invalidRecord }
@@ -60,12 +63,9 @@ public struct SyncRecord: Codable, Equatable, Sendable {
                 guard snapshot.noteID == notebookID, let catalogSnapshot else {
                     throw SyncError.invalidRecord
                 }
-                _ = try NotebookCatalogDocument(snapshot: catalogSnapshot)
+                _ = try NotebookCatalogDocument(snapshot: catalogSnapshot, forSync: true)
             }
         default:
-            throw SyncError.invalidRecord
-        }
-        guard id == Self.digest(snapshot: snapshot, kind: kind, notebookID: notebookID) else {
             throw SyncError.invalidRecord
         }
     }
@@ -199,6 +199,7 @@ public enum SyncError: Error, Equatable, LocalizedError {
     case scopeChanged
     case invalidCursor
     case localSaveRequired
+    case updateRequired(requiredVersion: UInt64)
     case unavailable(String)
 
     public var errorDescription: String? {
@@ -212,6 +213,8 @@ public enum SyncError: Error, Equatable, LocalizedError {
             "The sync account or workspace changed. Sync is paused to protect the local note."
         case .invalidCursor: "The sync cursor is invalid. A full replay is required."
         case .localSaveRequired: "Save this note locally before synchronizing."
+        case .updateRequired:
+            "Update meh.md to resume iCloud sync. You can keep editing your notes on this device."
         case .unavailable(let message): message
         }
     }

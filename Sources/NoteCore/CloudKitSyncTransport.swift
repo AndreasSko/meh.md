@@ -872,6 +872,9 @@ struct CloudKitRecordCodec: @unchecked Sendable {
     func decode(_ record: CKRecord) throws -> SyncRecord {
         do {
             return try decodeRemoteRecord(record)
+        } catch let error as SyncError {
+            if case .updateRequired = error { throw error }
+            throw CloudKitSyncTransportError.invalidRemoteRecord
         } catch {
             throw CloudKitSyncTransportError.invalidRemoteRecord
         }
@@ -889,6 +892,9 @@ struct CloudKitRecordCodec: @unchecked Sendable {
                 record, validateSnapshot: false
             )
             return try cache.validate(value, mode: mode)
+        } catch let error as SyncError {
+            if case .updateRequired = error { throw error }
+            throw CloudKitSyncTransportError.invalidRemoteRecord
         } catch {
             throw CloudKitSyncTransportError.invalidRemoteRecord
         }
@@ -987,6 +993,9 @@ struct CloudKitRecordCodec: @unchecked Sendable {
                     value,
                     bootstrap: record.recordID.recordName == mode.bootstrapName
                 )
+            } catch let error as SyncError {
+                if case .updateRequired = error { throw error }
+                throw CloudKitSyncTransportError.invalidRemoteRecord
             } catch {
                 throw CloudKitSyncTransportError.invalidRemoteRecord
             }
@@ -1250,7 +1259,17 @@ enum CloudKitBatchResultResolver {
     }
 
     private static func preferred(_ errors: [Error]) -> Error? {
-        errors.first(where: { !NotebookSyncRetryPolicy.isTransient($0) })
+        if let scope = errors.first(where: {
+            $0 as? SyncError == .scopeChanged
+        }) { return scope }
+        if let update = errors.first(where: {
+            guard let sync = $0 as? SyncError else { return false }
+            if case .updateRequired = sync { return true }
+            return false
+        }) { return update }
+        return errors.first(where: {
+            !NotebookSyncRetryPolicy.isTransient($0)
+        })
             ?? errors.first
     }
 
@@ -1837,6 +1856,13 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         if !missingSaves.isEmpty {
             engine.add(pendingRecordZoneChanges: missingSaves)
         }
+        if mode == .notebook, !saved.outbox.isEmpty {
+            engine.add(pendingRecordZoneChanges: [
+                .saveRecord(CKRecord.ID(
+                    recordName: mode.bootstrapName, zoneID: zoneID
+                ))
+            ])
+        }
     }
 
     public func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
@@ -1856,6 +1882,15 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             } ensureZone: {
                 try await ensureZone()
             }
+            if mode == .notebook {
+                do {
+                    try CloudKitNotebookFormatGate.read(existing)
+                        .requireSupported()
+                } catch let error as SyncError {
+                    latchFailure(error)
+                    throw error
+                }
+            }
             let canonical = try codec.decodeBootstrap(
                 existing, using: &bootstrapValidationCache
             )
@@ -1873,6 +1908,15 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             let cloudRecord = try makeCloudRecord(
                 proposal.record, id: recordID, assetURL: assetURL
             )
+            if mode == .notebook {
+                try CloudKitNotebookFormatGate(
+                    minimumReaderVersion: 1,
+                    minimumWriterVersion: 1,
+                    catalogFormatVersion: 1,
+                    migrationSnapshotID: nil
+                ).publish(on: cloudRecord, catalogVersion: nil,
+                          snapshotID: nil)
+            }
             do {
                 _ = try await CloudKitBootstrapZoneRetry.perform {
                     try await cloudRequest(labLabel: "bootstrap.saveCanonical") {
@@ -1889,6 +1933,15 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 await observeRetryAfter(conflict)
                 let server = try await cloudRequest(labLabel: "bootstrap.readCanonical") {
                     try await database.record(for: recordID)
+                }
+                if mode == .notebook {
+                    do {
+                        try CloudKitNotebookFormatGate.read(server)
+                            .requireSupported()
+                    } catch let error as SyncError {
+                        latchFailure(error)
+                        throw error
+                    }
                 }
                 let canonical = try codec.decodeBootstrap(
                     server, using: &bootstrapValidationCache
@@ -1983,11 +2036,23 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         engine.add(
             pendingRecordZoneChanges: recordIDs.map { .saveRecord($0) }
         )
+        let scopedRecordIDs: [CKRecord.ID]
+        if mode == .notebook {
+            let canonicalID = CKRecord.ID(
+                recordName: mode.bootstrapName, zoneID: zoneID
+            )
+            engine.add(pendingRecordZoneChanges: [
+                .saveRecord(canonicalID)
+            ])
+            scopedRecordIDs = recordIDs + [canonicalID]
+        } else {
+            scopedRecordIDs = recordIDs
+        }
         let sendError: Error?
         do {
             try await cloudRequest(labLabel: "publish.engineSend") {
                 try await engine.sendChanges(
-                    .init(scope: .recordIDs(recordIDs))
+                    .init(scope: .recordIDs(scopedRecordIDs))
                 )
             }
             sendError = nil
@@ -2011,6 +2076,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     public func fetch(after cursor: String?) async throws -> SyncPage {
         try await assertHealthy()
         try await verifyAccount()
+        if mode == .notebook {
+            _ = try await currentNotebookGate()
+        }
         let current = await store.snapshot()
         if current.unresolvedRemoteDeletionRecordIDs.isEmpty {
             if let buffered = try current.bufferedPage(
@@ -2049,6 +2117,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         await acquirePublishLease()
         defer { releasePublishLease() }
         try await assertHealthy()
+        _ = try await currentNotebookGate()
         var state = await store.snapshot()
         guard state.inbox.contains(where: {
             $0.kind == .catalog && $0.notebookID == notebookID
@@ -2115,39 +2184,12 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             let ids = batch.map {
                 CKRecord.ID(recordName: $0, zoneID: zoneID)
             }
-            let results = try await cloudRequest {
-                try await database.modifyRecords(
-                    saving: [],
-                    deleting: ids,
-                    savePolicy: .ifServerRecordUnchanged,
-                    atomically: false
-                ).deleteResults
-            }
-            var completed = Set<String>()
-            var failure: Error?
-            for id in ids {
-                guard let result = results[id] else {
-                    failure = failure
-                        ?? CloudKitSyncTransportError.uploadNotAcknowledged
-                    continue
-                }
-                switch result {
-                case .success:
-                    completed.insert(id.recordName)
-                case .failure(let error as CKError)
-                    where error.code == .unknownItem:
-                    completed.insert(id.recordName)
-                case .failure(let error):
-                    await observeRetryAfter(error)
-                    failure = failure ?? error
-                }
-            }
+            let completed = try await deleteBatchWithFence(ids)
             if !completed.isEmpty {
                 try await store.update {
                     $0.pendingRemoteDeletionIDs.subtract(completed)
                 }
             }
-            if let failure { throw failure }
         }
     }
 
@@ -2411,6 +2453,156 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         try codec.decode(record)
     }
 
+    private func currentNotebookGate() async throws ->
+        CloudKitNotebookFormatGate {
+        let id = CKRecord.ID(
+            recordName: mode.bootstrapName, zoneID: zoneID
+        )
+        let record: CKRecord
+        do {
+            record = try await cloudRequest(
+                labLabel: "format.readCanonical"
+            ) { try await database.record(for: id) }
+        } catch let error as CKError where
+            error.code == .unknownItem || error.code == .zoneNotFound {
+            try await haltForDeletedZone()
+            throw CloudKitSyncTransportError.unexpectedDeletion
+        }
+        do {
+            let gate = try CloudKitNotebookFormatGate.read(record)
+            try gate.requireSupported()
+            return gate
+        } catch {
+            latchFailure(error)
+            throw error
+        }
+    }
+
+    /// Fetches the live canonical record for each notebook publication. Its
+    /// server change tag is submitted with the snapshots in one atomic zone
+    /// batch, so a competing format migration invalidates this publication.
+    private func fencedNotebookBatch(
+        _ records: [CKRecord], outbox: [String: SyncRecord]
+    ) async throws -> CKSyncEngine.RecordZoneChangeBatch {
+        let canonicalID = CKRecord.ID(
+            recordName: mode.bootstrapName, zoneID: zoneID
+        )
+        try await verifyAccount()
+        let canonical: CKRecord
+        do {
+            canonical = try await cloudRequest(
+                labLabel: "publication.readCanonical"
+            ) {
+                try await database.record(for: canonicalID)
+            }
+        } catch let error as CKError where
+            error.code == .unknownItem || error.code == .zoneNotFound {
+            try await haltForDeletedZone()
+            throw CloudKitSyncTransportError.unexpectedDeletion
+        }
+        let gate = try CloudKitNotebookFormatGate.read(canonical)
+        try gate.requireSupported()
+        // Retain the seed CKAsset before CloudKit reclaims its temporary URL.
+        let seed = try codec.decode(canonical)
+        let seedURL = try assetStaging.retain(seed)
+        do {
+            canonical["document"] = CKAsset(fileURL: seedURL)
+            let candidate = try records.compactMap { cloud ->
+                (version: UInt64, id: String)? in
+                guard let value = outbox[cloud.recordID.recordName],
+                      value.kind == .catalog else { return nil }
+                return (try NotebookSyncFormat.version(of: value), value.id)
+            }.max { $0.version < $1.version }
+            try gate.publish(
+                on: canonical,
+                catalogVersion: candidate?.version,
+                snapshotID: candidate?.id
+            )
+            try await verifyAccount()
+            engineAssetLeases[canonicalID.recordName, default: []]
+                .append(seedURL)
+            return CKSyncEngine.RecordZoneChangeBatch(
+                recordsToSave: records + [canonical],
+                recordIDsToDelete: [], atomicByZone: true
+            )
+        } catch {
+            assetStaging.release(seedURL, uploadCompleted: true)
+            throw error
+        }
+    }
+
+    private func deleteBatchWithFence(
+        _ ids: [CKRecord.ID]
+    ) async throws -> Set<String> {
+        var remaining = ids
+        var completed = Set<String>()
+        for _ in 0..<3 {
+            guard !remaining.isEmpty else { return completed }
+            let control = try await fencedNotebookBatch([], outbox: [:])
+            defer {
+                releaseEngineAssetLease(
+                    for: mode.bootstrapName, uploadCompleted: true
+                )
+            }
+            let results = try await cloudRequest(
+                labLabel: "purge.atomicDelete"
+            ) {
+                try await database.modifyRecords(
+                    saving: control.recordsToSave,
+                    deleting: remaining,
+                    savePolicy: .ifServerRecordUnchanged,
+                    atomically: true
+                )
+            }
+            let canonicalID = control.recordsToSave[0].recordID
+            if case let .failure(error)? =
+                results.saveResults[canonicalID] {
+                if let cloud = error as? CKError,
+                   cloud.code == .serverRecordChanged,
+                   let server = cloud.serverRecord {
+                    do {
+                        try CloudKitNotebookFormatGate.read(server)
+                            .requireSupported()
+                    } catch {
+                        latchFailure(error)
+                        throw error
+                    }
+                } else if let cloud = error as? CKError,
+                          cloud.code == .batchRequestFailed {
+                    // An already-deleted record can fail the atomic batch.
+                    // Inspect the deletion results and retry the rest.
+                } else {
+                    throw error
+                }
+            }
+            var retry: [CKRecord.ID] = []
+            var firstFailure: Error?
+            for id in remaining {
+                switch results.deleteResults[id] {
+                case .success(_)? :
+                    completed.insert(id.recordName)
+                case .failure(let error as CKError)?
+                    where error.code == .unknownItem:
+                    completed.insert(id.recordName)
+                case .failure(let error)? :
+                    retry.append(id)
+                    if let cloud = error as? CKError,
+                       cloud.code == .batchRequestFailed {
+                        continue
+                    }
+                    firstFailure = firstFailure ?? error
+                case nil:
+                    retry.append(id)
+                    firstFailure = firstFailure ??
+                        CloudKitSyncTransportError.uploadNotAcknowledged
+                }
+            }
+            if let firstFailure { throw firstFailure }
+            remaining = retry
+        }
+        throw CloudKitSyncTransportError.uploadNotAcknowledged
+    }
+
     private func yieldAfterDelegateReturns(
         _ activities: [CloudKitSyncActivity]
     ) {
@@ -2566,6 +2758,14 @@ extension CloudKitSyncTransport {
                 let data = try update.get()
                 try await eventCommitter.commitEngineState(data)
             case let .fetchedRecordZoneChanges(modifications, deletions):
+                if mode == .notebook {
+                    for canonical in modifications where
+                        canonical.recordID.zoneID == zoneID &&
+                        canonical.recordID.recordName == mode.bootstrapName {
+                        try CloudKitNotebookFormatGate.read(canonical)
+                            .requireSupported()
+                    }
+                }
                 let targetDeletions = deletions.filter {
                     $0.zoneID == zoneID
                 }
@@ -2590,11 +2790,16 @@ extension CloudKitSyncTransport {
                     $0.record.recordID.recordName
                 })
                 var durablyCommittedIDs = Set<String>()
+                if mode == .notebook,
+                   savedIDs.contains(mode.bootstrapName) {
+                    durablyCommittedIDs.insert(mode.bootstrapName)
+                }
                 defer {
                     for id in savedIDs {
                         releaseEngineAssetLease(
                             for: id,
-                            uploadCompleted: isRetired
+                            uploadCompleted: id == mode.bootstrapName
+                                || isRetired
                                 || delegateFailure != nil
                                 || durablyCommittedIDs.contains(id)
                         )
@@ -2602,13 +2807,17 @@ extension CloudKitSyncTransport {
                     for id in failedIDs {
                         releaseEngineAssetLease(
                             for: id,
-                            uploadCompleted: isRetired
+                            uploadCompleted: id == mode.bootstrapName
+                                || isRetired
                                 || delegateFailure != nil
                                 || durablyCommittedIDs.contains(id)
                         )
                     }
                 }
-                let savedRecords = try savedCloudRecords.map { record in
+                let savedRecords = try savedCloudRecords.filter { record in
+                    mode != .notebook ||
+                        record.recordID.recordName != mode.bootstrapName
+                }.map { record in
                     let id = record.recordID.recordName
                     let saved = try decode(record)
                     guard saved.id == id else {
@@ -2635,10 +2844,43 @@ extension CloudKitSyncTransport {
                         committedCount
                     )
                 }
+                if mode == .notebook,
+                   savedIDs.contains(mode.bootstrapName),
+                   !(await store.snapshot().outbox.isEmpty) {
+                    syncEngine.add(pendingRecordZoneChanges: [
+                        .saveRecord(CKRecord.ID(
+                            recordName: mode.bootstrapName, zoneID: zoneID
+                        ))
+                    ])
+                }
                 for failure in failedSaves {
                     await observeRetryAfter(failure.error)
                     if let delegateFailure { throw delegateFailure }
                     let id = failure.record.recordID.recordName
+                    if mode == .notebook && id == mode.bootstrapName {
+                        if failure.error.code == .serverRecordChanged,
+                           let server = failure.error.serverRecord {
+                            let gate = try CloudKitNotebookFormatGate
+                                .read(server)
+                            try gate.requireSupported()
+                            // An ordinary competing publication is benign.
+                            // Keep the durable outbox for a fresh CAS batch.
+                            syncEngine.add(pendingRecordZoneChanges: [
+                                .saveRecord(failure.record.recordID)
+                            ])
+                            for other in failedSaves where
+                                other.record.recordID.recordName != id {
+                                syncEngine.add(pendingRecordZoneChanges: [
+                                    .saveRecord(other.record.recordID)
+                                ])
+                            }
+                        } else if failure.error.code == .zoneNotFound {
+                            try await haltForDeletedZone()
+                        } else {
+                            lastReportedFailure = failure.error
+                        }
+                        continue
+                    }
                     if failure.error.code == .serverRecordChanged {
                         do {
                             // CloudKit attaches the conflicting record; never
@@ -2778,6 +3020,24 @@ extension CloudKitSyncTransport {
         from syncEngine: any CloudKitSyncEngineClient
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
         do {
+            if mode == .notebook {
+                let canonicalID = CKRecord.ID(
+                    recordName: mode.bootstrapName, zoneID: zoneID
+                )
+                guard pending.contains(where: { change in
+                    if case let .saveRecord(id) = change { return id == canonicalID }
+                    return false
+                }) else {
+                    // A scoped engine retry may omit the control record.
+                    // Request a new cycle that can offer the complete fence.
+                    if !pending.isEmpty {
+                        syncEngine.add(pendingRecordZoneChanges: [
+                            .saveRecord(canonicalID)
+                        ])
+                    }
+                    return nil
+                }
+            }
             let prepared = try await CloudKitOutgoingBatchPreparer.assemble(
                 allowed: { await self.canOfferOutgoingBatch(syncEngine) },
                 readOutbox: { await self.store.snapshot().outbox },
@@ -2812,6 +3072,19 @@ extension CloudKitSyncTransport {
             batchStagingFailure = nil
             guard let prepared else {
                 if let stagingFailure { throw stagingFailure }
+                if mode == .notebook,
+                   !pending.contains(where: { change in
+                       if case let .saveRecord(id) = change {
+                           return id.recordName != mode.bootstrapName
+                       }
+                       return false
+                   }) {
+                    syncEngine.remove(pendingRecordZoneChanges: [
+                        .saveRecord(CKRecord.ID(
+                            recordName: mode.bootstrapName, zoneID: zoneID
+                        ))
+                    ])
+                }
                 return nil
             }
             if let stagingFailure {
@@ -2825,9 +3098,57 @@ extension CloudKitSyncTransport {
                 releaseOutgoingBatchLeases(prepared.leasedIDs)
                 return nil
             }
-            return prepared.batch
+            guard mode == .notebook,
+                  !prepared.batch.recordsToSave.isEmpty else {
+                if mode == .notebook {
+                    syncEngine.remove(pendingRecordZoneChanges: [
+                        .saveRecord(CKRecord.ID(
+                            recordName: mode.bootstrapName, zoneID: zoneID
+                        ))
+                    ])
+                }
+                return prepared.batch
+            }
+            do {
+                // CKSyncEngine allows at most 250 changes in one batch.
+                // Reserve one slot for the canonical control record.
+                let snapshots = Array(
+                    prepared.batch.recordsToSave.prefix(249)
+                )
+                let selected = Set(snapshots.map {
+                    $0.recordID.recordName
+                })
+                releaseOutgoingBatchLeases(
+                    prepared.leasedIDs.subtracting(selected)
+                )
+                let batch = try await fencedNotebookBatch(
+                    snapshots,
+                    outbox: await store.snapshot().outbox
+                )
+                guard await canOfferOutgoingBatch(syncEngine) else {
+                    releaseOutgoingBatchLeases(selected)
+                    releaseEngineAssetLease(
+                        for: mode.bootstrapName, uploadCompleted: true
+                    )
+                    return nil
+                }
+                return batch
+            } catch {
+                releaseOutgoingBatchLeases(prepared.leasedIDs)
+                throw error
+            }
         } catch {
             guard !isRetired else { return nil }
+            if error is CancellationError { return nil }
+            if let cloud = error as? CKError,
+               Self.transientCloudCodes.contains(cloud.code) {
+                await observeRetryAfter(cloud)
+                lastReportedFailure = cloud
+                yieldAfterDelegateReturns([
+                    .failed(cloud.localizedDescription)
+                ])
+                return nil
+            }
             latchFailure(error)
             lastReportedFailure = error
             yieldAfterDelegateReturns([.failed(error.localizedDescription)])
@@ -2854,6 +3175,12 @@ extension CloudKitSyncTransport {
         }
         return true
     }
+
+    private static let transientCloudCodes: Set<CKError.Code> = [
+        .notAuthenticated, .accountTemporarilyUnavailable,
+        .networkFailure, .networkUnavailable, .requestRateLimited,
+        .serverResponseLost, .serviceUnavailable, .zoneBusy
+    ]
 
     private func releaseOutgoingBatchLeases(_ ids: Set<String>) {
         for id in ids {
