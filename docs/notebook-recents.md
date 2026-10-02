@@ -11,6 +11,14 @@ a note returns Recents to its compact state. In a regular sidebar, selecting
 a note leaves expanded Recents available beside the editor. Search, Show in
 Files, selection mode, and notebook switches end expanded browsing.
 
+On Mac, a small More button beneath the five notes unfolds Recents into a
+scrollable card inside the sidebar. The editor stays visible. The fixed
+Less button in the fixed bottom footer or Escape returns to Files at its
+previous position. Only the notes scroll, so the footer stays visible. The
+Recents menu also offers Browse All Recents / Back to Files, with
+Command-Shift-R to switch between the two states. Arrow keys select notes
+in the expanded native list, and context menus retain the usual note actions.
+
 ## Animation and feedback
 
 The rounded card keeps its horizontal margins when expanded. Pulling the
@@ -54,6 +62,38 @@ An anchored overlay contains the grabber and unfolding history. The expanded
 table preserves native swipe-to-pin, context menus, and row reuse. The overlay
 is clipped to the browser viewport.
 
+Mac uses a native SwiftUI List inside the sidebar with stable note identities
+and the same bounded preview loader. Its card opens downward; the heading and
+existing rows stay in place until scrolled. Reduce Motion disables this
+geometry animation.
+Files remains mounted beneath the card, preserving selection and scrolling.
+Compact and expanded Recents share the rounded outline, width and top edge.
+The expanded card stops above the sidebar's bottom edge and removes extra
+list content margins. Its native selection highlight remains unobstructed.
+The expanded table removes its default column gap, so note text, pins and
+dividers keep the compact rows' horizontal padding.
+The Mac sidebar uses thin native overlay scrollbars, including expanded
+Recents and search. They appear while scrolling and fade away afterward.
+They do not reserve a gutter or narrow the rows when shown. Wheel, trackpad
+and keyboard scrolling remain available.
+The adapter observes the native style because SwiftUI can reset it during
+drawer expansion as well as when system pointing-device preferences change.
+Expansion resets are corrected synchronously to prevent a wide scrollbar
+from flashing during the animation.
+
+## Row actions
+
+In compact and expanded Recents, swipe toward the leading edge (left in
+left-to-right layouts) to reveal the red Trash action. It requires a tap;
+a full swipe does not trash a note. Swipe the other way to Pin or Unpin,
+including the existing full-swipe shortcut. These are native UIKit actions
+on iPhone and iPad, and SwiftUI List actions on Mac.
+
+Trash flushes the open editor and uses the existing recoverable Trash and
+browser Undo operation. UIKit receives success only after that operation
+finishes; a busy browser or failed save reports failure. VoiceOver also
+offers Move to Trash. Trashing remains available when the pin limit is full.
+
 ## Verification
 
 Focused model tests cover full and compact ordering, pin rollback, Trash,
@@ -66,3 +106,13 @@ before running these UI tests. They cover compact browser scrolling, tap and
 downward expansion, cancelled pulls, upward closing, older rows, pinning,
 grabber taps, and selecting a note.
 Simulator checks cannot establish the physical feel of the haptics.
+
+`MacRecentsUITests` checks expansion, older notes, keyboard navigation,
+context-menu pinning, and returning to the Files browser with fictional data.
+`python3 scripts/check_mac_recents_scrollbars.py` exercises the actual Mac
+drawer implementation in an offscreen native window without changing focus.
+It covers repeated opening, scrolling, resizing and native style resets.
+It checks the style throughout the animation and immediately after a reset.
+It also compares both row edges using the actual shared note-row view.
+The iPhone Recents tests also check both swipe directions, full-swipe safety,
+and restoring notes from Trash after using compact or expanded Recents.

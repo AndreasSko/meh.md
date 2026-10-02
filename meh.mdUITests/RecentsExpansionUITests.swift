@@ -112,8 +112,8 @@ final class RecentsExpansionUITests: XCTestCase {
 
     private func revealSwipeActions(_ row: XCUIElement) {
         // A full-width swipe commits UIKit's action in a narrow iPad pane.
-        let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5))
-        let end = row.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.5))
+        let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5))
+        let end = row.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow,
                     thenHoldForDuration: 0.2)
     }
@@ -188,6 +188,70 @@ final class RecentsExpansionUITests: XCTestCase {
         }
     }
 
+    func testCaptureRecentSwipeComparison() throws {
+        continueAfterFailure = false
+        let app = try makeFixture()
+        let target = recentButtons(app).matching(NSPredicate(
+            format: "label CONTAINS %@", "Observatory log"
+        )).firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: 10))
+        if (target.value as? String)?.contains("Pinned") == true {
+            revealSwipeActions(target)
+            app.buttons["Unpin from Recents"].tap()
+        }
+        revealSwipeActions(target)
+        XCTAssertTrue(app.buttons["Pin in Recents"].waitForExistence(timeout: 5))
+        capture(app, name: "Recents pin swipe after")
+    }
+
+    func testSwipeTrashRequiresTapAndRestoresCompactAndExpanded() throws {
+        continueAfterFailure = false
+        let app = try makeFixture()
+        for expanded in [false, true] {
+            if expanded {
+                app.buttons["notebook-recents-show-all"].tap()
+                XCTAssertTrue(app.buttons["notebook-recents-close"].isHittable)
+            }
+            let visibleRow = try XCTUnwrap(recentButtons(app).allElementsBoundByIndex.first {
+                $0.isHittable && !($0.value as? String ?? "").contains("Pinned")
+            })
+            let rowID = visibleRow.identifier
+            let target = recentButtons(app).matching(identifier: rowID).firstMatch
+            XCTAssertTrue(target.waitForExistence(timeout: 10))
+            let id = rowID.replacingOccurrences(of: "notebook-recent-", with: "")
+            let start = target.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
+            let end = target.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow,
+                        thenHoldForDuration: 0.2)
+            let trashAction = app.buttons.matching(NSPredicate(
+                format: "label == %@ OR label == %@", "Trash", "Move to Trash"
+            )).firstMatch
+            XCTAssertTrue(trashAction.waitForExistence(timeout: 5))
+            XCTAssertTrue(target.exists, "A full swipe must preserve the note")
+            capture(app, name: expanded ? "Expanded Recents Trash swipe" : "Compact Recents Trash swipe")
+            trashAction.tap()
+            XCTAssertTrue(target.waitForNonExistence(timeout: 5))
+            if expanded {
+                app.buttons["notebook-recents-close"].tap()
+            }
+            app.buttons["notebook-app-menu"].tap()
+            app.buttons["notebook-trash-toggle"].tap()
+            let menu = app.buttons["notebook-trash-actions-" + id]
+            XCTAssertTrue(menu.waitForExistence(timeout: 5))
+            menu.tap()
+            let restore = app.buttons["notebook-trash-restore-" + id]
+            XCTAssertTrue(restore.waitForExistence(timeout: 5))
+            restore.tap()
+            XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
+            let done = app.buttons["notebook-trash-close"]
+            XCTAssertTrue(done.waitForExistence(timeout: 5))
+            done.tap()
+            showSidebar(app)
+            XCTAssertTrue(app.buttons["notebook-recents-show-all"].isHittable)
+        }
+        capture(app, name: "Recents restored after fictional Trash checks")
+    }
+
     private func makeFixture() throws -> XCUIApplication {
         if let workspace = ProcessInfo.processInfo.environment[
             "MEH_RECENTS_UI_REUSE_WORKSPACE"
@@ -229,7 +293,9 @@ final class RecentsExpansionUITests: XCTestCase {
     private func launchApp(workspace: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
-        app.launchEnvironment["MEH_SYNC_URL"] = "http://127.0.0.1:9874"
+        app.launchEnvironment["MEH_SYNC_URL"] =
+            ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
+            ?? "http://127.0.0.1:9874"
         app.launchEnvironment["MEH_SYNC_WORKSPACE"] = workspace
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "source"]
@@ -248,8 +314,9 @@ final class RecentsExpansionUITests: XCTestCase {
 
     private func recentButtons(_ app: XCUIApplication) -> XCUIElementQuery {
         app.buttons.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND NOT identifier BEGINSWITH %@",
-            "notebook-recent-", "notebook-recent-pin-"
+            format: "identifier BEGINSWITH %@ AND NOT identifier BEGINSWITH %@ "
+                + "AND NOT identifier BEGINSWITH %@",
+            "notebook-recent-", "notebook-recent-pin-", "notebook-recent-swipe-"
         ))
     }
 

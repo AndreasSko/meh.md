@@ -131,10 +131,10 @@ final class RecentNotesUITests: XCTestCase {
         capture(app, name: "Revealed fictional note highlighted in Files")
     }
 
-    func testIPhoneTrailingSwipePinsAndUnpinsWithoutOpeningRecent() throws {
+    func testIPhoneLeadingSwipePinsAndUnpinsWithoutOpeningRecent() throws {
         try XCTSkipIf(
             UIDevice.current.userInterfaceIdiom != .phone,
-            "This test verifies the iPhone-only trailing swipe interaction."
+            "This test verifies the iPhone-only leading swipe interaction."
         )
         continueAfterFailure = false
         let app = makeApp()
@@ -149,7 +149,7 @@ final class RecentNotesUITests: XCTestCase {
         let recents = recentButtons(app)
         let pinTarget = recents.element(boundBy: 1)
         XCTAssertTrue(pinTarget.waitForExistence(timeout: 5))
-        pinTarget.swipeLeft(velocity: .slow)
+        pinTarget.swipeRight(velocity: .slow)
         let pinAction = app.buttons["Pin in Recents"]
         XCTAssertTrue(pinAction.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["notebook-recents-toggle"].isHittable)
@@ -163,7 +163,7 @@ final class RecentNotesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["notebook-recents-toggle"].isHittable)
         capture(app, name: "Pinned recent note in the fictional library")
 
-        pinnedRecent.swipeLeft(velocity: .slow)
+        pinnedRecent.swipeRight(velocity: .slow)
         let unpinAction = app.buttons["Unpin from Recents"]
         XCTAssertTrue(unpinAction.waitForExistence(timeout: 5))
         XCTAssertEqual(unpinAction.label, "Unpin from Recents")
@@ -178,7 +178,7 @@ final class RecentNotesUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 1)
         capture(app, name: "Recent notes after partial unpin")
 
-        fullSwipeLeft(unpinnedRecent)
+        fullSwipeRight(unpinnedRecent)
         Thread.sleep(forTimeInterval: 1)
         let fullSwipePinned = recents.element(boundBy: 0)
         XCTAssertTrue(fullSwipePinned.waitForExistence(timeout: 5))
@@ -187,7 +187,7 @@ final class RecentNotesUITests: XCTestCase {
         XCTAssertTrue(recents.element(boundBy: 1).label.contains(secondSource))
         capture(app, name: "Recent notes after full-swipe pin")
 
-        fullSwipeLeft(fullSwipePinned)
+        fullSwipeRight(fullSwipePinned)
         Thread.sleep(forTimeInterval: 1)
         let fullSwipeUnpinned = recents.element(boundBy: 1)
         XCTAssertTrue(fullSwipeUnpinned.waitForExistence(timeout: 5))
@@ -236,9 +236,9 @@ final class RecentNotesUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, secondSource + " suffix")
     }
 
-    private func fullSwipeLeft(_ row: XCUIElement) {
-        let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
-        let end = row.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
+    private func fullSwipeRight(_ row: XCUIElement) {
+        let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
+        let end = row.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
         start.press(forDuration: 0.05, thenDragTo: end)
     }
 
@@ -384,8 +384,16 @@ final class RecentNotesUITests: XCTestCase {
 
     private func makeApp() -> XCUIApplication {
         let app = XCUIApplication()
+        #if ICLOUD_ENABLED
+        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
+        app.launchEnvironment["MEH_SYNC_URL"] =
+            ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
+            ?? "http://127.0.0.1:9874"
+        app.launchEnvironment["MEH_SYNC_WORKSPACE"] = "recents-pin-" + UUID().uuidString
+        #else
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
+        #endif
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "source"]
         return app
@@ -393,8 +401,9 @@ final class RecentNotesUITests: XCTestCase {
 
     private func recentButtons(_ app: XCUIApplication) -> XCUIElementQuery {
         app.buttons.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND NOT identifier BEGINSWITH %@",
-            "notebook-recent-", "notebook-recent-pin-"
+            format: "identifier BEGINSWITH %@ AND NOT identifier BEGINSWITH %@ "
+                + "AND NOT identifier BEGINSWITH %@",
+            "notebook-recent-", "notebook-recent-pin-", "notebook-recent-swipe-"
         ))
     }
 
