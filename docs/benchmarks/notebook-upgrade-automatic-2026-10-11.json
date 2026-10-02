@@ -1,0 +1,66 @@
+{
+  "result": "PASS",
+  "date": "2026-10-11",
+  "environment": "Development CloudKit, isolated fictional lab zones",
+  "sourceCommitBeforeFinalAmend": "292ba170e0d4de159b0b9a113d84016d145e4837",
+  "factoryIdentity": {
+    "sourceCommit": "292ba170e0d4de159b0b9a113d84016d145e4837",
+    "productionTransportSHA256": "538c9f2344b11f8c0927923ffcb54ec6a3b02cfaced7510b02dbfa480369649a",
+    "modifiedFiles": [
+      "meh.md/NotebookSyncLabApp.swift",
+      "Sources/NoteCore/CloudKitSyncTransport.swift",
+      "Tools/CloudKit/run_notebook_lab.py",
+      "Tools/CloudKit/run_notebook_lab_simulator.py"
+    ],
+    "patchSHA256": "ac40d7300c9a8144aa7275583604ec71544753050d13ccf286ee0ebe9cc795a4",
+    "binarySHA256": "e66a0d8f77eb1a893c8285b0aa2ce90c5dd00e86643d3665c45ac9396f7cc235",
+    "filesSHA256": {
+      "meh.md/NotebookSyncLabApp.swift": "13c676acacd616a98c24138db932f1568d93a6a6499f2a29dee787b26d02d691",
+      "Sources/NoteCore/CloudKitSyncTransport.swift": "e23d485042a86cbbc23434c7047e1af4e23f12abc49142893057607f3d89f8dd",
+      "Tools/CloudKit/run_notebook_lab.py": "82b57fe7c5ac4b499c7f5372eee82619638e94560fcbd24a656466304dd75b45",
+      "Tools/CloudKit/run_notebook_lab_simulator.py": "726a097f4eabf0d1b418d5a20b5e80a8338a6b31850fe027ee3e86ba6732a945"
+    },
+    "scope": "Production workspace factory/setup/activity subscription, scheduler and transport decisions, plus narrow aggregate22 rollback retry; temporary lab phases, scene lifecycle and error/corpus diagnostics. APNs untested. Earlier harness identities describe obsolete ready-made transport injection."
+  },
+  "liveThreeClientRun": {
+    "runID": "C8AF0508-7E7E-46A1-A726-057DA1AB2C76",
+    "notes": 30,
+    "clients": 3,
+    "exactBodyComparisons": 90,
+    "sameIDsAndNames": true,
+    "convergenceMilliseconds": 139396.155,
+    "freshColdClients": 3,
+    "coldExactBodyComparisons": 90,
+    "rawHeadsAndSnapshotEqualityAsserted": false
+  },
+  "nativeSimulator": {
+    "name": "meh.md Offline iCloud Test",
+    "tests": 1,
+    "failures": 0,
+    "skipped": 0,
+    "durationSeconds": 358.922,
+    "manualSyncNowUsed": false,
+    "verified": [
+      "native outage editing and save",
+      "exact body after outage relaunch",
+      "automatic exchange after outage flag removed",
+      "foreground restoration",
+      "exact body after cold restart"
+    ],
+    "temporaryStageDiagnosticsInTestBinary": true,
+    "productionSourceDiagnosticsRestored": true,
+    "perNoteWarningTrianglesStillVisible": true
+  },
+  "freshMacPeer": {
+    "noteID": "C22755C1-B19B-4EB8-8E99-8CBD68A3BB4A",
+    "bodySHA256": "23d5bebe8ef5c0960ff92730f6c4d88138974f90c0cb53ff2d4866e75ebeab40",
+    "matchingIDs": 1,
+    "nonemptyHeads": true
+  },
+  "limitations": [
+    "Earlier ready-made transport harness skipped the normal cloud activity subscription; failed reports preserved.",
+    "UI Last sync alone does not establish upload health; the separately checked new note UUID and exact body establish remote visibility.",
+    "APNs and physical-device background delivery not tested.",
+    "Production TestFlight smoke test remains required."
+  ]
+}

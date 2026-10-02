@@ -1,3 +1,4 @@
+import Automerge
 import Foundation
 import XCTest
 
@@ -119,6 +120,120 @@ final class NotebookLocalTransportTests: XCTestCase, @unchecked Sendable {
 
         await assertInvalidRecord {
             _ = try await transport.fetch(after: nil)
+        }
+    }
+
+    func testFutureCatalogKeepsUpdateRequiredThroughLocalValidation()
+        async throws {
+        let future = try futureCatalog()
+        let version = NotebookSyncFormat.supportedVersion + 1
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NotebookSyncURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let transport = LocalSyncTransport(
+            baseURL: URL(string: "http://127.0.0.1:8765/")!,
+            workspace: "future-catalog", session: session,
+            protocolVersion: 2
+        )
+        defer { NotebookSyncURLProtocol.handler = nil }
+
+        await assertUpdateRequired(version) {
+            try await transport.publish(future)
+        }
+        await assertUpdateRequired(version) {
+            _ = try await transport.bootstrap(proposing: future)
+        }
+
+        let proposal = SyncRecord(catalog:
+            try NotebookCatalogDocument(notebookID: notebookID).snapshot()
+        )
+        NotebookSyncURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v2/bootstrap")
+            return try Self.response(future, for: XCTUnwrap(request.url))
+        }
+        await assertUpdateRequired(version) {
+            _ = try await transport.bootstrap(proposing: proposal)
+        }
+    }
+
+    func testMixedPagePreservesFutureVersionAndRejectsCorruptDigest()
+        async throws {
+        let future = try futureCatalog()
+        let valid = SyncRecord(
+            snapshot: try NoteDocument(text: "valid body").snapshot(),
+            notebookID: notebookID
+        )
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NotebookSyncURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let transport = LocalSyncTransport(
+            baseURL: URL(string: "http://127.0.0.1:8765/")!,
+            workspace: "mixed-page", session: session,
+            protocolVersion: 2
+        )
+        defer { NotebookSyncURLProtocol.handler = nil }
+        let version = NotebookSyncFormat.supportedVersion + 1
+        NotebookSyncURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v2/records")
+            return try Self.response(
+                SyncPage(records: [valid, future], cursor: "next",
+                         hasMore: false),
+                for: XCTUnwrap(request.url)
+            )
+        }
+        await assertUpdateRequired(version) {
+            _ = try await transport.fetch(after: nil)
+        }
+
+        var encoded = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(future)
+            ) as? [String: Any]
+        )
+        encoded["id"] = String(repeating: "0", count: 64)
+        let corruptFuture = try JSONDecoder().decode(
+            SyncRecord.self,
+            from: JSONSerialization.data(withJSONObject: encoded)
+        )
+        NotebookSyncURLProtocol.handler = { request in
+            return try Self.response(
+                SyncPage(records: [valid, corruptFuture], cursor: "next",
+                         hasMore: false),
+                for: XCTUnwrap(request.url)
+            )
+        }
+        await assertInvalidRecord {
+            _ = try await transport.fetch(after: nil)
+        }
+    }
+
+    private func futureCatalog() throws -> SyncRecord {
+        let seed = try NotebookCatalogDocument(notebookID: notebookID)
+            .snapshot()
+        let document = try Document(seed.data)
+        try document.put(
+            obj: .ROOT, key: "schemaVersion",
+            value: .Uint(NotebookSyncFormat.supportedVersion + 1)
+        )
+        return SyncRecord(catalog: NotebookCatalogSnapshot(
+            data: document.save(),
+            heads: Set(document.heads().map(\.debugDescription)),
+            notebookID: notebookID
+        ))
+    }
+
+    private func assertUpdateRequired(
+        _ version: UInt64,
+        operation: () async throws -> Void
+    ) async {
+        do {
+            try await operation()
+            XCTFail("Expected update-required error")
+        } catch {
+            XCTAssertEqual(
+                error as? SyncError,
+                .updateRequired(requiredVersion: version)
+            )
         }
     }
 

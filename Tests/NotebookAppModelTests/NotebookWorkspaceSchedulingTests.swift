@@ -204,6 +204,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         await workspace.receiveCloudActivity(.failed("Account changed"))
         await workspace.receiveCloudActivity(.failed("Account changed"))
 
+        try await Task.sleep(for: .milliseconds(250))
         let operationsAfterFailures = await transport.operationCount
         XCTAssertEqual(operationsAfterFailures, baselineOperations)
         XCTAssertEqual(workspace.syncSetupError, "Account changed")
@@ -322,6 +323,93 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         XCTAssertEqual(operations, 0)
     }
 
+    func testPublicationHintsCoalesceAndAutomaticallyPublishSavedWork() async throws {
+        let transport = RecordingTransport(scope: "publication-retry")
+        let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        let baseline = await transport.fetchCount
+        let replica = try XCTUnwrap(workspace.replica)
+        let noteID = try await replica.createNote(name: "pending.md", text: "durable edit")
+        await transport.setRetryDeadline(Date().addingTimeInterval(5.3))
+
+        await workspace.receiveCloudActivity(.publicationPending)
+        let deadline = try XCTUnwrap(workspace.syncRetryNotBefore)
+        await workspace.receiveCloudActivity(.publicationPending)
+        let repeatedDeadline = try XCTUnwrap(workspace.syncRetryNotBefore)
+        XCTAssertEqual(repeatedDeadline.timeIntervalSince(deadline), 0, accuracy: 0.05)
+        await workspace.refresh()
+        let beforeDeadline = await transport.fetchCount
+        XCTAssertEqual(beforeDeadline, baseline)
+
+        try await waitUntil(timeout: .seconds(8)) {
+            let published = await transport.containsPublishedNote(noteID)
+            let finished = await MainActor.run { !workspace.isRefreshing }
+            return published && finished
+        }
+        let fetches = await transport.fetchCount
+        XCTAssertEqual(fetches, baseline + 1)
+        XCTAssertNil(workspace.syncFailure)
+    }
+
+    func testBackgroundPublicationHintResumesAtForegroundWithCooldown() async throws {
+        let transport = RecordingTransport(scope: "background-publication")
+        let workspace = makeWorkspace(transport: transport)
+        await workspace.start()
+        let baseline = await transport.fetchCount
+        await transport.setRetryDeadline(Date().addingTimeInterval(5.3))
+        await workspace.receiveCloudActivity(.publicationPending)
+        let deadline = try XCTUnwrap(workspace.syncRetryNotBefore)
+        try await Task.sleep(for: .milliseconds(100))
+        let background = await transport.fetchCount
+        XCTAssertEqual(background, baseline)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.refresh()
+        let beforeDeadline = await transport.fetchCount
+        XCTAssertEqual(beforeDeadline, baseline)
+        XCTAssertGreaterThan(deadline, Date())
+        try await waitUntil(timeout: .seconds(8)) {
+            await transport.fetchCount > baseline
+        }
+    }
+
+    func testPublicationHintHonorsOptOutResetAndStaleGeneration() async throws {
+        for automaticSync in [false, true] {
+            let transport = RecordingTransport(scope: "guarded-\(automaticSync)")
+            let workspace = makeWorkspace(transport: transport, automaticSync: automaticSync)
+            await workspace.start()
+            let baseline = await transport.operationCount
+            if automaticSync {
+                await workspace.receiveCloudActivity(.publicationPending, generation: UUID())
+                XCTAssertNil(workspace.syncRetryNotBefore)
+                workspace.localStorageResetWasScheduled()
+            }
+            await workspace.receiveCloudActivity(.publicationPending)
+            XCTAssertNil(workspace.syncRetryNotBefore)
+            let operations = await transport.operationCount
+            XCTAssertEqual(operations, baseline)
+        }
+    }
+
+    func testUnsupportedTransportRejectsPublicationRetry() async throws {
+        let transport = RecordingTransport(scope: "unsupported-publication")
+        let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        await transport.setHalt(CloudKitSyncHaltStatus(
+            reason: .updateRequired,
+            underlyingError: SyncError.updateRequired(requiredVersion: 3),
+            isRecoverable: false
+        ))
+        await workspace.receiveCloudActivity(.failed("Update required"))
+        let baseline = await transport.operationCount
+        await workspace.receiveCloudActivity(.publicationPending)
+        XCTAssertTrue(workspace.isSyncUpdateRequired)
+        XCTAssertNil(workspace.syncRetryNotBefore)
+        let operations = await transport.operationCount
+        XCTAssertEqual(operations, baseline)
+    }
+
     private func makeWorkspace(
         transport: any SyncTransport,
         automaticSync: Bool = true,
@@ -357,13 +445,24 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
     }
 }
 
-private actor RecordingTransport: SyncTransport {
+private actor RecordingTransport: HaltableSyncTransport {
     nonisolated let scope: String
     private let base: InMemorySyncTransport
     private(set) var bootstrapCount = 0
     private(set) var publishCount = 0
     private(set) var fetchCount = 0
     private(set) var purgeCount = 0
+    private var retryDeadline: Date?
+    private var halt: CloudKitSyncHaltStatus?
+    func setRetryDeadline(_ deadline: Date?) { retryDeadline = deadline }
+    func retryNotBefore() async -> Date? { retryDeadline }
+    func setHalt(_ value: CloudKitSyncHaltStatus) { halt = value }
+    func haltStatus() async -> CloudKitSyncHaltStatus? { halt }
+    func retire() async {}
+    func containsPublishedNote(_ id: UUID) async -> Bool {
+        guard let page = try? await base.fetch(after: nil) else { return false }
+        return page.records.contains { $0.kind == .note && $0.snapshot.noteID == id }
+    }
     private var shouldPauseFetch = false
     private var pausedFetch: CheckedContinuation<Void, Never>?
     var isFetchPaused: Bool { pausedFetch != nil }

@@ -19,6 +19,8 @@ public enum CloudKitSyncActivity: Equatable, Sendable {
         reason: CloudKitSyncReason
     )
     case uploadsAcknowledged(recordCount: Int)
+    /// A scheduled publication needs a fresh app exchange to complete.
+    case publicationPending
     case accountChanged
     case failed(String)
 }
@@ -52,13 +54,14 @@ private final class CloudKitSyncActivityBuffer: @unchecked Sendable {
         case scheduledFetch
         case manualFetch
         case upload
+        case publication
         case account
         case failure
     }
 
     private let lock = NSLock()
     // `lock` protects all mutable state. The collections contain at most one
-    // entry for each of the five activity keys.
+    // entry for each of the six activity keys.
     private var order: [Key] = []
     private var pending: [Key: CloudKitSyncActivity] = [:]
     private var waiter: CheckedContinuation<CloudKitSyncActivity?, Never>?
@@ -139,6 +142,8 @@ private final class CloudKitSyncActivityBuffer: @unchecked Sendable {
             pending[key] = .uploadsAcknowledged(
                 recordCount: Self.saturatingSum(oldCount, newCount)
             )
+        case (.publicationPending, .publicationPending):
+            break
         case (.accountChanged, .accountChanged):
             break
         case (_, .failed(let message)):
@@ -159,6 +164,7 @@ private final class CloudKitSyncActivityBuffer: @unchecked Sendable {
         case .remoteChanges(_, _, .scheduled): .scheduledFetch
         case .remoteChanges(_, _, .manual): .manualFetch
         case .uploadsAcknowledged: .upload
+        case .publicationPending: .publication
         case .accountChanged: .account
         case .failed: .failure
         }

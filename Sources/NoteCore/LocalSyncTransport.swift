@@ -84,6 +84,9 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
             for record in page.records {
                 try validate(record)
             }
+        } catch let error as SyncError {
+            if case .updateRequired = error { throw error }
+            throw SyncError.invalidRecord
         } catch {
             throw SyncError.invalidRecord
         }
@@ -252,6 +255,9 @@ public struct LocalSyncTransport: SyncTransport, Sendable {
                 throw SyncError.invalidRecord
             }
             try record.validate()
+        } catch let error as SyncError {
+            if case .updateRequired = error { throw error }
+            throw SyncError.invalidRecord
         } catch {
             throw SyncError.invalidRecord
         }

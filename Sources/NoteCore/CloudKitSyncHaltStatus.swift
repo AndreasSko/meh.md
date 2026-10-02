@@ -7,6 +7,7 @@ public enum CloudKitSyncHaltReason: Equatable, Sendable {
     case accountChanged
     case corruptState
     case invalidRemoteRecord
+    case updateRequired
     case unexpectedDeletion
     case other
     case retired
@@ -35,6 +36,11 @@ public struct CloudKitSyncHaltStatus: Sendable {
         } else if error as? SyncError == .scopeChanged {
             underlyingError = error
             reason = .accountChanged
+            isRecoverable = false
+        } else if let syncError = error as? SyncError,
+                  case .updateRequired = syncError {
+            underlyingError = error
+            reason = .updateRequired
             isRecoverable = false
         } else if let error = error as? CloudKitSyncTransportError {
             underlyingError = error

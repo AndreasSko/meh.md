@@ -179,10 +179,10 @@ final class NotebookSyncSeedValidationTests: XCTestCase {
             return XCTFail("Missing error for \(fault)", file: file, line: line)
         }
         switch fault {
-        case .forgedID, .wrongKind, .wrongProtocol:
+        case .forgedID, .forgedBytes, .wrongKind, .wrongProtocol:
             XCTAssertEqual(received as? SyncError, .invalidRecord,
                 file: file, line: line)
-        case .forgedHeads, .forgedBytes:
+        case .forgedHeads:
             XCTAssertEqual(received as? NotebookCatalogError, .identityMismatch,
                 file: file, line: line)
         case .wrongNotebook:

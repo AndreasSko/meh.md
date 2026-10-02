@@ -41,6 +41,311 @@ final class CloudKitSyncEngineTests: XCTestCase {
         )
     }
 
+    func testFormatOneUploadSpansFencedBatchesWithoutMissingNotes() async throws {
+        let catalog = try makeCatalog()
+        let notes = try (0..<251).map { try makeNote("queued note \($0)") }
+        let sender = try await open("large-format-one-sender")
+        _ = try await sender.bootstrap(proposing: catalog)
+        let previousBatches = server.atomicSaveBatches.count
+
+        let result = try await sender.publishBatch(notes)
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.acknowledgedIDs, Set(notes.map(\.id)))
+        let batches = Array(server.atomicSaveBatches.dropFirst(previousBatches))
+        XCTAssertGreaterThan(batches.count, 1)
+        let canonical = CloudKitTransportMode.notebook.bootstrapName
+        for batch in batches {
+            XCTAssertLessThanOrEqual(batch.count, 250)
+            XCTAssertEqual(batch.filter { $0 == canonical }.count, 1)
+        }
+        XCTAssertEqual(
+            Set(batches.flatMap { $0 }.filter { $0 != canonical }),
+            Set(notes.map(\.id))
+        )
+
+        let receiver = try await open("large-format-one-receiver")
+        _ = try await receiver.bootstrap(proposing: catalog)
+        let received = try await fetchAll(receiver).records
+        XCTAssertEqual(received.count, notes.count + 1)
+        XCTAssertEqual(
+            Set(received.map(\.id)), Set(notes.map(\.id) + [catalog.id])
+        )
+        for note in notes {
+            XCTAssertEqual(received.first { $0.id == note.id }, note)
+        }
+        await sender.retire()
+        await receiver.retire()
+    }
+
+    func testFormatOneCanonicalRaceRetriesWithoutLosingNotes() async throws {
+        let catalog = try makeCatalog()
+        let peerNote = try makeNote("peer's independent edit")
+        let localNotes = try [
+            makeNote("first queued local edit"),
+            makeNote("second queued local edit")
+        ]
+        let peer = try await open("format-one-peer")
+        _ = try await peer.bootstrap(proposing: catalog)
+        try await peer.publish(peerNote)
+        let local = try await open("format-one-local")
+        _ = try await local.bootstrap(proposing: catalog)
+        let engine = try XCTUnwrap(server.latestEngine)
+        engine.stopAfterFailedBatch = true
+        engine.throwPartialFailureAfterFailedBatch = true
+        let previousSends = engine.sendChangesCount
+
+        // Change only the live control tag's compatibility requirement to
+        // the same supported format, after the publisher reads its old tag.
+        // The fake server rejects the entire stale atomic batch, and its
+        // engine ends the send after that rollback, as live CloudKit can.
+        server.inject(.advanceCanonicalBeforeSave(requiredVersion: 1))
+        let result = try await local.publishBatch(localNotes)
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.acknowledgedIDs, Set(localNotes.map(\.id)))
+        XCTAssertEqual(engine.sendChangesCount - previousSends, 2)
+        let halt = await local.haltStatus()
+        XCTAssertNil(halt)
+
+        let expected = Set([catalog.id, peerNote.id] + localNotes.map(\.id))
+        for transport in [local, peer] {
+            let received = try await fetchAll(transport).records
+            XCTAssertEqual(Set(received.map(\.id)), expected)
+            for note in [peerNote] + localNotes {
+                XCTAssertEqual(received.first { $0.id == note.id }, note)
+            }
+        }
+        let control = try await server.record(for: CKRecord.ID(
+            recordName: CloudKitTransportMode.notebook.bootstrapName,
+            zoneID: server.zoneID
+        ))
+        XCTAssertEqual(
+            try CloudKitNotebookFormatGate.read(control).catalogFormatVersion,
+            1
+        )
+        await local.retire()
+        await peer.retire()
+    }
+
+    func testVerifiedCanonicalRollbackRetriesTopLevelBatchRequestFailure()
+        async throws
+    {
+        let transport = try await open("top-level-atomic-rollback")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        let engine = try XCTUnwrap(server.latestEngine)
+        engine.stopAfterFailedBatch = true
+        engine.throwPartialFailureAfterFailedBatch = true
+        engine.failedBatchAggregateCode = .batchRequestFailed
+        let previousSends = engine.sendChangesCount
+        let notes = try [makeNote("first edit after supported CAS rollback"),
+                         makeNote("second edit after supported CAS rollback")]
+        server.inject(.advanceCanonicalBeforeSave(requiredVersion: 1))
+        let result = try await transport.publishBatch(notes)
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.acknowledgedIDs, Set(notes.map(\.id)))
+        XCTAssertEqual(engine.sendChangesCount - previousSends, 2)
+        XCTAssertTrue(Set(notes.map(\.id)).isSubset(of: server.recordNames))
+        await transport.retire()
+    }
+
+    func testTopLevelBatchFailureDoesNotHideAtomicQuotaRejection()
+        async throws
+    {
+        let transport = try await open("top-level-real-failure")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        let engine = try XCTUnwrap(server.latestEngine)
+        engine.stopAfterFailedBatch = true
+        engine.throwPartialFailureAfterFailedBatch = true
+        engine.failedBatchAggregateCode = .batchRequestFailed
+        let previousSends = engine.sendChangesCount
+        let note = try makeNote("quota rejection must retain its error")
+        server.inject(.failSave(.quotaExceeded) { $0.recordName == note.id })
+        let result = try await transport.publishBatch([note])
+        XCTAssertEqual(result.acknowledgedIDs, [])
+        XCTAssertNotNil(result.error)
+        XCTAssertEqual(engine.sendChangesCount - previousSends, 1)
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        let state = try JSONDecoder().decode(CloudKitTransportState.self,
+            from: Data(contentsOf: root.appending(path: "top-level-real-failure")
+                .appending(path: "cloudkit-sync-state.json")))
+        XCTAssertEqual(state.outbox[note.id], note)
+        await transport.retire()
+    }
+
+    func testBatchFailureRollbackRetryRechecksFutureCanonicalFormat()
+        async throws
+    {
+        let transport = try await open("top-level-future-format")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        let engine = try XCTUnwrap(server.latestEngine)
+        engine.stopAfterFailedBatch = true
+        engine.throwPartialFailureAfterFailedBatch = true
+        engine.failedBatchAggregateCode = .batchRequestFailed
+        let note = try makeNote("must not publish after a format upgrade")
+        let future = NotebookSyncFormat.supportedVersion + 1
+        server.inject(.advanceCanonicalBeforeSave(requiredVersion: 1))
+        server.inject(.advanceCanonicalBeforeSave(requiredVersion: future))
+        let result = try await transport.publishBatch([note])
+        XCTAssertEqual(result.acknowledgedIDs, [])
+        XCTAssertEqual(result.error as? SyncError,
+                       .updateRequired(requiredVersion: future))
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        let state = try JSONDecoder().decode(CloudKitTransportState.self,
+            from: Data(contentsOf: root.appending(path: "top-level-future-format")
+                .appending(path: "cloudkit-sync-state.json")))
+        XCTAssertEqual(state.outbox[note.id], note)
+        await transport.retire()
+    }
+
+    func testCompatibleCanonicalRaceRetryIsBoundedAndRetainsOutbox() async throws {
+        let transport = try await open("bounded-canonical-race")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        let engine = try XCTUnwrap(server.latestEngine)
+        engine.stopAfterFailedBatch = true
+        engine.throwPartialFailureAfterFailedBatch = true
+        let previousSends = engine.sendChangesCount
+        for _ in 0..<CloudKitSyncTransport.maximumCanonicalPublicationAttempts {
+            server.inject(.advanceCanonicalBeforeSave(requiredVersion: 1))
+        }
+        let note = try makeNote("retained after repeated contention")
+        let result = try await transport.publishBatch([note])
+        XCTAssertEqual(result.acknowledgedIDs, [])
+        XCTAssertEqual(result.error as? CloudKitSyncTransportError,
+                       .uploadNotAcknowledged)
+        XCTAssertEqual(engine.sendChangesCount - previousSends,
+                       CloudKitSyncTransport.maximumCanonicalPublicationAttempts)
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        let state = try JSONDecoder().decode(CloudKitTransportState.self,
+            from: Data(contentsOf: root.appending(path: "bounded-canonical-race")
+                .appending(path: "cloudkit-sync-state.json")))
+        XCTAssertEqual(state.outbox[note.id], note)
+        let halt = await transport.haltStatus()
+        XCTAssertNil(halt)
+        let retry = try await transport.publishBatch([note])
+        XCTAssertNil(retry.error)
+        XCTAssertEqual(retry.acknowledgedIDs, [note.id])
+        await transport.retire()
+    }
+
+    func testFutureCanonicalRaceIsRejectedWithoutAnotherSend() async throws {
+        let transport = try await open("future-canonical-race")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        let engine = try XCTUnwrap(server.latestEngine)
+        engine.stopAfterFailedBatch = true
+        engine.throwPartialFailureAfterFailedBatch = true
+        let previousSends = engine.sendChangesCount
+        let note = try makeNote("must never cross the future gate")
+        let future = NotebookSyncFormat.supportedVersion + 1
+        server.inject(.advanceCanonicalBeforeSave(requiredVersion: future))
+        let result = try await transport.publishBatch([note])
+        XCTAssertEqual(result.acknowledgedIDs, [])
+        XCTAssertEqual(result.error as? SyncError,
+                       .updateRequired(requiredVersion: future))
+        XCTAssertEqual(engine.sendChangesCount - previousSends, 1)
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        let halt = await transport.haltStatus()
+        XCTAssertNotNil(halt)
+        await transport.retire()
+    }
+
+    func testAtomicQuotaFailureDoesNotTriggerCanonicalRaceRetry() async throws {
+        let transport = try await open("real-atomic-failure")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        let engine = try XCTUnwrap(server.latestEngine)
+        engine.stopAfterFailedBatch = true
+        engine.throwPartialFailureAfterFailedBatch = true
+        let previousSends = engine.sendChangesCount
+        let note = try makeNote("quota rejection remains retryable later")
+        server.inject(.failSave(.quotaExceeded) { $0.recordName == note.id })
+        let result = try await transport.publishBatch([note])
+        XCTAssertEqual(result.acknowledgedIDs, [])
+        XCTAssertNotNil(result.error)
+        XCTAssertEqual(engine.sendChangesCount - previousSends, 1)
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        await transport.retire()
+    }
+
+    func testCleanupRetriesAfterPeerAlreadyDeletedOneBody() async throws {
+        try await verifyCleanupRace(alreadyDeleted: true)
+    }
+
+    func testCleanupRetriesAfterCompatibleCanonicalPublication() async throws {
+        try await verifyCleanupRace(alreadyDeleted: false)
+    }
+
+    private func verifyCleanupRace(alreadyDeleted: Bool) async throws {
+        let document = try NotebookCatalogDocument(notebookID: notebookID)
+        let deleted = try [makeNote("deleted revision one"),
+                           makeNote("deleted revision two")]
+        let retained = try makeNote("live note must survive cleanup")
+        for note in deleted + [retained] {
+            try document.add(id: note.snapshot.noteID, kind: .note,
+                             name: "\(note.snapshot.noteID).md")
+        }
+        let transport = try await open("cleanup-device")
+        _ = try await transport.bootstrap(proposing:
+            SyncRecord(catalog: document.snapshot()))
+        let uploaded = try await transport.publishBatch(deleted + [retained])
+        XCTAssertNil(uploaded.error)
+        XCTAssertEqual(uploaded.acknowledgedIDs,
+            Set((deleted + [retained]).map(\.id)))
+        let deletedIDs = Set(deleted.map { $0.snapshot.noteID })
+        try document.markPermanentlyDeleted(deletedIDs)
+        try await transport.publish(SyncRecord(catalog: document.snapshot()))
+        _ = try await fetchAll(transport)
+
+        if alreadyDeleted {
+            server.inject(.deleteBeforeModify(recordName: deleted[0].id))
+        } else {
+            server.inject(.advanceCanonicalBeforeSave(requiredVersion: 1))
+        }
+        try await transport.purgeDeletedNotes(deletedIDs, notebookID: notebookID)
+        XCTAssertTrue(server.recordNames.contains(retained.id))
+        for note in deleted {
+            XCTAssertFalse(server.recordNames.contains(note.id))
+        }
+        let state = try JSONDecoder().decode(CloudKitTransportState.self,
+            from: Data(contentsOf: root.appending(path: "cleanup-device")
+                .appending(path: "cloudkit-sync-state.json")))
+        XCTAssertTrue(state.pendingRemoteDeletionIDs.isEmpty)
+        let halt = await transport.haltStatus()
+        XCTAssertNil(halt)
+        try await transport.purgeDeletedNotes(deletedIDs, notebookID: notebookID)
+        let received = try await fetchAll(transport).records
+        XCTAssertEqual(received.first { $0.id == retained.id }, retained)
+        XCTAssertFalse(received.contains { deletedIDs.contains($0.snapshot.noteID) })
+        await transport.retire()
+    }
+
+    func testRestoredFormatOneOutboxPublishesThroughBackgroundEngine() async throws {
+        let catalog = try makeCatalog()
+        let note = try makeNote("queued before restart")
+        let transport = try await open("background-device")
+        _ = try await transport.bootstrap(proposing: catalog)
+        server.inject(.failNextRead)
+        let queued = try await transport.publishBatch([note])
+        XCTAssertTrue(queued.acknowledgedIDs.isEmpty)
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        await transport.retire()
+
+        let restarted = try await open("background-device")
+        let engine = try XCTUnwrap(server.latestEngine)
+        let previousBatches = server.atomicSaveBatches.count
+        try await engine.sendChanges(.init(scope: .zoneIDs([server.zoneID])))
+        let batches = Array(server.atomicSaveBatches.dropFirst(previousBatches))
+        XCTAssertEqual(batches.count, 1)
+        XCTAssertEqual(Set(try XCTUnwrap(batches.first)),
+            [note.id, CloudKitTransportMode.notebook.bootstrapName])
+        let halt = await restarted.haltStatus()
+        XCTAssertNil(halt)
+        let state = try JSONDecoder().decode(CloudKitTransportState.self,
+            from: Data(contentsOf: root.appending(path: "background-device")
+                .appending(path: "cloudkit-sync-state.json")))
+        XCTAssertTrue(state.outbox.isEmpty)
+        let received = try await fetchAll(restarted).records
+        XCTAssertEqual(received.first { $0.id == note.id }, note)
+        await restarted.retire()
+    }
+
     func testRecordAlreadyOnServerIsAcknowledged() async throws {
         let note = try makeNote("shared")
         let first = try await open("device-a")
@@ -55,7 +360,7 @@ final class CloudKitSyncEngineTests: XCTestCase {
         XCTAssertEqual(result.acknowledgedIDs, [note.id])
     }
 
-    func testConflictIsAcknowledgedWithoutAnotherRequest() async throws {
+    func testConflictIsAcknowledgedFromServerRecord() async throws {
         let note = try makeNote("shared")
         let first = try await open("device-a")
         _ = try await first.bootstrap(proposing: try makeCatalog())
@@ -63,9 +368,8 @@ final class CloudKitSyncEngineTests: XCTestCase {
         let second = try await open("device-b")
         _ = try await second.bootstrap(proposing: try makeCatalog())
 
-        // The conflict carries the server record. Reading it again from
-        // inside the engine callback could stall on a retry cooldown.
-        server.inject(.failNextRead)
+        // The publication first reads the canonical format gate. The
+        // immutable snapshot conflict itself carries the server record.
         let result = try await second.publishBatch([note])
         XCTAssertNil(result.error)
         XCTAssertEqual(result.acknowledgedIDs, [note.id])
@@ -290,6 +594,109 @@ final class CloudKitSyncEngineTests: XCTestCase {
             XCTAssertFalse(recoveredAgain, damage)
             await reopened.retire()
         }
+    }
+
+    func testScopedScheduledSendRequestsFreshFencedExchange() async throws {
+        let note = try makeNote("durable edit waiting for a complete fence")
+        let transport = try await open("scoped-publication")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        server.inject(.failNextRead)
+        _ = try await transport.publishBatch([note])
+        await transport.retire()
+
+        let restarted = try await open("scoped-publication")
+        let engine = try XCTUnwrap(server.latestEngine)
+        let hint = expectation(description: "scheduled publication retry")
+        let consumer = Task {
+            for await activity in restarted.activity {
+                if activity == .publicationPending { hint.fulfill(); return }
+            }
+        }
+        let batch = await restarted.nextRecordZoneChangeBatch(
+            pending: [.saveRecord(CKRecord.ID(
+                recordName: note.id, zoneID: server.zoneID
+            ))], from: engine
+        )
+        XCTAssertNil(batch, "A scoped retry must not bypass the fence")
+        await restarted.handle(.didSendChanges(scheduled: true), from: engine)
+        await fulfillment(of: [hint], timeout: 2)
+        consumer.cancel()
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        let recovered = try await restarted.publishBatch([note])
+        XCTAssertEqual(recovered.acknowledgedIDs, [note.id])
+        XCTAssertNil(recovered.error)
+        await restarted.retire()
+    }
+
+    func testScheduledCanonicalRollbackRequestsExchangeAfterPartialFailure()
+        async throws
+    {
+        let note = try makeNote("queued edit survives scheduled contention")
+        let transport = try await open("scheduled-cas")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        server.inject(.failNextRead)
+        _ = try await transport.publishBatch([note])
+        await transport.retire()
+        let restarted = try await open("scheduled-cas")
+        let engine = try XCTUnwrap(server.latestEngine)
+        engine.sendsAreScheduled = true
+        engine.stopAfterFailedBatch = true
+        engine.throwPartialFailureAfterFailedBatch = true
+        server.inject(.advanceCanonicalBeforeSave(requiredVersion: 1))
+        let hint = expectation(description: "supported CAS retry activity")
+        let consumer = Task {
+            for await activity in restarted.activity {
+                if activity == .publicationPending { hint.fulfill(); return }
+            }
+        }
+        do {
+            try await engine.sendChanges(
+                .init(scope: .zoneIDs([server.zoneID]))
+            )
+            XCTFail("Expected the fake engine's aggregate partial failure")
+        } catch {
+            XCTAssertEqual((error as? CKError)?.code, .partialFailure)
+        }
+        await fulfillment(of: [hint], timeout: 2)
+        consumer.cancel()
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        let state = try JSONDecoder().decode(CloudKitTransportState.self,
+            from: Data(contentsOf: root.appending(path: "scheduled-cas")
+                .appending(path: "cloudkit-sync-state.json")))
+        XCTAssertEqual(state.outbox[note.id], note)
+        engine.sendsAreScheduled = false
+        let recovered = try await restarted.publishBatch([note])
+        XCTAssertEqual(recovered.acknowledgedIDs, [note.id])
+        XCTAssertNil(recovered.error)
+        await restarted.retire()
+    }
+
+    func testManualScopedSendDoesNotLeakRetryHintIntoScheduledCompletion()
+        async throws
+    {
+        let note = try makeNote("manual exchange owns its retry")
+        let transport = try await open("manual-scoped")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        server.inject(.failNextRead)
+        _ = try await transport.publishBatch([note])
+        let engine = try XCTUnwrap(server.latestEngine)
+        let hint = expectation(description: "no duplicate app retry")
+        hint.isInverted = true
+        let consumer = Task {
+            for await activity in transport.activity {
+                if activity == .publicationPending { hint.fulfill() }
+            }
+        }
+        _ = await transport.nextRecordZoneChangeBatch(
+            pending: [.saveRecord(CKRecord.ID(
+                recordName: note.id, zoneID: server.zoneID
+            ))], from: engine
+        )
+        await transport.handle(.didSendChanges(scheduled: false), from: engine)
+        await transport.handle(.didSendChanges(scheduled: true), from: engine)
+        await fulfillment(of: [hint], timeout: 0.2)
+        consumer.cancel()
+        await transport.retire()
     }
 
     // MARK: Helpers
