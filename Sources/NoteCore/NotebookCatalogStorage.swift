@@ -140,6 +140,35 @@ public actor NotebookCatalogStorage {
         try write(snapshot)
     }
 
+    /// The first-join journal is the only authorization to change identity.
+    /// Complete both copies before the journal can be cleared. Reopening a
+    /// completed join preserves later edits instead of replaying its snapshot.
+    func installOfflineJoin(
+        _ transition: NotebookOfflineJoinReceipt.Transition,
+        afterStage: @Sendable (NotebookOfflineJoinStage) throws -> Void = { _ in }
+    ) throws -> NotebookCatalogSnapshot {
+        guard let source = transition.source.catalogSnapshot,
+              let destination = transition.destination.catalogSnapshot else {
+            throw NotebookOfflineJoinError.invalidReceipt
+        }
+        let installed: NotebookCatalogSnapshot
+        switch candidate(at: currentURL) {
+        case .valid(let current, _) where current == source:
+            installed = destination
+        case .valid(let current, let document) where current.notebookID == destination.notebookID:
+            guard destination.heads.isSubset(of: document.historyHeads) else {
+                throw NotebookOfflineJoinError.catalogChanged
+            }
+            installed = current
+        default: throw NotebookOfflineJoinError.catalogChanged
+        }
+        try SyncFileIO.replace(installed.data, at: previousURL)
+        try afterStage(.previousReplaced)
+        try SyncFileIO.replace(installed.data, at: currentURL)
+        try afterStage(.currentReplaced)
+        return installed
+    }
+
     /// Only a previously accepted snapshot can authorize skipping a write.
     /// Read both copies: repeat saves also establish or repair the backup.
     func matchesDurableCopies(of snapshot: NotebookCatalogSnapshot) -> Bool {

@@ -46,6 +46,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     private let lock = NSLock()
     private let assetDirectory: URL
     private var user = CKRecord.ID(recordName: "_fake-user")
+    private var accountAvailability: CKAccountStatus = .available
     private var zoneExists = false
     private var records: [CKRecord.ID: CKRecord] = [:]
     private var changes: [Change] = []
@@ -85,6 +86,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     var latestEngine: FakeSyncEngine? { locked { engines.last } }
 
     func setOffline(_ offline: Bool) { locked { isOffline = offline } }
+    func setAccountStatus(_ status: CKAccountStatus) { locked { accountAvailability = status } }
 
     var offline: Bool { locked { isOffline } }
 
@@ -145,7 +147,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
 
     func accountStatus() async throws -> CKAccountStatus {
         try checkReachable()
-        return .available
+        return locked { accountAvailability }
     }
 
     func userRecordID() async throws -> CKRecord.ID {

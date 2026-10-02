@@ -113,6 +113,8 @@ public final class NotebookReplica {
     @ObservationIgnored private let storage: NotebookCatalogStorage
     @ObservationIgnored private let importStorage: NotebookImportStorage
     @ObservationIgnored private let deletionStorage: NotebookDeletionStorage
+    @ObservationIgnored private let offlineJoinStorage: NotebookOfflineJoinStorage
+    @ObservationIgnored private var offlineJoinNeedsRestart = false
     @ObservationIgnored private let historyChecker = NotebookHistoryChecker()
     @ObservationIgnored private var acceptedCatalog: AcceptedCatalog?
     @ObservationIgnored private var recordReadCache:
@@ -127,6 +129,8 @@ public final class NotebookReplica {
     @ObservationIgnored var deletionFaultInjector: ((NotebookDeletionStage) throws -> Void)?
     @ObservationIgnored var linkLocationFaultInjector: ((NotebookLinkLocationStage) throws -> Void)?
     @ObservationIgnored var catalogWriteSuspension: (@MainActor () async throws -> Void)?
+    @ObservationIgnored var offlineJoinFaultInjector:
+        (@Sendable (NotebookOfflineJoinStage) throws -> Void)?
 
     /// A cheap invalidation token for derived search state. Reading it also
     /// observes live editor revisions, so unsaved local typing invalidates a
@@ -181,6 +185,7 @@ public final class NotebookReplica {
         storage = NotebookCatalogStorage(directory: directory)
         importStorage = NotebookImportStorage(directory: directory)
         deletionStorage = NotebookDeletionStorage(directory: directory)
+        offlineJoinStorage = NotebookOfflineJoinStorage(directory: directory)
         hasPendingImport = importStorage.hasPendingImport
     }
 
@@ -201,6 +206,11 @@ public final class NotebookReplica {
             let waiters = writeWaiters
             writeWaiters.removeAll()
             for waiter in waiters { waiter.resume() }
+        }
+        // A journalled first connection must finish before exposing the
+        // catalog or loading its identity-bound deletion/import metadata.
+        if let transition = try offlineJoinStorage.load()?.transition {
+            try await finishOfflineJoin(transition)
         }
         switch await storage.load() {
         case .firstLaunch:
@@ -257,6 +267,160 @@ public final class NotebookReplica {
         try await load()
         guard catalog == nil else { return }
         try await saveCatalog(NotebookCatalogDocument())
+    }
+
+    /// Open immediately, with a durable receipt proving that this catalog
+    /// has never belonged to another cloud notebook or account.
+    public func createNotebookForSync() async throws {
+        try await load()
+        try await withCatalogWrite {
+            guard self.catalog == nil else { return }
+            let stateURL = self.directory.appending(path: "notebook-sync-state.json")
+            if FileManager.default.fileExists(atPath: stateURL.path) {
+                let state = try JSONDecoder().decode(NotebookSyncState.self,
+                                                     from: Data(contentsOf: stateURL))
+                guard state.version == 2, state.notebookID == nil else {
+                    throw NotebookReplicaError.catalogUnavailable
+                }
+            }
+            let receipt: NotebookOfflineJoinReceipt
+            if let retained = try self.offlineJoinStorage.load() {
+                guard retained.transition == nil else {
+                    throw NotebookOfflineJoinError.needsRestart
+                }
+                receipt = retained
+            } else {
+                receipt = NotebookOfflineJoinReceipt(
+                    initial: SyncRecord(catalog: try NotebookCatalogDocument().snapshot()))
+                // Save the same identity before creating the catalog, so an
+                // interrupted first local save never creates a second root.
+                try self.offlineJoinStorage.save(receipt)
+            }
+            guard let initial = receipt.initial.catalogSnapshot else {
+                throw NotebookOfflineJoinError.invalidReceipt
+            }
+            try await self.persistCatalog(NotebookCatalogDocument(snapshot: initial))
+        }
+    }
+
+    func validateOfflineJoinScope(_ scope: String) throws {
+        if let transition = try offlineJoinStorage.load()?.transition,
+           transition.scope != scope { throw SyncError.scopeChanged }
+    }
+
+    /// Catalogs with an established binding use normal strict acceptance.
+    /// Only an offline-first receipt can authorize importing an unrelated
+    /// catalog, and it is committed to one account before any files change.
+    func acceptFirstSyncSeed(_ record: SyncRecord, scope: String) async throws {
+        try record.validate()
+        guard let incoming = record.catalogSnapshot else { throw SyncError.invalidRecord }
+        guard let current = catalogSnapshot, current.notebookID != incoming.notebookID,
+              var receipt = try offlineJoinStorage.load() else {
+            try await acceptSeed(record)
+            return
+        }
+        try await withCatalogWrite {
+            if let transition = receipt.transition {
+                guard transition.scope == scope,
+                      transition.destination.notebookID == incoming.notebookID else {
+                    throw SyncError.identityConflict
+                }
+                try await self.finishOfflineJoin(transition)
+                return
+            }
+            guard let local = self.catalog,
+                  let initial = receipt.initial.catalogSnapshot,
+                  initial.notebookID == local.notebookID,
+                  initial.heads.isSubset(of: local.historyHeads) else {
+                throw SyncError.identityConflict
+            }
+            // The import recovery UI remains available offline. Let it
+            // finish or discard a pending import before changing identity.
+            guard !self.hasPendingImport else { throw NotebookImportError.pendingImportExists }
+            let canonical = try NotebookCatalogDocument(snapshot: incoming)
+            let joined = try canonical.forkJoiningOfflineNotebook(local)
+            let deleted = try self.deletedIDs
+            guard deleted.isDisjoint(with: try canonical.items().map(\.id)) else {
+                throw SyncError.identityConflict
+            }
+            let transition = NotebookOfflineJoinReceipt.Transition(
+                scope: scope, source: SyncRecord(catalog: local.snapshot()),
+                destination: SyncRecord(catalog: joined.snapshot()), deletedIDs: deleted)
+            receipt.transition = transition
+            do {
+                try self.offlineJoinStorage.save(receipt)
+                try self.offlineJoinFaultInjector?(.journalSaved)
+                try await self.finishOfflineJoin(transition)
+            } catch {
+                // A partially installed identity cannot accept catalog edits
+                // against its old root. Reopening completes the durable plan.
+                if (try? self.offlineJoinStorage.load())?.transition != nil {
+                    self.offlineJoinNeedsRestart = true
+                    self.localEditsSuspended = true
+                    let sessions = Array(self.sessions.values)
+                    for session in sessions { session.suspendEditingForFirstSyncRecovery() }
+                    for session in sessions { await session.waitForPendingSave() }
+                    throw NotebookOfflineJoinInterrupted(underlyingError: error)
+                }
+                throw error
+            }
+        }
+    }
+
+    private func finishOfflineJoin(_ transition: NotebookOfflineJoinReceipt.Transition) async throws {
+        try offlineJoinStorage.validateBinding(for: transition)
+        guard let sourceID = transition.source.notebookID,
+              let destinationID = transition.destination.notebookID else {
+            throw NotebookOfflineJoinError.invalidReceipt
+        }
+        try importStorage.rebindForOfflineJoin(from: sourceID, to: destinationID)
+        try offlineJoinFaultInjector?(.importsRebound)
+        try deletionStorage.rebindForOfflineJoin(
+            from: sourceID, to: destinationID, retaining: transition.deletedIDs)
+        try offlineJoinFaultInjector?(.deletionsRebound)
+        let installed = try await storage.installOfflineJoin(
+            transition, afterStage: offlineJoinFaultInjector ?? { _ in })
+        rememberedDeletions = try deletionStorage.load(notebookID: destinationID)
+        try install(installed)
+        try offlineJoinFaultInjector?(.catalogInstalled)
+    }
+
+    /// Clearing the receipt follows the coordinator's durable account binding.
+    /// A crash before clearing it replays the same plan, never another import.
+    func completeFirstSyncJoin(scope: String, notebookID: UUID) throws {
+        guard let receipt = try offlineJoinStorage.load(),
+              let installed = catalogSnapshot else { return }
+        if let transition = receipt.transition {
+            guard transition.scope == scope,
+                  transition.destination.notebookID == notebookID else {
+                throw SyncError.scopeChanged
+            }
+            try offlineJoinStorage.saveBinding(transition)
+        } else {
+            guard receipt.initial.notebookID == notebookID,
+                  receipt.initial.snapshot.heads.isSubset(of:
+                    try NotebookCatalogDocument(snapshot: installed).historyHeads) else {
+                throw SyncError.identityConflict
+            }
+        }
+        guard installed.notebookID == notebookID else { throw SyncError.identityConflict }
+        try offlineJoinFaultInjector?(.bindingSaved)
+        try offlineJoinStorage.remove()
+    }
+
+    /// Derived copies and immutable backups may still carry the identity
+    /// minted before first sync. This receipt never authorizes account moves.
+    public func firstSyncLocalNotebookID() throws -> UUID? {
+        guard let snapshot = catalogSnapshot, let catalog else { return nil }
+        // Reuse the validated live document. Rebuilding it for every copy
+        // publication would undo main's catalog decoding optimization.
+        return try offlineJoinStorage.localNotebookID(before: snapshot) { catalog.historyHeads }
+    }
+
+    public func prepareMarkdownCopiesForFirstSync(_ publisher: NotebookMarkdownPublisher) async throws {
+        guard let snapshot = catalogSnapshot,
+              let sourceID = try firstSyncLocalNotebookID() else { return }
+        try await publisher.adoptFirstSyncNotebook(from: sourceID, to: snapshot.notebookID)
     }
 
     public func templateSettings(for id: UUID) -> NotebookTemplateSettings {
@@ -1000,9 +1164,9 @@ public final class NotebookReplica {
         _ id: UUID,
         allowingRecovery: Bool = false
     ) async throws -> NoteSession {
-        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
+        guard !localEditsSuspended else { throw localEditSuspensionError }
         await waitForWrites()
-        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
+        guard !localEditsSuspended else { throw localEditSuspensionError }
         try ensureAlive(id)
         guard try catalog!.items().contains(where: { $0.id == id && $0.kind == .note }) else {
             throw NotebookReplicaError.noteUnavailable(id)
@@ -1664,9 +1828,9 @@ public final class NotebookReplica {
         _ operation: () async throws -> T
     ) async throws -> T {
         guard !Self.holdsCatalogWrite else { throw NotebookReplicaError.busy }
-        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
+        guard !localEditsSuspended else { throw localEditSuspensionError }
         await waitForWrites()
-        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
+        guard !localEditsSuspended else { throw localEditSuspensionError }
         writingCatalog = true
         defer {
             writingCatalog = false
@@ -1746,6 +1910,10 @@ public final class NotebookReplica {
         try updateRecentProjection(from: document, placements: nextPlacements)
         searchBodyGeneration &+= 1
         for id in try deletedIDs { sessions[id]?.markPermanentlyDeleted() }
+    }
+
+    private var localEditSuspensionError: any Error {
+        offlineJoinNeedsRestart ? NotebookOfflineJoinError.needsRestart : NotebookReplicaError.resetPending
     }
 
     private func updateRecentProjection(

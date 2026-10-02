@@ -74,85 +74,117 @@ struct NotebookWorkspaceStatusView: View {
 
 struct NotebookSyncDetailsView: View {
     let workspace: NotebookWorkspace
-    @Environment(\.dismiss) private var dismiss
     @State private var showingEventLog = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Sync").font(.headline)
-                    Spacer()
-                    Button("Close") { dismiss() }
-                        .accessibilityIdentifier("notebook-sync-details-close")
+                NotebookSyncDetailsHeader()
+                ScrollView {
+                    NotebookSyncDetailsContent(workspace: workspace, now: context.date,
+                                               showingEventLog: $showingEventLog)
                 }
-                Text(presentation.summary ?? lastSyncText)
-                    .accessibilityIdentifier("note-sync-status")
-                if presentation.summary != nil { Text(lastSyncText).font(.caption) }
-                if let fraction = presentation.fraction {
-                    ProgressView(value: fraction)
-                        .accessibilityLabel("Sync progress")
-                        .accessibilityValue(
-                            "\(Int((fraction * 100).rounded())) percent"
-                        )
-                } else if presentation.showsActivity {
-                    ProgressView()
-                        .controlSize(.small)
-                        .accessibilityLabel("Sync in progress")
-                }
-                if let progress = workspace.sync?.progress {
-                    if progress.totalNotes > 0 {
-                        Text("Notes uploaded this pass: \(progress.completedNotes) of \(progress.totalNotes)")
-                    }
-                    if progress.receivedRecords > 0 {
-                        Text("Changes received this pass: \(progress.receivedRecords)")
-                    }
-                    Text("Last activity: \(progress.lastProgressAt.formatted(date: .omitted, time: .standard))")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if let failure = workspace.syncFailure {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(failure.title).font(.headline)
-                        Text(failure.message)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if let hint = failure.actionHint {
-                            Text(hint)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.callout)
-                    .accessibilityIdentifier("sync-failure-explanation")
-                } else if let error = workspace.syncSetupError {
-                    Text(error).font(.caption)
-                }
-                if let error = workspace.notificationRegistrationError {
-                    Text(error).font(.caption)
-                }
-                if workspace.syncFailure == nil,
-                   case .failed(let error) = workspace.sync?.status {
-                    Text(error).font(.caption)
-                }
-                Text("Progress counts saved revisions acknowledged by the sync service. Other devices receive them when they synchronize.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Sync Event Log") { showingEventLog = true }
-                    .accessibilityIdentifier("notebook-sync-event-log")
-                Button(workspace.syncHalt?.isRecoverable == true
-                       ? "Retry Sync" : "Sync Now") {
-                    Task { await workspace.refresh(manual: true) }
-                }
-                    .disabled(workspace.isRefreshing || !workspace.usesSync
-                              || !workspace.canRetrySync)
-                    .accessibilityIdentifier("sync-now")
             }
             .padding(20)
             .frame(idealWidth: 340, maxWidth: 420)
+            .frame(idealHeight: 520, maxHeight: 600)
         }
         .presentationDetents([.medium, .large])
         .sheet(isPresented: $showingEventLog) {
             NotebookSyncEventLogView(log: workspace.syncEventLog)
         }
+    }
+}
+
+private struct NotebookSyncDetailsHeader: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        HStack {
+            Text("Sync").font(.headline)
+            Spacer()
+            Button("Close") { dismiss() }
+                .accessibilityIdentifier("notebook-sync-details-close")
+        }
+    }
+}
+
+private struct NotebookSyncDetailsContent: View {
+    let workspace: NotebookWorkspace
+    let now: Date
+    @Binding var showingEventLog: Bool
+
+    var body: some View {
+        let presentation = NotebookSyncPresentation(workspace: workspace, now: now)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(presentation.summary ?? lastSyncText)
+                .accessibilityIdentifier("note-sync-status")
+            if workspace.replica?.catalogSnapshot != nil,
+               workspace.replica?.localEditsSuspended == false,
+               workspace.syncFailure != nil || workspace.syncSetupError != nil {
+                Text("Notes stay on this device while sync is unavailable.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("sync-local-saving-explanation")
+            }
+            if presentation.summary != nil { Text(lastSyncText).font(.caption) }
+            if let fraction = presentation.fraction {
+                ProgressView(value: fraction)
+                    .accessibilityLabel("Sync progress")
+                    .accessibilityValue(
+                        "\(Int((fraction * 100).rounded())) percent"
+                    )
+            } else if presentation.showsActivity {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Sync in progress")
+            }
+            if let progress = workspace.sync?.progress {
+                if progress.totalNotes > 0 {
+                    Text("Notes uploaded this pass: \(progress.completedNotes) of \(progress.totalNotes)")
+                }
+                if progress.receivedRecords > 0 {
+                    Text("Changes received this pass: \(progress.receivedRecords)")
+                }
+                Text("Last activity: \(progress.lastProgressAt.formatted(date: .omitted, time: .standard))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let failure = workspace.syncFailure {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(failure.title).font(.headline)
+                    Text(failure.message)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let hint = failure.actionHint {
+                        Text(hint)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.callout)
+                .accessibilityIdentifier("sync-failure-explanation")
+            } else if let error = workspace.syncSetupError {
+                Text(error).font(.caption)
+            }
+            if let error = workspace.notificationRegistrationError {
+                Text(error).font(.caption)
+            }
+            if workspace.syncFailure == nil,
+               case .failed(let error) = workspace.sync?.status {
+                Text(error).font(.caption)
+            }
+            Text("Progress counts saved revisions acknowledged by the sync service. Other devices receive them when they synchronize.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Sync Event Log") { showingEventLog = true }
+                .accessibilityIdentifier("notebook-sync-event-log")
+            Button(workspace.syncHalt?.isRecoverable == true
+                   ? "Retry Sync" : "Sync Now") {
+                Task { await workspace.refresh(manual: true) }
+            }
+                .disabled(workspace.isRefreshing || !workspace.usesSync
+                          || !workspace.canRetrySync)
+                .accessibilityIdentifier("sync-now")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var lastSyncText: String {
