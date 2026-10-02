@@ -232,10 +232,12 @@ struct NotebookSettingsView: View {
                 try await beforeExport()
                 try await replica.flushOpenNotes()
                 let placements = replica.placements
+                let linkNotes = replica.linkNotes
                 let notes = try await replica.persistedNoteSnapshots()
                 let activeIDs = Set(placements.filter { !$0.isInTrash }.map { $0.item.id })
                 document = MarkdownExportDocument(wrapper: try NotebookMarkdownExport.makeWrapper(
-                    placements: placements, notes: notes, selectedIDs: activeIDs
+                    placements: placements, notes: notes, selectedIDs: activeIDs,
+                    originalLinkNotes: linkNotes
                 ))
                 saving = true
             } catch { errorMessage = error.localizedDescription }

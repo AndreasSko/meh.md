@@ -1,4 +1,5 @@
 import SwiftUI
+import NoteCore
 
 enum MarkdownEditorScrollPadding {
     static func bottom(for viewportHeight: CGFloat) -> CGFloat {
@@ -25,10 +26,27 @@ final class MarkdownEditorNavigation {
     let tableCommands = MarkdownTableCommandState()
     let findPresentation = MarkdownEditorFindPresentation()
     var showFind: (() -> Void)?
+    var openLink: ((NotebookLinkOccurrence) -> Void)? {
+        didSet { linkActivationChanged?() }
+    }
+    var linkActivationChanged: (() -> Void)?
+    var requestLink: ((String, NSRange) -> Void)?
+    var selectionChanged: ((String, NSRange, Bool) -> Void)?
+    var insertLink: ((MarkdownEditingChange, String) -> Bool)?
+    var hasLinkCompletion = false
+    var completionCommand: ((String) -> Bool)?
     var revealSearchMatch: ((NSRange) -> Void)?
     var searchLandingPosition: MarkdownEditorPosition?
     var capturePosition: (() -> MarkdownEditorPosition?)?
     var restorePosition: ((MarkdownEditorPosition) -> Void)?
+    #if os(iOS)
+    var restorePositionAndNotify: ((MarkdownEditorPosition, @escaping () -> Void) -> Void)?
+    var captureViewportInsets: (() -> UIEdgeInsets?)?
+    var captureViewportOriginY: (() -> CGFloat?)?
+    #endif
+    // A link/history visit overrides the ordinary saved position for this
+    // attachment, even if SwiftUI's restoration task runs after navigation.
+    var hasExplicitVisitDestination = false
 
     private var isAttached = false
     private var isValid = true
@@ -366,9 +384,156 @@ final class MarkdownTextView: NSTextView {
         markdownDidAttachToWindow()
     }
 
+    var markdownLinkNavigation: MarkdownEditorNavigation? {
+        didSet {
+            oldValue?.linkActivationChanged = nil
+            markdownLinkNavigation?.linkActivationChanged = { [weak self] in
+                self?.refreshNoteLinkCursorRegions()
+                if let self { self.window?.invalidateCursorRects(for: self) }
+            }
+            refreshNoteLinkCursorRegions()
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    private var noteLinkTrackingArea: NSTrackingArea?
+    private var renderedLinkCursorRects: [NSRect] = []
+    private var sourceLinkCursorRects: [NSRect] = []
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let noteLinkTrackingArea { removeTrackingArea(noteLinkTrackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+            options: [.cursorUpdate, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        noteLinkTrackingArea = area
+        refreshNoteLinkCursorRegions()
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        refreshNoteLinkCursorRegions()
+    }
+
+    private func refreshNoteLinkCursorRegions() {
+        renderedLinkCursorRects = noteLinkCursorRects(modifiers: [])
+        sourceLinkCursorRects = noteLinkCursorRects(modifiers: .command)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if !updateNoteLinkCursor(at: convert(event.locationInWindow, from: nil),
+            modifiers: event.modifierFlags) {
+            super.cursorUpdate(with: event)
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateNoteLinkCursor(at: convert(event.locationInWindow, from: nil),
+            modifiers: event.modifierFlags)
+    }
+
+    @discardableResult
+    private func updateNoteLinkCursor(at point: NSPoint, modifiers: NSEvent.ModifierFlags) -> Bool {
+        // Title buttons and table overlays own their own native pointer.
+        guard visibleRect.contains(point),
+              hitTest(convert(point, to: superview)) === self else { return false }
+        let flags = modifiers.intersection([.command, .shift, .option, .control])
+        let rects = flags.isEmpty ? renderedLinkCursorRects
+            : (flags == .command ? sourceLinkCursorRects : [])
+        if markdownLinkNavigation?.openLink != nil, !hasMarkedText(),
+           rects.contains(where: { $0.contains(point) }) {
+            NSCursor.pointingHand.set()
+        } else { NSCursor.iBeam.set() }
+        return true
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        window?.invalidateCursorRects(for: self)
+        if let window {
+            let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            updateNoteLinkCursor(at: point, modifiers: event.modifierFlags)
+        }
+    }
+
+    func noteLinkCursorRects(modifiers: NSEvent.ModifierFlags) -> [NSRect] {
+        guard markdownLinkNavigation?.openLink != nil, !hasMarkedText(),
+              let manager = textLayoutManager,
+              let content = manager.textContentManager else { return [] }
+        let flags = modifiers.intersection([.command, .shift, .option, .control])
+        guard flags.isEmpty || flags == .command else { return [] }
+        let source = string as NSString
+        let snapshot = MarkdownLivePreview.snapshot(for: self)
+        var rects: [NSRect] = []
+        for link in NotebookLinkParser.parse(string) where !link.isEmbed {
+            guard flags == .command || MarkdownLivePreview.conceals(
+                link.range, in: source, snapshot: snapshot
+            ) else { continue }
+            // The pointer belongs to the visible label, including each wrapped
+            // line. Hidden destinations and trailing blank space stay editable.
+            let range: NSRange
+            if flags == .command { range = link.range }
+            else if link.kind == .markdown {
+                range = NSRange(location: link.range.location + 1,
+                    length: (link.label ?? "").utf16.count)
+            } else if link.label != nil {
+                let start = NSMaxRange(link.destinationRange) + 1
+                range = NSRange(location: start, length: NSMaxRange(link.range) - 2 - start)
+            } else { range = link.destinationRange }
+            for frame in MarkdownPresentation.textSegmentFrames(
+                for: range, layoutManager: manager, contentManager: content
+            ) {
+                let rect = frame.offsetBy(dx: textContainerOrigin.x,
+                    dy: textContainerOrigin.y).intersection(visibleRect)
+                if !rect.isNull, rect.width > 1, rect.height > 0 { rects.append(rect) }
+            }
+        }
+        return rects
+    }
+
+    func insertNoteLink(_ change: MarkdownEditingChange, expected: String) -> Bool {
+        guard isEditable, !hasMarkedText(), string == expected,
+              NSMaxRange(change.range) <= (string as NSString).length else { return false }
+        window?.makeFirstResponder(self)
+        breakUndoCoalescing()
+        insertText(change.replacement, replacementRange: change.range)
+        breakUndoCoalescing()
+        let updated = (expected as NSString).replacingCharacters(
+            in: change.range, with: change.replacement)
+        if string == updated { setSelectedRange(updated.clampedSelection(change.selection)) }
+        return true
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        let offset = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        if let link = NotebookLinkParser.parse(string).first(where: {
+            !$0.isEmbed && NSLocationInRange(offset, $0.range)
+        }) {
+            let item = NSMenuItem(title: String(localized: "Open Linked Note"),
+                action: #selector(openMarkdownLink(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = link
+            menu?.insertItem(item, at: 0)
+        }
+        return menu
+    }
+
+    @objc private func openMarkdownLink(_ sender: NSMenuItem) {
+        if let link = sender.representedObject as? NotebookLinkOccurrence {
+            markdownLinkNavigation?.openLink?(link)
+        }
+    }
+
     @discardableResult
     func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
         guard isEditable, !hasMarkedText() else { return false }
+        if command == .link, let request = markdownLinkNavigation?.requestLink {
+            request(string, selectedRange())
+            return true
+        }
         let syntaxResult = command == .toggleTask
             ? markdownSyntaxCache.result(for: string) : nil
         guard let change = MarkdownEditingRules.change(
@@ -413,10 +578,61 @@ final class MarkdownTextView: NSTextView {
             toggleMarkdownTask(at: checkbox.range.location)
             return
         }
+        if event.clickCount == 1,
+           let open = markdownLinkNavigation?.openLink,
+           let link = noteLink(at: point, modifiers: event.modifierFlags) {
+            open(link)
+            return
+        }
         super.mouseDown(with: event)
     }
 
+    // Test the displayed glyph, not merely the nearest insertion position:
+    // clicking blank space after a link should still place the caret.
+    func noteLink(at point: NSPoint, modifiers: NSEvent.ModifierFlags) -> NotebookLinkOccurrence? {
+        guard !hasMarkedText(), let window else { return nil }
+        let flags = modifiers.intersection([.command, .shift, .option, .control])
+        guard flags.isEmpty || flags == .command else { return nil }
+        let snapshot = MarkdownLivePreview.snapshot(for: self)
+        let source = string as NSString
+        let offset = characterIndexForInsertion(at: point)
+        let links = NotebookLinkParser.parse(string)
+        for candidate in [offset, offset - 1] where candidate >= 0 && candidate < source.length {
+            let character = source.rangeOfComposedCharacterSequence(at: candidate)
+            let screenRect = firstRect(forCharacterRange: character, actualRange: nil)
+            let rect = convert(window.convertFromScreen(screenRect), from: nil)
+            guard rect.width > 1, rect.contains(point),
+                  let link = links.first(where: {
+                      !$0.isEmbed && NSLocationInRange(candidate, $0.range)
+                  }) else { continue }
+            if flags == .command || MarkdownLivePreview.conceals(
+                link.range, in: source, snapshot: snapshot
+            ) { return link }
+        }
+        return nil
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        if markdownLinkNavigation?.hasLinkCompletion == true,
+           flags.isEmpty, !hasMarkedText() {
+            let command: String?
+            switch event.keyCode {
+            case 124, 125: command = "next"
+            case 123, 126: command = "previous"
+            case 36: command = "accept"
+            case 53: command = "dismiss"
+            default: command = nil
+            }
+            if let command, markdownLinkNavigation?.completionCommand?(command) == true { return }
+        }
+        super.keyDown(with: event)
+    }
+
     override func insertNewline(_ sender: Any?) {
+        if markdownLinkNavigation?.hasLinkCompletion == true,
+           !hasMarkedText(),
+           markdownLinkNavigation?.completionCommand?("accept") == true { return }
         if !performMarkdownCommand(.continueLine) { super.insertNewline(sender) }
     }
 
@@ -704,6 +920,10 @@ struct MarkdownEditor: NSViewRepresentable {
                 guard let self, let textView else { return }
                 self.schedulePositionRestore(position, in: textView)
             }
+            textView.markdownLinkNavigation = navigation
+            navigation?.insertLink = { [weak textView] change, expected in
+                textView?.insertNoteLink(change, expected: expected) == true
+            }
             textView.markdownDidAttachToWindow = { [weak navigation] in
                 navigation?.didAttach()
             }
@@ -711,6 +931,11 @@ struct MarkdownEditor: NSViewRepresentable {
 
         func update(parent: MarkdownEditor, textView: NSTextView) {
             self.parent = parent
+            if let nativeView = textView as? MarkdownTextView,
+               nativeView.markdownLinkNavigation !== parent.navigation {
+                attachNavigation(to: nativeView)
+                if nativeView.window != nil { parent.navigation?.didAttach() }
+            }
             textView.isEditable = !parent.isReadOnly
             guard !textView.hasMarkedText() else { return }
 
@@ -775,6 +1000,7 @@ struct MarkdownEditor: NSViewRepresentable {
                 return
             }
             refreshTableCommands(in: textView)
+            reportLinkSelection(in: textView)
             if parent.mode == .livePreview {
                 schedulePresentationRefresh(for: textView)
             }
@@ -788,8 +1014,20 @@ struct MarkdownEditor: NSViewRepresentable {
             }
             clearDestinationHighlight(in: textView)
             synchronizeBinding(from: textView)
+            reportLinkSelection(in: textView)
             schedulePendingSearchMatchReveal(in: textView)
             schedulePendingPositionRestore(in: textView)
+        }
+
+        private func reportLinkSelection(in textView: NSTextView) {
+            guard !textView.hasMarkedText() else { return }
+            let text = textView.string
+            let selection = textView.selectedRange()
+            let editing = textView.window?.firstResponder === textView
+            let navigation = parent.navigation
+            DispatchQueue.main.async { [weak navigation] in
+                navigation?.selectionChanged?(text, selection, editing)
+            }
         }
 
         private func scheduleSearchMatchReveal(
@@ -1218,7 +1456,8 @@ nonisolated(unsafe) private var markdownTextViewStateKey: UInt8 = 0
 
 // UIKit's TextKit factory can bypass Swift subclass property initializers.
 // Keep editor state in a normally initialized object attached to the view.
-final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
+final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
+    UIPointerInteractionDelegate {
     var markdownFindPresentation: MarkdownEditorFindPresentation? {
         get { markdownState.findPresentation }
         set { markdownState.findPresentation = newValue }
@@ -1243,6 +1482,10 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
     }
 
     private func updateFindKeyboardInsets() {
+        // Read-only navigation previews pin the captured source viewport.
+        // Their bottom inset must survive subsequent layout passes as well.
+        if !isEditable, contentInsetAdjustmentBehavior == .never,
+           !markdownState.isFinding { return }
         // Find's glass accessory needs the dimmed document behind it.
         // Keep matches above the keyboard while the view extends beneath it.
         let overlap = bounds.intersection(keyboardLayoutGuide.layoutFrame)
@@ -1277,7 +1520,20 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
             width: textContainer.size.width - 2 * textContainer.lineFragmentPadding
         )
         updateMarkdownTableScrollOverlays()
+        markdownState.linkPointer?.invalidate()
         markdownState.didLayout?()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        markdownState.linkPointer?.invalidate()
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        markdownState.linkPointer?.invalidate()
+        return accepted
     }
 
     func updateMarkdownTitle(_ title: AnyView?, height: CGFloat) {
@@ -1370,10 +1626,120 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
         didAttachToWindow()
     }
 
+    var markdownLinkNavigation: MarkdownEditorNavigation? {
+        get { markdownState.linkNavigation }
+        set {
+            markdownState.linkNavigation?.linkActivationChanged = nil
+            markdownState.linkNavigation = newValue
+            newValue?.linkActivationChanged = { [weak self] in
+                self?.markdownState.linkPointer?.invalidate()
+            }
+            installMarkdownLinkPointer()
+            markdownState.linkPointer?.invalidate()
+        }
+    }
+
+    private func installMarkdownLinkPointer() {
+        guard markdownState.linkPointer == nil else { return }
+        let interaction = UIPointerInteraction(delegate: self)
+        addInteraction(interaction)
+        markdownState.linkPointer = interaction
+    }
+
+    private func passiveNoteLink(at point: CGPoint,
+                                 modifiers: UIKeyModifierFlags = []) -> NotebookLinkOccurrence? {
+        guard !isFirstResponder, markedTextRange == nil,
+              markdownLinkNavigation?.openLink != nil,
+              modifiers.intersection([.command, .shift, .alternate, .control]).isEmpty,
+              MarkdownLivePreview.snapshot(for: self).mode == .livePreview else { return nil }
+        return noteLink(at: point)
+    }
+
+    /// Match the pointer to the visible label segment under it, including
+    /// wrapped labels. Hidden destinations and trailing space remain text.
+    func noteLinkPointerRegion(at point: CGPoint,
+                               modifiers: UIKeyModifierFlags = []) -> UIPointerRegion? {
+        guard window != nil, let link = passiveNoteLink(at: point, modifiers: modifiers) else {
+            return nil
+        }
+        let labelRange: NSRange
+        if link.kind == .markdown {
+            labelRange = NSRange(location: link.range.location + 1,
+                                 length: (link.label ?? "").utf16.count)
+        } else if link.label != nil {
+            let start = NSMaxRange(link.destinationRange) + 1
+            labelRange = NSRange(location: start, length: NSMaxRange(link.range) - 2 - start)
+        } else { labelRange = link.destinationRange }
+        guard let start = position(from: beginningOfDocument, offset: labelRange.location),
+              let end = position(from: start, offset: labelRange.length),
+              let range = textRange(from: start, to: end) else { return nil }
+        for selection in selectionRects(for: range) {
+            let rect = selection.rect.intersection(bounds)
+            if !rect.isNull, rect.width > 1, rect.height > 0, rect.contains(point) {
+                return UIPointerRegion(rect: rect, identifier: link.range.location)
+            }
+        }
+        return nil
+    }
+
+    func pointerInteraction(_ interaction: UIPointerInteraction,
+                            regionFor request: UIPointerRegionRequest,
+                            defaultRegion: UIPointerRegion) -> UIPointerRegion? {
+        noteLinkPointerRegion(at: request.location, modifiers: request.modifiers)
+    }
+
+    func pointerInteraction(_ interaction: UIPointerInteraction,
+                            styleFor region: UIPointerRegion) -> UIPointerStyle? {
+        guard interaction === markdownState.linkPointer,
+              let current = noteLinkPointerRegion(at: CGPoint(x: region.rect.midX,
+                                                              y: region.rect.midY)),
+              current.identifier == region.identifier else { return nil }
+        let parameters = UIPreviewParameters(textLineRects: [NSValue(cgRect: region.rect)])
+        parameters.backgroundColor = .clear
+        let preview = UITargetedPreview(view: self, parameters: parameters)
+        return UIPointerStyle(effect: .highlight(preview), shape: .roundedRect(
+            convert(region.rect, to: preview.target.container), radius: 4))
+    }
+
+    func insertNoteLink(_ change: MarkdownEditingChange, expected: String) -> Bool {
+        guard isEditable, markedTextRange == nil, text == expected,
+              NSMaxRange(change.range) <= (text as NSString).length else { return false }
+        markdownState.isApplyingCommand = true
+        defer { markdownState.isApplyingCommand = false }
+        becomeFirstResponder()
+        undoManager?.beginUndoGrouping()
+        selectedRange = change.range
+        super.insertText(change.replacement)
+        undoManager?.endUndoGrouping()
+        let updated = (expected as NSString).replacingCharacters(
+            in: change.range, with: change.replacement)
+        if text == updated { selectedRange = updated.clampedSelection(change.selection) }
+        delegate?.textViewDidChange?(self)
+        return true
+    }
+
+    private func noteLink(at point: CGPoint) -> NotebookLinkOccurrence? {
+        guard let position = closestPosition(to: point) else { return nil }
+        let offset = self.offset(from: beginningOfDocument, to: position)
+        guard let link = NotebookLinkParser.parse(text ?? "").first(where: {
+            !$0.isEmbed && NSLocationInRange(offset, $0.range)
+        }), let start = self.position(from: beginningOfDocument, offset: link.range.location),
+            let end = self.position(from: start, offset: link.range.length),
+            let range = textRange(from: start, to: end),
+            selectionRects(for: range).contains(where: {
+                $0.rect.insetBy(dx: -4, dy: -4).contains(point)
+            }) else { return nil }
+        return link
+    }
+
     @discardableResult
     func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
         guard isEditable, markedTextRange == nil,
               !markdownState.isApplyingCommand else { return false }
+        if command == .link, let request = markdownLinkNavigation?.requestLink {
+            request(text ?? "", selectedRange)
+            return true
+        }
         let source = text ?? ""
         let syntaxResult = command == .toggleTask
             ? markdownSyntaxCache.result(for: source) : nil
@@ -1419,6 +1785,8 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
     }
 
     func installMarkdownTaskTap() {
+        installMarkdownLinkPointer()
+        defer { markdownState.linkPointer?.invalidate() }
         guard markdownState.taskTap == nil else { return }
         let tap = UITapGestureRecognizer(
             target: self, action: #selector(tappedMarkdownTask(_:))
@@ -1440,13 +1808,50 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
     }
 
     @objc private func tappedMarkdownTask(_ tap: UITapGestureRecognizer) {
+        let point = tap.location(in: self)
+        if let link = markdownState.tappedLink {
+            markdownState.tappedLink = nil
+            markdownLinkNavigation?.openLink?(link)
+            return
+        }
         guard let checkbox = MarkdownPresentation.taskCheckbox(
-            at: tap.location(in: self), in: self
+            at: point, in: self
         ) else { return }
         toggleMarkdownTask(at: checkbox.range.location)
     }
 
+    private var linkCompletionKeyCommands: [UIKeyCommand] {
+        guard markdownLinkNavigation?.hasLinkCompletion == true,
+              markedTextRange == nil else { return [] }
+        let keys = [UIKeyCommand.inputDownArrow, UIKeyCommand.inputUpArrow,
+                    UIKeyCommand.inputRightArrow, UIKeyCommand.inputLeftArrow,
+                    "\r", UIKeyCommand.inputEscape]
+        let commands = keys.map {
+            let command = UIKeyCommand(input: $0, modifierFlags: [],
+                action: #selector(handleLinkCompletionKey(_:)))
+            command.wantsPriorityOverSystemBehavior = true
+            return command
+        }
+        return commands
+    }
+
+    @objc private func handleLinkCompletionKey(_ sender: UIKeyCommand) {
+        let command: String
+        switch sender.input {
+        case UIKeyCommand.inputDownArrow, UIKeyCommand.inputRightArrow: command = "next"
+        case UIKeyCommand.inputUpArrow, UIKeyCommand.inputLeftArrow: command = "previous"
+        case UIKeyCommand.inputEscape: command = "dismiss"
+        default: command = "accept"
+        }
+        if markdownLinkNavigation?.completionCommand?(command) != true, command == "accept" {
+            super.insertText("\n")
+        }
+    }
+
     override func insertText(_ text: String) {
+        if text == "\n", markdownLinkNavigation?.hasLinkCompletion == true,
+           markedTextRange == nil,
+           markdownLinkNavigation?.completionCommand?("accept") == true { return }
         if !markdownState.isApplyingCommand, !markdownState.isPasting {
             if text == "\t", performMarkdownCommand(.tableNextCell) { return }
             let command: MarkdownEditingCommand? = text == "\n"
@@ -1473,7 +1878,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
             ("c", [.command, .shift], #selector(codeMarkdown)),
             ("t", [.command, .shift], #selector(toggleTaskMarkdown)),
         ]
-        return (super.keyCommands ?? []) + commands.map { input, flags, action in
+        return linkCompletionKeyCommands + (super.keyCommands ?? []) + commands.map { input, flags, action in
             let key = UIKeyCommand(input: input, modifierFlags: flags, action: action)
             key.wantsPriorityOverSystemBehavior = true
             return key
@@ -1525,9 +1930,10 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate {
               let tap = gestureRecognizer as? UITapGestureRecognizer else {
             return super.gestureRecognizerShouldBegin(gestureRecognizer)
         }
-        return MarkdownPresentation.taskCheckbox(
-            at: tap.location(in: self), in: self
-        ) != nil
+        let point = tap.location(in: self)
+        markdownState.tappedLink = passiveNoteLink(at: point, modifiers: tap.modifierFlags)
+        return MarkdownPresentation.taskCheckbox(at: point, in: self) != nil
+            || markdownState.tappedLink != nil
     }
 }
 
@@ -1541,6 +1947,9 @@ private final class MarkdownTextViewState: NSObject {
     var didLayout: (() -> Void)?
     let syntaxCache = MarkdownSyntaxCache()
     var taskTap: UITapGestureRecognizer?
+    var tappedLink: NotebookLinkOccurrence?
+    var linkPointer: UIPointerInteraction?
+    weak var linkNavigation: MarkdownEditorNavigation?
     var layoutDelegate: MarkdownLayoutManagerDelegate?
     var titleHost: UIHostingController<AnyView>?
     var titleHeight: CGFloat = 0
@@ -1667,6 +2076,9 @@ struct MarkdownEditor: UIViewRepresentable {
     var fontSize: Double
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
+    var initialPreviewPosition: MarkdownEditorPosition?
+    var initialPreviewInsets: UIEdgeInsets?
+    var initialPreviewOriginY: CGFloat?
 
     init(
         text: Binding<String>,
@@ -1681,7 +2093,10 @@ struct MarkdownEditor: UIViewRepresentable {
         focusRequest: Int = 0,
         fontSize: Double = 17,
         fontFamily: EditorFontFamily = .system,
-        mode: MarkdownEditorMode = .source
+        mode: MarkdownEditorMode = .source,
+        initialPreviewPosition: MarkdownEditorPosition? = nil,
+        initialPreviewInsets: UIEdgeInsets? = nil,
+        initialPreviewOriginY: CGFloat? = nil
     ) {
         _text = text
         self.isReadOnly = isReadOnly
@@ -1696,6 +2111,9 @@ struct MarkdownEditor: UIViewRepresentable {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
         self.mode = mode
+        self.initialPreviewPosition = initialPreviewPosition
+        self.initialPreviewInsets = initialPreviewInsets
+        self.initialPreviewOriginY = initialPreviewOriginY
     }
 
     func makeCoordinator() -> Coordinator {
@@ -1709,9 +2127,7 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         textView.delegate = context.coordinator
-        textView.installMarkdownKeyboardToolbar(navigation: navigation)
         textView.isFindInteractionEnabled = true
-        textView.markdownFindPresentation = navigation?.findPresentation
         textView.keyboardLayoutGuide.usesBottomSafeArea = false
         textView.keyboardDismissMode = UIDevice.current.userInterfaceIdiom == .pad
             ? .none : .interactive
@@ -1746,6 +2162,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         context.coordinator.attachNavigation(to: textView)
         textView.updateMarkdownTitle(title, height: titleHeight)
+        context.coordinator.applyInitialPreviewInsets(in: textView)
         return textView
     }
 
@@ -1777,6 +2194,10 @@ struct MarkdownEditor: UIViewRepresentable {
         private var pendingSearchMatch: NSRange?
         private var destinationHighlightRange: NSRange?
         private var destinationCenterGeometry: DestinationCenterGeometry?
+        private var pendingPositionCompletion: (() -> Void)?
+        private var pendingInitialPreviewPosition: MarkdownEditorPosition?
+        private var initialPreviewGeometry: DestinationCenterGeometry?
+        private var initialPreviewOriginY: CGFloat?
 
         private struct DestinationCenterGeometry: Equatable {
             let size: CGSize
@@ -1785,12 +2206,12 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-            positionRestoreGeneration &+= 1
-            pendingPosition = nil
+            cancelPositionRestore()
         }
 
         init(parent: MarkdownEditor) {
             self.parent = parent
+            pendingInitialPreviewPosition = parent.initialPreviewPosition
             handledFocusRequest = parent.focusRequest
             displayedText = parent.text
             displayedMode = parent.mode
@@ -1817,9 +2238,12 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func attachNavigation(to textView: MarkdownTextView) {
+            textView.installMarkdownKeyboardToolbar(navigation: parent.navigation)
+            textView.markdownFindPresentation = parent.navigation?.findPresentation
             installDestinationHighlightRendering(in: textView)
             textView.markdownDidLayout = { [weak self, weak textView] in
                 guard let self, let textView else { return }
+                self.restoreInitialPreviewIfNeeded(in: textView)
                 self.centerDestinationIfGeometryChanged(in: textView)
             }
             refreshTableCommands(in: textView)
@@ -1878,13 +2302,47 @@ struct MarkdownEditor: UIViewRepresentable {
                 guard let self, let textView else { return }
                 self.schedulePositionRestore(position, in: textView)
             }
+            parent.navigation?.restorePositionAndNotify = {
+                [weak self, weak textView] position, completion in
+                guard let self, let textView else { return }
+                self.schedulePositionRestore(position, in: textView, completion: completion)
+            }
+            parent.navigation?.captureViewportInsets = { [weak textView] in
+                guard let textView else { return nil }
+                textView.layoutIfNeeded()
+                return textView.adjustedContentInset
+            }
+            parent.navigation?.captureViewportOriginY = { [weak textView] in
+                guard let textView, let window = textView.window else { return nil }
+                return textView.convert(textView.bounds, to: window).minY
+            }
+            textView.markdownLinkNavigation = navigation
+            navigation?.insertLink = { [weak textView] change, expected in
+                textView?.insertNoteLink(change, expected: expected) == true
+            }
             textView.markdownDidAttachToWindow = { [weak navigation] in
                 navigation?.didAttach()
             }
         }
 
         func update(parent: MarkdownEditor, textView: UITextView) {
+            if parent.isReadOnly,
+               parent.initialPreviewPosition != self.parent.initialPreviewPosition
+                || parent.initialPreviewInsets != self.parent.initialPreviewInsets
+                || parent.initialPreviewOriginY != self.parent.initialPreviewOriginY {
+                pendingInitialPreviewPosition = parent.initialPreviewPosition
+                textView.setNeedsLayout()
+            }
             self.parent = parent
+            applyInitialPreviewInsets(in: textView)
+            // SwiftUI can retain the native view while a navigation visit or
+            // History changes its owner. Selection reporting uses the updated
+            // parent, so insertion and toolbar callbacks must follow it too.
+            if let nativeView = textView as? MarkdownTextView,
+               nativeView.markdownLinkNavigation !== parent.navigation {
+                attachNavigation(to: nativeView)
+                if nativeView.window != nil { parent.navigation?.didAttach() }
+            }
             textView.isEditable = !parent.isReadOnly
             guard textView.markedTextRange == nil else { return }
 
@@ -1937,6 +2395,7 @@ struct MarkdownEditor: UIViewRepresentable {
         func textViewDidChangeSelection(_ textView: UITextView) {
             guard !isUpdating else { return }
             refreshTableCommands(in: textView)
+            reportLinkSelection(in: textView)
             if parent.mode == .livePreview {
                 schedulePresentationRefresh(for: textView)
             }
@@ -1946,6 +2405,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             guard !isUpdating, textView.markedTextRange == nil else { return }
+            defer { reportLinkSelection(in: textView) }
             refreshTableCommands(in: textView)
             clearDestinationHighlight(in: textView)
             defer {
@@ -1987,12 +2447,37 @@ struct MarkdownEditor: UIViewRepresentable {
             }
         }
 
+        private func reportLinkSelection(in textView: UITextView) {
+            guard textView.markedTextRange == nil else { return }
+            let text = textView.text ?? ""
+            let selection = textView.selectedRange
+            let editing = textView.isFirstResponder
+            let navigation = parent.navigation
+            DispatchQueue.main.async { [weak navigation] in
+                navigation?.selectionChanged?(text, selection, editing)
+            }
+        }
+
+        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
+                      suggestedActions: [UIMenuElement]) -> UIMenu? {
+            let link = NotebookLinkParser.parse(textView.text ?? "").first {
+                !$0.isEmbed && (NSIntersectionRange($0.range, range).length > 0
+                    || NSLocationInRange(range.location, $0.range))
+            }
+            guard let link else { return UIMenu(children: suggestedActions) }
+            let action = UIAction(title: String(localized: "Open Linked Note"),
+                                  image: UIImage(systemName: "link")) {
+                [weak navigation = parent.navigation] _ in
+                navigation?.openLink?(link)
+            }
+            return UIMenu(children: [action] + suggestedActions)
+        }
+
         private func scheduleSearchMatchReveal(
             _ range: NSRange,
             in textView: UITextView
         ) {
-            positionRestoreGeneration &+= 1
-            pendingPosition = nil
+            cancelPositionRestore()
             parent.navigation?.searchLandingPosition = nil
             pendingSearchMatch = range
             schedulePendingSearchMatchReveal(in: textView)
@@ -2177,12 +2662,72 @@ struct MarkdownEditor: UIViewRepresentable {
             )
         }
 
+        func applyInitialPreviewInsets(in textView: UITextView) {
+            guard parent.isReadOnly, let insets = parent.initialPreviewInsets else { return }
+            textView.contentInsetAdjustmentBehavior = .never
+            if textView.contentInset != insets { textView.contentInset = insets }
+            textView.scrollIndicatorInsets = insets
+        }
+
+        private func restoreInitialPreviewIfNeeded(in textView: UITextView) {
+            guard parent.isReadOnly, let window = textView.window,
+                  textView.bounds.width > 0,
+                  textView.bounds.height > 0,
+                  let position = parent.initialPreviewPosition else { return }
+            let origin = textView.convert(textView.bounds, to: window).minY
+            let geometry = centerGeometry(for: textView)
+            guard pendingInitialPreviewPosition != nil
+                    || initialPreviewGeometry != geometry || initialPreviewOriginY != origin
+            else { return }
+            // A lazy navigation preview must be positioned before its first
+            // paint, including the outgoing screen during a link push.
+            pendingInitialPreviewPosition = nil
+            initialPreviewGeometry = geometry
+            initialPreviewOriginY = origin
+            applyPreviewPosition(position, origin: origin, in: textView)
+        }
+
+        private func applyPreviewPosition(_ position: MarkdownEditorPosition,
+                                          origin: CGFloat, in textView: UITextView) {
+            cancelPositionRestore()
+            let offset = parent.initialPreviewOriginY.map { $0 - origin } ?? 0
+            let previewPosition = MarkdownEditorPosition(
+                selection: position.selection, scrollAnchor: position.scrollAnchor,
+                scrollAnchorOffset: position.scrollAnchorOffset + Double(offset)
+            )
+            restore(previewPosition, generation: positionRestoreGeneration,
+                    in: textView, completion: nil, immediately: true)
+        }
+
+        private func cancelPositionRestore() {
+            positionRestoreGeneration &+= 1
+            pendingPosition = nil
+            let completion = pendingPositionCompletion
+            pendingPositionCompletion = nil
+            // An explicit scroll, focus, or reveal owns the new viewport.
+            // A canceled restoration must still release its retained preview.
+            completion?()
+        }
+
         private func schedulePositionRestore(
             _ position: MarkdownEditorPosition,
-            in textView: UITextView
+            in textView: UITextView,
+            completion: (() -> Void)? = nil
         ) {
-            positionRestoreGeneration &+= 1
+            cancelPositionRestore()
             pendingPosition = position
+            if let completion {
+                let generation = positionRestoreGeneration
+                var completed = false
+                pendingPositionCompletion = { [weak self] in
+                    guard !completed else { return }
+                    completed = true
+                    if self?.positionRestoreGeneration == generation {
+                        self?.pendingPositionCompletion = nil
+                    }
+                    completion()
+                }
+            }
             schedulePendingPositionRestore(in: textView)
         }
 
@@ -2196,11 +2741,13 @@ struct MarkdownEditor: UIViewRepresentable {
                 self.positionRestoreScheduled = false
                 guard let textView, textView.markedTextRange == nil,
                       let position = self.pendingPosition else { return }
+                let completion = self.pendingPositionCompletion
                 self.pendingPosition = nil
                 self.restore(
                     position,
                     generation: self.positionRestoreGeneration,
-                    in: textView
+                    in: textView,
+                    completion: completion
                 )
             }
         }
@@ -2208,7 +2755,9 @@ struct MarkdownEditor: UIViewRepresentable {
         private func restore(
             _ position: MarkdownEditorPosition,
             generation: Int,
-            in textView: UITextView
+            in textView: UITextView,
+            completion: (() -> Void)?,
+            immediately: Bool = false
         ) {
             let source = textView.text ?? ""
             let selection = source.clampedSelection(position.selection)
@@ -2230,6 +2779,11 @@ struct MarkdownEditor: UIViewRepresentable {
             )
             textView.setNeedsLayout()
             textView.layoutIfNeeded()
+            if immediately {
+                finishRestore(position, generation: generation, attemptsRemaining: 0,
+                              in: textView, completion: completion)
+                return
+            }
             // TextKit 2 can expose an estimated contentSize until a scroll
             // reaches that provisional extent. Apply the offset after this
             // layout turn, then converge again if the anchor misses its saved
@@ -2241,13 +2795,15 @@ struct MarkdownEditor: UIViewRepresentable {
                         return
                     }
                     self.pendingPosition = position
+                    self.pendingPositionCompletion = completion
                     return
                 }
                 self.finishRestore(
                     position,
                     generation: generation,
                     attemptsRemaining: 2,
-                    in: textView
+                    in: textView,
+                    completion: completion
                 )
             }
         }
@@ -2256,7 +2812,8 @@ struct MarkdownEditor: UIViewRepresentable {
             _ position: MarkdownEditorPosition,
             generation: Int,
             attemptsRemaining: Int,
-            in textView: UITextView
+            in textView: UITextView,
+            completion: (() -> Void)?
         ) {
             guard generation == positionRestoreGeneration else { return }
             let source = textView.text ?? ""
@@ -2266,7 +2823,7 @@ struct MarkdownEditor: UIViewRepresentable {
             textView.layoutIfNeeded()
 
             guard let anchorRect = localCaretRect(at: anchor, in: textView)
-            else { return }
+            else { completion?(); return }
             let offset = position.scrollAnchorOffset.isFinite
                 ? CGFloat(position.scrollAnchorOffset) : 0
             let insets = textView.adjustedContentInset
@@ -2286,7 +2843,12 @@ struct MarkdownEditor: UIViewRepresentable {
             )
             let restoredOffset = anchorRect.minY - textView.bounds.minY
             guard attemptsRemaining > 0,
-                  abs(restoredOffset - offset) > 1 else { return }
+                  abs(restoredOffset - offset) > 1 else {
+                // The incoming live editor may now replace the retained
+                // navigation preview without exposing its initial offset.
+                completion?()
+                return
+            }
             textView.setNeedsLayout()
             DispatchQueue.main.async { [weak self, weak textView] in
                 guard let self, let textView,
@@ -2295,6 +2857,7 @@ struct MarkdownEditor: UIViewRepresentable {
                 }
                 guard textView.markedTextRange == nil else {
                     self.pendingPosition = position
+                    self.pendingPositionCompletion = completion
                     return
                 }
                 textView.layoutIfNeeded()
@@ -2302,7 +2865,8 @@ struct MarkdownEditor: UIViewRepresentable {
                     position,
                     generation: generation,
                     attemptsRemaining: attemptsRemaining - 1,
-                    in: textView
+                    in: textView,
+                    completion: completion
                 )
             }
         }
@@ -2385,8 +2949,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         func textViewDidBeginEditing(_ textView: UITextView) {
             parent.onBeginEditing()
-            positionRestoreGeneration &+= 1
-            pendingPosition = nil
+            cancelPositionRestore()
             schedulePresentationRefresh(for: textView)
         }
 

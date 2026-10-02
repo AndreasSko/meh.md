@@ -82,7 +82,8 @@ public actor NotebookMarkdownBackupStore {
         let wrapper = try NotebookMarkdownExport.makeWrapper(
             placements: placements,
             notes: notes,
-            selectedIDs: selectedIDs
+            selectedIDs: selectedIDs,
+            preserveSource: true
         )
         guard !(wrapper.fileWrappers ?? [:]).keys.contains(where: {
             NotebookName.collisionKey($0) == NotebookName.collisionKey(Self.markerName)

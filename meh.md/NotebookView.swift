@@ -16,6 +16,7 @@ private struct EditorAttachmentID: Hashable {
 
 private struct NotebookFileReveal: Equatable {
     let id: UUID
+    var highlights = true
     let token = UUID()
 }
 
@@ -84,12 +85,40 @@ private struct NotebookSidebarRow: Identifiable {
     }
 }
 
+private struct NotebookLinkRoute: Hashable {
+    let id = UUID()
+    let noteID: UUID
+}
+
+#if os(iOS)
+private struct NotebookLinkVisitPreview {
+    let text: String
+    let position: MarkdownEditorPosition?
+    let viewportInsets: UIEdgeInsets?
+    let viewportOriginY: CGFloat?
+    let titleHeight: CGFloat
+}
+#endif
+
 struct NotebookView: View {
     let replica: NotebookReplica
     var workspace: NotebookWorkspace? = nil
     let sceneID: UUID
     let preferredNoteID: UUID?
     @State private var search = NotebookSearchState()
+    @State private var links = NotebookLinkState()
+    @State private var linkHistory = NotebookLinkNavigationHistory()
+    @State private var linkJourneyID = UUID()
+    @State private var showingBacklinks = false
+    @State private var backlinkDeparture: NotebookLinkNavigationHistory.Visit?
+    @State private var linkInsertion: NotebookLinkInsertionRequest?
+    @State private var linkCompletion: NotebookLinkCompletion?
+    @State private var linkCompletionText = ""
+    @State private var linkCompletionSelection = 0
+    @State private var linkChoices: [NotebookLinkNote] = []
+    @State private var linkChoiceFragment: String?
+    @State private var missingLink: NotebookLinkOccurrence?
+    @Environment(\.openURL) private var openURL
     @FocusState private var searchFocused: Bool
     @State private var pendingSearchQuery: String?
     @State private var searchDestinationID: UUID?
@@ -157,6 +186,11 @@ struct NotebookView: View {
         @State private var browserViewport: NotebookBrowserViewport?
         @State private var browserReturnViewport: NotebookBrowserViewport?
         @State private var browserToolbarWasHidden = false
+        @State private var linkRootRoute: NotebookLinkRoute?
+        @State private var linkRoutes: [NotebookLinkRoute] = []
+        @State private var activeLinkRouteID: UUID?
+        @State private var restoringLinkRouteID: UUID?
+        @State private var linkVisitPreviews: [UUID: NotebookLinkVisitPreview] = [:]
     #endif
 
     init(
@@ -329,6 +363,33 @@ struct NotebookView: View {
                             mode: editorMode
                         )
                         }
+                        if let completion = linkCompletion, historyBrowser == nil {
+                            let completionText = linkCompletionText
+                            NotebookLinkSuggestions(
+                                notes: completion.query.contains("#") ? [] : links.suggestions(for: completion.query),
+                                isLoading: links.isLoading,
+                                selection: linkCompletionSelection,
+                                headings: completionHeadings,
+                                selectHeading: { heading in
+                                    if let target = completionHeadingTarget {
+                                        insertCompletedLink(to: target,
+                                            fragment: NotebookLinkDestination.wikiHeadingFragment(heading),
+                                            completionSnapshot: completion, textSnapshot: completionText,
+                                            sourceID: selectedID)
+                                    }
+                                },
+                                select: { insertCompletedLink(to: $0,
+                                    completionSnapshot: completion, textSnapshot: completionText,
+                                    sourceID: selectedID) },
+                                dismiss: {
+                                    linkCompletion = nil
+                                    editorNavigation.hasLinkCompletion = false
+                                }
+                            )
+                            .task(id: replica.searchRevision.catalogHeads) {
+                                await links.refresh(replica: replica)
+                            }
+                        }
                     }
                     .allowsHitTesting(!isLoadingHistory)
                     .overlay {
@@ -352,12 +413,14 @@ struct NotebookView: View {
                     )) {
                         guard session.isEditingEnabled, historyBrowser == nil else { return }
                         let incomingNavigation = editorNavigation
+                        guard !incomingNavigation.hasExplicitVisitDestination else { return }
                         let state = navigationState
                         let position = state.position(for: selectedID).flatMap {
                             try? JSONDecoder().decode(MarkdownEditorPosition.self, from: $0)
                         }
                         incomingNavigation.whenAttached { [weak incomingNavigation, weak state] in
                             guard let incomingNavigation,
+                                  !incomingNavigation.hasExplicitVisitDestination,
                                   state?.selectedID == selectedID else { return }
                             if searchDestinationID == selectedID {
                                 revealSearchDestination(in: incomingNavigation)
@@ -367,6 +430,18 @@ struct NotebookView: View {
                         }
                     }
                     .toolbar {
+                        if historyBrowser == nil, !usesCompactLinkNavigation,
+                           linkHistory.backTarget != nil {
+                            ToolbarItemGroup(placement: .navigation) {
+                                Button { navigateLinkHistory(back: true) } label: {
+                                    Label("Previous Note", systemImage: "chevron.backward")
+                                }
+                                .disabled(busy || linkHistory.backTarget == nil)
+                                .keyboardShortcut("[", modifiers: .command)
+                                .help("Go back to the previous note")
+                                .accessibilityIdentifier("note-link-back")
+                            }
+                        }
                         if let placement = selectedPlacement, historyBrowser == nil {
                             #if os(iOS)
                             if horizontalSizeClass == .compact {
@@ -392,6 +467,24 @@ struct NotebookView: View {
                             #endif
                             ToolbarItem {
                                 Menu {
+                                    #if os(macOS)
+                                    if linkHistory.forwardTarget != nil {
+                                        Button("Go Forward") {
+                                            navigateLinkHistory(back: false)
+                                        }
+                                        .disabled(busy)
+                                        .keyboardShortcut("]", modifiers: .command)
+                                        .accessibilityIdentifier("note-link-forward")
+                                        Divider()
+                                    }
+                                    #endif
+                                    Button {
+                                        showBacklinks()
+                                    } label: {
+                                        Label("Linked from…", systemImage: "link")
+                                    }
+                                    .disabled(!session.isEditingEnabled || busy)
+                                    .accessibilityIdentifier("notebook-backlinks")
                                     Button("Find in Note…") { showFind() }
                                         .disabled(!session.isEditingEnabled)
                                         .accessibilityIdentifier("notebook-find")
@@ -448,12 +541,125 @@ struct NotebookView: View {
             }
     }
 
-    private var searchNavigation: some View {
+    private var usesCompactLinkNavigation: Bool {
+        #if os(iOS)
+        horizontalSizeClass == .compact
+        #else
+        false
+        #endif
+    }
+
+    @ViewBuilder
+    private var notebookNavigationContainer: some View {
+        #if os(iOS)
+        if usesCompactLinkNavigation {
+            NavigationStack(path: Binding<[NotebookLinkRoute]>(
+                get: {
+                    guard preferredCompactColumn == .detail, let linkRootRoute else { return [] }
+                    return [linkRootRoute] + linkRoutes
+                },
+                set: { routes in
+                    if routes.isEmpty {
+                        guard !busy else { return }
+                        // Commit composition synchronously while its editor
+                        // is still attached; the note session remains open.
+                        guard editorNavigation.prepareToLeave?() != false, !unrecordedEdit else {
+                            errorMessage = NotebookNavigationError.unrecordedEdit.localizedDescription
+                            return
+                        }
+                        rememberEditorPosition()
+                        preferredCompactColumn = .sidebar
+                    } else if routes.first == linkRootRoute {
+                        navigateCompactLinks(to: Array(routes.dropFirst()))
+                    }
+                }
+            )) {
+                notebookSidebar
+                    .navigationDestination(for: NotebookLinkRoute.self) { route in
+                        compactLinkScreen(route, isCurrent: activeLinkRouteID == route.id)
+                    }
+            }
+        } else {
+            NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
+                notebookSidebar
+            } detail: {
+                notebookDetail
+            }
+        }
+        #else
         NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
             notebookSidebar
         } detail: {
             notebookDetail
         }
+        #endif
+    }
+
+    #if os(iOS)
+    private func compactLinkScreen(_ route: NotebookLinkRoute?,
+                                   isCurrent: Bool) -> some View {
+        let title = route.flatMap { route in
+            replica.placements.first { $0.item.id == route.noteID }
+        }.map { NotebookNoteName.title(from: $0.displayName) } ?? ""
+        // Opening the incoming session can publish before the route changes.
+        // A departing screen must keep its own preview throughout that gap.
+        let showsLiveEditor = isCurrent && route?.noteID == selectedID
+        let isRestoring = session?.isEditingEnabled == true
+            && (route.map { restoringLinkRouteID == $0.id } ?? false)
+        return ZStack {
+            if showsLiveEditor {
+                notebookDetail
+                    .opacity(isRestoring ? 0 : 1)
+                    .allowsHitTesting(!isRestoring)
+            }
+            if let route, let preview = linkVisitPreviews[route.id],
+               !showsLiveEditor || isRestoring {
+                NotebookPreviousLinkView(
+                    text: preview.text, position: preview.position, title: title,
+                    viewportInsets: preview.viewportInsets, titleHeight: preview.titleHeight,
+                    viewportOriginY: preview.viewportOriginY,
+                    titleFont: editorTitleFont,
+                    fontSize: editorFontSize, fontFamily: editorFontFamily,
+                    mode: editorMode
+                )
+                .transition(.identity)
+            } else if !showsLiveEditor {
+                Color(uiColor: .systemBackground)
+            }
+        }
+        // Both children extend beneath the bars. Keep their parent geometry
+        // fixed when the preview is removed, rather than adding a safe-area
+        // offset to the already-restored live editor.
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
+        .animation(nil, value: isRestoring)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Keep the title in the native Back menu, while the document's
+            // existing title remains the only visible heading.
+            ToolbarItem(placement: .principal) {
+                Color.clear.frame(width: 1, height: 1).accessibilityHidden(true)
+            }
+        }
+    }
+
+    private func navigateCompactLinks(to routes: [NotebookLinkRoute]) {
+        guard !busy, routes.count < linkRoutes.count,
+              Array(linkRoutes.prefix(routes.count)) == routes else { return }
+        let steps = linkRoutes.count - routes.count
+        guard linkHistory.backTarget(steps: steps) != nil else { return }
+        // Accept the native pop immediately. Keeping the old path during an
+        // asynchronous save makes NavigationStack undo and replay the pop.
+        let previousRoutes = linkRoutes
+        rememberLinkVisitPreview()
+        linkRoutes = routes
+        navigateLinkHistory(back: true, steps: steps, compactRoutesBeforePop: previousRoutes)
+    }
+    #endif
+
+    private var searchNavigation: some View {
+        notebookNavigationContainer
+        .task(id: ObjectIdentifier(editorNavigation)) { configureLinkNavigation() }
         .focusedSceneValue(\.notebookSearch, search)
         .focusedSceneValue(\.notebookRecentCommands, recentCommands)
         .onChange(of: focusedRecentID) { _, id in
@@ -461,6 +667,7 @@ struct NotebookView: View {
         }
         .onChange(of: selectedID) { _, id in
             historyLoadTask?.cancel()
+            linkCompletion = nil
             if historyBrowser != nil { closeHistory() }
             recentCommands.selectedNoteID = id
         }
@@ -527,6 +734,11 @@ struct NotebookView: View {
             navigationState.refreshAvailability()
             if previous?.notebookID != current?.notebookID {
                 search.clear()
+                links.clear()
+                resetLinkJourney()
+                linkCompletion = nil
+                showingBacklinks = false
+                linkInsertion = nil
                 searchLandingPosition = nil
                 pendingSearchQuery = nil
                 searchDestinationID = nil
@@ -538,6 +750,9 @@ struct NotebookView: View {
             } else {
                 browserSelection.prune(to: activeBrowserIDs)
             }
+        }
+        .onChange(of: replica.linkMaintenanceIssueMessage) { _, message in
+            if let message { errorMessage = message }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { rememberEditorPosition() }
@@ -563,7 +778,10 @@ struct NotebookView: View {
                 get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
             )
         ) {
-            Button("OK", role: .cancel) { errorMessage = nil }
+            Button("OK", role: .cancel) {
+                errorMessage = nil
+                replica.acknowledgeLinkMaintenanceIssue()
+            }
         } message: {
             Text(errorMessage ?? "")
         }
@@ -572,6 +790,45 @@ struct NotebookView: View {
                 get: { !movingIDs.isEmpty }, set: { if !$0 { movingIDs = [] } }
             )
         ) { moveSheet }
+        .sheet(isPresented: $showingBacklinks, onDismiss: {
+            backlinkDeparture = nil
+        }) {
+            if let selectedID {
+                NotebookBacklinksView(state: links, replica: replica, noteID: selectedID) {
+                    openBacklink($0, targetID: selectedID)
+                }
+                .id(selectedID)
+            }
+        }
+        .sheet(item: $linkInsertion, onDismiss: {
+            editorNavigation.resumeEditing?()
+            editorNavigation.focusEditor?()
+        }) { request in
+            NotebookLinkPicker(state: links, replica: replica,
+                select: { insertPickedLink(to: $0, request: request) },
+                insertURL: { insertPickedURL($0, request: request) })
+        }
+        .confirmationDialog("Choose linked note", isPresented: Binding(
+            get: { !linkChoices.isEmpty },
+            set: { if !$0 { linkChoices = [] } }
+        ), titleVisibility: .visible) {
+            ForEach(linkChoices, id: \.id) { note in
+                Button(note.fullPath) {
+                    linkChoices = []
+                    perform { try await visitLinkedNote(note.id, fragment: linkChoiceFragment) }
+                }
+            }
+        }
+        .confirmationDialog("Create linked note?", isPresented: Binding(
+            get: { missingLink != nil }, set: { if !$0 { missingLink = nil } }
+        ), titleVisibility: .visible) {
+            if let missingLink {
+                Button("Create Note") { createMissingLinkedNote(missingLink) }
+            }
+            Button("Cancel", role: .cancel) { missingLink = nil }
+        } message: {
+            Text(missingLink?.destination ?? "")
+        }
         .sheet(isPresented: $showingImport) {
             NotebookImportView(replica: replica, onImport: importMarkdown)
         }
@@ -612,6 +869,7 @@ struct NotebookView: View {
             guard !busy else { return }
             busy = true
             await navigationState.restoreLastSelection(preferredNoteID: preferredNoteID)
+            resetLinkJourney()
             if selectedID != nil { preferredCompactColumn = .detail }
             busy = false
             #if os(iOS)
@@ -1290,6 +1548,7 @@ struct NotebookView: View {
                 if editingID == row.id {
                     TextField("Name", text: $proposedName)
                         .textFieldStyle(.plain)
+                        .accessibilityIdentifier("notebook-inline-name")
                         .focused($focusedNameID, equals: row.id)
                         .disabled(busy)
                         .onSubmit { submitInlineName() }
@@ -1662,6 +1921,11 @@ struct NotebookView: View {
         originalName = ""
         proposedName = ""
         if placement?.item.kind == .note, selectedID == id {
+            // Inline rename reopens this note without selecting it again.
+            // Replace the retained Files-transition path before pushing it.
+            if usesCompactLinkNavigation, preferredCompactColumn != .detail {
+                resetLinkJourney()
+            }
             preferredCompactColumn = .detail
         }
     }
@@ -1749,6 +2013,19 @@ struct NotebookView: View {
         reveal(id)
         preferredCompactColumn = .sidebar
         fileRevealRequest = NotebookFileReveal(id: id)
+    }
+
+    private func revealLinkedNoteInFiles(_ id: UUID) {
+        navigationState.isTreeExpanded = true
+        reveal(id)
+        // Keep deliberate batch selections intact. Otherwise the native Files
+        // selection should track the note reached through links or history.
+        // A compact split view treats List selection as a new detail root;
+        // changing it during a link push would discard the native link stack.
+        if !usesCompactLinkNavigation, !selectingItems, browserSelection.count <= 1 {
+            browserSelection.selectOnly(id)
+        }
+        fileRevealRequest = NotebookFileReveal(id: id, highlights: false)
     }
 
     private func commitMove(to parentID: UUID?) async throws {
@@ -2084,6 +2361,10 @@ struct NotebookView: View {
             if horizontalSizeClass == .compact, column == .sidebar {
                 rememberEditorPosition()
                 navigationState.recordClosed()
+                linkJourneyID = UUID()
+                linkHistory.clear()
+                // Keep the outgoing screen's identity/content through the
+                // Files transition. Direct selection starts a fresh journey.
             }
             #endif
             if isPhoneLayout, column == .sidebar, !selectingItems {
@@ -2095,6 +2376,10 @@ struct NotebookView: View {
             await Task.yield()
             guard !Task.isCancelled else { return }
             withAnimation { scrollProxy.scrollTo(request.id, anchor: .center) }
+            guard request.highlights else {
+                fileRevealRequest = nil
+                return
+            }
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
             withAnimation(.easeIn(duration: 0.2)) {
@@ -2422,6 +2707,410 @@ struct NotebookView: View {
         }
     }
 
+    private var completionHeadingTarget: NotebookLinkNote? {
+        guard let completion = linkCompletion, completion.query.contains("#"),
+              let selectedID else { return nil }
+        let path = NotebookLinkParser.literalDestinationParts(completion.query).path
+        let probe = "[[\(path.isEmpty ? "#__heading" : path)]]"
+        guard let occurrence = NotebookLinkParser.parse(probe).first,
+              case .resolved(let id, _) = NotebookLinkResolver.resolve(
+                occurrence, sourceID: selectedID, notes: replica.linkNotes)
+        else { return nil }
+        return replica.linkNotes.first { $0.id == id }
+    }
+
+    private var completionHeadings: [String] {
+        guard let target = completionHeadingTarget, let completion = linkCompletion else { return [] }
+        let fragment = NotebookLinkParser.literalDestinationParts(completion.query).fragment ?? ""
+        let headings = target.id == selectedID
+            ? NotebookLinkParser.headings(in: linkCompletionText)
+            : links.headingNames[target.id] ?? []
+        return headings.filter { fragment.isEmpty || $0.localizedCaseInsensitiveContains(fragment) }
+    }
+
+    private func configureLinkNavigation() {
+        let navigation = editorNavigation
+        navigation.openLink = { link in openNoteLink(link) }
+        navigation.requestLink = { [weak navigation] text, range in
+            guard let selectedID, !busy else { return }
+            let existing = NotebookLinkParser.parse(text).first {
+                !$0.isEmbed && (NSIntersectionRange($0.range, range).length > 0
+                    || NSLocationInRange(range.location, $0.range))
+            }
+            let selectedText = (text as NSString).substring(with: range)
+            linkInsertion = NotebookLinkInsertionRequest(
+                sourceID: selectedID, text: text,
+                range: existing?.range ?? range,
+                label: existing?.label ?? selectedText)
+            linkCompletion = nil
+            navigation?.hasLinkCompletion = false
+        }
+        navigation.completionCommand = { [weak navigation] command in
+            guard let completion = linkCompletion else { return false }
+            let suggestions = links.suggestions(for: completion.query)
+            let headings = completionHeadings
+            let isHeading = completion.query.contains("#")
+            let count = isHeading ? headings.count : suggestions.count
+            switch command {
+            case "dismiss":
+                linkCompletion = nil
+                navigation?.hasLinkCompletion = false
+            case "accept":
+                guard count > 0 else { return false }
+                if isHeading, let target = completionHeadingTarget {
+                    let heading = headings[min(linkCompletionSelection, headings.count - 1)]
+                    insertCompletedLink(to: target,
+                        fragment: NotebookLinkDestination.wikiHeadingFragment(heading))
+                } else {
+                    insertCompletedLink(to: suggestions[min(linkCompletionSelection, suggestions.count - 1)])
+                }
+            case "next":
+                linkCompletionSelection = min(max(0, count - 1), linkCompletionSelection + 1)
+            case "previous":
+                linkCompletionSelection = max(0, linkCompletionSelection - 1)
+            default: return false
+            }
+            return true
+        }
+        navigation.selectionChanged = { [weak navigation] text, range, editing in
+            guard navigation === editorNavigation, editing, !busy,
+                  text == session?.text, linkInsertion == nil else {
+                linkCompletion = nil
+                navigation?.hasLinkCompletion = false
+                return
+            }
+            let completion = NotebookLinkCompletion.detect(in: text, selection: range)
+            if completion?.query != linkCompletion?.query { linkCompletionSelection = 0 }
+            linkCompletion = completion
+            navigation?.hasLinkCompletion = completion != nil
+            linkCompletionText = text
+        }
+    }
+
+    private func currentLinkVisit() -> NotebookLinkNavigationHistory.Visit? {
+        guard let selectedID else { return nil }
+        let position = editorNavigation.capturePosition?().flatMap {
+            try? JSONEncoder().encode($0)
+        }
+        return .init(noteID: selectedID, position: position)
+    }
+
+    private func resetLinkJourney() {
+        linkJourneyID = UUID()
+        backlinkDeparture = nil
+        linkHistory.clear()
+        #if os(iOS)
+        linkRoutes = []
+        linkVisitPreviews = [:]
+        restoringLinkRouteID = nil
+        linkRootRoute = selectedID.map { NotebookLinkRoute(noteID: $0) }
+        activeLinkRouteID = linkRootRoute?.id
+        #endif
+    }
+
+    private func rememberLinkVisitPreview(route: NotebookLinkRoute? = nil) {
+        #if os(iOS)
+        guard let route = route ?? linkRoutes.last ?? linkRootRoute, let session else { return }
+        linkVisitPreviews[route.id] = NotebookLinkVisitPreview(
+            text: session.text, position: editorNavigation.capturePosition?(),
+            viewportInsets: editorNavigation.captureViewportInsets?(),
+            viewportOriginY: editorNavigation.captureViewportOriginY?(),
+            titleHeight: detailTitleHeight
+        )
+        #endif
+    }
+
+    private func showBacklinks() {
+        perform {
+            try await flushEditor()
+            linkCompletion = nil
+            editorNavigation.hasLinkCompletion = false
+            // A presented sheet changes the underlying editor's viewport.
+            // Back should return to the reading position before presentation.
+            backlinkDeparture = currentLinkVisit()
+            rememberLinkVisitPreview()
+            if let selectedID { links.prepareBacklinks(replica: replica, targetID: selectedID) }
+            showingBacklinks = true
+        }
+    }
+
+    private func openNoteLink(_ occurrence: NotebookLinkOccurrence) {
+        guard let sourceID = selectedID else { return }
+        perform {
+            try await flushEditor()
+            guard sourceID == selectedID,
+                  NotebookLinkParser.parse(session?.text ?? "").contains(occurrence)
+            else { throw NotebookLinkUIError.changed }
+            let notes = replica.linkNotes
+            switch NotebookLinkResolver.resolve(occurrence, sourceID: sourceID, notes: notes) {
+            case .resolved(let targetID, let fragment):
+                try await visitLinkedNote(targetID, fragment: fragment)
+            case .ambiguous(let ids):
+                linkChoices = notes.filter { ids.contains($0.id) }
+                linkChoiceFragment = NotebookLinkResolver.fragment(of: occurrence)
+            case .missing:
+                missingLink = occurrence
+            case .external(let url):
+                openURL(url)
+            case .unsupported:
+                throw NotebookLinkUIError.unsupported
+            }
+        }
+    }
+
+    private func visitLinkedNote(_ id: UUID, fragment: String?,
+                                 occurrence: NotebookLinkOccurrence? = nil,
+                                 targetID: UUID? = nil) async throws {
+        try await flushEditor()
+        if let occurrence, let targetID {
+            let opened = try await replica.openNote(id)
+            guard currentBacklinkRange(occurrence, sourceID: id, targetID: targetID,
+                text: opened.text) != nil else { throw NotebookLinkUIError.changed }
+        }
+        let sheetDeparture = occurrence != nil && targetID == selectedID
+            && backlinkDeparture?.noteID == selectedID ? backlinkDeparture : nil
+        let previous = sheetDeparture ?? currentLinkVisit()
+        if sheetDeparture == nil { rememberLinkVisitPreview() }
+        rememberEditorPosition()
+        try await selectNote(id, linkVisit: true)
+        guard selectedID == id else { return }
+        revealLinkedNoteInFiles(id)
+        if let previous { linkHistory.recordDeparture(previous) }
+        #if os(iOS)
+        let retainedRoutes = Set(linkRoutes.map(\.id) + [linkRootRoute?.id].compactMap { $0 })
+        linkVisitPreviews = linkVisitPreviews.filter { retainedRoutes.contains($0.key) }
+        linkRoutes.append(NotebookLinkRoute(noteID: id))
+        activeLinkRouteID = linkRoutes.last?.id
+        if linkRoutes.count > linkHistory.limit {
+            if let oldRoot = linkRootRoute { linkVisitPreviews[oldRoot.id] = nil }
+            linkRootRoute = linkRoutes.removeFirst()
+        }
+        #endif
+        linkCompletion = nil
+        let incoming = editorNavigation
+        incoming.hasExplicitVisitDestination = true
+        incoming.whenAttached { [weak incoming] in
+            guard let incoming, selectedID == id, let text = session?.text else { return }
+            var destination: NSRange?
+            if let occurrence, let targetID {
+                destination = currentBacklinkRange(occurrence, sourceID: id,
+                    targetID: targetID, text: text)
+                guard destination != nil else {
+                    errorMessage = NotebookLinkUIError.changed.localizedDescription
+                    return
+                }
+            } else if let fragment {
+                destination = NotebookLinkParser.targetRange(for: fragment, in: text)
+                if destination == nil { errorMessage = NotebookLinkUIError.missingFragment.localizedDescription }
+            }
+            // Plain links open at the start; returning restores the visit position.
+            incoming.revealSearchMatch?(destination ?? NSRange(location: 0, length: 0))
+        }
+    }
+
+    private func currentBacklinkRange(_ occurrence: NotebookLinkOccurrence,
+                                      sourceID: UUID, targetID: UUID, text: String) -> NSRange? {
+        let current = NotebookLinkParser.parse(text).filter {
+            if case .resolved(let resolved, _) = NotebookLinkResolver.resolve(
+                $0, sourceID: sourceID, notes: replica.linkNotes) { return resolved == targetID }
+            return false
+        }
+        if let exact = current.first(where: { $0 == occurrence }) { return exact.range }
+        let matching = current.filter {
+            $0.destination == occurrence.destination && $0.label == occurrence.label
+        }
+        return matching.count == 1 ? matching[0].range : nil
+    }
+
+    private func navigateLinkHistory(back: Bool, steps: Int = 1,
+                                     compactRoutesBeforePop: [NotebookLinkRoute]? = nil) {
+        let target = back ? linkHistory.backTarget(steps: steps) : linkHistory.forwardTarget
+        guard let target else { return }
+        let journeyID = linkJourneyID
+        perform {
+            do {
+                try await flushEditor()
+                guard linkJourneyID == journeyID else { return }
+                guard let current = currentLinkVisit() else { return }
+                rememberLinkVisitPreview(route: compactRoutesBeforePop?.last)
+                try await selectNote(target.noteID,
+                                     revealDetail: !usesCompactLinkNavigation, linkVisit: true)
+                guard linkJourneyID == journeyID else { return }
+                guard selectedID == target.noteID else { throw NotebookLinkUIError.changed }
+                revealLinkedNoteInFiles(target.noteID)
+                if back { linkHistory.commitBack(current: current, steps: steps) }
+                else { linkHistory.commitForward(current: current) }
+                #if os(iOS)
+                if back {
+                    if compactRoutesBeforePop == nil {
+                        linkRoutes.removeLast(min(steps, linkRoutes.count))
+                    }
+                } else {
+                    linkRoutes.append(NotebookLinkRoute(noteID: target.noteID))
+                }
+                let incomingRoute = linkRoutes.last ?? linkRootRoute
+                if usesCompactLinkNavigation, session?.isEditingEnabled == true,
+                   let incomingRoute,
+                   target.position != nil, linkVisitPreviews[incomingRoute.id] != nil {
+                    // Keep the already-positioned transition preview until
+                    // TextKit finishes restoring the replacement editor.
+                    restoringLinkRouteID = incomingRoute.id
+                } else {
+                    restoringLinkRouteID = nil
+                }
+                activeLinkRouteID = incomingRoute?.id
+                // Popped screens remain alive through UIKit's transition. Keep
+                // their previews until the next push or a fresh journey.
+                #endif
+                let incoming = editorNavigation
+                incoming.hasExplicitVisitDestination = true
+                #if os(iOS)
+                let restorationRouteID = restoringLinkRouteID
+                #endif
+                incoming.whenAttached { [weak incoming] in
+                    guard let incoming, selectedID == target.noteID else { return }
+                    let finishRestoration = {
+                        #if os(iOS)
+                        guard incoming === editorNavigation, linkJourneyID == journeyID,
+                              restoringLinkRouteID == restorationRouteID else { return }
+                        restoringLinkRouteID = nil
+                        #endif
+                    }
+                    if let data = target.position,
+                       let position = try? JSONDecoder().decode(MarkdownEditorPosition.self, from: data) {
+                        #if os(iOS)
+                        if usesCompactLinkNavigation, let restore = incoming.restorePositionAndNotify {
+                            restore(position, finishRestoration)
+                        } else {
+                            incoming.restorePosition?(position)
+                            finishRestoration()
+                        }
+                        #else
+                        incoming.restorePosition?(position)
+                        #endif
+                    } else {
+                        finishRestoration()
+                    }
+                }
+            } catch {
+                #if os(iOS)
+                if linkJourneyID == journeyID {
+                    restoringLinkRouteID = nil
+                    if let compactRoutesBeforePop {
+                        // Failed saves leave the visit/history intact and
+                        // return to its original screen without losing text.
+                        linkRoutes = compactRoutesBeforePop
+                    }
+                }
+                #endif
+                throw error
+            }
+        }
+    }
+
+    private func openBacklink(_ backlink: NotebookBacklink, targetID: UUID) {
+        perform {
+            try await visitLinkedNote(backlink.sourceID, fragment: nil,
+                occurrence: backlink.occurrence, targetID: targetID)
+            showingBacklinks = false
+        }
+    }
+
+    private func insertCompletedLink(to target: NotebookLinkNote, fragment: String? = nil,
+                                     completionSnapshot: NotebookLinkCompletion? = nil,
+                                     textSnapshot: String? = nil, sourceID: UUID? = nil) {
+        // A touch on the suggestion list can end native text input before the
+        // button action arrives. Use that row's captured authoring intent;
+        // the editor's text/revision guards still reject stale insertions.
+        guard let completion = completionSnapshot ?? linkCompletion,
+              let sourceID = sourceID ?? selectedID, sourceID == selectedID,
+              let source = replica.linkNotes.first(where: { $0.id == sourceID }),
+              let currentTarget = replica.linkNotes.first(where: { $0.id == target.id }),
+              let destination = NotebookLinkDestination.make(target: currentTarget, source: source,
+                kind: .wiki,
+                fragment: fragment ?? NotebookLinkParser.literalDestinationParts(completion.query).fragment,
+                includeExtension: false) else { return }
+        let alias = links.alias(for: completion.query, noteID: target.id)
+        let escapedAlias = alias.map {
+            $0.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "]", with: "\\]")
+        }
+        let replacement = "[[\(destination)\(escapedAlias.map { "|" + $0 } ?? "")]]"
+        let change = MarkdownEditingChange(range: completion.range, replacement: replacement,
+            selection: NSRange(location: completion.range.location + replacement.utf16.count, length: 0))
+        if editorNavigation.insertLink?(change, textSnapshot ?? linkCompletionText) != true {
+            errorMessage = NotebookLinkUIError.changed.localizedDescription
+        }
+        linkCompletion = nil
+        editorNavigation.hasLinkCompletion = false
+    }
+
+    private func insertPickedLink(to target: NotebookLinkNote,
+                                  request: NotebookLinkInsertionRequest) {
+        guard let source = replica.linkNotes.first(where: { $0.id == request.sourceID }),
+              let currentTarget = replica.linkNotes.first(where: { $0.id == target.id }),
+              let destination = NotebookLinkDestination.make(target: currentTarget,
+                source: source, kind: .markdown) else { return }
+        insertPickedURL(destination, request: request,
+            defaultLabel: NotebookNoteName.title(from: target.name))
+    }
+
+    private func insertPickedURL(_ destination: String, request: NotebookLinkInsertionRequest,
+                                 defaultLabel: String = "Link") {
+        guard selectedID == request.sourceID else { return }
+        let label = (request.label.isEmpty ? defaultLabel : request.label)
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
+        let safeDestination = destination
+            .replacingOccurrences(of: "(", with: "%28")
+            .replacingOccurrences(of: ")", with: "%29")
+            .replacingOccurrences(of: " ", with: "%20")
+        let replacement = "[\(label)](\(safeDestination))"
+        let change = MarkdownEditingChange(range: request.range, replacement: replacement,
+            selection: NSRange(location: request.range.location + replacement.utf16.count, length: 0))
+        if editorNavigation.insertLink?(change, request.text) != true {
+            errorMessage = NotebookLinkUIError.changed.localizedDescription
+        }
+        linkInsertion = nil
+    }
+
+    private func createMissingLinkedNote(_ link: NotebookLinkOccurrence) {
+        guard let sourceID = selectedID else { return }
+        perform {
+            try await flushEditor()
+            let notes = replica.linkNotes
+            guard case .missing = NotebookLinkResolver.resolve(link, sourceID: sourceID,
+                notes: notes), let source = notes.first(where: { $0.id == sourceID })
+            else { throw NotebookLinkUIError.changed }
+            let path = NotebookLinkResolver.path(of: link)
+            let explicitRelative = path.hasPrefix("./") || path.hasPrefix("../")
+            let base = link.kind == .markdown || explicitRelative ? source.path : (source.rootPath ?? "")
+            var components = base.split(separator: "/").map(String.init)
+            for part in path.split(separator: "/") {
+                if part == "." { continue }
+                if part == ".." {
+                    guard !components.isEmpty else { throw NotebookLinkUIError.unsupported }
+                    components.removeLast()
+                } else { components.append(String(part)) }
+            }
+            guard var name = components.popLast(), !name.isEmpty else { throw NotebookLinkUIError.unsupported }
+            if !name.lowercased().hasSuffix(".md") && !name.lowercased().hasSuffix(".markdown") { name += ".md" }
+            var parentID: UUID?
+            for folder in components {
+                let matches = replica.placements.filter {
+                    $0.item.kind == .folder && !$0.isInTrash
+                        && $0.parentID == parentID && $0.displayName == folder
+                }
+                guard matches.count == 1 else { throw NotebookLinkUIError.missingFolder }
+                parentID = matches[0].item.id
+            }
+            let id = try await replica.createNote(name: name, parentID: parentID)
+            missingLink = nil
+            try await visitLinkedNote(id, fragment: nil)
+        }
+    }
+
     private func rememberEditorPosition() {
         guard let selectedID,
               let position = editorNavigation.capturePosition?(),
@@ -2442,7 +3131,8 @@ struct NotebookView: View {
     }
 
     private func selectNote(
-        _ id: UUID, revealDetail: Bool = true, searchVisit: Bool = false
+        _ id: UUID, revealDetail: Bool = true, searchVisit: Bool = false,
+        linkVisit: Bool = false
     ) async throws {
         if id != selectedID {
             try await flushEditor()
@@ -2450,7 +3140,7 @@ struct NotebookView: View {
             pendingSearchQuery = nil
             let notebookID = replica.catalogSnapshot?.notebookID
             let openedSession = try await replica.openNote(id, allowingRecovery: true)
-            if searchVisit {
+            if searchVisit || linkVisit {
                 guard replica.catalogSnapshot?.notebookID == notebookID,
                       replica.placements.contains(where: {
                           $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
@@ -2473,7 +3163,10 @@ struct NotebookView: View {
             }
             navigationState.recordOpened(id)
         }
-        if revealDetail { preferredCompactColumn = .detail }
+        if selectedID == id, !linkVisit { resetLinkJourney() }
+        if revealDetail, preferredCompactColumn != .detail {
+            preferredCompactColumn = .detail
+        }
     }
 
     private func perform(
@@ -2503,6 +3196,52 @@ struct NotebookView: View {
             busy = false
             if succeeded { onSuccess() }
             onCompletion(succeeded)
+        }
+    }
+}
+
+#if os(iOS)
+/// The preceding screen stays readable during an interactive Back gesture.
+/// Only the top visit owns an editable session and navigation callbacks.
+private struct NotebookPreviousLinkView: View {
+    let text: String
+    let position: MarkdownEditorPosition?
+    let title: String
+    let viewportInsets: UIEdgeInsets?
+    let titleHeight: CGFloat
+    let viewportOriginY: CGFloat?
+    let titleFont: Font
+    let fontSize: Double
+    let fontFamily: EditorFontFamily
+    let mode: MarkdownEditorMode
+    var body: some View {
+        MarkdownEditor(
+            text: .constant(text), isReadOnly: true,
+            title: AnyView(Text(title).font(titleFont)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)),
+            titleHeight: titleHeight, fontSize: fontSize, fontFamily: fontFamily, mode: mode,
+            initialPreviewPosition: position, initialPreviewInsets: viewportInsets,
+            initialPreviewOriginY: viewportOriginY
+        )
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
+        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+#endif
+
+private enum NotebookLinkUIError: LocalizedError {
+    case changed, unsupported, missingFragment, missingFolder
+    var errorDescription: String? {
+        switch self {
+        case .changed: "This link changed. Open it again to use its current destination."
+        case .unsupported: "This link points to content that meh.md does not support yet."
+        case .missingFragment: "The note opened, but its linked heading or block could not be found."
+        case .missingFolder: "Create the destination folder in Files before creating this linked note."
         }
     }
 }

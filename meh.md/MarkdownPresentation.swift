@@ -205,6 +205,7 @@ enum MarkdownPresentation {
             invalidatedRange: layoutRange
         )
         textView.needsDisplay = true
+        textView.window?.invalidateCursorRects(for: textView)
         (textView as? MarkdownTextView)?.updateMarkdownTableScrollOverlays()
     }
 
@@ -1583,7 +1584,7 @@ enum MarkdownPresentation {
         return lineHeight * 0.25
     }
 
-    private static func textSegmentFrames(
+    static func textSegmentFrames(
         for range: NSRange,
         layoutManager: NSTextLayoutManager,
         contentManager: NSTextContentManager

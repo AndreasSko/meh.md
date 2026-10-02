@@ -1,4 +1,5 @@
 import Foundation
+import NoteCore
 
 enum MarkdownStyleRole: Equatable {
     case heading(level: Int)
@@ -219,6 +220,13 @@ enum MarkdownSyntax {
         editedRange: NSRange,
         changeInLength: Int
     ) -> MarkdownSyntaxIncrementalResult? {
+        // Link exclusions can span comments and frontmatter. The existing
+        // restart map does not carry that context into substring parsing.
+        if text.contains("<!--") || previousText.contains("<!--")
+            || text.hasPrefix("---") || previousText.hasPrefix("---")
+            || text.contains("\n---") || previousText.contains("\n---") {
+            return nil
+        }
         let source = text as NSString
         let previousSource = previousText as NSString
         let previousEditedLength = editedRange.length - changeInLength
@@ -822,48 +830,11 @@ enum MarkdownSyntax {
         excluding codeRanges: [NSRange],
         spans: inout [MarkdownStyleSpan]
     ) {
-        var location = 0
-        while location < source.length {
-            if let range = containingRange(location, in: codeRanges) {
-                location = NSMaxRange(range)
-                continue
-            }
-            guard source.character(at: location) == ASCII.openBracket,
-                  !isEscaped(location, in: source) else {
-                location += 1
-                continue
-            }
-
-            let lineEnd = contentEndOfLine(containing: location, in: source)
-            guard let labelEnd = matchingDelimiter(
-                from: location,
-                opening: ASCII.openBracket,
-                closing: ASCII.closeBracket,
-                before: lineEnd,
-                in: source
-            ), labelEnd + 1 < lineEnd,
-                  source.character(at: labelEnd + 1)
-                    == ASCII.openParenthesis else {
-                location += 1
-                continue
-            }
-
-            let destinationStart = labelEnd + 1
-            let destinationEnd = matchingDelimiter(
-                from: destinationStart,
-                opening: ASCII.openParenthesis,
-                closing: ASCII.closeParenthesis,
-                before: lineEnd,
-                in: source
-            )
-            let end = destinationEnd.map { $0 + 1 } ?? lineEnd
-            spans.append(
-                MarkdownStyleSpan(
-                    range: NSRange(location: location, length: end - location),
-                    role: .link
-                )
-            )
-            location = max(end, location + 1)
+        for link in NotebookLinkParser.parse(source as String, includingIncomplete: true) where !link.isEmbed {
+            guard !codeRanges.contains(where: {
+                NSLocationInRange(link.range.location, $0)
+            }) else { continue }
+            spans.append(MarkdownStyleSpan(range: link.range, role: .link))
         }
     }
 
