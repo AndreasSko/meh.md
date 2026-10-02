@@ -21,6 +21,40 @@ struct MarkdownTableLayout {
         var contentWidth: CGFloat { columnWidths.reduce(0, +) }
     }
 
+    private struct PDFCellLayout {
+        // NSLayoutManager keeps its text storage weakly. Retain it while
+        // drawing so the measured glyph ranges still refer to live text.
+        let storage: NSTextStorage
+        let manager: NSLayoutManager
+        let container: NSTextContainer
+        let glyphRange: NSRange
+
+        init(cell: NSAttributedString, width: CGFloat) {
+            let storage = NSTextStorage(attributedString: cell)
+            let manager = NSLayoutManager()
+            let container = NSTextContainer(size: CGSize(
+                width: max(1, width), height: .greatestFiniteMagnitude
+            ))
+            container.lineFragmentPadding = 0
+            storage.addLayoutManager(manager)
+            manager.addTextContainer(container)
+            manager.ensureLayout(for: container)
+            glyphRange = manager.glyphRange(for: container)
+            self.storage = storage
+            self.manager = manager
+            self.container = container
+        }
+
+        var usedHeight: CGFloat {
+            manager.usedRect(for: container).maxY
+        }
+
+        func draw(at origin: CGPoint) {
+            manager.drawBackground(forGlyphRange: glyphRange, at: origin)
+            manager.drawGlyphs(forGlyphRange: glyphRange, at: origin)
+        }
+    }
+
     let rows: [Row]
     let delimiters: [NSRange]
     let width: CGFloat
@@ -39,7 +73,8 @@ struct MarkdownTableLayout {
         result: MarkdownSyntaxResult,
         hiddenRanges: [NSRange],
         bodyFont: PlatformFont,
-        width: CGFloat
+        width: CGFloat,
+        usePDFTextLayout: Bool = false
     ) -> MarkdownTableLayout {
         let source = text as NSString
         let presentation = MarkdownRenderingPresentation(result: result, hiddenRanges: [])
@@ -75,6 +110,10 @@ struct MarkdownTableLayout {
                 let cells = styledRows[index]
                 let textHeight = cells.enumerated().map { column, cell in
                     let textWidth = max(1, columnWidths[column] - 2 * padding)
+                    if usePDFTextLayout {
+                        return PDFCellLayout(cell: cell,
+                                             width: textWidth).usedHeight
+                    }
                     return cell.boundingRect(
                         with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
                         options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil
@@ -139,6 +178,70 @@ struct MarkdownTableLayout {
 
     func contentWidth(for tableRange: NSRange) -> CGFloat? {
         rows.first(where: { $0.tableRange == tableRange })?.contentWidth
+    }
+
+    func row(at sourceLocation: Int) -> Row? {
+        rows.first { $0.range.location == sourceLocation }
+    }
+
+    /// Draws a table row slice inside a PDF page. Wide tables are compressed
+    /// horizontally as a unit so every column stays visible.
+    func drawForPDF(
+        _ row: Row,
+        in rect: CGRect,
+        context: CGContext
+    ) {
+        guard row.contentWidth > 0, row.height > 0,
+              rect.width > 0, rect.height > 0 else { return }
+        let xScale = min(1, rect.width / row.contentWidth)
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.clip(to: rect)
+        context.translateBy(x: rect.minX, y: rect.minY)
+        context.scaleBy(x: xScale, y: 1)
+#if os(macOS)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        let border = NSColor.separatorColor
+        let fill = NSColor.quaternaryLabelColor.withAlphaComponent(0.08)
+#else
+        UIGraphicsPushContext(context)
+        defer { UIGraphicsPopContext() }
+        let border = UIColor.separator
+        let fill = UIColor.secondarySystemBackground
+#endif
+        let contentRect = CGRect(x: 0, y: 0, width: row.contentWidth,
+                                 height: row.height)
+        if row.isHeader {
+            context.setFillColor(fill.cgColor)
+            context.fill(contentRect)
+        }
+        context.setStrokeColor(border.cgColor)
+        context.setLineWidth(0.5)
+        context.stroke(CGRect(x: 0.25, y: 0.25,
+                              width: row.contentWidth - 0.5,
+                              height: max(0, rect.height - 0.5)))
+        var columnX: CGFloat = 0
+        for (index, cell) in row.cells.enumerated() {
+            let columnWidth = row.columnWidths[index]
+            if index > 0 {
+                context.move(to: CGPoint(x: columnX, y: 0))
+                context.addLine(to: CGPoint(x: columnX,
+                                            y: rect.height))
+                context.strokePath()
+            }
+            let cellRect = CGRect(x: columnX + padding, y: padding,
+                                  width: columnWidth - 2 * padding,
+                                  height: row.height - 2 * padding)
+            context.saveGState()
+            context.clip(to: cellRect)
+            PDFCellLayout(cell: cell, width: cellRect.width).draw(
+                at: CGPoint(x: cellRect.minX, y: cellRect.minY)
+            )
+            context.restoreGState()
+            columnX += columnWidth
+        }
     }
 
     private static func cellText(
