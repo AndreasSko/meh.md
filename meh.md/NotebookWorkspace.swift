@@ -2,7 +2,14 @@ import CloudKit
 import CryptoKit
 import Foundation
 import Network
+#if NOTEBOOK_CLOUD_UI_LAB
+#if !DEBUG || !ICLOUD_DEV
+#error("The interactive CloudKit lab requires Debug-iCloud.")
+#endif
+@_spi(SyncLab) import NoteCore
+#else
 import NoteCore
+#endif
 import Observation
 #if os(iOS)
 import UIKit
@@ -72,7 +79,7 @@ final class NotebookWorkspace {
     }
 
     static var isPreviewEnabled: Bool {
-        #if DEBUG && (!ICLOUD_ENABLED || ICLOUD_DEV)
+        #if !NOTEBOOK_CLOUD_UI_LAB && DEBUG && (!ICLOUD_ENABLED || ICLOUD_DEV)
         if case .valid = previewRequest(
             environment: ProcessInfo.processInfo.environment
         ) { return true }
@@ -108,6 +115,9 @@ final class NotebookWorkspace {
     let mode: Mode
     let directory: URL
     private let documentsDirectory: URL
+    #if NOTEBOOK_CLOUD_UI_LAB
+    private let cloudUITestScope = NotebookCloudUITestScope(bundle: .main)
+    #endif
     private var notebookTransport: (any SyncTransport)?
     @ObservationIgnored private var transportFactory:
         (@MainActor (String?) async throws -> any SyncTransport)?
@@ -171,7 +181,9 @@ final class NotebookWorkspace {
     var label: String {
         switch mode {
         case .cloud:
-            #if ICLOUD_DEV
+            #if NOTEBOOK_CLOUD_UI_LAB
+            "iCloud Test"
+            #elseif ICLOUD_DEV
             "iCloud Dev"
             #else
             "iCloud"
@@ -185,6 +197,16 @@ final class NotebookWorkspace {
     init(preview: Bool = false) {
         backupFrequency = Self.savedBackupFrequency
         backupRetentionCount = Self.savedBackupRetentionCount
+        #if NOTEBOOK_CLOUD_UI_LAB
+        // The UUID is baked into this dedicated build. Icon launches and
+        // relaunches cannot fall back to the ordinary development notebook.
+        automaticSync = true
+        let component = cloudUITestScope?.directoryComponent
+            ?? "CloudKitUITests/invalid-configuration"
+        self.mode = cloudUITestScope == nil ? .invalid : .cloud
+        directory = URL.applicationSupportDirectory.appending(path: component + "/Notebook")
+        documentsDirectory = URL.documentsDirectory.appending(path: component)
+        #else
         let environment = ProcessInfo.processInfo.environment
         automaticSync = environment["MEH_SYNC_AUTOMATIC"] != "0"
         var mode: Mode = preview ? .preview : .local
@@ -267,6 +289,7 @@ final class NotebookWorkspace {
                 documentsDirectory = URL.documentsDirectory
             }
         }
+        #endif
     }
 
     /// Deterministic app-model tests use the same scheduler with an isolated
@@ -909,6 +932,15 @@ final class NotebookWorkspace {
         } else {
             switch mode {
             case .cloud:
+                #if NOTEBOOK_CLOUD_UI_LAB
+                guard let scope = cloudUITestScope else { throw SyncError.invalidRecord }
+                transport = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: "iCloud.de.andreas-sk.meh-md",
+                    stateDirectory: directory.appending(path: "CloudKit"),
+                    runID: scope.runID, automaticallySync: automaticSync,
+                    expectedScope: expectedScope, expectedNotebookID: expectedNotebookID
+                )
+                #else
                 transport = try await CloudKitSyncTransport.makeNotebook(
                     containerIdentifier: "iCloud.de.andreas-sk.meh-md",
                     stateDirectory: directory.appending(path: "CloudKit"),
@@ -916,6 +948,7 @@ final class NotebookWorkspace {
                     expectedScope: expectedScope,
                     expectedNotebookID: expectedNotebookID
                 )
+                #endif
             case .development(let endpoint, let name):
                 transport = LocalSyncTransport(
                     baseURL: endpoint,
@@ -1056,3 +1089,22 @@ final class NotebookWorkspace {
         } catch { copyError = error.localizedDescription }
     }
 }
+
+#if NOTEBOOK_CLOUD_UI_LAB
+/// Present only in the dedicated interactive lab binary. A missing UUID
+/// disables sync rather than selecting the ordinary notebook or cloud zone.
+struct NotebookCloudUITestScope {
+    let runID: UUID
+
+    init?(runID: String?) {
+        guard let runID, let id = UUID(uuidString: runID) else { return nil }
+        self.runID = id
+    }
+
+    init?(bundle: Bundle) {
+        self.init(runID: bundle.object(forInfoDictionaryKey: "MehCloudLabRunID") as? String)
+    }
+
+    var directoryComponent: String { "CloudKitUITests/" + runID.uuidString.lowercased() }
+}
+#endif

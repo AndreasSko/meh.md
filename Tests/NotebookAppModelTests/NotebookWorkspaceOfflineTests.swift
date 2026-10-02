@@ -109,7 +109,8 @@ final class NotebookWorkspaceOfflineTests: XCTestCase {
 
         factory.isAvailable = true
         workspace.sceneActivityChanged(id: UUID(), isActive: true)
-        try await waitUntil { workspace.lastSuccessfulSync != nil }
+        // Refresh publishes the Markdown copies after the cloud exchange.
+        try await waitUntil { workspace.lastSuccessfulSync != nil && !workspace.isRefreshing }
 
         XCTAssertEqual(Set(replica.placements.map { $0.item.id }), [localNote, cloudNote])
         XCTAssertEqual(replica.catalogSnapshot?.notebookID, remote.catalogSnapshot?.notebookID)

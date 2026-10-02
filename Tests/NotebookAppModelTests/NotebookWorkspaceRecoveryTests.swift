@@ -113,7 +113,9 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
         await original.setHalt(.accountChanged, underlyingError: SyncError.scopeChanged, recoverable: false)
 
         workspace.cloudAccountAvailabilityChanged()
-        try await waitUntil { factory.creationCount == 1 && workspace.syncHalt == nil }
+        try await waitUntil {
+            factory.creationCount == 1 && workspace.syncHalt == nil && !workspace.isRefreshing
+        }
 
         XCTAssertEqual(factory.expectedScopes, ["same-account"])
         XCTAssertNil(workspace.syncFailure)

@@ -17,6 +17,12 @@ APNs entitlements and the iOS remote-notification background mode.
   restoration, and development polling share that automatic schedule.
   Startup and Sync Now bypass the typing delay. An exchange already running
   finishes normally; requests received meanwhile are combined into a follow-up.
+- Account availability notifications work even before a cloud transport exists.
+  They and foreground activation recheck account-related failures. A halted
+  transport can resume for its original account; another account remains
+  blocked before notebook data is exchanged. Missing iCloud accounts do not
+  cause periodic retry loops. See
+  [offline-first startup](offline-first-startup.md).
 - CloudKit commits fetched changes and background upload acknowledgements to
   the transport store before notifying the workspace through an async stream.
   The workspace then applies the inbox through the existing coordinator.

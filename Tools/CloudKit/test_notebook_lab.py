@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 import unittest
+import uuid
 from unittest.mock import patch
 
 from run_notebook_lab import BUNDLE, CONTAINER, TEAM, read_lab_log, verify
@@ -11,6 +12,76 @@ from run_notebook_lab_simulator import (
     check_existing_app, check_simulator, ensure_fresh_phase, lab_report_path,
     read_lab_report,
 )
+from prepare_offline_icloud_test import (
+    check_dedicated_simulator, verify_interactive_app,
+)
+
+
+class InteractiveCloudLabGuardTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.app = Path(self.temporary.name) / "Interactive.app"
+        self.app.mkdir()
+        self.run = uuid.uuid4()
+        self.info = {"MehCloudLabRunID": str(self.run)}
+        self.symbols = b"MyAppV5$main"
+        self.demangled = b"meh_md_iCloud_Dev.NotebookCloudUITestScope.directoryComponent.getter"
+
+    def verify(self):
+        (self.app / "Info.plist").write_bytes(plistlib.dumps(self.info))
+        executable = self.app / "Interactive"
+        with patch("prepare_offline_icloud_test.verify", return_value=(executable, executable)) as guard, \
+             patch("prepare_offline_icloud_test.command", return_value=
+                   subprocess.CompletedProcess([], 0, self.symbols, b"")), \
+             patch("prepare_offline_icloud_test.subprocess.run", return_value=
+                   subprocess.CompletedProcess([], 0, self.demangled, b"")) as demangle:
+            result = verify_interactive_app(self.app, self.run)
+            guard.assert_called_once_with(self.app, platform="iPhoneSimulator", lab=False)
+            demangle.assert_called_once_with(
+                ["xcrun", "swift-demangle"], input=self.symbols,
+                capture_output=True, check=True, timeout=60,
+            )
+            return result
+
+    def test_valid_guarded_build_retains_the_session_identity(self):
+        self.assertEqual(self.verify()[0], self.app / "Interactive")
+
+    def test_missing_malformed_or_other_session_identity_is_rejected(self):
+        for value in (None, "", "../Notebook", str(uuid.uuid4())):
+            with self.subTest(value=value):
+                self.info = {} if value is None else {"MehCloudLabRunID": value}
+                with self.assertRaises(ValueError):
+                    self.verify()
+
+    def test_ordinary_binary_cannot_be_disguised_with_a_test_plist(self):
+        self.demangled = b"MyAppV5$main"
+        with self.assertRaises(ValueError):
+            self.verify()
+
+    def test_development_entitlement_verification_cannot_be_bypassed(self):
+        with patch("prepare_offline_icloud_test.verify", side_effect=ValueError("Production")):
+            with self.assertRaisesRegex(ValueError, "Production"):
+                verify_interactive_app(self.app, self.run)
+
+    def test_only_the_exact_unique_booted_simulator_can_be_used(self):
+        device = str(uuid.uuid4()).upper()
+        listing = {"devices": {"iOS": [{"name": "meh.md Offline iCloud Test",
+                   "udid": device, "state": "Booted"}]}}
+        def check(expected):
+            with patch("prepare_offline_icloud_test.command", return_value=
+                       subprocess.CompletedProcess([], 0, json.dumps(listing).encode(), b"")):
+                check_dedicated_simulator(expected)
+        check(device)
+        with self.assertRaises(ValueError):
+            check(str(uuid.uuid4()))
+        listing["devices"]["iOS"][0]["state"] = "Shutdown"
+        with self.assertRaises(ValueError):
+            check(device)
+        listing["devices"]["iOS"][0]["state"] = "Booted"
+        listing["devices"]["iOS"].append(listing["devices"]["iOS"][0].copy())
+        with self.assertRaises(ValueError):
+            check(device)
 
 
 class LabLaunchGuardTests(unittest.TestCase):

@@ -31,6 +31,8 @@ and the evidence collected along the way.
 ## Notebook behavior and contracts
 
 - [Notebook core](notebook-core-contract.md): identity, folders, and Trash.
+- [Offline-first startup](offline-first-startup.md): write before iCloud is
+  available and connect later without losing local notes.
 - [Local search](notebook-search.md): matching, Quick Open, and native Find.
 - [Note templates](notebook-templates.md): reusable notes, recursive template
   folders, and destination and filename defaults.
