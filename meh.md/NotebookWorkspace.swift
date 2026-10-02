@@ -114,6 +114,7 @@ final class NotebookWorkspace {
     private(set) var lastSuccessfulSync: Date?
     @ObservationIgnored private var statusSyncRequestInFlight = false
     @ObservationIgnored lazy var syncEventLog = NotebookSyncEventLog(directory: directory)
+    @ObservationIgnored lazy var welcome = NotebookWelcomeState(directory: directory)
     private var syncMonitor: Task<Void, Never>?
     private var slowSyncIndicator: Task<Void, Never>?
     private(set) var recoveryAction: RecoveryAction?
@@ -168,6 +169,17 @@ final class NotebookWorkspace {
     private var needsAnotherCopyPublication = false
 
     var isPreview: Bool { if case .preview = mode { true } else { false } }
+    var shouldOfferWelcome: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["MEH_WELCOME_TEST"] == "1" {
+            return true
+        }
+        #endif
+        switch mode {
+        case .cloud, .local: return true
+        default: return false
+        }
+    }
     var backupDirectory: URL { documentsDirectory.appending(path: "Backups") }
 
     func storageReport(for replica: NotebookReplica) async throws
@@ -757,6 +769,7 @@ final class NotebookWorkspace {
     }
 
     func sceneDidClose(id: UUID) {
+        welcome.sceneDidClose(id: id)
         let wasKnown = sceneActivityPhases.removeValue(forKey: id) != nil
         activeSceneIDs.remove(id)
         if usesSync, wasKnown {

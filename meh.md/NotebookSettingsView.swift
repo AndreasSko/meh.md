@@ -11,6 +11,7 @@ struct NotebookSettingsView: View {
     let onImport: (NotebookImportPlan?) async throws -> Void
     let beforeExport: () async throws -> Void
     var onOpenNote: ((UUID) -> Void)? = nil
+    var onShowWelcome: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingReset = false
     @State private var resetScheduled = false
@@ -136,6 +137,10 @@ struct NotebookSettingsView: View {
                         Label("Storage", systemImage: "internaldrive")
                     }
                     .accessibilityIdentifier("notebook-storage-settings")
+                }
+                Section("Help") {
+                    Button("Getting Started…", action: onShowWelcome)
+                        .accessibilityIdentifier("notebook-getting-started")
                 }
                 Section("Local Storage") {
                     Button("Reset All Local Data…", role: .destructive) {

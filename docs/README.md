@@ -30,6 +30,7 @@ and the evidence collected along the way.
 
 ## Notebook behavior and contracts
 
+- [Getting started](getting-started.md): optional welcome and example notes.
 - [Notebook core](notebook-core-contract.md): identity, folders, and Trash.
 - [Offline-first startup](offline-first-startup.md): write before iCloud is
   available and connect later without losing local notes.

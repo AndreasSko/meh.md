@@ -154,6 +154,13 @@ public final class NotebookReplica {
         Self.linkNotes(in: placements, history: linkLocationHistory)
     }
 
+    /// Catalog identities include permanent-deletion tombstones, unlike the
+    /// user-facing placements projection.
+    public func catalogItemIDsIncludingDeleted() throws -> Set<UUID> {
+        guard let catalog else { throw NotebookReplicaError.notJoined }
+        return Set(try catalog.items().map(\.id))
+    }
+
     private static func linkNotes(
         in placements: [NotebookPlacement],
         history: [UUID: [NotebookLinkLocation]] = [:]
