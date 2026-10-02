@@ -116,6 +116,7 @@ public final class NotebookSyncCoordinator {
     private func exchange() async throws {
         try await replica.load()
         var state = try loadState()
+        try replica.validateOfflineJoinScope(transport.scope)
         diagnosticLog?.record(
             "checkpoints_loaded",
             counts: [
@@ -143,9 +144,14 @@ public final class NotebookSyncCoordinator {
             throw SyncError.identityConflict
         }
         // Acceptance validates the record or reuses an exact, durable match.
-        try await replica.acceptSeed(seed)
+        if state.notebookID == nil {
+            try await replica.acceptFirstSyncSeed(seed, scope: transport.scope)
+        } else {
+            try await replica.acceptSeed(seed)
+        }
         state.notebookID = notebookID
         try save(state)
+        try replica.completeFirstSyncJoin(scope: transport.scope, notebookID: notebookID)
         let remembered = state.deletedIDs.union(try replica.deletedIDs)
         let checkpoints = state.appliedHeads.merging(state.acknowledgedHeads) { $0.union($1) }
         if try await !replica.containsHistory(checkpoints, deleted: remembered) {

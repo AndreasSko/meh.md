@@ -1,3 +1,4 @@
+import CloudKit
 import CryptoKit
 import Foundation
 import Network
@@ -112,6 +113,8 @@ final class NotebookWorkspace {
     @ObservationIgnored private var pendingSyncTrigger = "automatic refresh"
 
     @ObservationIgnored private var cloudActivityTask: Task<Void, Never>?
+    @ObservationIgnored private var accountAvailabilityTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingAccountRecheck = false
     @ObservationIgnored private var connectivityMonitor: NWPathMonitor?
     @ObservationIgnored private var previousConnectivity: NWPath.Status?
     @ObservationIgnored private var retryPolicy = NotebookSyncRetryPolicy()
@@ -265,6 +268,8 @@ final class NotebookWorkspace {
         self.transportFactory = transportFactory
     }
 
+    isolated deinit { accountAvailabilityTask?.cancel() }
+
     private static let backupFrequencyKey = "meh.md.backupFrequency"
     private static let backupRetentionKey = "meh.md.backupRetentionCount"
 
@@ -300,8 +305,9 @@ final class NotebookWorkspace {
             let store = backupStore ?? NotebookMarkdownBackupStore(directory: backupDirectory)
             backupStore = store
             let notebookID = replica?.catalogSnapshot?.notebookID
+            let firstLocalID = try replica?.firstSyncLocalNotebookID()
             lastBackup = try await store.listBackups().first {
-                $0.notebookID == notebookID
+                $0.notebookID == notebookID || $0.notebookID == firstLocalID
             }
         } catch { backupError = error.localizedDescription }
     }
@@ -411,17 +417,19 @@ final class NotebookWorkspace {
             if replica == nil {
                 let loaded = NotebookReplica(directory: directory)
                 try await loaded.load()
-                if !usesSync, loaded.catalogSnapshot == nil {
-                    try await loaded.createLocalNotebook()
+                if loaded.catalogSnapshot == nil {
+                    if usesSync { try await loaded.createNotebookForSync() }
+                    else { try await loaded.createLocalNotebook() }
                 }
-                // Existing catalogs are visible before account discovery or
-                // any network request, so offline reopening remains useful.
+                // Fresh and existing notebooks are writable before account
+                // discovery or any network request.
                 replica = loaded
             }
             // A local backup can succeed even when the following cloud
             // exchange is delayed or unavailable.
             await runDueBackup()
             startConnectivityMonitoring()
+            startAccountAvailabilityMonitoring()
             await refresh(whileLoading: true, manual: manualRetry, trigger: "startup")
             await runDueBackup()
         } catch {
@@ -495,6 +503,9 @@ final class NotebookWorkspace {
         needsManualRefresh = false
         cloudActivityTask?.cancel()
         cloudActivityTask = nil
+        accountAvailabilityTask?.cancel()
+        accountAvailabilityTask = nil
+        pendingAccountRecheck = false
         connectivityMonitor?.cancel()
         connectivityMonitor = nil
         transportGeneration = UUID()
@@ -553,6 +564,7 @@ final class NotebookWorkspace {
         isForeground = newForeground
         guard !isResetPending, automaticSync, changed else { return }
         if newForeground {
+            pendingAccountRecheck = true
             requestAutomaticRefresh(trigger: "foreground activation")
         } else {
             // The engine owns background scheduling. App retry timers resume
@@ -597,6 +609,26 @@ final class NotebookWorkspace {
         }
         monitor.start(queue: DispatchQueue(label: "meh.notebook.connectivity"))
         connectivityMonitor = monitor
+    }
+
+    private func startAccountAvailabilityMonitoring() {
+        guard case .cloud = mode, automaticSync, accountAvailabilityTask == nil else { return }
+        // No CKSyncEngine exists when first account discovery fails. Observe
+        // availability independently, so signing in can finish first joining.
+        accountAvailabilityTask = Task { @MainActor [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: .CKAccountChanged) {
+                guard !Task.isCancelled else { return }
+                self?.cloudAccountAvailabilityChanged()
+            }
+        }
+    }
+
+    func cloudAccountAvailabilityChanged() {
+        guard !isResetPending, automaticSync else { return }
+        pendingAccountRecheck = true
+        searchScopeGeneration += 1
+        syncEventLog.record("iCloud account availability changed")
+        if isForeground { requestAutomaticRefresh(trigger: "iCloud account availability changed") }
     }
 
     func refresh(
@@ -654,7 +686,10 @@ final class NotebookWorkspace {
             var hasBinding = false
             do {
                 syncEventLog.record("notebook transport preparing")
-                try await prepareNotebookTransport(recoverIfHalted: manual)
+                let recheckAccount = pendingAccountRecheck
+                pendingAccountRecheck = false
+                try await prepareNotebookTransport(recoverIfHalted: manual,
+                                                   recheckAccount: recheckAccount)
                 guard !isResetPending else {
                     endSyncPresentation()
                     return
@@ -806,13 +841,16 @@ final class NotebookWorkspace {
         syncRetryNotBefore = deadline
     }
 
-    private func prepareNotebookTransport(recoverIfHalted: Bool) async throws {
+    private func prepareNotebookTransport(recoverIfHalted: Bool,
+                                          recheckAccount: Bool = false) async throws {
         var expectedScope: String?
+        var expectedNotebookID: UUID?
         if let existing = notebookTransport {
             guard let haltable = existing as? any HaltableSyncTransport,
                   let halt = await haltable.haltStatus() else { return }
             syncHalt = halt
-            guard recoverIfHalted, halt.isRecoverable else {
+            let accountRecheck = recheckAccount && halt.reason == .accountChanged
+            guard (recoverIfHalted && halt.isRecoverable) || accountRecheck else {
                 throw halt.underlyingError
             }
             // refresh owns the exchange throughout retirement and replacement.
@@ -824,6 +862,10 @@ final class NotebookWorkspace {
             await haltable.retire()
             sync = nil
             expectedScope = existing.scope
+            if let replica, (try? NotebookSyncCoordinator(replica: replica, transport: existing)
+                .hasDurableBinding()) == true {
+                expectedNotebookID = replica.catalogSnapshot?.notebookID
+            }
             syncEventLog.record("rebuilding halted cloud transport")
             // Retain the retired instance until creation succeeds, so another
             // manual attempt retains both the halt reason and expected scope.
@@ -839,8 +881,7 @@ final class NotebookWorkspace {
                     stateDirectory: directory.appending(path: "CloudKit"),
                     automaticallySync: automaticSync,
                     expectedScope: expectedScope,
-                    expectedNotebookID: expectedScope == nil
-                        ? nil : replica?.catalogSnapshot?.notebookID
+                    expectedNotebookID: expectedNotebookID
                 )
             case .development(let endpoint, let name):
                 transport = LocalSyncTransport(
@@ -968,6 +1009,7 @@ final class NotebookWorkspace {
             let output = documentsDirectory.appending(path: "Notebook Copies")
             let publisher = self.publisher ?? NotebookMarkdownPublisher(directory: output)
             self.publisher = publisher
+            try await replica.prepareMarkdownCopiesForFirstSync(publisher)
             guard let catalog = replica.catalogSnapshot else { return }
             let placements = replica.placements
             let notes = try await replica.persistedNoteSnapshots()

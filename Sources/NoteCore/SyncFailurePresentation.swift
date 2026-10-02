@@ -69,6 +69,15 @@ public struct SyncFailurePresentation: Equatable, Sendable {
     ) -> Failure {
         guard depth < 12 else { return unknownFailure }
 
+        if error is NotebookOfflineJoinInterrupted {
+            return Failure(
+                "Restart to finish sync setup",
+                "Connecting this notebook was interrupted. Editing is paused until setup finishes.",
+                actionHint: "Close and reopen the app to finish connecting. Saved notes stay on this device.",
+                disposition: .unavailable
+            )
+        }
+
         if let failure = error as? CloudKitStateWriteFailure {
             return classify(
                 failure.underlyingError,
