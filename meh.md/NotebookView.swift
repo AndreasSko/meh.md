@@ -19,6 +19,54 @@ private struct NotebookFileReveal: Equatable {
     let token = UUID()
 }
 
+#if os(iOS)
+private struct NotebookBrowserViewport: Equatable {
+    let offset: CGFloat
+    let bottomInset: CGFloat
+    let size: CGSize
+}
+
+private final class NotebookBrowserScrollReference {
+    weak var value: UIScrollView?
+}
+
+/// Reads the Files header's enclosing list, without owning its scrolling.
+private struct NotebookBrowserScrollReader: UIViewRepresentable {
+    let reference: NotebookBrowserScrollReference
+
+    func makeUIView(context: Context) -> NotebookBrowserScrollProbe {
+        let view = NotebookBrowserScrollProbe()
+        view.reference = reference
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: NotebookBrowserScrollProbe, context: Context) {
+        view.connect()
+    }
+}
+
+private final class NotebookBrowserScrollProbe: UIView {
+    var reference: NotebookBrowserScrollReference?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        connect()
+    }
+
+    func connect() {
+        var ancestor = superview
+        while let view = ancestor {
+            if let scrollView = view as? UIScrollView {
+                reference?.value = scrollView
+                return
+            }
+            ancestor = view.superview
+        }
+    }
+}
+#endif
+
 private struct NotebookRecentPreviewRequest: Equatable {
     let ids: [UUID]
     let revision: NotebookSearchRevision
@@ -101,6 +149,10 @@ struct NotebookView: View {
     #if os(iOS)
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
         @State private var quickActionRequests = NotebookQuickActionRequests.shared
+        @State private var browserScrollView = NotebookBrowserScrollReference()
+        @State private var browserViewport: NotebookBrowserViewport?
+        @State private var browserReturnViewport: NotebookBrowserViewport?
+        @State private var browserToolbarWasHidden = false
     #endif
 
     init(
@@ -1823,6 +1875,9 @@ struct NotebookView: View {
                 .accessibilityHidden(hidesCompactRows)
                 .textCase(nil)
                 .listRowInsets(sidebarSectionInsets)
+                #if os(iOS)
+                .background(NotebookBrowserScrollReader(reference: browserScrollView))
+                #endif
             }
         }
         .listStyle(.plain)
@@ -1830,6 +1885,20 @@ struct NotebookView: View {
         .listSectionSpacing(12)
         .listSectionMargins(.top, 8)
         .listSectionMargins(.bottom, 0)
+        .onScrollGeometryChange(for: NotebookBrowserViewport.self) { geometry in
+            NotebookBrowserViewport(offset: geometry.contentOffset.y,
+                                    bottomInset: geometry.contentInsets.bottom,
+                                    size: geometry.containerSize)
+        } action: { _, viewport in
+            browserViewport = viewport
+            restoreBrowserViewportIfReady()
+        }
+        .onScrollPhaseChange { _, phase in
+            if phase == .tracking || phase == .interacting {
+                browserReturnViewport = nil
+                browserToolbarWasHidden = false
+            }
+        }
         #endif
         .scrollContentBackground(.hidden)
         .background(NotebookSidebarPalette.background)
@@ -1881,6 +1950,14 @@ struct NotebookView: View {
         }
         .onChange(of: preferredCompactColumn) { _, column in
             #if os(iOS)
+            if horizontalSizeClass == .compact {
+                if column == .detail {
+                    browserReturnViewport = browserViewport
+                    browserToolbarWasHidden = false
+                } else if column == .sidebar {
+                    restoreBrowserViewportIfReady()
+                }
+            }
             if horizontalSizeClass == .compact, column == .sidebar {
                 rememberEditorPosition()
                 navigationState.recordClosed()
@@ -1914,6 +1991,31 @@ struct NotebookView: View {
         ))
         #endif
     }
+
+    #if os(iOS)
+    private func restoreBrowserViewportIfReady() {
+        guard let saved = browserReturnViewport, let viewport = browserViewport else { return }
+        guard viewport.size == saved.size, fileRevealRequest == nil else {
+            browserReturnViewport = nil
+            return
+        }
+        if viewport.bottomInset < saved.bottomInset - 0.5 {
+            browserToolbarWasHidden = true
+            return
+        }
+        guard browserToolbarWasHidden, preferredCompactColumn == .sidebar,
+              viewport.bottomInset >= saved.bottomInset - 0.5,
+              abs(viewport.offset - saved.offset) > 0.5,
+              let scrollView = browserScrollView.value else { return }
+        // Hiding the bottom toolbar can clamp an offscreen list's offset.
+        // Restore only once its search toolbar has returned to the safe area.
+        // Keep the snapshot through cancelled swipe-back transitions until
+        // the next browser pan or note opening establishes a new position.
+        scrollView.setContentOffset(
+            CGPoint(x: scrollView.contentOffset.x, y: saved.offset), animated: false
+        )
+    }
+    #endif
 
     private var libraryNewNote: some View {
         Button { createDefaultNote() } label: {
