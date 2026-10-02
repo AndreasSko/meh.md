@@ -7,6 +7,7 @@ struct NotebookApplicationView: View {
     @Environment(\.scenePhase) private var scenePhase
     @SceneStorage("notebook.sceneID") private var sceneIDString = UUID().uuidString
     @State private var fallbackSceneID = UUID()
+    @State private var incomingImports = NotebookIncomingImportRequests()
 
     private var sceneID: UUID {
         UUID(uuidString: sceneIDString) ?? fallbackSceneID
@@ -18,6 +19,7 @@ struct NotebookApplicationView: View {
                 NotebookView(
                     replica: replica,
                     workspace: workspace,
+                    incomingImports: incomingImports,
                     sceneID: sceneID,
                     preferredNoteID: preferredNoteID
                 )
@@ -49,6 +51,22 @@ struct NotebookApplicationView: View {
             } else {
                 ProgressView("Opening notebook…")
             }
+        }
+        .onOpenURL { incomingImports.receive($0) }
+        .overlay {
+            if incomingImports.readingCount > 0 {
+                ProgressView("Reading Markdown…")
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            }
+        }
+        .alert("Couldn’t Read Shared Files", isPresented: Binding(
+            get: { incomingImports.errorMessage != nil },
+            set: { if !$0 { incomingImports.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(incomingImports.errorMessage ?? "")
         }
         .task {
             if UUID(uuidString: sceneIDString) == nil {

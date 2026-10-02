@@ -7,6 +7,117 @@ import XCTest
 final class NotebookImportTests: XCTestCase {
     private enum InjectedFailure: Error { case stop }
 
+    func testDestinationImportResumesIntoChosenFolder() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let destination = try await replica.createFolder(name: "Projects")
+        let existing = try await replica.createNote(
+            name: "Existing.md", text: "existing", parentID: destination
+        )
+        let plan = Self.plan()
+        replica.importFaultInjector = { stage in
+            if stage == .journalSaved { throw InjectedFailure.stop }
+        }
+        do {
+            try await replica.importMarkdown(plan, parentID: destination)
+            XCTFail("Expected interruption")
+        } catch is InjectedFailure {}
+
+        let restarted = NotebookReplica(directory: root)
+        try await restarted.load()
+        try await restarted.resumePendingImport()
+
+        for entry in plan.entries {
+            let placement = try XCTUnwrap(restarted.placements.first {
+                $0.item.id == entry.id
+            })
+            XCTAssertEqual(placement.parentID, entry.parentID ?? destination)
+        }
+        let order = restarted.orderedChildren(parentID: destination).map(\.item.id)
+        XCTAssertEqual(order.first, existing)
+        XCTAssertEqual(Set(order.dropFirst()),
+                       Set(plan.entries.filter { $0.parentID == nil }.map(\.id)))
+        XCTAssertFalse(restarted.hasPendingImport)
+    }
+
+    func testDestinationMustBeAnActiveFolderBeforeStaging() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let note = try await replica.createNote(name: "Note.md")
+        let trash = try await replica.createFolder(name: "Trash folder")
+        try await replica.setTrashed(trash, true)
+        for destination in [note, trash, UUID()] {
+            do {
+                try await replica.importMarkdown(Self.plan(), parentID: destination)
+                XCTFail("Expected invalid destination to fail")
+            } catch {
+                XCTAssertEqual(error as? NotebookImportError, .catalogConflict)
+            }
+            XCTAssertFalse(replica.hasPendingImport)
+        }
+    }
+
+    func testResumeDoesNotImportIntoDestinationTrashedAfterStaging() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let destination = try await replica.createFolder(name: "Projects")
+        let plan = Self.plan()
+        replica.importFaultInjector = { stage in
+            if stage == .journalSaved { throw InjectedFailure.stop }
+        }
+        do { try await replica.importMarkdown(plan, parentID: destination) }
+        catch is InjectedFailure {}
+        try await replica.setTrashed(destination, true)
+        replica.importFaultInjector = nil
+        do {
+            try await replica.resumePendingImport()
+            XCTFail("Expected missing active destination to fail")
+        } catch {
+            XCTAssertEqual(error as? NotebookImportError, .catalogConflict)
+        }
+        XCTAssertTrue(replica.hasPendingImport)
+        XCTAssertFalse(replica.placements.contains { $0.item.id == Self.noteID })
+    }
+
+    func testDeletionCleanupPreservesDestinationOfRetainedImport() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = UUID()
+        let notebook = UUID()
+        let plan = Self.plan()
+        let storage = NotebookImportStorage(directory: root)
+        try storage.create(NotebookImportJournal(
+            notebookID: notebook, plan: plan, snapshots: [],
+            destinationParentID: destination
+        ))
+        let deleted = try XCTUnwrap(plan.entries.first { $0.kind == .note })
+        try storage.scrub(deletedIDs: [deleted.id], notebookID: notebook)
+        let retained = try storage.load()
+        XCTAssertEqual(retained.schemaVersion, 2)
+        XCTAssertEqual(retained.destinationParentID, destination)
+        XCTAssertFalse(retained.plan.entries.contains { $0.id == deleted.id })
+    }
+
+    func testOldImportJournalDefaultsToNotebookRoot() throws {
+        let journal = NotebookImportJournal(
+            notebookID: UUID(), plan: Self.plan(), snapshots: []
+        )
+        let encoded = try JSONEncoder().encode(journal)
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        old.removeValue(forKey: "destinationParentID")
+        let decoded = try JSONDecoder().decode(
+            NotebookImportJournal.self, from: JSONSerialization.data(withJSONObject: old)
+        )
+        XCTAssertNil(decoded.destinationParentID)
+        XCTAssertEqual(decoded.plan, journal.plan)
+    }
+
     func testResumePreservesStagedDatesAfterSourceIsRemoved() async throws {
         let root = temporaryDirectory()
         let sourceRoot = temporaryDirectory()

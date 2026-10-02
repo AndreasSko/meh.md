@@ -5,6 +5,53 @@ import XCTest
 
 @MainActor
 final class NotebookImportIntegrationTests: XCTestCase {
+    func testMixedSelectionImportsAtRootRegardlessOfNewNoteDestination() async throws {
+        let root = temporaryDirectory(named: "MixedImport")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sources = root.appending(path: "Source Container")
+        try createDirectory(sources)
+        var selections: [URL] = []
+        for index in 1...4 {
+            let folder = sources.appending(path: "Folder \(index)")
+            try createDirectory(folder.appending(path: "Nested"))
+            try Data("# Inside \(index)\r\n".utf8).write(
+                to: folder.appending(path: "Nested/Inside.md")
+            )
+            selections.append(folder)
+        }
+        for index in 1...10 {
+            let note = sources.appending(path: "Note \(index).md")
+            try Data("# Note \(index)\r\n".utf8).write(to: note)
+            selections.append(note)
+        }
+        let sourcesBefore = try treeSnapshot(at: sources)
+        let replica = NotebookReplica(directory: root.appending(path: "replica"))
+        try await replica.createLocalNotebook()
+        let destination = try await replica.createFolder(name: "New Notes")
+        try await replica.setDefaultNewNoteParentID(destination)
+        let existing = try await replica.createNote(
+            name: "Note 1.md", text: "Keep my edits\n", parentID: destination
+        )
+
+        let plan = try await NotebookImportScanner().scan(urls: selections.reversed())
+        try await replica.importMarkdown(plan)
+
+        let importedRoots = replica.placements.filter {
+            $0.parentID == nil && $0.item.id != destination
+        }
+        XCTAssertEqual(importedRoots.filter { $0.item.kind == .folder }.count, 4)
+        XCTAssertEqual(importedRoots.filter { $0.item.kind == .note }.count, 10)
+        XCTAssertEqual(Set(importedRoots.map(\.item.name)),
+                       Set(selections.map(\.lastPathComponent)))
+        XCTAssertFalse(replica.placements.contains { $0.item.name == "Source Container" })
+        XCTAssertEqual(replica.defaultNewNoteParentID, destination)
+        let existingNote = try await replica.openNote(existing)
+        XCTAssertEqual(existingNote.text, "Keep my edits\n")
+        XCTAssertFalse(replica.hasPendingImport)
+        try await assertImportedPlan(plan, in: replica)
+        XCTAssertEqual(try treeSnapshot(at: sources), sourcesBefore)
+    }
+
     func testRealServiceImportsAndPublishesExactSourceHierarchy() async throws {
         let endpoint = try loopbackEndpoint()
         let root = temporaryDirectory(named: "HTTPImport")

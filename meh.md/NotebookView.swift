@@ -103,6 +103,9 @@ private struct NotebookLinkVisitPreview {
 struct NotebookView: View {
     let replica: NotebookReplica
     var workspace: NotebookWorkspace? = nil
+    var incomingImports: NotebookIncomingImportRequests? = nil
+    @State private var sharedImport: NotebookIncomingImport?
+    @State private var sharedImportID: UUID?
     let sceneID: UUID
     let preferredNoteID: UUID?
     @State private var search = NotebookSearchState()
@@ -196,11 +199,13 @@ struct NotebookView: View {
     init(
         replica: NotebookReplica,
         workspace: NotebookWorkspace? = nil,
+        incomingImports: NotebookIncomingImportRequests? = nil,
         sceneID: UUID,
         preferredNoteID: UUID? = nil
     ) {
         self.replica = replica
         self.workspace = workspace
+        self.incomingImports = incomingImports
         self.sceneID = sceneID
         self.preferredNoteID = preferredNoteID
         _navigationState = State(initialValue: NotebookNavigationState(
@@ -788,7 +793,8 @@ struct NotebookView: View {
         .sheet(
             isPresented: Binding(
                 get: { !movingIDs.isEmpty }, set: { if !$0 { movingIDs = [] } }
-            )
+            ),
+            onDismiss: presentSharedImport
         ) { moveSheet }
         .sheet(isPresented: $showingBacklinks, onDismiss: {
             backlinkDeparture = nil
@@ -829,10 +835,10 @@ struct NotebookView: View {
         } message: {
             Text(missingLink?.destination ?? "")
         }
-        .sheet(isPresented: $showingImport) {
-            NotebookImportView(replica: replica, onImport: importMarkdown)
-        }
-        .sheet(isPresented: $showingTrash) {
+        .notebookMarkdownImporter(
+            isPresented: $showingImport, replica: replica, onImport: importMarkdown
+        )
+        .sheet(isPresented: $showingTrash, onDismiss: presentSharedImport) {
             NavigationStack {
                 trashView
             }
@@ -840,11 +846,31 @@ struct NotebookView: View {
             .frame(minWidth: 400, idealWidth: 560, minHeight: 360, idealHeight: 540)
             #endif
         }
-        .sheet(isPresented: $showingSettings) {
+        .sheet(isPresented: $showingSettings, onDismiss: presentSharedImport) {
             NotebookSettingsView(replica: replica,
                                  workspace: workspace ?? NotebookWorkspace.shared,
                                  onImport: importMarkdown,
                                  beforeExport: flushEditor)
+        }
+        .sheet(item: $sharedImport, onDismiss: finishSharedImport) { request in
+            NotebookSharedImportView(plan: request.plan, replica: replica) { parentID in
+                try await importMarkdown(request.plan, parentID: parentID)
+            }
+        }
+        .onChange(of: incomingImports?.requests.first?.id, initial: true) { _, _ in
+            guard incomingImports?.requests.first != nil else { return }
+            if showingSettings { showingSettings = false }
+            else if showingTrash { showingTrash = false }
+            else { presentSharedImport() }
+        }
+        .onChange(of: busy) { _, busy in
+            if !busy { presentSharedImport() }
+        }
+        .onChange(of: replica.hasPendingImport) { _, pending in
+            if !pending { presentSharedImport() }
+        }
+        .onChange(of: showingImport) { _, presented in
+            if !presented { presentSharedImport() }
         }
         .confirmationDialog(
             deletionSelection?.rootID == nil ? "Empty Trash?" : "Delete permanently?",
@@ -2153,7 +2179,29 @@ struct NotebookView: View {
         }
     }
 
+    private func presentSharedImport() {
+        guard sharedImportID == nil, !busy, !showingSettings, !showingTrash,
+              !showingImport, movingIDs.isEmpty, !replica.hasPendingImport,
+              let request = incomingImports?.requests.first else { return }
+        sharedImportID = request.id
+        sharedImport = request
+    }
+
+    private func finishSharedImport() {
+        if let request = incomingImports?.requests.first(where: { $0.id == sharedImportID }) {
+            incomingImports?.finish(request)
+        }
+        sharedImportID = nil
+        presentSharedImport()
+    }
+
     private func importMarkdown(_ plan: NotebookImportPlan?) async throws {
+        try await importMarkdown(plan, parentID: nil)
+    }
+
+    private func importMarkdown(
+        _ plan: NotebookImportPlan?, parentID: UUID?
+    ) async throws {
         guard !busy else { throw NotebookReplicaError.busy }
         busy = true
         defer {
@@ -2162,8 +2210,15 @@ struct NotebookView: View {
         }
         try await flushEditor()
         if let plan {
-            try await replica.importMarkdown(plan)
+            try await replica.importMarkdown(plan, parentID: parentID)
             expandedIDs.formUnion(plan.entries.filter { $0.kind == .folder }.map(\.id))
+            var ancestor = parentID
+            var visited = Set<UUID>()
+            while let id = ancestor, visited.insert(id).inserted,
+                  let placement = replica.placements.first(where: { $0.item.id == id }) {
+                expandedIDs.insert(id)
+                ancestor = placement.parentID
+            }
         } else {
             try await replica.resumePendingImport()
         }

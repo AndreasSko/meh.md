@@ -535,7 +535,7 @@ final class NotebookCatalogDocument {
     /// Builds an import on an isolated fork after validating the complete
     /// tree. This avoids recomputing placements after every inserted item.
     func forkAddingImportEntries(
-        _ entries: [NotebookImportEntry]
+        _ entries: [NotebookImportEntry], destinationParentID: UUID? = nil
     ) throws -> NotebookCatalogDocument {
         guard Set(entries.map(\.id)).count == entries.count else {
             throw NotebookImportError.invalidPlan
@@ -573,10 +573,10 @@ final class NotebookCatalogDocument {
         }
 
         let candidate = try fork()
-        try candidate.ensureOrder(parentID: nil)
+        try candidate.ensureOrder(parentID: destinationParentID)
         let rootLower = try candidate.orderedChildren(
-            parentID: nil, inTrash: false
-        ).filter { $0.item.parentID == nil }.last?.item.orderKey
+            parentID: destinationParentID, inTrash: false
+        ).filter { $0.item.parentID == destinationParentID }.last?.item.orderKey
         for entry in entries {
             let item = try candidate.document.putObject(
                 obj: candidate.itemsObject,
@@ -596,7 +596,7 @@ final class NotebookCatalogDocument {
             try candidate.document.put(
                 obj: item,
                 key: "parent",
-                value: entry.parentID.map {
+                value: (entry.parentID ?? destinationParentID).map {
                     .String($0.uuidString)
                 } ?? .Null
             )
@@ -628,7 +628,7 @@ final class NotebookCatalogDocument {
             for id in importedIDs {
                 try candidate.writeOrder(
                     ranks[id]!,
-                    parentID: parentID,
+                    parentID: parentID ?? destinationParentID,
                     object: candidate.object(for: id)
                 )
             }

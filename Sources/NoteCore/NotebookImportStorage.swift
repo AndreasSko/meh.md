@@ -47,16 +47,24 @@ struct NotebookImportJournal: Codable, Equatable {
     let notebookID: UUID
     let plan: NotebookImportPlan
     let snapshots: [NoteSnapshot]
+    let destinationParentID: UUID?
+
+    var isSupported: Bool {
+        (schemaVersion == 1 && destinationParentID == nil) || schemaVersion == 2
+    }
 
     init(
         notebookID: UUID,
         plan: NotebookImportPlan,
-        snapshots: [NoteSnapshot]
+        snapshots: [NoteSnapshot],
+        destinationParentID: UUID? = nil
     ) {
-        schemaVersion = 1
+        // Older builds must not resume a destination import at the root.
+        schemaVersion = destinationParentID == nil ? 1 : 2
         self.notebookID = notebookID
         self.plan = plan
         self.snapshots = snapshots
+        self.destinationParentID = destinationParentID
     }
 }
 
@@ -104,7 +112,7 @@ struct NotebookImportStorage {
                 NotebookImportJournal.self,
                 from: Data(contentsOf: journalURL)
             )
-            guard journal.schemaVersion == 1 else {
+            guard journal.isSupported else {
                 throw NotebookImportError.corruptJournal
             }
             return journal
@@ -224,7 +232,7 @@ struct NotebookImportStorage {
                 NotebookImportJournal.self,
                 from: Data(contentsOf: url)
             )
-            guard journal.schemaVersion == 1 else {
+            guard journal.isSupported else {
                 throw NotebookDeletionStorageError.invalidImportJournal(url)
             }
             guard journal.notebookID == notebookID else {
@@ -272,7 +280,8 @@ struct NotebookImportStorage {
                 entries: retainedEntries,
                 skippedPaths: journal.plan.skippedPaths
             ),
-            snapshots: retainedSnapshots
+            snapshots: retainedSnapshots,
+            destinationParentID: journal.destinationParentID
         )
         let temporary = url.deletingLastPathComponent().appending(
             path: ".scrubbed-import-\(UUID().uuidString).tmp"

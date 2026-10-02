@@ -292,13 +292,16 @@ public final class NotebookReplica {
         return id
     }
 
-    public func importMarkdown(_ plan: NotebookImportPlan) async throws {
+    public func importMarkdown(
+        _ plan: NotebookImportPlan, parentID: UUID? = nil
+    ) async throws {
         guard let catalog else { throw NotebookReplicaError.notJoined }
         guard !hasPendingImport, !importStorage.hasPendingImport else {
             hasPendingImport = true
             throw NotebookImportError.pendingImportExists
         }
         try validate(plan, against: catalog)
+        try validateImportDestination(parentID, in: catalog)
         guard !plan.entries.isEmpty else { return }
         let snapshots: [NoteSnapshot] = try plan.entries.compactMap { entry in
             guard entry.kind == .note, let text = entry.text else { return nil }
@@ -311,7 +314,8 @@ public final class NotebookReplica {
         let journal = NotebookImportJournal(
             notebookID: catalog.notebookID,
             plan: plan,
-            snapshots: snapshots
+            snapshots: snapshots,
+            destinationParentID: parentID
         )
 
         try await withCatalogWrite {
@@ -1361,6 +1365,7 @@ public final class NotebookReplica {
             return
         }
 
+        try validateImportDestination(journal.destinationParentID, in: latest)
         for entry in journal.plan.entries where entry.kind == .note {
             guard let staged = snapshots[entry.id] else {
                 throw NotebookImportError.corruptJournal
@@ -1378,7 +1383,9 @@ public final class NotebookReplica {
             }
         }
 
-        let next = try catalogWithImport(journal.plan, basedOn: latest)
+        let next = try latest.forkAddingImportEntries(
+            journal.plan.entries, destinationParentID: journal.destinationParentID
+        )
         try importFaultInjector?(.beforeCatalog)
         do {
             try await persistCatalog(next)
@@ -1425,11 +1432,14 @@ public final class NotebookReplica {
         return latest
     }
 
-    private func catalogWithImport(
-        _ plan: NotebookImportPlan,
-        basedOn catalog: NotebookCatalogDocument
-    ) throws -> NotebookCatalogDocument {
-        try catalog.forkAddingImportEntries(plan.entries)
+    private func validateImportDestination(
+        _ parentID: UUID?, in catalog: NotebookCatalogDocument
+    ) throws {
+        guard let parentID else { return }
+        guard try catalog.placements().contains(where: {
+            $0.item.id == parentID && $0.item.kind == .folder && !$0.isInTrash
+                && !$0.item.isPermanentlyDeleted
+        }) else { throw NotebookImportError.catalogConflict }
     }
 
     private func waitForWrites() async {
