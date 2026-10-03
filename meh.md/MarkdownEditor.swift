@@ -694,6 +694,13 @@ struct MarkdownEditor: NSViewRepresentable {
     var isReadOnly = false
     var editRevision: Data?
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
+    var commitNativeEdit: ((String, Data, NoteEditorTextChange?) throws -> MarkdownEditorCommit)?
+
+    private var revisionedCommit: ((String, Data, NoteEditorTextChange?) throws -> MarkdownEditorCommit)? {
+        if let commitNativeEdit { return commitNativeEdit }
+        guard let commitEdit else { return nil }
+        return { text, revision, _ in try commitEdit(text, revision) }
+    }
     var onEditError: ((Error) -> Void)?
     var navigation: MarkdownEditorNavigation?
     var onBeginEditing: () -> Void
@@ -709,6 +716,7 @@ struct MarkdownEditor: NSViewRepresentable {
         isReadOnly: Bool = false,
         editRevision: Data? = nil,
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
+        commitNativeEdit: ((String, Data, NoteEditorTextChange?) throws -> MarkdownEditorCommit)? = nil,
         onEditError: ((Error) -> Void)? = nil,
         navigation: MarkdownEditorNavigation? = nil,
         onBeginEditing: @escaping () -> Void = {},
@@ -723,6 +731,7 @@ struct MarkdownEditor: NSViewRepresentable {
         self.isReadOnly = isReadOnly
         self.editRevision = editRevision
         self.commitEdit = commitEdit
+        self.commitNativeEdit = commitNativeEdit
         self.onEditError = onEditError
         self.navigation = navigation
         self.onBeginEditing = onBeginEditing
@@ -971,7 +980,7 @@ struct MarkdownEditor: NSViewRepresentable {
             }
             guard !hasUncommittedText else { return }
 
-            if parent.commitEdit != nil, let revision = parent.editRevision,
+            if parent.revisionedCommit != nil, let revision = parent.editRevision,
                revision == displayedRevision {
                 // A local commit or an earlier replacement already installed
                 // this state. Avoid scanning the entire native/model buffer.
@@ -1345,19 +1354,26 @@ struct MarkdownEditor: NSViewRepresentable {
             let nativeText = MarkdownPresentation.syntaxCache(for: textView)
                 .textSnapshot(in: storage)
             guard !displayedText.utf8.elementsEqual(nativeText.utf8) else {
+                MarkdownPresentation.syntaxCache(for: textView).acknowledgeNativeText()
                 return
             }
 
-            guard let commitEdit = parent.commitEdit,
+            guard let commitEdit = parent.revisionedCommit,
                   let baseRevision = displayedRevision else {
                 displayedText = nativeText
+                MarkdownPresentation.syntaxCache(for: textView).acknowledgeNativeText()
                 parent.text = nativeText
                 schedulePresentationRefresh(for: textView)
                 return
             }
 
             do {
-                let commit = try commitEdit(nativeText, baseRevision)
+                let cache = MarkdownPresentation.syntaxCache(for: textView)
+                let commit = try commitEdit(
+                    nativeText, baseRevision,
+                    textView.textStorage.flatMap { cache.nativeTextChange(in: $0) }
+                )
+                cache.acknowledgeNativeText()
                 hasUncommittedText = false
                 staleParentRevision = baseRevision
                 if nativeText.utf8.elementsEqual(commit.text.utf8) {
@@ -1435,6 +1451,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
             textView.setSelectedRange(selection)
             refreshTableCommands(in: textView)
+            MarkdownPresentation.syntaxCache(for: textView).acknowledgeNativeText()
             displayedText = newText
             displayedRevision = revision
             hasUncommittedText = false
@@ -2103,6 +2120,13 @@ struct MarkdownEditor: UIViewRepresentable {
     var isReadOnly = false
     var editRevision: Data?
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
+    var commitNativeEdit: ((String, Data, NoteEditorTextChange?) throws -> MarkdownEditorCommit)?
+
+    private var revisionedCommit: ((String, Data, NoteEditorTextChange?) throws -> MarkdownEditorCommit)? {
+        if let commitNativeEdit { return commitNativeEdit }
+        guard let commitEdit else { return nil }
+        return { text, revision, _ in try commitEdit(text, revision) }
+    }
     var onEditError: ((Error) -> Void)?
     var navigation: MarkdownEditorNavigation?
     var onBeginEditing: () -> Void
@@ -2121,6 +2145,7 @@ struct MarkdownEditor: UIViewRepresentable {
         isReadOnly: Bool = false,
         editRevision: Data? = nil,
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
+        commitNativeEdit: ((String, Data, NoteEditorTextChange?) throws -> MarkdownEditorCommit)? = nil,
         onEditError: ((Error) -> Void)? = nil,
         navigation: MarkdownEditorNavigation? = nil,
         onBeginEditing: @escaping () -> Void = {},
@@ -2138,6 +2163,7 @@ struct MarkdownEditor: UIViewRepresentable {
         self.isReadOnly = isReadOnly
         self.editRevision = editRevision
         self.commitEdit = commitEdit
+        self.commitNativeEdit = commitNativeEdit
         self.onEditError = onEditError
         self.navigation = navigation
         self.onBeginEditing = onBeginEditing
@@ -2406,7 +2432,7 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             guard !hasUncommittedText else { return }
 
-            if parent.commitEdit != nil, let revision = parent.editRevision,
+            if parent.revisionedCommit != nil, let revision = parent.editRevision,
                revision == displayedRevision {
                 // A local commit or an earlier replacement already installed
                 // this state. Avoid scanning the entire native/model buffer.
@@ -2462,19 +2488,26 @@ struct MarkdownEditor: UIViewRepresentable {
             let nativeText = MarkdownPresentation.syntaxCache(for: textView)
                 .textSnapshot(in: textView.textStorage)
             guard !displayedText.utf8.elementsEqual(nativeText.utf8) else {
+                MarkdownPresentation.syntaxCache(for: textView).acknowledgeNativeText()
                 return
             }
 
-            guard let commitEdit = parent.commitEdit,
+            guard let commitEdit = parent.revisionedCommit,
                   let baseRevision = displayedRevision else {
                 displayedText = nativeText
+                MarkdownPresentation.syntaxCache(for: textView).acknowledgeNativeText()
                 parent.text = nativeText
                 schedulePresentationRefresh(for: textView)
                 return
             }
 
             do {
-                let commit = try commitEdit(nativeText, baseRevision)
+                let cache = MarkdownPresentation.syntaxCache(for: textView)
+                let commit = try commitEdit(
+                    nativeText, baseRevision,
+                    cache.nativeTextChange(in: textView.textStorage)
+                )
+                cache.acknowledgeNativeText()
                 hasUncommittedText = false
                 staleParentRevision = baseRevision
                 if nativeText.utf8.elementsEqual(commit.text.utf8) {
@@ -2979,6 +3012,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
             textView.selectedRange = selection
             refreshTableCommands(in: textView)
+            MarkdownPresentation.syntaxCache(for: textView).acknowledgeNativeText()
             displayedText = newText
             displayedRevision = revision
             hasUncommittedText = false

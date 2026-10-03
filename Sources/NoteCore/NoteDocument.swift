@@ -451,6 +451,22 @@ final class NoteDocument {
         document.commitWith(timestamp: modificationDate)
     }
 
+    /// Only the session's matching-revision path calls this, after validating
+    /// the scalar range and complete resulting text against its cached source.
+    func applyValidatedEditorChange(
+        _ replacement: String,
+        scalarRange: (start: UInt64, length: UInt64),
+        at modificationDate: Date = Date()
+    ) throws {
+        let modifiedAt = try nextModifiedAt(modificationDate)
+        try document.spliceText(
+            obj: textObject, start: scalarRange.start,
+            delete: Int64(scalarRange.length), value: replacement
+        )
+        try setModifiedAt(modifiedAt)
+        document.commitWith(timestamp: modificationDate)
+    }
+
     func replaceAll(
         with text: String,
         at modificationDate: Date = Date(),
