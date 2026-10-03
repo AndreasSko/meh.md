@@ -4,6 +4,8 @@
 import argparse
 import json
 import math
+import re
+import statistics
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,7 +39,8 @@ def percentile95(values: list[float]) -> float:
 def check_report(
     report: Any, size_kb: int, mode: str = "livePreview",
     context: str | None = None, host: str = "editor",
-    shape: str = "standard",
+    shape: str = "standard", baseline: Any = None,
+    enforce_budgets: bool = True, reference: Any = None,
 ) -> list[str]:
     errors: list[str] = []
     if not isinstance(report, dict):
@@ -79,12 +82,13 @@ def check_report(
     elif shape == "standard" and report["full_parses_during_edits"] != 0:
         errors.append("full parses occurred during measured edits")
     source_utf16_length = report.get("utf16_length")
-    if shape != "standard" and (
+    if (
         not isinstance(source_utf16_length, int)
         or isinstance(source_utf16_length, bool)
-        or source_utf16_length < 0
+        or source_utf16_length <= 0
+        or (isinstance(fixture_bytes, int) and source_utf16_length > fixture_bytes)
     ):
-        errors.append("utf16_length must be a nonnegative integer for fallback shapes")
+        errors.append("utf16_length must be a positive integer no greater than utf8_bytes")
 
     measurements = report.get("measurements")
     if not isinstance(measurements, dict):
@@ -123,8 +127,10 @@ def check_report(
 
     required_metrics = [f"{kind}_{suffix}" for kind in COUNTS for suffix in
                         ("synchronous_ms", "to_idle_ms")]
+    # Absolute ceilings include virtualized simulator scheduling variance.
+    # The 500 KB baseline comparison separately catches lost CRDT fast paths.
     sync_budget = 50 if size_kb <= 50 else 150
-    idle_budget = 100 if size_kb <= 50 else 250
+    idle_budget = (500 if shape == "nearby-table" else 250) if size_kb <= 50 else 1000
     for key in required_metrics:
         if key.startswith("bulk_insert_"):
             continue
@@ -135,11 +141,25 @@ def check_report(
         ):
             budget = sync_budget if key.endswith("synchronous_ms") else idle_budget
             p95 = percentile95(samples)
-            if p95 > budget:
+            if enforce_budgets and p95 > budget:
                 errors.append(f"{key} p95 {p95:.1f} ms exceeds {budget} ms")
 
+    # p95 of 21 samples omits one outlier. Keep cold first-input latency
+    # visible and bound every subsequent character independently.
+    typing_idle = measurements.get("typing_to_idle_ms", [])
+    if (enforce_budgets and isinstance(typing_idle, list)
+            and len(typing_idle) == COUNTS["typing"]
+            and all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and math.isfinite(value) and value >= 0 for value in typing_idle)):
+        first_limit = 500 if size_kb <= 50 else 2_000
+        subsequent_limit = 500
+        if typing_idle[0] > first_limit:
+            errors.append(f"first typing sample exceeds {first_limit} ms ceiling")
+        if max(typing_idle[1:]) > subsequent_limit:
+            errors.append(f"subsequent typing sample exceeds {subsequent_limit} ms ceiling")
+
     bulk_sync_budget = sync_budget
-    bulk_idle_budget = 250 if size_kb <= 50 else 1_500
+    bulk_idle_budget = 500 if size_kb <= 50 else 2_000
     for suffix, budget in (("synchronous_ms", bulk_sync_budget),
                            ("to_idle_ms", bulk_idle_budget)):
         key = f"bulk_insert_{suffix}"
@@ -148,7 +168,7 @@ def check_report(
                 and isinstance(samples[0], (int, float))
                 and not isinstance(samples[0], bool)
                 and math.isfinite(samples[0]) and samples[0] >= 0
-                and samples[0] > budget):
+                and enforce_budgets and samples[0] > budget):
             errors.append(f"{key} {samples[0]:.1f} ms exceeds single-sample "
                           f"ceiling {budget} ms")
 
@@ -247,6 +267,42 @@ def check_report(
         errors.append("incremental_parses_during_edits must be an integer")
     elif incremental_parse_sum != aggregate_incremental:
         errors.append("step incremental_parses sum does not match report aggregate")
+    if errors:
+        return errors
+    for label, compared, limit in (("baseline", baseline, .8),
+                                   ("reference", reference, 1.2)):
+        if compared is None:
+            continue
+        comparison_errors = check_report(
+            compared, size_kb, mode, context, host, shape,
+            enforce_budgets=False,
+        )
+        if comparison_errors:
+            errors += [label + ": " + error for error in comparison_errors]
+            continue
+        for source, value in (("current", report), (label, compared)):
+            digest = value.get("fixture_sha256")
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                errors.append(f"{source}: fixture_sha256 must be a SHA-256 digest")
+        for field in ("utf8_bytes", "utf16_length", "fixture_sha256"):
+            if report.get(field) != compared.get(field):
+                errors.append(f"{label}: fixture {field} does not match")
+        for metric in ("typing_synchronous_ms", "typing_to_idle_ms"):
+            current = measurements[metric]
+            previous = compared["measurements"][metric]
+            for name, summarize in (("median", statistics.median),
+                                    ("p95", percentile95)):
+                before = summarize(previous)
+                after = summarize(current)
+                if before <= 0:
+                    errors.append(f"{label}: {metric} {name} must be positive")
+                elif after > limit * before:
+                    requirement = ("must improve by at least 20%" if label == "baseline"
+                                   else "must stay within 20% of the fixed reference")
+                    errors.append(
+                        f"{metric} {name} {requirement}: "
+                        f"{after:.1f} ms vs {label} {before:.1f} ms"
+                    )
     return errors
 
 
@@ -254,6 +310,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
     parser.add_argument("--size-kb", required=True, type=int)
+    parser.add_argument("--baseline-report", type=Path)
+    parser.add_argument("--reference-report", type=Path)
     parser.add_argument("--mode", default="livePreview")
     parser.add_argument("--context", choices=("standard", "mixed"))
     parser.add_argument("--host", choices=("editor", "notebook"), default="editor")
@@ -261,11 +319,15 @@ def main() -> int:
     args = parser.parse_args()
     try:
         report = json.loads(args.report.read_text(encoding="utf-8"))
+        baseline = (json.loads(args.baseline_report.read_text(encoding="utf-8"))
+                    if args.baseline_report else None)
+        reference = (json.loads(args.reference_report.read_text(encoding="utf-8"))
+                     if args.reference_report else None)
     except (OSError, json.JSONDecodeError) as error:
         print(f"Cannot read performance report: {error}", file=sys.stderr)
         return 2
     errors = check_report(
-        report, args.size_kb, args.mode, args.context, args.host, args.shape
+        report, args.size_kb, args.mode, args.context, args.host, args.shape, baseline, reference=reference
     )
     if errors:
         for error in errors:

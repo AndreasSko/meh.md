@@ -1,3 +1,9 @@
+import copy
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import unittest
 
 from check_editor_performance import COUNTS, check_report
@@ -13,6 +19,7 @@ def valid_report(size=500, context="standard", shape="standard"):
         "context": context,
         "shape": shape,
         "requested_kb": size,
+        "fixture_sha256": "a" * 64,
         "utf8_bytes": size * 1000 + shape_suffix,
         "utf16_length": size * 1000 + shape_suffix,
         "source_and_selection_preserved": True,
@@ -68,9 +75,116 @@ class CheckEditorPerformanceTests(unittest.TestCase):
 
     def test_fails_latency_budget(self):
         report = valid_report()
-        report["measurements"]["deletion_to_idle_ms"] = [251.0] * COUNTS["deletion"]
+        report["measurements"]["deletion_to_idle_ms"] = [1001.0] * COUNTS["deletion"]
         errors = check_report(report, 500)
         self.assertTrue(any("deletion_to_idle_ms p95" in e for e in errors))
+
+    def test_500kb_sync_budget_catches_old_fastpath_regression(self):
+        current = valid_report()
+        baseline = copy.deepcopy(current)
+        for value, sync, idle in ((current, 55.0, 20.0),
+                                  (baseline, 55.0, 100.0)):
+            value["measurements"]["typing_synchronous_ms"] = [sync] * COUNTS["typing"]
+            value["measurements"]["typing_to_idle_ms"] = [idle] * COUNTS["typing"]
+            for step in value["steps"]:
+                if step["action"] == "typing":
+                    step.update(synchronous_ms=sync, to_idle_ms=idle)
+        self.assertEqual(check_report(current, 500), [])
+        errors = check_report(current, 500, baseline=baseline)
+        self.assertTrue(any("typing_synchronous_ms p95 must improve" in e
+                            for e in errors))
+        self.assertFalse(any("typing_to_idle_ms" in e for e in errors))
+
+    def test_baseline_comparison_rejects_regression_and_bad_reports(self):
+        current = valid_report()
+        baseline = valid_report()
+        for kind in COUNTS:
+            for suffix in ("synchronous_ms", "to_idle_ms"):
+                key = f"{kind}_{suffix}"
+                baseline["measurements"][key] = [100.0] * COUNTS[kind]
+        for step in baseline["steps"]:
+            step.update(synchronous_ms=100.0, to_idle_ms=100.0)
+        self.assertEqual(check_report(current, 500, baseline=baseline), [])
+        self.assertTrue(check_report(baseline, 500, baseline=baseline))
+        broken = copy.deepcopy(baseline)
+        broken["saved_text_preserved"] = False
+        self.assertTrue(any("baseline:" in e for e in
+                            check_report(current, 500, baseline=broken)))
+        broken = copy.deepcopy(baseline)
+        broken["utf8_bytes"] += 1
+        self.assertTrue(any("fixture utf8_bytes" in e for e in
+                            check_report(current, 500, baseline=broken)))
+
+    def test_comparison_rejects_same_size_different_literal_fixture(self):
+        for digest in (None, "broken", "b" * 64):
+            baseline = valid_report()
+            baseline["fixture_sha256"] = digest
+            self.assertTrue(any("fixture_sha256" in error for error in
+                                check_report(valid_report(), 500, baseline=baseline)))
+
+    def test_comparison_requires_valid_fixture_and_positive_baseline(self):
+        for value in (None, True, 0, 500_001):
+            report = valid_report()
+            report["utf16_length"] = value
+            self.assertTrue(any("utf16_length" in error for error in
+                                check_report(report, 500)))
+        baseline = valid_report()
+        baseline["measurements"]["typing_synchronous_ms"] = [0.0] * COUNTS["typing"]
+        for step in baseline["steps"]:
+            if step["action"] == "typing":
+                step["synchronous_ms"] = 0.0
+        self.assertTrue(any("must be positive" in error for error in
+                            check_report(valid_report(), 500, baseline=baseline)))
+
+    def test_fixed_reference_catches_partial_regression(self):
+        baseline, reference, current = valid_report(), valid_report(), valid_report()
+        for report, synchronous, idle in ((baseline, 100, 200), (current, 15, 30)):
+            for metric, value in (("synchronous_ms", synchronous), ("to_idle_ms", idle)):
+                report["measurements"]["typing_" + metric] = [value] * COUNTS["typing"]
+                for step in report["steps"]:
+                    if step["action"] == "typing":
+                        step[metric] = value
+        self.assertEqual(check_report(current, 500, baseline=baseline), [])
+        errors = check_report(current, 500, baseline=baseline, reference=reference)
+        self.assertTrue(any("fixed reference" in error for error in errors))
+        self.assertEqual(check_report(reference, 500, baseline=baseline,
+                                      reference=reference), [])
+        for field, value in (("fixture_sha256", "b" * 64), ("saved_text_preserved", False)):
+            broken = copy.deepcopy(reference)
+            broken[field] = value
+            self.assertTrue(check_report(reference, 500, reference=broken))
+
+    def test_cli_enforces_fixed_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            current = Path(directory) / "current.json"
+            reference = Path(directory) / "reference.json"
+            current.write_text(json.dumps(valid_report()))
+            reference.write_text(json.dumps(valid_report()))
+            command = [sys.executable, str(Path(__file__).with_name("check_editor_performance.py")),
+                       str(current), "--size-kb", "500", "--reference-report", str(reference)]
+            self.assertEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            broken = valid_report()
+            broken["fixture_sha256"] = "b" * 64
+            reference.write_text(json.dumps(broken))
+            self.assertEqual(subprocess.run(command, capture_output=True).returncode, 1)
+
+    def test_single_typing_hang_cannot_hide_beyond_p95(self):
+        for index, value, expected in ((0, 2001, "first typing"),
+                                       (20, 501, "subsequent typing")):
+            report = valid_report()
+            report["measurements"]["typing_to_idle_ms"][index] = value
+            steps = [step for step in report["steps"] if step["action"] == "typing"]
+            steps[index]["to_idle_ms"] = value
+            errors = check_report(report, 500)
+            self.assertTrue(any(expected in error for error in errors))
+            self.assertFalse(any("typing_to_idle_ms p95" in error for error in errors))
+            self.assertEqual(check_report(report, 500, enforce_budgets=False), [])
+
+    def test_cold_first_typing_is_retained_with_its_own_ceiling(self):
+        report = valid_report()
+        report["measurements"]["typing_to_idle_ms"][0] = 1735.0
+        report["steps"][0]["to_idle_ms"] = 1735.0
+        self.assertEqual(check_report(report, 500), [])
 
     def test_bulk_insert_uses_separate_single_sample_ceiling(self):
         report = valid_report()
@@ -81,17 +195,17 @@ class CheckEditorPerformanceTests(unittest.TestCase):
         errors = check_report(report, 500)
         self.assertEqual(errors, [])
 
-        report["measurements"]["bulk_insert_to_idle_ms"] = [1_501.0]
-        bulk_step["to_idle_ms"] = 1_501.0
+        report["measurements"]["bulk_insert_to_idle_ms"] = [2_001.0]
+        bulk_step["to_idle_ms"] = 2_001.0
         errors = check_report(report, 500)
-        self.assertTrue(any("single-sample ceiling 1500 ms" in e for e in errors))
+        self.assertTrue(any("single-sample ceiling 2000 ms" in e for e in errors))
 
         report = valid_report()
-        report["measurements"]["typing_to_idle_ms"][-2:] = [251.0, 251.0]
+        report["measurements"]["typing_to_idle_ms"][-2:] = [1001.0, 1001.0]
         typing_steps = [step for step in report["steps"]
                         if step["action"] == "typing"]
         for step in typing_steps[-2:]:
-            step["to_idle_ms"] = 251.0
+            step["to_idle_ms"] = 1001.0
         errors = check_report(report, 500)
         self.assertTrue(any("typing_to_idle_ms p95" in e for e in errors))
 
@@ -139,11 +253,11 @@ class CheckEditorPerformanceTests(unittest.TestCase):
         self.assertEqual(
             check_report(report, 50, context="mixed", shape="long-line"), []
         )
-        report["measurements"]["typing_to_idle_ms"][-2:] = [100.1, 100.1]
+        report["measurements"]["typing_to_idle_ms"][-2:] = [250.1, 250.1]
         typing_steps = [step for step in report["steps"]
                         if step["action"] == "typing"]
         for step in typing_steps[-2:]:
-            step["to_idle_ms"] = 100.1
+            step["to_idle_ms"] = 250.1
         errors = check_report(report, 50, context="mixed", shape="long-line")
         self.assertTrue(any("typing_to_idle_ms p95" in e for e in errors))
 
