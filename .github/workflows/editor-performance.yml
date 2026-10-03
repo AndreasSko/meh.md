@@ -14,7 +14,7 @@ concurrency:
 jobs:
   editor-performance:
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -22,22 +22,30 @@ jobs:
           fetch-depth: 0
       - name: Check report gate
         run: python3 -m unittest discover -s scripts -p 'test_check_editor_performance.py'
-      - name: Check known catalog regression on this runner
-        if: github.event_name == 'workflow_dispatch'
+      - name: Check baseline catalog and parser on this runner
         shell: bash
         run: |
           set -euo pipefail
-          baseline_root=$(mktemp -d "$RUNNER_TEMP/catalog-baseline.XXXXXX")
-          git archive 1378bf5e1b9fcaf0ff5e97435a320ef7d726ef42 | tar -x -C "$baseline_root"
+          baseline_root=$(mktemp -d "$RUNNER_TEMP/editor-baseline.XXXXXX")
+          git worktree add --detach "$baseline_root" 1378bf5e1b9fcaf0ff5e97435a320ef7d726ef42
+          printf 'EDITOR_PERFORMANCE_BASELINE_ROOT=%s\n' "$baseline_root" >> "$GITHUB_ENV"
           cp Tests/NoteCoreTests/NotebookCatalogPerformanceTests.swift \
             "$baseline_root/Tests/NoteCoreTests/NotebookCatalogPerformanceTests.swift"
+          cp Tests/NativeEditorTests/MarkdownFullParsePerformanceTests.swift \
+            "$baseline_root/Tests/NativeEditorTests/MarkdownFullParsePerformanceTests.swift"
+          mkdir -p "$baseline_root/Tools/EditorQuoteCheck" "$baseline_root/scripts"
+          cp -R Tools/EditorQuoteCheck/. "$baseline_root/Tools/EditorQuoteCheck/"
+          cp scripts/run_editor_performance_check.sh scripts/editor_performance_app_cache.py \
+            "$baseline_root/scripts/"
           (
             cd "$baseline_root"
             MEH_CATALOG_BENCHMARK=1 \
               MEH_CATALOG_BENCHMARK_REPORT="$RUNNER_TEMP/catalog-baseline.json" \
-              swift test -c release \
-                --filter 'NotebookCatalogPerformanceTests/testCatalogStartupAndRecentActivityBenchmark'
-          ) 2>&1 | tee "$RUNNER_TEMP/catalog-baseline.log"
+              MEH_FULL_PARSE_BENCHMARK=1 MEH_FULL_PARSE_LABEL=ci-baseline-release \
+              MEH_FULL_PARSE_REPORT="$RUNNER_TEMP/parser-baseline.json" \
+              swift test -c release --filter \
+                'NotebookCatalogPerformanceTests/testCatalogStartupAndRecentActivityBenchmark|MarkdownFullParsePerformanceTests/testOptInFullParseTiming'
+          ) 2>&1 | tee "$RUNNER_TEMP/catalog-parser-baseline.log"
           PYTHONPATH=scripts python3 - "$RUNNER_TEMP/catalog-baseline.json" <<'PY'
           import json
           import sys
@@ -62,9 +70,34 @@ jobs:
             swift test -c release --filter NotebookCatalogPerformanceTests \
             2>&1 | tee "$RUNNER_TEMP/catalog-performance.log"
           python3 scripts/check_catalog_performance.py "$RUNNER_TEMP/catalog-performance.json"
+      - name: Guard Unicode initial parsing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts -p 'test_check_parser_performance.py'
+          MEH_FULL_PARSE_BENCHMARK=1 MEH_FULL_PARSE_LABEL=ci-release \
+            MEH_FULL_PARSE_REPORT="$RUNNER_TEMP/parser-performance.json" \
+            swift test -c release --filter MarkdownFullParsePerformanceTests \
+            2>&1 | tee "$RUNNER_TEMP/parser-performance.log"
+          python3 scripts/check_parser_performance.py "$RUNNER_TEMP/parser-performance.json" \
+            --baseline-report "$RUNNER_TEMP/parser-baseline.json"
+      - name: Check compiled app cache
+        run: python3 -m unittest discover -s scripts -p 'test_editor_performance_app_cache.py'
       - name: Run native editor probes
         id: probe
         run: scripts/run_editor_performance_ci.sh
+      - name: Remove owned baseline worktree
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${EDITOR_PERFORMANCE_BASELINE_ROOT:-}" ]]; then
+            case "$EDITOR_PERFORMANCE_BASELINE_ROOT" in
+              "$RUNNER_TEMP"/editor-baseline.*)
+                git worktree remove --force "$EDITOR_PERFORMANCE_BASELINE_ROOT"
+                ;;
+              *) echo "Refusing unexpected baseline worktree path" >&2; exit 1 ;;
+            esac
+          fi
       - name: Preserve performance evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -75,6 +108,9 @@ jobs:
             ${{ runner.temp }}/catalog-performance.json
             ${{ runner.temp }}/catalog-performance.log
             ${{ runner.temp }}/catalog-baseline.json
-            ${{ runner.temp }}/catalog-baseline.log
+            ${{ runner.temp }}/catalog-parser-baseline.log
+            ${{ runner.temp }}/parser-baseline.json
+            ${{ runner.temp }}/parser-performance.json
+            ${{ runner.temp }}/parser-performance.log
           if-no-files-found: warn
           retention-days: 30

@@ -88,7 +88,7 @@ struct MarkdownSyntaxIncrementalResult: Equatable {
 
 enum MarkdownSyntax {
     static func parse(_ text: String, isDocumentStart: Bool = true) -> MarkdownSyntaxResult {
-        let source = text as NSString
+        let source = contiguousSource(text)
         let fences = fencedCodeRanges(in: source)
         let fenced = fences.ranges
         let inline = inlineCodeRanges(in: source, excluding: fenced)
@@ -192,8 +192,19 @@ enum MarkdownSyntax {
         return result
     }
 
+    private static func contiguousSource(_ text: String) -> NSString {
+        // Full parsing repeatedly indexes UTF-16 offsets. A Swift-bridged
+        // NSString can traverse Unicode storage for those accesses; copy the
+        // literal code units once into Foundation's contiguous representation.
+        let units = Array(text.utf16)
+        return units.withUnsafeBufferPointer { buffer in
+            guard let base = buffer.baseAddress else { return NSString(string: "") }
+            return NSString(characters: base, length: buffer.count)
+        }
+    }
+
     private static func inlineSpans(in text: String) -> [MarkdownStyleSpan] {
-        let source = text as NSString
+        let source = contiguousSource(text)
         let code = inlineCodeRanges(in: source, excluding: [])
         var spans = code.map { MarkdownStyleSpan(range: $0, role: .code) }
         appendLinkSpans(in: source, excluding: code, spans: &spans, allowFrontmatter: false)
@@ -1547,10 +1558,13 @@ enum MarkdownSyntax {
         at location: Int,
         in source: NSString
     ) -> Bool {
-        guard repeatedLength(of: marker, at: location, in: source) == 2 else {
-            return false
-        }
-        return location == 0 || source.character(at: location - 1) != marker
+        // Only an isolated run of two markers qualifies. Inspect its fixed
+        // boundaries instead of recounting every suffix of a long marker run.
+        guard location >= 0, location + 1 < source.length,
+              source.character(at: location) == marker,
+              source.character(at: location + 1) == marker else { return false }
+        return (location == 0 || source.character(at: location - 1) != marker)
+            && (location + 2 == source.length || source.character(at: location + 2) != marker)
     }
 
     private static func containingRange(

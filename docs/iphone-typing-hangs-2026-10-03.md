@@ -142,3 +142,16 @@ This reduces measured parser cost; full parsing remains synchronous and
 nonzero. The fixture does not reproduce the owner's note or prove that the
 618 ms physical opening stall is eliminated. Updated full-screen simulator
 checks and physical-device verification remain separate work.
+
+The pull-request workflow repeats the 50 KB and 500 KB Unicode benchmarks
+for the 0.10.6 source and candidate on the same Xcode runner. At
+both sizes, candidate median and p95 must improve by at least 20%. Absolute
+ceilings are 50 ms at 50 KB and 200 ms at 500 KB. Byte count, UTF-16 length,
+and parsed-syntax checksum must match. These CI comparisons measure the
+synthetic fixture, not the owner's note or physical-device opening latency.
+
+Catalog responsiveness has a separate pull-request control using the same
+main-queue heartbeat timer for the 0.10.6 baseline and candidate. The shared
+main-actor-gap ceiling is 120 ms. The baseline run must fail that heartbeat
+gate, while the candidate must pass. This distinguishes main-thread blocking
+from total local storage time.
