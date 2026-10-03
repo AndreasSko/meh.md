@@ -2,8 +2,199 @@ import XCTest
 
 #if os(iOS)
 import UIKit
+import Vision
 
 final class EditorKeyboardUITests: XCTestCase {
+    func testKeyboardViewportSurvivesBackgroundReturn() throws {
+        try assertKeyboardViewportSurvivesBackgroundReturn(scrollFromCaret: true)
+    }
+
+    func testTypingViewportSurvivesBackgroundReturn() throws {
+        try assertKeyboardViewportSurvivesBackgroundReturn(scrollFromCaret: false)
+    }
+
+    func testTypingViewportSurvivesShortHomeGesture() throws {
+        try assertKeyboardViewportSurvivesBackgroundReturn(
+            scrollFromCaret: false, shortHomeGesture: true
+        )
+    }
+
+    func testMiddleTypingViewportSurvivesBackgroundReturn() throws {
+        try assertKeyboardViewportSurvivesBackgroundReturn(
+            scrollFromCaret: false, middleTyping: true
+        )
+    }
+
+    private func assertKeyboardViewportSurvivesBackgroundReturn(
+        scrollFromCaret: Bool, shortHomeGesture: Bool = false,
+        middleTyping: Bool = false
+    ) throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        app.launch()
+        let newItem = app.buttons["notebook-new-item"]
+        XCTAssertTrue(newItem.waitForExistence(timeout: 15))
+        newItem.tap()
+        let menuNote = app.buttons["notebook-menu-new-note"]
+        if menuNote.waitForExistence(timeout: 1) { menuNote.tap() }
+        commitDefaultTitle(in: app)
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.tap()
+        let lineCount = middleTyping ? 120 : 45
+        let source = (1...lineCount).map { "Moon log \($0)" }
+            .joined(separator: "\n")
+        editor.typeText(source)
+        Thread.sleep(forTimeInterval: 1)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        if scrollFromCaret { capture(app, name: "Reading setup after typing") }
+        if middleTyping {
+            let start = origin.withOffset(CGVector(dx: 180, dy: 180))
+            let end = origin.withOffset(CGVector(
+                dx: 180, dy: app.frame.maxY - 90
+            ))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            let hidden = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"),
+                object: app.keyboards.firstMatch
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
+            for _ in 0..<5 {
+                if try findKeyboardAnchor(
+                    in: app, editor: editor, text: "Moon log 60"
+                ) != nil { break }
+                start.press(forDuration: 0.05, thenDragTo:
+                    origin.withOffset(CGVector(dx: 180, dy: 550)))
+            }
+            let caretLine = try visibleKeyboardAnchor(
+                in: app, editor: editor, text: "Moon log 60"
+            )
+            origin.withOffset(CGVector(
+                dx: 150, dy: editor.frame.minY + caretLine.y - 4
+            )).tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        }
+        if scrollFromCaret {
+            var visibleLine: (text: String, y: CGFloat)?
+            for line in 40...44 {
+                visibleLine = try findKeyboardAnchor(
+                    in: app, editor: editor, text: "Moon log \(line)"
+                )
+                if visibleLine != nil { break }
+            }
+            let caretLine = try XCTUnwrap(visibleLine)
+            origin.withOffset(CGVector(
+                dx: 150, dy: editor.frame.minY + caretLine.y
+            )).tap()
+            let start = origin.withOffset(CGVector(dx: 180, dy: 430))
+            let end = origin.withOffset(CGVector(dx: 180, dy: 180))
+            start.press(forDuration: 0.05, thenDragTo: end)
+        }
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        let anchorText = middleTyping ? "Moon log 60" : "Moon log 45"
+        // Bulk typing can leave the final line beside the formatting bar,
+        // outside the OCR helper's unobscured viewport. Prepare the fixture
+        // before interruption without changing the insertion point.
+        if !scrollFromCaret && !middleTyping {
+            for _ in 0..<3 {
+                if try findKeyboardAnchor(
+                    in: app, editor: editor, text: anchorText
+                ) != nil { break }
+                origin.withOffset(CGVector(dx: 180, dy: 400))
+                    .press(forDuration: 0.05, thenDragTo:
+                        origin.withOffset(CGVector(dx: 180, dy: 300)))
+                XCTAssertTrue(app.keyboards.firstMatch.exists)
+                Thread.sleep(forTimeInterval: 0.3)
+            }
+        }
+        capture(app, name: "Keyboard viewport before interruption")
+        let before = try visibleKeyboardAnchor(
+            in: app, editor: editor, text: anchorText
+        )
+        if shortHomeGesture {
+            let home = origin.withOffset(CGVector(
+                dx: app.frame.midX, dy: app.frame.maxY - 3
+            ))
+            let lifted = origin.withOffset(CGVector(
+                dx: app.frame.midX, dy: app.frame.maxY - 65
+            ))
+            home.press(forDuration: 0.1, thenDragTo: lifted,
+                       withVelocity: .slow, thenHoldForDuration: 0.5)
+            let springboard = XCUIApplication(
+                bundleIdentifier: "com.apple.springboard"
+            )
+            springboard.coordinate(withNormalizedOffset: CGVector(
+                dx: 0.5, dy: 0.5
+            )).tap()
+            app.activate()
+        } else {
+            XCUIDevice.shared.press(.home)
+            app.activate()
+        }
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1)
+        capture(app, name: "Keyboard viewport after returning")
+        let after = try visibleKeyboardAnchor(
+            in: app, editor: editor, text: anchorText
+        )
+        XCTAssertEqual(editor.value as? String, source)
+        editor.typeText(" resumed")
+        if scrollFromCaret || middleTyping {
+            XCTAssertTrue((editor.value as? String)?.contains(" resumed") == true)
+            XCTAssertTrue((editor.value as? String)?.hasSuffix(
+                "Moon log \(lineCount)"
+            ) == true)
+        } else {
+            XCTAssertEqual(editor.value as? String, source + " resumed")
+        }
+        XCTAssertEqual(after.text, before.text)
+        XCTAssertEqual(after.y, before.y, accuracy: 8)
+    }
+
+    private func visibleKeyboardAnchor(
+        in app: XCUIApplication, editor: XCUIElement,
+        text expectedText: String = "Moon log 45"
+    ) throws -> (text: String, y: CGFloat) {
+        try XCTUnwrap(findKeyboardAnchor(
+            in: app, editor: editor, text: expectedText
+        ))
+    }
+
+    private func findKeyboardAnchor(
+        in app: XCUIApplication, editor: XCUIElement, text expectedText: String
+    ) throws -> (text: String, y: CGFloat)? {
+        let image = try XCTUnwrap(app.screenshot().image.cgImage)
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["en-US"]
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        let frame = editor.frame
+        let screen = app.frame
+        let keyboardTop = app.keyboards.firstMatch.exists
+            ? app.keyboards.firstMatch.frame.minY : screen.maxY
+        let lines = (request.results ?? []).compactMap { observation
+            -> (text: String, y: CGFloat)? in
+            guard let text = observation.topCandidates(1).first?.string,
+                  text == expectedText else { return nil }
+            let box = observation.boundingBox
+            let center = CGPoint(
+                x: screen.minX + box.midX * screen.width,
+                y: screen.minY + (1 - box.midY) * screen.height
+            )
+            guard frame.contains(center), center.y > screen.minY + 130,
+                  center.y < keyboardTop - 50
+            else { return nil }
+            return (text, center.y - frame.minY)
+        }
+        return lines.first
+    }
+
     func testOrdinaryScrollRetainsKeyboardAndDragDismissesIt() throws {
         try XCTSkipUnless(
             UIDevice.current.userInterfaceIdiom == .phone,
@@ -12,6 +203,7 @@ final class EditorKeyboardUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launch()
         let newItem = app.buttons["notebook-new-item"]
@@ -300,6 +492,8 @@ final class EditorKeyboardUITests: XCTestCase {
     }
 
     private func commitDefaultTitle(in app: XCUIApplication) {
+        let menuNote = app.buttons["notebook-menu-new-note"]
+        if menuNote.exists { menuNote.tap() }
         let titleField = app.textFields["title-field"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         titleField.tap()

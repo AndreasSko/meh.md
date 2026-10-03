@@ -128,6 +128,44 @@ final class MarkdownEditorScrollPaddingTests: XCTestCase {
 #endif
 
 #if os(iOS)
+    func testFractionalViewportResizeKeepsDocumentPaddingAndReadingPosition()
+        throws {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        textView.frame = CGRect(x: 0, y: 0, width: 390, height: 400)
+        textView.font = .systemFont(ofSize: 17)
+        textView.text = (1...300).map { "Fictional observation \($0)." }
+            .joined(separator: "\n")
+        textView.setNeedsLayout()
+        textView.layoutIfNeeded()
+        let manager = try XCTUnwrap(textView.textLayoutManager)
+        let content = try XCTUnwrap(manager.textContentManager)
+        manager.ensureLayout(for: content.documentRange)
+        let anchor = try XCTUnwrap(textView.position(
+            from: textView.beginningOfDocument, offset: 1_500
+        ))
+        textView.setContentOffset(CGPoint(x: 0, y: 1_000), animated: false)
+        let offset = textView.contentOffset.y
+        let glyphY = textView.caretRect(for: anchor).minY - offset
+        let inset = textView.textContainerInset
+
+        for height: CGFloat in [401 + 1.0 / 3.0, 400] {
+            textView.frame.size.height = height
+            textView.setNeedsLayout()
+            textView.layoutIfNeeded()
+
+            XCTAssertEqual(textView.textContainerInset, inset)
+            XCTAssertEqual(textView.contentOffset.y, offset, accuracy: 0.5)
+            XCTAssertEqual(textView.caretRect(for: anchor).minY
+                - textView.contentOffset.y, glyphY, accuracy: 0.5)
+        }
+
+        textView.frame.size.height = 600
+        textView.setNeedsLayout()
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.textContainerInset.bottom, 318, accuracy: 0.5)
+        XCTAssertEqual(textView.textContainerInset.top, inset.top)
+    }
+
     func testKeyboardResizeKeepsPaddingOutOfCaretViewport() {
         let textView = MarkdownTextView(usingTextLayoutManager: true)
         textView.font = .systemFont(ofSize: 17)
