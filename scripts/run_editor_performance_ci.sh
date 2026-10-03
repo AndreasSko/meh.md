@@ -38,12 +38,14 @@ cleanup() {
 trap cleanup EXIT
 
 run_case() {
-  local label="$1" size="$2" mode="$3" context="$4"
+  local label="$1" size="$2" mode="$3" context="$4" shape="$5"
   local report="$evidence_root/${label}.json"
   local log="$evidence_root/${label}.log"
   printf 'Running %s: %s KB, %s, context=%s\n' "$label" "$size" "$mode" "$context"
   set +e
-  EDITOR_PERFORMANCE_CONTEXT="$context" \
+  EDITOR_PERFORMANCE_HOST=notebook \
+    EDITOR_PERFORMANCE_CONTEXT="$context" \
+    EDITOR_PERFORMANCE_SHAPE="$shape" \
     "$repo_root/scripts/run_editor_performance_check.sh" \
     "$sim_udid" working-tree "$mode" "$size" "$report" large-note \
     2>&1 | tee "$log"
@@ -55,8 +57,10 @@ run_case() {
   fi
   python3 "$repo_root/scripts/check_editor_performance.py" \
     "$report" --size-kb "$size" --mode "$mode" --context "$context" \
+    --host notebook --shape "$shape" \
     2>&1 | tee -a "$log"
 }
 
-run_case mixed-50kb 50 livePreview mixed
-run_case standard-500kb 500 livePreview standard
+run_case mixed-50kb 50 livePreview mixed standard
+run_case standard-500kb 500 livePreview standard standard
+run_case nearby-table-50kb 50 livePreview standard nearby-table

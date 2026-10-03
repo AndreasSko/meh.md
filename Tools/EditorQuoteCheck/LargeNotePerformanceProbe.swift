@@ -14,6 +14,8 @@ enum LargeNotePerformanceProbe {
     static func run(in window: UIWindow) async {
         let directory = URL.documentsDirectory
         var report: [String: Any] = [:]
+        var notebookHost: NotebookPerformanceHost.Context?
+        var storageDirectoryForCleanup: URL?
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let environment = ProcessInfo.processInfo.environment
@@ -23,35 +25,77 @@ enum LargeNotePerformanceProbe {
             ) ?? .livePreview
             try verifyMultilineBold()
             let context = environment["EDITOR_PERFORMANCE_CONTEXT"] ?? "standard"
+            let shape = environment["EDITOR_PERFORMANCE_SHAPE"] ?? "standard"
+            let host = environment["EDITOR_PERFORMANCE_HOST"] ?? "editor"
+            guard host == "editor" || host == "notebook" else {
+                throw ProbeError.failed("Unsupported performance host: \(host)")
+            }
             let prefix = context == "mixed"
                 ? "---\naliases: [Observatory]\n---\n\n<!-- Hidden [[Sky]]\nexample -->\n\nHorizon\n---\n\n"
                 : ""
-            let initial = prefix + fixture(minimumBytes: kilobytes * 1_000)
+            var initial = prefix + fixture(minimumBytes: kilobytes * 1_000)
+            let baseFixtureMidpoint = (initial as NSString).length / 2
+            switch shape {
+            case "standard":
+                break
+            case "long-line":
+                initial += "\n" + String(repeating: "x", count: 65_537)
+            case "nearby-table":
+                initial += "\n| Left | Right |\n| --- | --- |\n| Alpha | Beta |\nEOF"
+            default:
+                throw ProbeError.failed("Unsupported performance shape: \(shape)")
+            }
+            let initialSource = initial as NSString
+            let eofLine = initialSource.lineRange(for: NSRange(
+                location: max(0, initialSource.length - 1), length: 0
+            ))
             try initial.write(
                 to: directory.appending(path: "large-note-fixture.md"),
                 atomically: true, encoding: .utf8
             )
-            // A unique location on every run; never open the user's notebook.
-            let storageDirectory = directory.appending(path: UUID().uuidString)
-            defer { try? FileManager.default.removeItem(at: storageDirectory) }
-            let session = NoteSession(storage: NoteFileStorage(directory: storageDirectory))
-            await session.load()
-            try session.replaceAll(with: initial)
-            try await session.flush()
-
-            let navigation = MarkdownEditorNavigation()
-            let controller = UIHostingController(rootView: NotebookNoteEditor(
-                session: session, navigation: navigation, isInTrash: false,
-                hasUnrecordedEdit: .constant(false), mode: mode
-            ))
-            let openStart = CACurrentMediaTime()
-            window.rootViewController = controller
-            controller.view.layoutIfNeeded()
-            await nextIdle()
-            guard let editor = findEditor(in: controller.view) else {
-                throw ProbeError.failed("Native editor did not attach")
+            let session: NoteSession
+            let storageDirectory: URL
+            if host == "notebook" {
+                let attached = try await NotebookPerformanceHost.attach(
+                    initialText: initial, mode: mode, in: window
+                )
+                notebookHost = attached
+                session = attached.session
+                storageDirectory = attached.directory
+            } else {
+                // A unique location on every run; never open the user's notebook.
+                storageDirectory = directory.appending(path: UUID().uuidString)
+                let isolatedSession = NoteSession(
+                    storage: NoteFileStorage(directory: storageDirectory)
+                )
+                await isolatedSession.load()
+                try isolatedSession.replaceAll(with: initial)
+                try await isolatedSession.flush()
+                session = isolatedSession
             }
-            let openMS = milliseconds(since: openStart)
+            storageDirectoryForCleanup = storageDirectory
+
+            let editor: MarkdownTextView
+            let openMS: Double
+            if let notebookHost {
+                editor = notebookHost.editor
+                openMS = notebookHost.openToIdleMS
+            } else {
+                let navigation = MarkdownEditorNavigation()
+                let controller = UIHostingController(rootView: NotebookNoteEditor(
+                    session: session, navigation: navigation, isInTrash: false,
+                    hasUnrecordedEdit: .constant(false), mode: mode
+                ))
+                let openStart = CACurrentMediaTime()
+                window.rootViewController = controller
+                controller.view.layoutIfNeeded()
+                await nextIdle()
+                guard let attached = findEditor(in: controller.view) else {
+                    throw ProbeError.failed("Native editor did not attach")
+                }
+                editor = attached
+                openMS = milliseconds(since: openStart)
+            }
             guard editor.becomeFirstResponder() else {
                 throw ProbeError.failed("Native editor could not become first responder")
             }
@@ -131,7 +175,7 @@ enum LargeNotePerformanceProbe {
             // Exercise unmatched delimiters away from EOF, one key at a time.
             // The ordinary line belongs to a short paragraph in the fixture.
             let source = expected as NSString
-            let middle = source.length / 2
+            let middle = min(baseFixtureMidpoint, source.length)
             let target = source.range(of: "An ordinary paragraph", options: [],
                                       range: NSRange(location: middle, length: source.length - middle))
             guard target.location != NSNotFound else {
@@ -169,15 +213,25 @@ enum LargeNotePerformanceProbe {
             }
             guard session.status == .saved else { throw ProbeError.failed("Autosave timed out") }
             measurements["autosave_wait_including_debounce_ms"] = [milliseconds(since: saveStart)]
-            let reloaded = NoteSession(storage: NoteFileStorage(directory: storageDirectory))
-            await reloaded.load()
+            let reloaded: NoteSession
+            if let notebookHost {
+                reloaded = try await notebookHost.reloadForVerification()
+            } else {
+                reloaded = NoteSession(
+                    storage: NoteFileStorage(directory: storageDirectory)
+                )
+                await reloaded.load()
+            }
             guard reloaded.text.utf8.elementsEqual(expected.utf8), reloaded.status == .saved else {
                 throw ProbeError.failed("Saved text did not round-trip")
             }
             report = [
-                "scenario": "large-note", "mode": mode.rawValue, "context": context,
+                "scenario": "large-note", "mode": mode.rawValue,
+                "context": context, "shape": shape, "host": host,
                 "requested_kb": kilobytes, "utf8_bytes": initial.utf8.count,
-                "utf16_length": initial.utf16.count, "prior_edit_history": 0,
+                "utf16_length": initial.utf16.count,
+                "eof_line_utf16_length": eofLine.length,
+                "prior_edit_history": 0,
                 "system": UIDevice.current.systemVersion,
                 "device": environment["SIMULATOR_MODEL_IDENTIFIER"] ?? UIDevice.current.model,
                 "source_and_selection_preserved": true, "saved_text_preserved": true,
@@ -186,11 +240,17 @@ enum LargeNotePerformanceProbe {
                 "full_parses_during_edits": cache.parseCount - initialFullParses,
                 "incremental_parses_during_edits": cache.incrementalParseCount - initialIncrementalParses,
                 "measurements": measurements, "steps": steps,
-                "measurement_note": "Native edit call and next main-run-loop idle; Synchronous formatting is checked after the final edit. Main-actor delay includes correctness checks and styling. Not display latency. Autosave wait includes debounce. No CloudKit or notebook catalog."
+                "measurement_note": host == "notebook"
+                    ? "Native edit call and next main-run-loop idle. Includes the real NotebookView, NoteSession, local catalog, and edit callbacks; no CloudKit. Not physical-display latency. Autosave wait includes debounce."
+                    : "Native edit call and next main-run-loop idle; synchronous formatting is checked after the final edit. Main-actor delay includes correctness checks and styling. Not display latency. Autosave wait includes debounce. No CloudKit or notebook catalog."
             ]
         } catch {
             report = ["scenario": "large-note", "source_and_selection_preserved": false,
                       "error": String(describing: error)]
+        }
+        if let notebookHost { await notebookHost.finish() }
+        if let storageDirectoryForCleanup {
+            try? FileManager.default.removeItem(at: storageDirectoryForCleanup)
         }
         do {
             let data = try JSONSerialization.data(

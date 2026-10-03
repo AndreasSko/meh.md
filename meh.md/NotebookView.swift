@@ -3015,7 +3015,9 @@ struct NotebookView: View {
             if completion?.query != linkCompletion?.query { linkCompletionSelection = 0 }
             linkCompletion = completion
             navigation?.hasLinkCompletion = completion != nil
-            linkCompletionText = text
+            // Only an active completion needs a source snapshot. Publishing
+            // the whole note here otherwise redraws this scene on every key.
+            if completion != nil { linkCompletionText = text }
         }
     }
 
