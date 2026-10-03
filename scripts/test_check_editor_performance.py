@@ -79,6 +79,46 @@ class CheckEditorPerformanceTests(unittest.TestCase):
         errors = check_report(report, 500)
         self.assertTrue(any("deletion_to_idle_ms p95" in e for e in errors))
 
+    def test_mixed_50kb_typing_idle_budget_boundary(self):
+        for value, accepted in ((300.0, True), (301.0, False)):
+            with self.subTest(value=value):
+                report = valid_report(50, "mixed")
+                report["measurements"]["typing_to_idle_ms"][-2:] = [value] * 2
+                typing_steps = [step for step in report["steps"]
+                                if step["action"] == "typing"]
+                for step in typing_steps[-2:]:
+                    step["to_idle_ms"] = value
+                errors = check_report(report, 50, context="mixed")
+                self.assertEqual(errors, [] if accepted else [
+                    "typing_to_idle_ms p95 301.0 ms exceeds 300 ms"
+                ])
+
+    def test_mixed_typing_allowance_preserves_other_budgets(self):
+        cases = ((50, "standard", "standard", "typing", 251.0),
+                 (50, "mixed", "long-line", "typing", 251.0),
+                 (50, "mixed", "nearby-table", "typing", 501.0),
+                 (50, "mixed", "standard", "deletion", 251.0))
+        for size, context, shape, action, value in cases:
+            with self.subTest(context=context, shape=shape, action=action):
+                report = valid_report(size, context, shape)
+                metric = f"{action}_to_idle_ms"
+                report["measurements"][metric] = [value] * COUNTS[action]
+                for step in report["steps"]:
+                    if step["action"] == action:
+                        step["to_idle_ms"] = value
+                errors = check_report(report, size, context=context, shape=shape)
+                self.assertTrue(any(f"{metric} p95" in e for e in errors))
+
+    def test_mixed_50kb_keeps_individual_typing_ceiling(self):
+        report = valid_report(50, "mixed")
+        report["measurements"]["typing_to_idle_ms"][-1] = 501.0
+        typing_steps = [step for step in report["steps"]
+                        if step["action"] == "typing"]
+        typing_steps[-1]["to_idle_ms"] = 501.0
+        self.assertEqual(check_report(report, 50, context="mixed"), [
+            "subsequent typing sample exceeds 500 ms ceiling"
+        ])
+
     def test_500kb_sync_budget_catches_old_fastpath_regression(self):
         current = valid_report()
         baseline = copy.deepcopy(current)

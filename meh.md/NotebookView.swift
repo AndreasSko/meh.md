@@ -129,6 +129,9 @@ struct NotebookView: View {
     @State private var showingBacklinks = false
     @State private var backlinkDeparture: NotebookLinkNavigationHistory.Visit?
     @State private var linkInsertion: NotebookLinkInsertionRequest?
+    @State private var variableCompletionSelection = NSRange(location: 0, length: 0)
+    @State private var snippetSourceNoteIDs: Set<UUID> = []
+    @State private var variableCompletion: NotebookSnippetVariableCompletion?
     @State private var linkCompletion: NotebookLinkCompletion?
     @State private var linkCompletionText = ""
     @State private var linkCompletionSelection = 0
@@ -148,7 +151,7 @@ struct NotebookView: View {
     @State private var showingImport = false
     @State private var showingSettings = false
     @State private var showingTemplates = false
-    @State private var pendingTemplateNoteID: UUID?
+    @State private var pendingPresentedItemID: UUID?
     @State private var showingTrash = false
     @State private var showingTextSize = false
     @State private var historyBrowser: NoteHistoryBrowserState?
@@ -400,6 +403,23 @@ struct NotebookView: View {
                             mode: editorMode
                         )
                         }
+                        if let completion = variableCompletion, canCompleteSnippetVariable {
+                            let completionText = linkCompletionText
+                            let navigation = editorNavigation
+                            let caret = variableCompletionSelection
+                            NotebookSnippetVariableSuggestions(
+                                variables: completion.suggestions,
+                                selection: linkCompletionSelection,
+                                title: selectedPlacement
+                                    .map { NotebookNoteName.title(from: $0.displayName) } ?? "",
+                                select: { variable in
+                                    insertCompletedVariable(variable, completion: completion,
+                                        textSnapshot: completionText, sourceID: selectedID,
+                                        selection: caret, navigation: navigation)
+                                },
+                                dismiss: { dismissEditorCompletion() }
+                            )
+                        }
                         if let completion = linkCompletion, historyBrowser == nil {
                             let completionText = linkCompletionText
                             NotebookLinkSuggestions(
@@ -419,7 +439,7 @@ struct NotebookView: View {
                                     completionSnapshot: completion, textSnapshot: completionText,
                                     sourceID: selectedID) },
                                 dismiss: {
-                                    linkCompletion = nil
+                                    dismissEditorCompletion()
                                     editorNavigation.hasLinkCompletion = false
                                 }
                             )
@@ -688,8 +708,18 @@ struct NotebookView: View {
     }
     #endif
 
-    private var searchNavigation: some View {
+    private var snippetNavigation: some View {
         notebookNavigationContainer
+        .task(id: ObjectIdentifier(editorNavigation)) { configureSnippetNavigation() }
+        .onChange(of: replica.snippets, initial: true) { _, _ in updateSnippetMenu() }
+        .onChange(of: replica.snippetSources) { _, _ in updateSnippetMenu() }
+        .onChange(of: busy) { _, _ in updateSnippetMenu() }
+        .onChange(of: historyBrowser == nil) { _, _ in updateSnippetMenu() }
+        .onChange(of: session?.isEditingEnabled) { _, _ in updateSnippetMenu() }
+    }
+
+    private var searchNavigation: some View {
+        snippetNavigation
         .task(id: ObjectIdentifier(editorNavigation)) { configureLinkNavigation() }
         .focusedSceneValue(\.notebookSearch, search)
         .focusedSceneValue(\.notebookRecentCommands, recentCommands)
@@ -698,7 +728,8 @@ struct NotebookView: View {
         }
         .onChange(of: selectedID) { _, id in
             historyLoadTask?.cancel()
-            linkCompletion = nil
+            dismissEditorCompletion()
+            updateSnippetMenu()
             if historyBrowser != nil { closeHistory() }
             recentCommands.selectedNoteID = id
         }
@@ -779,7 +810,7 @@ struct NotebookView: View {
                 search.clear()
                 links.clear()
                 resetLinkJourney()
-                linkCompletion = nil
+                dismissEditorCompletion()
                 showingBacklinks = false
                 linkInsertion = nil
                 searchLandingPosition = nil
@@ -891,7 +922,7 @@ struct NotebookView: View {
             NotebookTemplatePicker(
                 replica: replica,
                 onCreate: createTemplateNote,
-                onOpenNote: openTemplateSource
+                onOpenNote: openReusableSource
             )
         }
         .sheet(isPresented: $showingSettings, onDismiss: finishTemplatePresentation) {
@@ -899,7 +930,7 @@ struct NotebookView: View {
                                  workspace: workspace ?? NotebookWorkspace.shared,
                                  onImport: importMarkdown,
                                  beforeExport: flushEditor,
-                                 onOpenNote: openTemplateSource)
+                                 onOpenNote: openReusableSource)
         }
         .sheet(item: $sharedImport, onDismiss: finishSharedImport) { request in
             NotebookSharedImportView(plan: request.plan, replica: replica) { parentID in
@@ -1366,6 +1397,15 @@ struct NotebookView: View {
             setTemplateSource(id, enabled: !replica.isTemplateSource(id))
         })
         menuActions.append(UIAction(
+            title: replica.isSnippetSource(id)
+                ? String(localized: "Stop Using as Snippet")
+                : String(localized: "Use as Snippet"),
+            image: UIImage(systemName: "text.badge.plus"),
+            attributes: busy ? .disabled : []
+        ) { _ in
+            setSnippetSource(id, enabled: !replica.isSnippetSource(id))
+        })
+        menuActions.append(UIAction(
             title: String(localized: "Move to Trash"),
             attributes: .destructive
         ) { _ in
@@ -1829,6 +1869,17 @@ struct NotebookView: View {
             }
             .disabled(busy)
             .accessibilityIdentifier("notebook-use-as-template-\(placement.item.id)")
+            let snippetRegistered = replica.isSnippetSource(placement.item.id)
+            let snippetTitle: LocalizedStringKey = placement.item.kind == .folder
+                ? (snippetRegistered ? "Stop Using as Snippet Folder" : "Use as Snippet Folder")
+                : (snippetRegistered ? "Stop Using as Snippet" : "Use as Snippet")
+            Button {
+                setSnippetSource(placement.item.id, enabled: !snippetRegistered)
+            } label: {
+                Label(snippetTitle, systemImage: "text.badge.plus")
+            }
+            .disabled(busy)
+            .accessibilityIdentifier("notebook-use-as-snippet-\(placement.item.id)")
         }
         Button("Move…") {
             beginMoving([placement.item.id], fromTrash: placement.isInTrash)
@@ -2018,6 +2069,58 @@ struct NotebookView: View {
         }
     }
 
+    private func setSnippetSource(_ id: UUID, enabled: Bool) {
+        perform {
+            try await replica.setSnippetSource(id, enabled: enabled)
+        }
+    }
+
+    private func updateSnippetMenu() {
+        snippetSourceNoteIDs = Set(replica.snippets.map(\.id))
+        editorNavigation.snippetMenu.update(replica.snippets, sources: replica.snippetSources)
+        if variableCompletion != nil && !canCompleteSnippetVariable { dismissEditorCompletion() }
+        editorNavigation.snippetMenu.isEnabled = !busy && historyBrowser == nil
+            && session?.isEditingEnabled == true
+    }
+
+    private func configureSnippetNavigation() {
+        let navigation = editorNavigation
+        updateSnippetMenu()
+        navigation.insertSnippet = { [weak navigation] id in
+            guard let navigation, navigation === editorNavigation,
+                  !busy, historyBrowser == nil, let targetID = selectedID,
+                  session?.isEditingEnabled == true else { return }
+            guard let insert = navigation.prepareSnippetInsertion?() else {
+                errorMessage = String(localized:
+                    "Place the cursor in the note before inserting a snippet. For a table cell, switch to Source mode.")
+                return
+            }
+            let title = selectedPlacement.map {
+                NotebookNoteName.title(from: $0.displayName)
+            } ?? ""
+            let date = Date()
+            Task { @MainActor in
+                do {
+                    let source = try await replica.snippetText(id)
+                    guard selectedID == targetID, navigation === editorNavigation,
+                          !busy, historyBrowser == nil,
+                          session?.isEditingEnabled == true else { return }
+                    let text = NotebookSnippetText.expand(
+                        text: source, title: title, date: date
+                    )
+                    guard insert(text) else {
+                        errorMessage = String(localized:
+                            "The note or cursor changed while the snippet was loading. Choose the snippet again.")
+                        return
+                    }
+                } catch {
+                    guard selectedID == targetID, navigation === editorNavigation else { return }
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
     private func setTemplateSource(_ id: UUID, enabled: Bool) {
         perform {
             try await flushEditor()
@@ -2032,7 +2135,7 @@ struct NotebookView: View {
         try await flushEditor()
         let id = try await replica.createNoteFromTemplate(sourceID)
         if showingTemplates {
-            pendingTemplateNoteID = id
+            pendingPresentedItemID = id
         } else {
             // A completed write must still open its note if presentation
             // ended while storage was saving; never leave a stale route.
@@ -2041,14 +2144,14 @@ struct NotebookView: View {
         }
     }
 
-    private func openTemplateSource(_ id: UUID) {
-        pendingTemplateNoteID = id
+    private func openReusableSource(_ id: UUID) {
+        pendingPresentedItemID = id
         showingSettings = false
         showingTemplates = false
     }
 
     private func finishTemplatePresentation() {
-        openPendingTemplateNote()
+        openPendingPresentedItem()
         #if os(iOS)
         awaitingQuickActionSheetDismissal = false
         handlePendingQuickAction()
@@ -2056,12 +2159,25 @@ struct NotebookView: View {
         presentSharedImport()
     }
 
-    private func openPendingTemplateNote() {
-        guard let id = pendingTemplateNoteID else { return }
-        pendingTemplateNoteID = nil
+    private func openPendingPresentedItem() {
+        guard let id = pendingPresentedItemID else { return }
+        pendingPresentedItemID = nil
         perform {
-            reveal(id)
-            try await selectNote(id)
+            guard let placement = replica.placements.first(where: {
+                $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+            }) else { throw NotebookReplicaError.noteUnavailable(id) }
+            if placement.item.kind == .folder {
+                try await flushEditor()
+                guard replica.placements.contains(where: {
+                    $0.item.id == id && $0.item.kind == .folder
+                        && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+                }) else { throw NotebookReplicaError.noteUnavailable(id) }
+                expandedIDs.insert(id)
+                showInFiles(id)
+            } else {
+                reveal(id)
+                try await selectNote(id)
+            }
         }
     }
 
@@ -3021,6 +3137,36 @@ struct NotebookView: View {
         }
     }
 
+    private var canCompleteSnippetVariable: Bool {
+        guard let selectedID, !busy, historyBrowser == nil,
+              session?.isEditingEnabled == true else { return false }
+        return snippetSourceNoteIDs.contains(selectedID)
+    }
+
+    private func dismissEditorCompletion() {
+        linkCompletion = nil
+        variableCompletion = nil
+        editorNavigation.hasLinkCompletion = false
+    }
+
+    private func insertCompletedVariable(_ variable: NotebookSnippetVariable,
+        completion: NotebookSnippetVariableCompletion, textSnapshot: String,
+        sourceID: UUID, selection: NSRange, navigation: MarkdownEditorNavigation) {
+        guard sourceID == selectedID, navigation === editorNavigation,
+              navigation.isValid, canCompleteSnippetVariable,
+              replica.snippets.contains(where: { $0.id == sourceID }),
+              session?.text == textSnapshot,
+              navigation.capturePosition?()?.selection == selection else { return }
+        let change = MarkdownEditingChange(range: completion.range,
+            replacement: variable.token,
+            selection: NSRange(location: completion.range.location + variable.token.utf16.count,
+                length: 0))
+        if navigation.insertLink?(change, textSnapshot) != true {
+            errorMessage = NotebookLinkUIError.changed.localizedDescription
+        }
+        dismissEditorCompletion()
+    }
+
     private var completionHeadingTarget: NotebookLinkNote? {
         guard let completion = linkCompletion, completion.query.contains("#"),
               let selectedID else { return nil }
@@ -3056,10 +3202,33 @@ struct NotebookView: View {
                 sourceID: selectedID, text: text,
                 range: existing?.range ?? range,
                 label: existing?.label ?? selectedText)
-            linkCompletion = nil
+            dismissEditorCompletion()
             navigation?.hasLinkCompletion = false
         }
         navigation.completionCommand = { [weak navigation] command in
+            if let completion = variableCompletion {
+                guard canCompleteSnippetVariable, navigation === editorNavigation else {
+                    dismissEditorCompletion()
+                    return false
+                }
+                switch command {
+                case "dismiss": dismissEditorCompletion()
+                case "accept":
+                    guard let selectedID, !completion.suggestions.isEmpty else { return false }
+                    insertCompletedVariable(
+                        completion.suggestions[min(linkCompletionSelection,
+                            completion.suggestions.count - 1)],
+                        completion: completion, textSnapshot: linkCompletionText,
+                        sourceID: selectedID, selection: variableCompletionSelection,
+                        navigation: editorNavigation)
+                case "next":
+                    linkCompletionSelection = min(max(0, completion.suggestions.count - 1),
+                        linkCompletionSelection + 1)
+                case "previous": linkCompletionSelection = max(0, linkCompletionSelection - 1)
+                default: return false
+                }
+                return true
+            }
             guard let completion = linkCompletion else { return false }
             let suggestions = links.suggestions(for: completion.query)
             let headings = completionHeadings
@@ -3067,7 +3236,7 @@ struct NotebookView: View {
             let count = isHeading ? headings.count : suggestions.count
             switch command {
             case "dismiss":
-                linkCompletion = nil
+                dismissEditorCompletion()
                 navigation?.hasLinkCompletion = false
             case "accept":
                 guard count > 0 else { return false }
@@ -3087,19 +3256,26 @@ struct NotebookView: View {
             return true
         }
         navigation.selectionChanged = { [weak navigation] text, range, editing in
-            guard navigation === editorNavigation, editing, !busy,
+            guard navigation === editorNavigation, editing, !busy, historyBrowser == nil,
+                  session?.isEditingEnabled == true,
                   text == session?.text, linkInsertion == nil else {
-                linkCompletion = nil
+                dismissEditorCompletion()
                 navigation?.hasLinkCompletion = false
                 return
             }
-            let completion = NotebookLinkCompletion.detect(in: text, selection: range)
+            let variable = canCompleteSnippetVariable
+                ? NotebookSnippetVariableCompletion.detect(in: text, selection: range) : nil
+            if variable?.query != variableCompletion?.query { linkCompletionSelection = 0 }
+            if variableCompletion != variable { variableCompletion = variable }
+            if variable != nil { variableCompletionSelection = range }
+            let completion = variable == nil
+                ? NotebookLinkCompletion.detect(in: text, selection: range) : nil
             if completion?.query != linkCompletion?.query { linkCompletionSelection = 0 }
             linkCompletion = completion
-            navigation?.hasLinkCompletion = completion != nil
+            navigation?.hasLinkCompletion = completion != nil || variable != nil
             // Only an active completion needs a source snapshot. Publishing
             // the whole note here otherwise redraws this scene on every key.
-            if completion != nil { linkCompletionText = text }
+            if completion != nil || variable != nil { linkCompletionText = text }
         }
     }
 
@@ -3139,7 +3315,7 @@ struct NotebookView: View {
     private func showBacklinks() {
         perform {
             try await flushEditor()
-            linkCompletion = nil
+            dismissEditorCompletion()
             editorNavigation.hasLinkCompletion = false
             // A presented sheet changes the underlying editor's viewport.
             // Back should return to the reading position before presentation.
@@ -3202,7 +3378,7 @@ struct NotebookView: View {
             linkRootRoute = linkRoutes.removeFirst()
         }
         #endif
-        linkCompletion = nil
+        dismissEditorCompletion()
         let incoming = editorNavigation
         incoming.hasExplicitVisitDestination = true
         incoming.whenAttached { [weak incoming] in
@@ -3357,7 +3533,7 @@ struct NotebookView: View {
         if editorNavigation.insertLink?(change, textSnapshot ?? linkCompletionText) != true {
             errorMessage = NotebookLinkUIError.changed.localizedDescription
         }
-        linkCompletion = nil
+        dismissEditorCompletion()
         editorNavigation.hasLinkCompletion = false
     }
 

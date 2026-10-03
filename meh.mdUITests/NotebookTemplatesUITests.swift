@@ -440,7 +440,7 @@ final class NotebookTemplatesUITests: XCTestCase {
     }
 
     private func closeTemplatesSettings(_ app: XCUIApplication) {
-        let templates = app.navigationBars["Templates"]
+        let templates = app.navigationBars["Templates & Snippets"]
         XCTAssertTrue(templates.waitForExistence(timeout: 5))
         templates.buttons.firstMatch.tap()
         let done = app.buttons["Done"]

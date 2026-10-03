@@ -284,3 +284,97 @@ private struct NotebookLinkSuggestionRow: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
+
+/// Variable tokens stay literal in the source and expand at snippet insertion.
+struct NotebookSnippetVariableSuggestions: View {
+    let variables: [NotebookSnippetVariable]
+    let selection: Int
+    let title: String
+    let select: (NotebookSnippetVariable) -> Void
+    let dismiss: () -> Void
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
+    @ScaledMetric(relativeTo: .body) private var rowHeight: CGFloat = 68
+
+    private var selectedVariable: NotebookSnippetVariable? {
+        variables.isEmpty ? nil : variables[min(max(0, selection), variables.count - 1)]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Snippet variable")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    .padding(.leading, 16)
+                Spacer(minLength: 0)
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss suggestions")
+            }
+            if variables.isEmpty {
+                Text("No matching variables").font(.callout)
+                    .foregroundStyle(.secondary).padding(16)
+            } else {
+                ScrollViewReader { scroll in
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(variables, id: \.rawValue) { variable in
+                                Button { select(variable) } label: {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        HStack {
+                                            Text(variable.token).font(.body.monospaced())
+                                            Spacer(minLength: 8)
+                                            Text(descriptor(variable)).font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Text(variable.value(title: title, date: Date(),
+                                            timeZone: timeZone, locale: locale))
+                                            .font(.caption).foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .foregroundStyle(.primary)
+                                    .padding(.horizontal, 12)
+                                    .frame(maxWidth: .infinity, minHeight: rowHeight,
+                                        alignment: .leading)
+                                    .background(selectedVariable == variable
+                                        ? Color.accentColor.opacity(0.12) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 12))
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain).padding(.horizontal, 6)
+                                .id(variable.rawValue)
+                                .accessibilityIdentifier("snippet-variable-\(variable.rawValue)")
+                                .accessibilityAddTraits(selectedVariable == variable
+                                    ? .isSelected : [])
+                            }
+                        }
+                    }
+                    .frame(height: rowHeight * CGFloat(min(3, variables.count)))
+                    .onChange(of: selectedVariable, initial: true) { _, variable in
+                        if let variable { scroll.scrollTo(variable.rawValue, anchor: .center) }
+                    }
+                }
+            }
+        }
+        .padding(.bottom, 6).frame(maxWidth: 480)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("note-snippet-variable-suggestions")
+    }
+
+    private func descriptor(_ variable: NotebookSnippetVariable) -> LocalizedStringKey {
+        switch variable {
+        case .date: "Date"
+        case .shortDate: "Date without year"
+        case .longDate: "Long date"
+        case .isoDate: "ISO date"
+        case .time: "Time"
+        case .title: "Note title"
+        }
+    }
+}

@@ -31,6 +31,17 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         let document: Document
     }
 
+    func testSnippetInsertionRejectsAnActiveRenderedCell() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let insert = try XCTUnwrap(owner.preparedSnippetInsertion())
+        try begin(owner.markdownCellController, owner: owner, row: 1, column: 0)
+        XCTAssertNil(owner.preparedSnippetInsertion())
+        XCTAssertFalse(insert("# Multiline\n\nSnippet"))
+        XCTAssertEqual(owner.string, source)
+    }
+
     func testCellReplacementCommitsOnceAndUsesNativeUndoRedo() throws {
         let mounted = try mount()
         defer { mounted.window.orderOut(nil) }

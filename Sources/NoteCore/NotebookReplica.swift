@@ -94,6 +94,9 @@ public final class NotebookReplica {
     public private(set) var templateSources: [NotebookTemplateSource] = []
     public private(set) var templates: [NotebookTemplate] = []
     private var storedTemplateSettings: [UUID: NotebookTemplateSettings] = [:]
+    public private(set) var snippetSources: [NotebookSnippetSource] = []
+    public private(set) var snippets: [NotebookSnippet] = []
+    @ObservationIgnored private var storedSnippetSourceIDs: Set<UUID> = []
     public private(set) var recentNotes: [NotebookRecentNote] = []
     /// All eligible recent notes, with pins first and no ordinary-note cap.
     public private(set) var allRecentNotes: [NotebookRecentNote] = []
@@ -271,6 +274,59 @@ public final class NotebookReplica {
             try next.setTemplateSource(id, enabled: enabled)
             try await self.persistCatalog(next)
         }
+    }
+
+    public func isSnippetSource(_ id: UUID) -> Bool {
+        snippetSources.contains { $0.id == id }
+    }
+
+    public func setSnippetSource(_ id: UUID, enabled: Bool) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.setSnippetSource(id, enabled: enabled)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    /// Read the latest source body without opening or flushing an editor.
+    public func snippetText(_ id: UUID) async throws -> String {
+        try Task.checkCancellation()
+        await waitForWrites()
+        let notebookID = catalogSnapshot?.notebookID
+        guard snippets.contains(where: { $0.id == id }) else {
+            throw NotebookSnippetError.sourceUnavailable
+        }
+        let text: String
+        if let session = sessions[id] {
+            if let load = sessionLoads[id] { await load.value }
+            guard session.isEditingEnabled else {
+                throw NotebookReplicaError.noteUnavailable(id)
+            }
+            text = session.text
+        } else {
+            guard case .current(let snapshot) = await noteStorage(id).load(),
+                  snapshot.noteID == id else {
+                throw NotebookReplicaError.noteUnavailable(id)
+            }
+            let decode = Task.detached(priority: .userInitiated) {
+                try Task.checkCancellation()
+                let document = try NoteDocument(snapshot: snapshot)
+                try Task.checkCancellation()
+                return try document.text
+            }
+            text = try await withTaskCancellationHandler {
+                try await decode.value
+            } onCancel: {
+                decode.cancel()
+            }
+        }
+        try Task.checkCancellation()
+        guard notebookID == catalogSnapshot?.notebookID,
+              snippets.contains(where: { $0.id == id }) else {
+            throw NotebookSnippetError.sourceUnavailable
+        }
+        return text
     }
 
     public func setTemplateSettings(_ settings: NotebookTemplateSettings, for id: UUID) async throws {
@@ -1667,6 +1723,11 @@ public final class NotebookReplica {
         templateSources = templateProjection.sources
         templates = templateProjection.templates
         storedTemplateSettings = templateMetadata.settings
+        let snippetMetadata = try document.snippetMetadata()
+        let snippetProjection = snippetMetadata.projection(nextPlacements)
+        snippetSources = snippetProjection.sources
+        snippets = snippetProjection.snippets
+        storedSnippetSourceIDs = snippetMetadata.sources
         defaultNewNoteParentID = try document.defaultNewNoteParentID()
         try updateRecentProjection(from: document, placements: nextPlacements)
         searchBodyGeneration &+= 1
@@ -1726,6 +1787,10 @@ public final class NotebookReplica {
         let projection = metadata.projection(placements)
         templateSources = projection.sources
         templates = projection.templates
+        let snippetsProjection = NotebookSnippetMetadata(
+            sources: storedSnippetSourceIDs).projection(placements)
+        snippetSources = snippetsProjection.sources
+        snippets = snippetsProjection.snippets
         searchBodyGeneration &+= 1
     }
 

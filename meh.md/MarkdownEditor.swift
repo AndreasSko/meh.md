@@ -23,6 +23,9 @@ final class MarkdownEditorNavigation {
     var captureHasEditingFocus: (() -> Bool)?
     var performCommand: ((MarkdownEditingCommand) -> Void)?
     var prepareCommand: ((MarkdownEditingCommand) -> (() -> Void)?)?
+    var prepareSnippetInsertion: (() -> ((String) -> Bool)?)?
+    let snippetMenu = EditorSnippetMenuState()
+    var insertSnippet: ((UUID) -> Void)?
     let tableCommands = MarkdownTableCommandState()
     let findPresentation = MarkdownEditorFindPresentation()
     var showFind: (() -> Void)?
@@ -49,7 +52,7 @@ final class MarkdownEditorNavigation {
     var hasExplicitVisitDestination = false
 
     private var isAttached = false
-    private var isValid = true
+    fileprivate(set) var isValid = true
     private var pendingAttachmentAction: (@MainActor @Sendable () -> Void)?
 
     func whenAttached(_ action: @escaping @MainActor @Sendable () -> Void) {
@@ -76,6 +79,49 @@ final class MarkdownEditorNavigation {
         DispatchQueue.main.async { [weak self] in
             guard self?.isValid == true else { return }
             action()
+        }
+    }
+}
+
+extension MarkdownTextView {
+    /// Capture before loading a snippet so an async result cannot edit a new
+    /// note or a selection the user has moved in the meantime.
+    func preparedSnippetInsertion() -> ((String) -> Bool)? {
+        #if os(macOS)
+        guard isEditable, !hasMarkedText(),
+              !markdownCellController.isActive else { return nil }
+        let source = string
+        let selection = selectedRange()
+        #else
+        guard isEditable, markedTextRange == nil,
+              !markdownState.isApplyingCommand,
+              !markdownCellController.isActive else { return nil }
+        let source = text ?? ""
+        let selection = selectedRange
+        #endif
+        let navigation = markdownLinkNavigation
+        let hadNavigation = navigation != nil
+        return { [weak self, weak navigation] snippet in
+            guard let self, (!hadNavigation || navigation != nil),
+                  self.markdownLinkNavigation === navigation,
+                  navigation?.isValid != false,
+                  !self.markdownCellController.isActive else { return false }
+            #if os(macOS)
+            guard self.string.utf8.elementsEqual(source.utf8),
+                  self.selectedRange() == selection else { return false }
+            #else
+            guard (self.text ?? "").utf8.elementsEqual(source.utf8),
+                  self.selectedRange == selection,
+                  !self.markdownState.isApplyingCommand else { return false }
+            #endif
+            let change = MarkdownEditingChange(
+                range: selection, replacement: snippet,
+                selection: NSRange(
+                    location: selection.location + snippet.utf16.count,
+                    length: 0
+                )
+            )
+            return self.insertNoteLink(change, expected: source)
         }
     }
 }
@@ -890,6 +936,9 @@ struct MarkdownEditor: NSViewRepresentable {
             refreshTableCommands(in: textView)
             parent.navigation?.prepareCommand = { [weak textView] command in
                 textView?.preparedMarkdownCommand(command)
+            }
+            parent.navigation?.prepareSnippetInsertion = { [weak textView] in
+                textView?.preparedSnippetInsertion()
             }
             let navigation = parent.navigation
             parent.navigation?.prepareToLeave = { [weak self, weak textView] in
@@ -2362,6 +2411,9 @@ struct MarkdownEditor: UIViewRepresentable {
             refreshTableCommands(in: textView)
             parent.navigation?.prepareCommand = { [weak textView] command in
                 textView?.preparedMarkdownCommand(command)
+            }
+            parent.navigation?.prepareSnippetInsertion = { [weak textView] in
+                textView?.preparedSnippetInsertion()
             }
             let navigation = parent.navigation
             parent.navigation?.prepareToLeave = { [weak self, weak textView] in
