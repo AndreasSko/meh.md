@@ -19,8 +19,49 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Check report gate
         run: python3 -m unittest discover -s scripts -p 'test_check_editor_performance.py'
+      - name: Check known catalog regression on this runner
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_root=$(mktemp -d "$RUNNER_TEMP/catalog-baseline.XXXXXX")
+          git archive 1378bf5e1b9fcaf0ff5e97435a320ef7d726ef42 | tar -x -C "$baseline_root"
+          cp Tests/NoteCoreTests/NotebookCatalogPerformanceTests.swift \
+            "$baseline_root/Tests/NoteCoreTests/NotebookCatalogPerformanceTests.swift"
+          (
+            cd "$baseline_root"
+            MEH_CATALOG_BENCHMARK=1 \
+              MEH_CATALOG_BENCHMARK_REPORT="$RUNNER_TEMP/catalog-baseline.json" \
+              swift test -c release \
+                --filter 'NotebookCatalogPerformanceTests/testCatalogStartupAndRecentActivityBenchmark'
+          ) 2>&1 | tee "$RUNNER_TEMP/catalog-baseline.log"
+          PYTHONPATH=scripts python3 - "$RUNNER_TEMP/catalog-baseline.json" <<'PY'
+          import json
+          import sys
+          from check_catalog_performance import HEARTBEAT_METRICS, check_report
+          with open(sys.argv[1], encoding="utf-8") as source:
+              errors = check_report(json.load(source))
+          heartbeat_failed = any(
+              error.startswith(metric + " ")
+              for error in errors for metric in HEARTBEAT_METRICS
+          )
+          if not heartbeat_failed or any("budget is" not in error for error in errors):
+              sys.exit(f"Baseline must fail a valid heartbeat budget: {errors}")
+          print("Known baseline rejected:", *errors, sep="\n")
+          PY
+      - name: Guard catalog responsiveness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts -p 'test_check_catalog_performance.py'
+          MEH_CATALOG_BENCHMARK=1 \
+            MEH_CATALOG_BENCHMARK_REPORT="$RUNNER_TEMP/catalog-performance.json" \
+            swift test -c release --filter NotebookCatalogPerformanceTests \
+            2>&1 | tee "$RUNNER_TEMP/catalog-performance.log"
+          python3 scripts/check_catalog_performance.py "$RUNNER_TEMP/catalog-performance.json"
       - name: Run native editor probes
         id: probe
         run: scripts/run_editor_performance_ci.sh
@@ -29,6 +70,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: editor-performance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.probe.outputs.evidence_root }}
+          path: |
+            ${{ steps.probe.outputs.evidence_root }}
+            ${{ runner.temp }}/catalog-performance.json
+            ${{ runner.temp }}/catalog-performance.log
+            ${{ runner.temp }}/catalog-baseline.json
+            ${{ runner.temp }}/catalog-baseline.log
           if-no-files-found: warn
           retention-days: 30

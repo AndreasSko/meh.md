@@ -204,11 +204,12 @@ public final class NotebookReplica {
                 throw NotebookReplicaError.catalogUnavailable
             }
         case .current(let snapshot):
-            let document = try NotebookCatalogDocument(snapshot: snapshot)
+            let document = try await Self.prepareCatalog(snapshot: snapshot)
+            guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
             rememberedDeletions = try deletionStorage.load(
                 notebookID: document.notebookID
             )
-            try install(snapshot)
+            try install(snapshot, using: document)
             let observed = Set(try document.items()
                 .filter(\.isPermanentlyDeleted).map(\.id))
             rememberedDeletions = try deletionStorage.record(
@@ -224,9 +225,18 @@ public final class NotebookReplica {
         case .recoveryRequired: throw NotebookReplicaError.catalogNeedsRecovery
         case .blocked: throw NotebookReplicaError.catalogUnavailable
         }
+        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
         hasPendingImport = importStorage.hasPendingImport
         loaded = true
         tryBestEffortDeletionCleanup()
+    }
+
+    /// Decode a fresh, immutable snapshot off the main actor. The `sending`
+    /// result transfers exclusive ownership back for main-actor projection.
+    @concurrent nonisolated private static func prepareCatalog(
+        snapshot: NotebookCatalogSnapshot
+    ) async throws -> sending NotebookCatalogDocument {
+        try NotebookCatalogDocument(snapshot: snapshot)
     }
 
     public var deletedIDs: Set<UUID> {

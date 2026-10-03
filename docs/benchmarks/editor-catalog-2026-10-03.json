@@ -1,0 +1,346 @@
+{
+  "captured_on": "2026-10-03",
+  "environment": {
+    "os": "macOS 27.0",
+    "architecture": "arm64",
+    "xcode": "27.0 (27A266a)",
+    "swift": "6.4",
+    "configuration": "Release"
+  },
+  "benchmark": {
+    "test": "NotebookCatalogPerformanceTests",
+    "opt_in": "MEH_CATALOG_BENCHMARK=1",
+    "measurement_note": "One replica sample and three direct samples per fixture.",
+    "heartbeat_period_ms": 10,
+    "fixtures": [
+      {
+        "item_count": 100,
+        "history_activity_count": 99,
+        "baseline_snapshot_bytes": 6999,
+        "candidate_snapshot_bytes": 6989,
+        "baseline_ms": {
+          "snapshot": [
+            0.42,
+            0.428,
+            0.418
+          ],
+          "validated_startup_projection": [
+            14.244,
+            14.096,
+            14.296
+          ],
+          "activity_fork_and_snapshot": [
+            13.23,
+            13.156,
+            13.348
+          ],
+          "replica_load": 40.987,
+          "replica_load_max_main_actor_gap": 29.9,
+          "replica_first_activity_write": 80.755,
+          "replica_first_activity_max_main_actor_gap": 24.768
+        },
+        "candidate_ms": {
+          "snapshot": [
+            0.44,
+            0.409,
+            0.4
+          ],
+          "validated_startup_projection": [
+            14.004,
+            13.832,
+            13.863
+          ],
+          "activity_fork_and_snapshot": [
+            1.447,
+            1.213,
+            1.192
+          ],
+          "replica_load": 27.406,
+          "replica_load_max_main_actor_gap": 12.596,
+          "replica_first_activity_write": 47.083,
+          "replica_first_activity_max_main_actor_gap": 12.568
+        }
+      },
+      {
+        "item_count": 500,
+        "history_activity_count": 499,
+        "baseline_snapshot_bytes": 34261,
+        "candidate_snapshot_bytes": 34283,
+        "baseline_ms": {
+          "snapshot": [
+            1.987,
+            1.989,
+            1.971
+          ],
+          "validated_startup_projection": [
+            80.78,
+            80.655,
+            80.548
+          ],
+          "activity_fork_and_snapshot": [
+            77.087,
+            77.167,
+            76.943
+          ],
+          "replica_load": 232.448,
+          "replica_load_max_main_actor_gap": 163.862,
+          "replica_first_activity_write": 469.357,
+          "replica_first_activity_max_main_actor_gap": 144.11
+        },
+        "candidate_ms": {
+          "snapshot": [
+            1.992,
+            2.055,
+            2.124
+          ],
+          "validated_startup_projection": [
+            82.248,
+            85.082,
+            87.29
+          ],
+          "activity_fork_and_snapshot": [
+            6.005,
+            6.068,
+            6.092
+          ],
+          "replica_load": 160.932,
+          "replica_load_max_main_actor_gap": 15.096,
+          "replica_first_activity_write": 275.046,
+          "replica_first_activity_max_main_actor_gap": 15.213
+        }
+      }
+    ]
+  },
+  "source_revision": "1378bf5e1b9fcaf0ff5e97435a320ef7d726ef42",
+  "candidate_note": "Same revision plus uncommitted catalog changes and benchmark test.",
+  "limitations": [
+    "Synthetic local catalogs; no CloudKit traffic or physical iPhone run.",
+    "Replica wall times are single samples and include durable local storage.",
+    "Heartbeat gaps estimate main-actor blocking; they are not display latency."
+  ],
+  "recent_cache_followup": {
+    "source": "working tree based on PR head 552b1b0, with recent-state cache added",
+    "reports": [
+      {
+        "history_activity_count": 99,
+        "item_count": 100,
+        "measurements_ms": {
+          "activity_fork_and_snapshot_ms": [
+            0.5080000264570117,
+            0.46716665383428335,
+            0.47608325257897377
+          ],
+          "replica_first_activity_max_main_actor_gap_ms": [
+            15.09512506891042
+          ],
+          "replica_first_activity_write_ms": [
+            45.310333371162415
+          ],
+          "replica_load_max_main_actor_gap_ms": [
+            12.589541729539633
+          ],
+          "replica_load_ms": [
+            26.000999961979687
+          ],
+          "snapshot_ms": [
+            0.4078749334439635,
+            0.3885834012180567,
+            0.37958333268761635
+          ],
+          "validated_startup_projection_ms": [
+            12.973708333447576,
+            12.665458372794092,
+            12.829541694372892
+          ]
+        },
+        "notebook_id": "11111111-1111-4111-8111-111111111111",
+        "snapshot_bytes": 6991
+      },
+      {
+        "history_activity_count": 499,
+        "item_count": 500,
+        "measurements_ms": {
+          "activity_fork_and_snapshot_ms": [
+            2.300416585057974,
+            2.2250832989811897,
+            2.2327916231006384
+          ],
+          "replica_first_activity_max_main_actor_gap_ms": [
+            15.089083346538246
+          ],
+          "replica_first_activity_write_ms": [
+            259.0779166202992
+          ],
+          "replica_load_max_main_actor_gap_ms": [
+            17.620416707359254
+          ],
+          "replica_load_ms": [
+            153.15504174213856
+          ],
+          "snapshot_ms": [
+            1.9607916474342346,
+            2.0488332957029343,
+            2.053791657090187
+          ],
+          "validated_startup_projection_ms": [
+            75.96466667018831,
+            75.9752499870956,
+            76.65141660254449
+          ]
+        },
+        "notebook_id": "11111111-1111-4111-8111-111111111111",
+        "snapshot_bytes": 34227
+      }
+    ],
+    "reason": "The initial PR CI exposed repeated recent register decoding during projection and sequence generation; the added cache keeps the 50 ms heartbeat budget."
+  },
+  "main_queue_heartbeat_followup": {
+    "method": "Serial local Release runs with a 10 ms DispatchSource timer on the main queue; avoids the cooperative-executor wakeup hop of Task.sleep. The same 50 ms gate rejects baseline and accepts candidate.",
+    "baseline_source": "1378bf5 production code; diagnostic XCTest harness only",
+    "candidate_source": "working tree based on 48f4d86; only benchmark heartbeat changed",
+    "baseline": [
+      {
+        "history_activity_count": 99,
+        "item_count": 100,
+        "measurements_ms": {
+          "activity_fork_and_snapshot_ms": [
+            12.654499965719879,
+            12.53441662993282,
+            13.533208286389709
+          ],
+          "replica_first_activity_max_main_actor_gap_ms": [
+            23.94183340948075
+          ],
+          "replica_first_activity_write_ms": [
+            78.76083336304873
+          ],
+          "replica_load_max_main_actor_gap_ms": [
+            26.937666698358953
+          ],
+          "replica_load_ms": [
+            39.52466673217714
+          ],
+          "snapshot_ms": [
+            0.4154583439230919,
+            0.39508333429694176,
+            0.37379167042672634
+          ],
+          "validated_startup_projection_ms": [
+            13.819374958984554,
+            13.507708325050771,
+            13.38479167316109
+          ]
+        },
+        "notebook_id": "11111111-1111-4111-8111-111111111111",
+        "snapshot_bytes": 6997
+      },
+      {
+        "history_activity_count": 499,
+        "item_count": 500,
+        "measurements_ms": {
+          "activity_fork_and_snapshot_ms": [
+            77.35970825888216,
+            76.69237500522286,
+            76.79249998182058
+          ],
+          "replica_first_activity_max_main_actor_gap_ms": [
+            143.04579165764153
+          ],
+          "replica_first_activity_write_ms": [
+            464.2032916890457
+          ],
+          "replica_load_max_main_actor_gap_ms": [
+            160.41050001513213
+          ],
+          "replica_load_ms": [
+            232.3013333370909
+          ],
+          "snapshot_ms": [
+            2.0440833177417517,
+            2.063416759483516,
+            2.0112083293497562
+          ],
+          "validated_startup_projection_ms": [
+            84.8300417419523,
+            81.06120827142149,
+            80.51604172214866
+          ]
+        },
+        "notebook_id": "11111111-1111-4111-8111-111111111111",
+        "snapshot_bytes": 34257
+      }
+    ],
+    "candidate": [
+      {
+        "history_activity_count": 99,
+        "item_count": 100,
+        "measurements_ms": {
+          "activity_fork_and_snapshot_ms": [
+            0.5527082830667496,
+            0.5032083718106151,
+            0.45712501741945744
+          ],
+          "replica_first_activity_max_main_actor_gap_ms": [
+            13.017625082284212
+          ],
+          "replica_first_activity_write_ms": [
+            44.42149994429201
+          ],
+          "replica_load_max_main_actor_gap_ms": [
+            12.540208408609033
+          ],
+          "replica_load_ms": [
+            24.283541715703905
+          ],
+          "snapshot_ms": [
+            0.36912492942065,
+            0.40820834692567587,
+            0.3904165932908654
+          ],
+          "validated_startup_projection_ms": [
+            12.97245838213712,
+            11.998874950222671,
+            12.123874970711768
+          ]
+        },
+        "notebook_id": "11111111-1111-4111-8111-111111111111",
+        "snapshot_bytes": 7008
+      },
+      {
+        "history_activity_count": 499,
+        "item_count": 500,
+        "measurements_ms": {
+          "activity_fork_and_snapshot_ms": [
+            2.2402084432542324,
+            2.1903750021010637,
+            2.2069583646953106
+          ],
+          "replica_first_activity_max_main_actor_gap_ms": [
+            13.445875025354326
+          ],
+          "replica_first_activity_write_ms": [
+            256.93820836022496
+          ],
+          "replica_load_max_main_actor_gap_ms": [
+            12.723874999210238
+          ],
+          "replica_load_ms": [
+            152.03395835123956
+          ],
+          "snapshot_ms": [
+            2.037125057540834,
+            2.0035000052303076,
+            2.0173750817775726
+          ],
+          "validated_startup_projection_ms": [
+            76.45904168020934,
+            74.98883339576423,
+            74.94408322963864
+          ]
+        },
+        "notebook_id": "11111111-1111-4111-8111-111111111111",
+        "snapshot_bytes": 34271
+      }
+    ]
+  }
+}
