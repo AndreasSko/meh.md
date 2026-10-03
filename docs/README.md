@@ -34,6 +34,8 @@ and the evidence collected along the way.
 - [Local search](notebook-search.md): matching, Quick Open, and native Find.
 - [Note templates](notebook-templates.md): reusable notes, recursive template
   folders, and destination and filename defaults.
+- [Markdown snippets](notebook-snippets.md): reusable text, folder categories,
+  and insertion-time variables.
 - [Navigation and preview](notebook-navigation-preview.md): app interaction
   and the isolated Debug workspace.
 - [Markdown import](notebook-import-contract.md): source-preserving import.
