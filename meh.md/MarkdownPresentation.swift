@@ -2238,6 +2238,7 @@ final class MarkdownSyntaxCache: NSObject {
     private var cachedGroupLefts: [GroupGeometryKey: CGFloat] = [:]
     private(set) var parseCount = 0
     private(set) var incrementalParseCount = 0
+    private(set) var fullTextComparisonCount = 0
     private struct CharacterEdit {
         let range: NSRange
         let delta: Int
@@ -2348,12 +2349,21 @@ final class MarkdownSyntaxCache: NSObject {
         return text
     }
 
+    /// The observed storage revision already identifies this prepared result.
+    /// Native consumers must not recheck an unrelated string's contents.
+    func preparedSyntax(in textStorage: NSTextStorage) -> MarkdownSyntaxResult {
+        _ = prepare(in: textStorage)
+        return cachedResult!
+    }
+
     // Arbitrary strings have no native revision identity. Keep exact equality
     // here, including for callers that reuse a cache with unrelated text.
     func result(for text: String) -> MarkdownSyntaxResult {
-        if let cachedText, cachedText.utf8.elementsEqual(text.utf8),
-           let cachedResult {
-            return cachedResult
+        if let cachedText {
+            fullTextComparisonCount += 1
+            if cachedText.utf8.elementsEqual(text.utf8), let cachedResult {
+                return cachedResult
+            }
         }
         // Only the observed storage path can apply its pending edit range.
         let result = MarkdownSyntax.parse(text)
