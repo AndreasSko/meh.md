@@ -22,6 +22,11 @@ FIDELITY = (
     "saved_text_preserved",
     "final_presentation_verified",
 )
+SHAPE_SUFFIX_BYTES = {
+    "standard": 0,
+    "long-line": 65_538,
+    "nearby-table": 52,
+}
 
 
 def percentile95(values: list[float]) -> float:
@@ -31,7 +36,8 @@ def percentile95(values: list[float]) -> float:
 
 def check_report(
     report: Any, size_kb: int, mode: str = "livePreview",
-    context: str | None = None,
+    context: str | None = None, host: str = "editor",
+    shape: str = "standard",
 ) -> list[str]:
     errors: list[str] = []
     if not isinstance(report, dict):
@@ -44,22 +50,41 @@ def check_report(
         errors.append("scenario must be large-note")
     if report.get("mode") != mode:
         errors.append(f"mode must be {mode}")
+    if report.get("host") != host:
+        errors.append(f"host must be {host}")
+    if shape not in SHAPE_SUFFIX_BYTES:
+        errors.append(f"unsupported expected shape: {shape}")
+    elif report.get("shape") != shape:
+        errors.append(f"shape must be {shape}")
     expected_context = context or ("mixed" if size_kb == 50 else "standard")
     if report.get("context") != expected_context:
         errors.append(f"context must be {expected_context}")
     if report.get("requested_kb") != size_kb:
         errors.append(f"requested_kb must be {size_kb}")
     fixture_bytes = report.get("utf8_bytes")
+    shape_suffix = SHAPE_SUFFIX_BYTES.get(shape, 0)
+    minimum_bytes = size_kb * 1_000 + shape_suffix
     if (not isinstance(fixture_bytes, int) or isinstance(fixture_bytes, bool)
-            or fixture_bytes < size_kb * 1_000
-            or fixture_bytes > size_kb * 1_000 + 500):
-        errors.append(f"utf8_bytes must be between {size_kb * 1000} and "
-                      f"{size_kb * 1000 + 500}")
+            or fixture_bytes < minimum_bytes
+            or fixture_bytes > minimum_bytes + 500):
+        errors.append(f"utf8_bytes must be between {minimum_bytes} and "
+                      f"{minimum_bytes + 500} for shape {shape}")
+    if shape == "long-line" and size_kb != 50:
+        errors.append("long-line shape is currently supported only at 50 KB")
     if (not isinstance(report.get("full_parses_during_edits"), int)
             or isinstance(report.get("full_parses_during_edits"), bool)):
         errors.append("full_parses_during_edits must be an integer")
-    elif report["full_parses_during_edits"] != 0:
+    elif report["full_parses_during_edits"] < 0:
+        errors.append("full_parses_during_edits must be nonnegative")
+    elif shape == "standard" and report["full_parses_during_edits"] != 0:
         errors.append("full parses occurred during measured edits")
+    source_utf16_length = report.get("utf16_length")
+    if shape != "standard" and (
+        not isinstance(source_utf16_length, int)
+        or isinstance(source_utf16_length, bool)
+        or source_utf16_length < 0
+    ):
+        errors.append("utf16_length must be a nonnegative integer for fallback shapes")
 
     measurements = report.get("measurements")
     if not isinstance(measurements, dict):
@@ -153,17 +178,42 @@ def check_report(
         step_full_parses = step.get("full_parses")
         if not isinstance(step_full_parses, int) or isinstance(step_full_parses, bool):
             errors.append(f"steps[{index}] full_parses must be an integer")
-        elif step_full_parses != 0:
+        elif step_full_parses < 0:
+            errors.append(f"steps[{index}] full_parses must be nonnegative")
+        elif shape == "standard" and step_full_parses != 0:
             errors.append(f"steps[{index}] full_parses must be zero")
         step_incremental_parses = step.get("incremental_parses")
         if (not isinstance(step_incremental_parses, int)
                 or isinstance(step_incremental_parses, bool)):
             errors.append(f"steps[{index}] incremental_parses must be an integer")
-        elif step_incremental_parses != 1:
+        elif step_incremental_parses < 0:
+            errors.append(f"steps[{index}] incremental_parses must be nonnegative")
+        elif shape == "standard" and step_incremental_parses != 1:
             errors.append(f"steps[{index}] incremental_parses must be one")
+        if (
+            shape != "standard"
+            and isinstance(step_full_parses, int)
+            and not isinstance(step_full_parses, bool)
+            and step_full_parses >= 0
+            and isinstance(step_incremental_parses, int)
+            and not isinstance(step_incremental_parses, bool)
+            and step_incremental_parses >= 0
+            and step_full_parses + step_incremental_parses != 1
+        ):
+            errors.append(
+                f"steps[{index}] must record exactly one full or incremental parse"
+            )
         length = step.get("formatted_utf16_length")
-        limit = 512 if kind == "bulk_insert" else 256
-        if not isinstance(length, int) or length < 0 or length > limit:
+        if shape == "long-line":
+            limit = 256
+        elif shape == "nearby-table":
+            limit = source_utf16_length + 128 if isinstance(
+                source_utf16_length, int
+            ) and not isinstance(source_utf16_length, bool) else 0
+        else:
+            limit = 512 if kind == "bulk_insert" else 256
+        if (not isinstance(length, int) or isinstance(length, bool)
+                or length < 0 or length > limit):
             errors.append(f"steps[{index}] formatted_utf16_length must be 0..{limit}")
         if step.get("presentation_current_at_idle") is not True:
             errors.append(f"steps[{index}] presentation must be current at idle")
@@ -206,18 +256,22 @@ def main() -> int:
     parser.add_argument("--size-kb", required=True, type=int)
     parser.add_argument("--mode", default="livePreview")
     parser.add_argument("--context", choices=("standard", "mixed"))
+    parser.add_argument("--host", choices=("editor", "notebook"), default="editor")
+    parser.add_argument("--shape", choices=tuple(SHAPE_SUFFIX_BYTES), default="standard")
     args = parser.parse_args()
     try:
         report = json.loads(args.report.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         print(f"Cannot read performance report: {error}", file=sys.stderr)
         return 2
-    errors = check_report(report, args.size_kb, args.mode, args.context)
+    errors = check_report(
+        report, args.size_kb, args.mode, args.context, args.host, args.shape
+    )
     if errors:
         for error in errors:
             print(f"FAIL: {error}", file=sys.stderr)
         return 1
-    print(f"PASS: {args.size_kb} KB report satisfies editor performance guard")
+    print(f"PASS: {args.size_kb} KB {args.shape} report satisfies guard")
     return 0
 
 

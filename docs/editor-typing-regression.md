@@ -108,3 +108,123 @@ whole 80,015-unit note instead of a bounded edit region.
 
 Physical iPhone and iPad typing, user note history, and live CloudKit traffic
 have not been validated by these results.
+
+
+## Follow-up: the real notebook screen
+
+The owner reported that version 0.10.6 still felt slow when typing at the end
+of an existing long note on a physical iPhone. The installed release was
+build 28, from main `1378bf5`, published by pipeline `37125466475`.
+
+PR #191 measured a fresh note hosted directly in `NotebookNoteEditor`. That
+included native editing, NoteSession, Automerge, and local saving, but omitted
+`NotebookView`, its local catalog, and its real edit and selection callbacks.
+The earlier benchmark's explicit notebook/catalog limitation matters: it did
+not establish typing performance on the complete app screen.
+
+The follow-up probe hosts the real `NotebookView` with a disposable local
+notebook. It uses the same fictional note and serial optimized iPhone 18 Pro
+simulator runs on iOS 27, without CloudKit. The baseline uses the production
+sources shipped in 0.10.6; only the probe is changed to host the full screen.
+Both versions preserve literal text, caret position, final presentation, and
+saved text. These are fresh-note simulator timings, not a repeat of the
+owner's physical-device session or existing document history.
+
+| Full-screen source state | Size | Typing to idle median | Maximum |
+| --- | ---: | ---: | ---: |
+| 0.10.6 baseline | 50 KB | 204.00 ms | 225.51 ms |
+| Combined candidate | 50 KB | 24.19 ms | 86.18 ms |
+| 0.10.6 baseline | 500 KB | 1,802.95 ms | 1,883.50 ms |
+| Combined candidate | 500 KB | 98.60 ms | 129.76 ms |
+| State assignment fix only | 500 KB | 125.51 ms | 417.65 ms |
+
+The baseline's synchronous typing call medians were only 6.81 ms at 50 KB and
+48.05 ms at 500 KB. Most of the measured delay therefore occurred after the
+native edit call returned. The four baseline/combined runs performed zero
+full parses and 38 incremental parses, so those checks alone did not expose
+the screen-level delay.
+
+One suspect was the selection callback assigning the entire note to
+`linkCompletionText` even when no link completion was shown. That observable
+state belongs to `NotebookView`; each assignment can invalidate the complete
+screen. The assignment entered in `dba14f74` on September 30, with the
+connected-notes work in PR #173. The candidate retains completion text only
+while completion is active. It also passes validated native insertions and
+deletions to NoteSession, avoiding whole-text CRDT updates and redundant
+CRDT text extraction when the editor revision still matches. Stale revisions
+retain the existing merge path.
+
+A separate optimized core benchmark measured the old whole-text commit plus
+CRDT text extraction at about 33 ms for a fresh 500 KB document and 36 ms
+after 400 prior typing/deletion operations. Snapshot serialization measured
+about 1.4 ms in that controlled fixture. This does not reproduce the owner's
+history, but it does not explain the baseline screen's roughly 1.8-second
+per-character delay. The new native delta path targets the remaining core
+work separately from screen invalidation.
+
+The state-only comparison retains the shipped core and editor paths and
+changes only the selection callback's conditional state assignment. Its
+500 KB median fell from 1,802.95 ms to 125.51 ms, establishing that this
+assignment caused the dominant delay in this fixture. The worst sample was
+still 417.65 ms. Adding native delta commits reduced the combined candidate's
+median further to 98.60 ms. These are individual serial runs; they support
+attribution in the tested setup, not stable worst-case or hardware guarantees.
+
+A mixed 50 KB candidate fixture with frontmatter, comments, and horizontal
+rules measured 25.53 ms median typing to idle and 81.76 ms maximum, with no
+full parses. Additional note shapes exposed remaining work: a nominal 50 KB
+fixture with a 65,537-unit trailing line is about 115 KB in total. The initial
+candidate measured 258.66 ms median and 266.05 ms maximum typing to idle on
+that shape, plus 302.11 ms for the single multiline insertion. It performed
+28 full parses because the existing 65,536-unit speculative parse limit was
+exceeded. A nearby-table fixture also retained 28 expected full parses,
+measuring 78.58 ms median and 121.96 ms maximum typing to idle.
+
+The long-line and nearby-table runs are exploratory shape evidence. The
+experiment that limited EOF attribute rebuilding and deferred viewport layout
+was reverted entirely. It did not establish a fix for the long-line delay.
+The existing parser limit and full-formatting fallback remain unchanged.
+
+The final scope follows the physical iPhone profile: retain completion text
+only while completion is active, commit validated native deltas when the
+editor revision matches, and return the prepared syntax cache directly for
+native toolbar queries. The toolbar accessor previously prepared the native
+storage and then compared the entire UTF-8 string again through `result(for:)`.
+The arbitrary-string accessor retains that exact comparison for callers
+without native storage identity. Earlier combined reports predate the direct
+prepared-cache accessor. The
+final narrowed candidate passes all three native report checkers:
+
+| Final fixture | Typing to idle median | Maximum |
+| --- | ---: | ---: |
+| Mixed 50 KB | 22.09 ms | 84.59 ms |
+| Standard 500 KB | 94.93 ms | 133.00 ms |
+| Nearby table 50 KB | 77.61 ms | 136.31 ms |
+
+The mixed 50 KB run compiled the optimized probe from the working tree based
+on `1378bf5`. The other two runs reused that installed binary through a
+temporary manual rerun harness, with production source unchanged. Their
+source identity is caller supplied; the probe does not embed a source hash.
+The mixed and standard reports each contain zero full parses and 38
+incremental parses. The nearby-table report retains 28 expected full parses
+and ten incremental parses. Full local validation passed: 964 Swift tests
+with nine expected skips,
+35 sync-tool Python tests, and 34 performance-gate Python tests. The iCloud
+Dev link-navigation UI test also passed. Exact-head PR CI and review remain
+pending; simulator checks do not establish physical-device improvement.
+
+The owner's [sanitized physical iPhone profile](
+iphone-typing-hangs-2026-10-03.md) independently identifies repeated completion
+state comparisons, toolbar string scans, and core commits. It also separates
+startup catalog decoding and first-activity catalog serialization from typing.
+The sampled viewport layout contribution was only 0.4% during the selected
+typing window, so the final fix does not change viewport rendering behavior.
+
+The [full-screen reports](
+benchmarks/editor-real-notebook-2026-10-03.json) retain the finished samples
+and source metadata. The baseline reports' original `measurement_note`
+predates full-screen instrumentation and incorrectly excludes the catalog;
+these reports have `host: notebook` and include the local notebook screen.
+The physical profile records baseline hangs, not a before/after device test.
+Candidate physical-device performance, long-lived document history, and live
+CloudKit remain separate verification work.
