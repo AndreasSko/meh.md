@@ -12,10 +12,13 @@ The development app no longer migrates or synchronizes the earlier single-note
 system. Ordinary notebook sync ignores and removes any legacy body embedded
 in an old bootstrap proposal. Existing notebook data remains intact.
 
-A first iCloud activation must be online to join the version 2 notebook.
-An existing notebook opens from local durable state before cloud discovery,
-even when CloudKit is unavailable. A failed join offers Retry without
-replacing a remote notebook with an empty one.
+Fresh and existing installations open from local durable state before cloud
+discovery, even when CloudKit is unavailable. A fresh sync notebook retains a
+receipt authorizing its first connection. An empty cloud accepts its history;
+an existing cloud receives its local items without changing note identities or
+bodies. Ordinary unrelated catalogs still fail explicitly. See
+[offline-first startup](offline-first-startup.md) for the handoff and recovery
+contract.
 
 Version 1 note records retain their original JSON and snapshot hashes.
 Version 2 records explicitly identify protocol, notebook, and document kind.

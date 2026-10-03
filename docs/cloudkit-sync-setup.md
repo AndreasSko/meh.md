@@ -52,10 +52,13 @@ let notebookTransport = try await CloudKitSyncTransport.makeNotebook(
 )
 ```
 
-The iCloud Dev scheme needs no launch variables. A fresh installation must be
-online to join the canonical version 2 notebook; setup failure offers a retry.
-An established activated notebook opens before account discovery completes and
-remains editable offline. The Local scheme uses its local notebook by default;
+The iCloud Dev scheme needs no launch variables. Fresh and existing notebooks
+open before account discovery and remain editable when iCloud is unavailable.
+The cloud warning explains that notes stay on the device. Account availability
+notifications and foreground activation retry first joining automatically;
+an existing cloud notebook retains its notes alongside the local ones. See
+[offline-first startup](offline-first-startup.md). The Local scheme uses its
+local notebook by default;
 its legacy Debug `MEH_SYNC_CLOUDKIT=1` override remains available for targeted
 tests. Use the isolated iCloud Dev scheme for manual cross-device testing.
 Use a TestFlight build of the regular scheme to verify the Production

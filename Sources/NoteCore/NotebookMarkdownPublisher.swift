@@ -162,6 +162,24 @@ public actor NotebookMarkdownPublisher {
         let data: Data?
     }
 
+    /// Called only with the replica's durable first-sync receipt. Recover and
+    /// validate owned generations before rebinding; unrelated destinations
+    /// and external files retain the ordinary refusal behavior.
+    func adoptFirstSyncNotebook(from sourceID: UUID, to destinationID: UUID) throws {
+        try prepareRoot()
+        guard fileManager.fileExists(atPath: manifestURL.path) else { return }
+        var manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: manifestURL))
+        guard manifest.version == 1 else { throw NotebookMarkdownPublisherError.destinationNotOwned }
+        guard manifest.notebookID != destinationID else { return }
+        guard manifest.notebookID == sourceID else {
+            throw NotebookMarkdownPublisherError.notebookIdentityMismatch
+        }
+        try recover(&manifest)
+        try validateManagedContent(manifest.current)
+        manifest.notebookID = destinationID
+        try save(manifest)
+    }
+
     private func makePlan(
         placements: [NotebookPlacement],
         notes: [NoteSnapshot]
@@ -635,7 +653,7 @@ public actor NotebookMarkdownPublisher {
 
 private struct Manifest: Codable {
     let version: Int
-    let notebookID: UUID
+    var notebookID: UUID
     var current: Generation?
     var pending: Generation?
     var cleanup: Cleanup?

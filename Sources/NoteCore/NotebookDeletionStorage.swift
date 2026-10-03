@@ -64,6 +64,21 @@ struct NotebookDeletionStorage {
         return ledger.ids
     }
 
+    func rebindForOfflineJoin(from sourceID: UUID, to destinationID: UUID,
+                              retaining ids: Set<UUID>) throws {
+        var combined = ids
+        if hasLedger {
+            let ledger = try JSONDecoder().decode(Ledger.self, from: Data(contentsOf: ledgerURL))
+            guard ledger.schemaVersion == 1,
+                  ledger.notebookID == sourceID || ledger.notebookID == destinationID else {
+                throw NotebookDeletionStorageError.notebookIdentityMismatch
+            }
+            combined.formUnion(ledger.ids)
+        }
+        let ledger = Ledger(schemaVersion: 1, notebookID: destinationID, ids: combined)
+        try SyncFileIO.replace(JSONEncoder().encode(ledger), at: ledgerURL)
+    }
+
     @discardableResult
     func record(_ ids: Set<UUID>, notebookID: UUID) throws -> Set<UUID> {
         let existing = try load(notebookID: notebookID)

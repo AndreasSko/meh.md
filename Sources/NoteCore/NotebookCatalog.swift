@@ -579,6 +579,53 @@ final class NotebookCatalogDocument {
         try document.merge(other: other.document)
     }
 
+    /// First connection copies metadata onto the canonical cloud history.
+    /// Note UUIDs and body documents stay intact. Independent catalog roots
+    /// are never merged or assigned a matching UUID to bypass validation.
+    func forkJoiningOfflineNotebook(_ local: NotebookCatalogDocument) throws
+        -> NotebookCatalogDocument
+    {
+        let localItems = try local.items()
+        let remoteIDs = Set(try items().map(\.id))
+        guard remoteIDs.isDisjoint(with: localItems.map(\.id)) else {
+            throw SyncError.identityConflict
+        }
+        let candidate = try fork()
+        for item in localItems {
+            let source = try local.object(for: item.id)
+            let destination = try candidate.document.putObject(
+                obj: candidate.itemsObject, key: item.id.uuidString, ty: .Map)
+            for key in local.document.keys(obj: source) {
+                guard case .Scalar(let value) = try local.document.get(obj: source, key: key)
+                else { throw NotebookCatalogError.invalidDocument }
+                try candidate.document.put(obj: destination, key: key, value: value)
+            }
+        }
+        // These optional registers describe individual items. Keep template
+        // settings, pins, former link locations and the local new-note choice.
+        for key in local.document.keys(obj: .ROOT) where
+            key.hasPrefix("template.") || key.hasPrefix("recent.")
+                || key.hasPrefix("linkLocation.") || key == "newNoteParent"
+        {
+            guard case .Scalar(let value) = try local.document.get(obj: .ROOT, key: key)
+            else { throw NotebookCatalogError.invalidDocument }
+            if key != "newNoteParent", let existing = try candidate.document.get(obj: .ROOT, key: key),
+               existing != .Scalar(value) { throw SyncError.identityConflict }
+            try candidate.document.put(obj: .ROOT, key: key, value: value)
+        }
+        // The root is shared with cloud notes. Append the offline roots in
+        // their existing order; ranks inside their folders are preserved.
+        let roots = try local.orderedChildren(parentID: nil, inTrash: false)
+            .filter { $0.item.parentID == nil }.map { $0.item.id }
+        let lower = try orderedChildren(parentID: nil, inTrash: false).last?.item.orderKey
+        let ranks = try NotebookOrderKeyFactory.distribute(itemIDs: roots, lower: lower, upper: nil)
+        for id in roots {
+            try candidate.writeOrder(ranks[id]!, parentID: nil, object: candidate.object(for: id))
+        }
+        _ = try NotebookCatalogDocument(snapshot: candidate.snapshot())
+        return candidate
+    }
+
     @discardableResult
     func add(id: UUID = UUID(), kind: NotebookItemKind, name: String, parentID: UUID? = nil) throws
         -> UUID

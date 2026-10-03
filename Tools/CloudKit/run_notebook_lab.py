@@ -144,7 +144,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("app", type=Path)
     parser.add_argument("evidence", type=Path)
-    parser.add_argument("--phase", choices=["account", "exchange", "publish", "receive", "edit", "verify"], required=True)
+    parser.add_argument("--phase", choices=["account", "exchange", "offline-join", "publish", "receive", "edit", "verify"], required=True)
     parser.add_argument("--allow-development-cloud", action="store_true")
     parser.add_argument("--run-id", type=uuid.UUID)
     parser.add_argument("--timeout", type=int, default=180)
