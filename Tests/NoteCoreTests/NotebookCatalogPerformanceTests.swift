@@ -9,24 +9,28 @@ final class NotebookCatalogPerformanceTests: XCTestCase {
 
     @MainActor
     private final class MainActorHeartbeat {
-        private var task: Task<Void, Never>?
+        private var timer: DispatchSourceTimer?
         private var previousBeat = ProcessInfo.processInfo.systemUptime
         private(set) var maximumGapMilliseconds = 0.0
 
         func start() {
             previousBeat = ProcessInfo.processInfo.systemUptime
-            task = Task { [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 10_000_000)
-                    guard !Task.isCancelled else { return }
-                    self?.recordBeat()
-                }
+            // Measure the UI queue itself. A sleeping Swift task first needs
+            // a cooperative-executor wakeup, which can lag during unrelated
+            // background decode work even when the main queue is available.
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + .milliseconds(10),
+                           repeating: .milliseconds(10), leeway: .milliseconds(1))
+            timer.setEventHandler { [weak self] in
+                MainActor.assumeIsolated { self?.recordBeat() }
             }
+            self.timer = timer
+            timer.resume()
         }
 
         func stop() {
-            task?.cancel()
-            task = nil
+            timer?.cancel()
+            timer = nil
             recordBeat()
         }
 
