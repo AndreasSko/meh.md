@@ -78,6 +78,7 @@ struct MarkdownSyntaxResult: Equatable {
     let restartOffsets: [Int]
     let canRestartAtEnd: Bool
     var tables: [MarkdownTable] = []
+    var linkContextRanges: [NSRange] = []
 }
 
 struct MarkdownSyntaxIncrementalResult: Equatable {
@@ -86,7 +87,7 @@ struct MarkdownSyntaxIncrementalResult: Equatable {
 }
 
 enum MarkdownSyntax {
-    static func parse(_ text: String) -> MarkdownSyntaxResult {
+    static func parse(_ text: String, isDocumentStart: Bool = true) -> MarkdownSyntaxResult {
         let source = text as NSString
         let fences = fencedCodeRanges(in: source)
         let fenced = fences.ranges
@@ -118,7 +119,8 @@ enum MarkdownSyntax {
             spans: &spans,
             paragraphRuns: &paragraphRuns
         )
-        appendLinkSpans(in: source, excluding: codeRanges, spans: &spans)
+        appendLinkSpans(in: source, excluding: codeRanges, spans: &spans,
+                        allowFrontmatter: isDocumentStart)
         let emphasis = appendEmphasisSpans(
             in: source,
             excluding: codeRanges,
@@ -166,8 +168,15 @@ enum MarkdownSyntax {
             }
             return left.range.location < right.range.location
         }
+        let linkContext = NotebookLinkParser.incrementalContext(
+            in: text, allowFrontmatter: isDocumentStart
+        )
         let canRestartAtEnd = emphasis.atEnd && !fences.hasOpenFence
-        var restartOffsets = emphasis.offsets
+            && !linkContext.hasOpenComment
+        var restartOffsets = emphasis.offsets.filter { offset in
+            !(linkContext.hasOpenComment && offset == source.length)
+                && !linkContext.ranges.contains { $0.location < offset && offset < NSMaxRange($0) }
+        }
         if canRestartAtEnd, restartOffsets.last != source.length {
             restartOffsets.append(source.length)
         }
@@ -179,6 +188,7 @@ enum MarkdownSyntax {
             canRestartAtEnd: canRestartAtEnd
         )
         result.tables = tables
+        result.linkContextRanges = linkContext.ranges
         return result
     }
 
@@ -186,7 +196,7 @@ enum MarkdownSyntax {
         let source = text as NSString
         let code = inlineCodeRanges(in: source, excluding: [])
         var spans = code.map { MarkdownStyleSpan(range: $0, role: .code) }
-        appendLinkSpans(in: source, excluding: code, spans: &spans)
+        appendLinkSpans(in: source, excluding: code, spans: &spans, allowFrontmatter: false)
         _ = appendEmphasisSpans(
             in: source, excluding: code, blockBoundaries: [], spans: &spans
         )
@@ -220,13 +230,6 @@ enum MarkdownSyntax {
         editedRange: NSRange,
         changeInLength: Int
     ) -> MarkdownSyntaxIncrementalResult? {
-        // Link exclusions can span comments and frontmatter. The existing
-        // restart map does not carry that context into substring parsing.
-        if text.contains("<!--") || previousText.contains("<!--")
-            || text.hasPrefix("---") || previousText.hasPrefix("---")
-            || text.contains("\n---") || previousText.contains("\n---") {
-            return nil
-        }
         let source = text as NSString
         let previousSource = previousText as NSString
         let previousEditedLength = editedRange.length - changeInLength
@@ -238,10 +241,31 @@ enum MarkdownSyntax {
               editedRange.location + previousEditedLength
                 <= previousSource.length else { return nil }
 
+        let beginsWithFrontmatter = source.substring(
+            with: source.lineRange(for: NSRange(location: 0, length: 0))
+        ).trimmingCharacters(in: .whitespacesAndNewlines) == "---"
         let previousEditedRange = NSRange(
             location: editedRange.location,
             length: previousEditedLength
         )
+        // An unchanged opening rule can become frontmatter when typing a
+        // closing delimiter later in the document. That changes earlier links
+        // too, so a local splice is not sufficient for this transition.
+        let firstLine = previousSource.lineRange(for: NSRange(location: 0, length: 0))
+        if previousSource.substring(with: firstLine)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "---",
+           previousResult.linkContextRanges.first?.location != 0 {
+            let changedLines = [source.substring(with: syntaxLineRange(
+                containing: editedRange, in: source)),
+                previousSource.substring(with: syntaxLineRange(
+                    containing: previousEditedRange, in: previousSource))]
+            if changedLines.contains(where: { lines in
+                lines.components(separatedBy: .newlines).contains {
+                    let value = $0.trimmingCharacters(in: .whitespaces)
+                    return value == "---" || value == "..."
+                }
+            }) { return nil }
+        }
         // A new table can form when an edit changes either of two neighboring
         // lines, so inspect the edit and one line on each side in both versions.
         if hasNearbyPipe(around: editedRange, in: source)
@@ -275,11 +299,18 @@ enum MarkdownSyntax {
             // A full parse remains the correctness fallback for those cases.
             guard newEnd - start <= 65_536 else { return nil }
             let region = NSRange(location: start, length: newEnd - start)
-            let local = parse(source.substring(with: region))
+            let local = parse(source.substring(with: region), isDocumentStart: start == 0)
             // A distant fence edit can expose a table within this region.
             // Tables are not spliced into incremental results yet.
             guard local.tables.isEmpty else { return nil }
-            if local.canRestartAtEnd || oldEnd == previousSource.length {
+            // A frontmatter opener is recognized only once its closing line
+            // is known. Do not commit a short prefix while a later closing
+            // line could still reinterpret it as metadata.
+            let unresolvedFrontmatter = start == 0
+                && beginsWithFrontmatter
+                && local.linkContextRanges.first?.location != 0
+            if (local.canRestartAtEnd && !unresolvedFrontmatter)
+                || oldEnd == previousSource.length {
                 replacement = (
                     NSRange(location: start, length: oldEnd - start),
                     region, local
@@ -356,6 +387,11 @@ enum MarkdownSyntax {
                     ? local.canRestartAtEnd : previousResult.canRestartAtEnd
             )
         result.tables = tables
+        result.linkContextRanges = previousResult.linkContextRanges.compactMap { range in
+            if NSIntersectionRange(range, previousLine).length > 0 { return nil }
+            return range.location >= NSMaxRange(previousLine) ? offset(range, by: delta) : range
+        } + local.linkContextRanges.map { offset($0, by: start) }
+        result.linkContextRanges.sort { $0.location < $1.location }
         return MarkdownSyntaxIncrementalResult(
             result: result,
             invalidatedRange: line
@@ -828,9 +864,11 @@ enum MarkdownSyntax {
     private static func appendLinkSpans(
         in source: NSString,
         excluding codeRanges: [NSRange],
-        spans: inout [MarkdownStyleSpan]
+        spans: inout [MarkdownStyleSpan],
+        allowFrontmatter: Bool = true
     ) {
-        for link in NotebookLinkParser.parse(source as String, includingIncomplete: true) where !link.isEmbed {
+        for link in NotebookLinkParser.parse(source as String, includingIncomplete: true,
+                                              allowFrontmatter: allowFrontmatter) where !link.isEmbed {
             guard !codeRanges.contains(where: {
                 NSLocationInRange(link.range.location, $0)
             }) else { continue }

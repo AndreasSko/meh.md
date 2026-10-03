@@ -10,6 +10,38 @@ import UIKit
 
 @MainActor
 final class MarkdownPresentationTests: XCTestCase {
+    func testTableMenuUsesIncrementalStoragePathBeforePresentation() {
+        let initial = String(repeating: "A **bright** star and a [map](sky.md).\n\n", count: 2_000)
+            + "End of sample."
+        for mode in [MarkdownEditorMode.source, .livePreview] {
+#if os(macOS)
+            let view = MarkdownTextView(usingTextLayoutManager: true)
+            view.string = initial
+            let storage = view.textStorage!
+#else
+            let view = MarkdownTextView(usingTextLayoutManager: true)
+            view.text = initial
+            let storage = view.textStorage
+#endif
+            MarkdownPresentation.configure(view, mode: mode)
+            let cache = view.markdownSyntaxCache
+            let fullParses = cache.parseCount
+            for character in " brightness" {
+                storage.replaceCharacters(in: NSRange(location: storage.length, length: 0),
+                                          with: String(character))
+                // This callback can beat the queued presentation refresh.
+                _ = view.availableTableCommands
+                _ = view.currentTableAlignment
+                MarkdownPresentation.refresh(view, mode: mode)
+                XCTAssertEqual(cache.parseCount, fullParses,
+                               "Toolbar queries must not discard the pending edit")
+                XCTAssertLessThan(cache.lastLayoutRange.length, 256)
+                XCTAssertEqual(cache.currentPresentation?.result, MarkdownSyntax.parse(storage.string))
+            }
+            XCTAssertEqual(cache.incrementalParseCount, 11)
+        }
+    }
+
     func testBatchedEditsReuseSyntaxAndMatchFullParse() throws {
         let initial = "# Heading\nOrdinary café 🪐 paragraph.\n**Later**"
         let batches: [[(String, String)]] = [

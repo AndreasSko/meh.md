@@ -5,6 +5,34 @@ import XCTest
 
 @MainActor
 final class MarkdownSyntaxIncrementalTests: XCTestCase {
+    func testTypingOutsideLinkExclusionsStaysBounded() throws {
+        for prefix in ["---\naliases: [Sky]\n---\n\n",
+                       "<!-- Hidden [[Sky]]\ncontinued -->\n\n",
+                       "Heading\n---\n\n", "Before\n\n---\n\n"] {
+            let previous = prefix + String(repeating: "Ordinary paragraph.\n\n", count: 5_000)
+                + "Last paragraph."
+            let update = try check(previous: previous, target: "Last paragraph",
+                                   replacement: "Last bright paragraph")
+            XCTAssertLessThan(update.invalidatedRange.length, 256)
+        }
+    }
+
+    func testLinkContextEditsMatchFullParse() throws {
+        for (previous, target, replacement) in [
+            ("Start\n<!-- hidden\n[[Sky]]\n-->\n[[Moon]]\nTail", "hidden", "visible"),
+            ("Start\n<!-- hidden\n[[Sky]]\n-->\n[[Moon]]\nTail", "-->", ""),
+            ("Start\n<!-- hidden\n[[Sky]]", "hidden", "bright"),
+            ("Start\nwords\n[[Sky]]\nTail", "words", "<!-- words"),
+            ("Start\n<!-- hidden\n[[Sky]]\nTail", "[[Sky]]", "--> [[Sky]]"),
+            ("---\naliases: [Sky]\n---\n[[Moon]]\nTail", "aliases", "names"),
+            ("---\naliases: [Sky]\n---\n[[Moon]]\nTail", "---\n[[Moon]]", "\n[[Moon]]"),
+            ("Before\n\n---\n[[Sky]]\n---\nTail", "[[Sky]]", "[[Moon]]"),
+            ("```\n<!-- example\n```\n[[Sky]]\nTail", "Tail", "Bright tail"),
+        ] {
+            _ = try check(previous: previous, target: target, replacement: replacement)
+        }
+    }
+
     func testTaskMarkersStayInLiteralMarkdown() {
         let text = "- [ ] Open\n1. [x] Done\n> + [X] Quoted\n"
             + "\\- [x] Escaped\n- \\[x] Escaped marker\n"

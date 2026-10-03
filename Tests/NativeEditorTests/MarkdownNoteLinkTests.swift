@@ -343,13 +343,15 @@ final class MarkdownNoteLinkTests: XCTestCase {
                 location: (guardedSource as NSString).length,
                 length: 1
             )
-            XCTAssertNil(MarkdownSyntax.incrementallyParse(
+            let incremental = try XCTUnwrap(MarkdownSyntax.incrementallyParse(
                 updated,
                 previousText: guardedSource,
                 previousResult: previous,
                 editedRange: edit,
                 changeInLength: 1
             ))
+            XCTAssertEqual(incremental.result, MarkdownSyntax.parse(updated))
+            XCTAssertLessThan(incremental.invalidatedRange.length, 256)
         }
     }
 

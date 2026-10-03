@@ -83,9 +83,12 @@ for name in "${files[@]}"; do
   fi
 done
 # Table support is absent in historical comparison revisions.
-for name in MarkdownTablePresentation MarkdownTableEditing MarkdownTableScrolling; do
+for name in MarkdownTablePresentation MarkdownTableEditing MarkdownTableScrolling \
+            MarkdownTableAccessibility MarkdownTableCellEditing MarkdownTableCellEditor; do
   if [[ "$revision" == working-tree ]]; then
-    cp "$repo_root/meh.md/$name.swift" "$check_root/sources/$name.swift"
+    if [[ -f "$repo_root/meh.md/$name.swift" ]]; then
+      cp "$repo_root/meh.md/$name.swift" "$check_root/sources/$name.swift"
+    fi
   elif git -C "$repo_root" cat-file -e "$revision:meh.md/$name.swift" 2>/dev/null; then
     git -C "$repo_root" show "$revision:meh.md/$name.swift" \
       > "$check_root/sources/$name.swift"
@@ -93,17 +96,20 @@ for name in MarkdownTablePresentation MarkdownTableEditing MarkdownTableScrollin
 done
 cp "$repo_root/Tools/EditorQuoteCheck/Info.plist" "$check_app/Info.plist"
 extra_arguments=("$repo_root/Tools/EditorQuoteCheck/EditorQuoteCheck.swift")
-if [[ "$scenario" == large-note ]]; then
+if [[ "$scenario" == large-note ]] || rg -q "import NoteCore" "$check_root/sources"; then
   sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
   target="$(uname -m)-apple-ios27.0-simulator"
   build_args=(--package-path "$repo_root" -c release --product NoteCore
               --triple "$target" --sdk "$sdk")
   swift build "${build_args[@]}"
   products="$(swift build "${build_args[@]}" --show-bin-path)"
-  extra_arguments+=(-D LARGE_NOTE_PERFORMANCE -I "$products"
+  extra_arguments+=(-I "$products"
     -I "$products/include" -L "$products" -luniffi_automerge
     "$products/NoteCore.o" "$products/Automerge.o"
-    "$products/AutomergeUniffi.o" "$products/AutomergeUtilities.o"
+    "$products/AutomergeUniffi.o" "$products/AutomergeUtilities.o")
+fi
+if [[ "$scenario" == large-note ]]; then
+  extra_arguments+=(-D LARGE_NOTE_PERFORMANCE
     "$repo_root/meh.md/NotebookNoteEditor.swift"
     "$repo_root/Tools/EditorQuoteCheck/LargeNotePerformanceProbe.swift")
 fi
@@ -122,6 +128,7 @@ xcrun simctl install "$device" "$check_app"
 container="$(xcrun simctl get_app_container "$device" "$bundle_id" data)"
 report="$container/Documents/performance.json"
 rm -f "$report"
+SIMCTL_CHILD_EDITOR_PERFORMANCE_CONTEXT="${EDITOR_PERFORMANCE_CONTEXT:-standard}" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_CHECK=1 \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_SCROLL_ROUNDS="${EDITOR_PERFORMANCE_SCROLL_ROUNDS:-1}" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_BLOCKS="$blocks" \

@@ -338,7 +338,9 @@ enum MarkdownLivePreview {
         for range: NSRange,
         in source: NSString
     ) -> [NSRange] {
-        if let link = NotebookLinkParser.parse(source.substring(with: range)).first,
+        if range.length >= 4, source.character(at: range.location) == 91,
+           source.character(at: range.location + 1) == 91,
+           let link = NotebookLinkParser.parse(source.substring(with: range)).first,
            link.kind == .wiki {
             let start = range.location
             let length = range.length
