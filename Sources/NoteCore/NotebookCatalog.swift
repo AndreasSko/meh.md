@@ -96,6 +96,14 @@ final class NotebookCatalogDocument {
         let activityOrder: UInt64?
         let activityActionID: UUID?
     }
+    private struct RecentCache {
+        var heads: Set<ChangeHash>
+        var states: [UUID: RecentState] = [:]
+        var maxPinSequence: UInt64 = 0
+        var maxActivitySequence: UInt64 = 0
+    }
+    private var recentCache: RecentCache?
+    private(set) var recentStatesDecodeCount = 0
     private let document: Document
     private let itemsObject: ObjId
     private typealias ItemEntry = (
@@ -161,6 +169,28 @@ final class NotebookCatalogDocument {
         _ = try legacyMigration()
         _ = try historicalLinkLocations()
         _ = try templateMetadata()
+    }
+
+    /// A fork owns a distinct Automerge document but initially has the same
+    /// validated content. Carry derived values only when their source heads
+    /// still match that content.
+    private init(forking document: Document, from source: NotebookCatalogDocument) {
+        self.document = document
+        itemsObject = source.itemsObject
+        notebookID = source.notebookID
+
+        let sourceHeads = Set(source.document.heads())
+        let forkHeads = Set(document.heads())
+        guard sourceHeads == forkHeads else { return }
+        if let cache = source.itemsCache, cache.heads == sourceHeads {
+            itemsCache = (heads: forkHeads, entries: cache.entries)
+        }
+        if let cache = source.recentCache, cache.heads == sourceHeads {
+            recentCache = cache
+        }
+        if let cache = source.linkLocationsCache, cache.heads == sourceHeads {
+            linkLocationsCache = (heads: forkHeads, locations: cache.locations)
+        }
     }
 
     /// Optional flat registers are readable by older catalogs and merge
@@ -367,11 +397,38 @@ final class NotebookCatalogDocument {
         return RecentAction(verb: String(parts[0]), sequence: sequence, id: id)
     }
 
-    func recentStates() throws -> [UUID: RecentState] {
-        let prefix = "recent."
-        let keys = document.keys(obj: .ROOT).filter { $0.hasPrefix(prefix) }
+    /// Decode every native conflict, including actions suppressed by clear or
+    /// unpin. Those actions still constrain the next sequence number.
+    private func updateRecentState(_ id: UUID, in cache: inout RecentCache) throws {
+        let pins = try recentActions(.pin, id)
+        let activities = try recentActions(.activity, id)
+        for action in pins {
+            cache.maxPinSequence = max(cache.maxPinSequence, action.sequence)
+        }
+        for action in activities {
+            cache.maxActivitySequence = max(cache.maxActivitySequence, action.sequence)
+        }
+        let winningPin = pins.contains { $0.verb == "unpin" } ? nil : pins.max {
+            ($0.sequence, $0.id.uuidString) < ($1.sequence, $1.id.uuidString)
+        }
+        let winningActivity = activities.contains { $0.verb == "clear" }
+            ? nil : activities.max {
+                ($0.sequence, $0.id.uuidString) < ($1.sequence, $1.id.uuidString)
+            }
+        cache.states[id] = RecentState(
+            pinned: winningPin != nil,
+            pinOrder: winningPin?.sequence,
+            pinActionID: winningPin?.id,
+            activityOrder: winningActivity?.sequence,
+            activityActionID: winningActivity?.id
+        )
+    }
+
+    private func decodedRecentCache() throws -> RecentCache {
+        let currentHeads = Set(document.heads())
+        if let recentCache, recentCache.heads == currentHeads { return recentCache }
         var ids: Set<UUID> = []
-        for key in keys {
+        for key in document.keys(obj: .ROOT) where key.hasPrefix("recent.") {
             let parts = key.split(separator: ".")
             guard parts.count == 3,
                 ["pin", "activity"].contains(parts[1]),
@@ -380,62 +437,59 @@ final class NotebookCatalogDocument {
             else { throw NotebookCatalogError.invalidDocument }
             ids.insert(id)
         }
-        var result: [UUID: RecentState] = [:]
-        for id in ids {
-            let pins = try recentActions(.pin, id)
-            let activities = try recentActions(.activity, id)
-            // A conflict exists only for concurrent writes. An observed later
-            // write replaces its predecessor in Automerge's register.
-            let winningPin = pins.contains { $0.verb == "unpin" } ? nil : pins.max {
-                ($0.sequence, $0.id.uuidString) < ($1.sequence, $1.id.uuidString)
-            }
-            let winningActivity = activities.contains { $0.verb == "clear" }
-                ? nil : activities.max {
-                    ($0.sequence, $0.id.uuidString) < ($1.sequence, $1.id.uuidString)
-                }
-            result[id] = RecentState(
-                pinned: winningPin != nil,
-                pinOrder: winningPin?.sequence,
-                pinActionID: winningPin?.id,
-                activityOrder: winningActivity?.sequence,
-                activityActionID: winningActivity?.id
-            )
-        }
-        return result
+        var cache = RecentCache(heads: currentHeads)
+        for id in ids { try updateRecentState(id, in: &cache) }
+        recentCache = cache
+        recentStatesDecodeCount += 1
+        return cache
+    }
+
+    func recentStates() throws -> [UUID: RecentState] {
+        try decodedRecentCache().states
     }
 
     private func nextRecentSequence(_ field: RecentField) throws -> UInt64 {
-        let prefix = "recent.\(field.rawValue)."
-        var highest: UInt64 = 0
-        for key in document.keys(obj: .ROOT) where key.hasPrefix(prefix) {
-            guard let id = UUID(uuidString: String(key.dropFirst(prefix.count))) else {
-                throw NotebookCatalogError.invalidDocument
-            }
-            for action in try recentActions(field, id) {
-                highest = max(highest, action.sequence)
-            }
-        }
+        let cache = try decodedRecentCache()
+        let highest = field == .pin ? cache.maxPinSequence : cache.maxActivitySequence
         guard highest < UInt64.max else { throw NotebookCatalogError.invalidDocument }
         return highest + 1
     }
 
+    /// Only known recent writes can advance this cache without a full scan.
+    /// Read back the touched native registers before trusting the new heads.
+    private func advanceRecentCache(
+        for ids: Set<UUID>, from previousHeads: Set<ChangeHash>
+    ) throws {
+        guard var cache = recentCache, cache.heads == previousHeads else { return }
+        for id in ids { try updateRecentState(id, in: &cache) }
+        cache.heads = Set(document.heads())
+        recentCache = cache
+    }
+
     func setPinnedInRecents(_ pinned: Bool, for id: UUID) throws {
+        let previousHeads = Set(document.heads())
         let action = RecentAction(
             verb: pinned ? "pin" : "unpin",
             sequence: try nextRecentSequence(.pin), id: UUID()
         )
         try document.put(obj: .ROOT, key: recentKey(.pin, id), value: .String(action.token))
+        try advanceRecentCache(for: [id], from: previousHeads)
+        advanceUnchangedMetadataCaches(from: previousHeads)
     }
 
     func recordRecentActivity(for id: UUID) throws {
+        let previousHeads = Set(document.heads())
         let action = RecentAction(
             verb: "edit", sequence: try nextRecentSequence(.activity), id: UUID()
         )
         try document.put(obj: .ROOT, key: recentKey(.activity, id), value: .String(action.token))
+        try advanceRecentCache(for: [id], from: previousHeads)
+        advanceUnchangedMetadataCaches(from: previousHeads)
     }
 
     func clearRecents(for ids: Set<UUID>) throws {
         guard !ids.isEmpty else { return }
+        let previousHeads = Set(document.heads())
         var pinSequence = try nextRecentSequence(.pin)
         var activitySequence = try nextRecentSequence(.activity)
         guard UInt64(ids.count - 1) <= UInt64.max - pinSequence,
@@ -454,6 +508,18 @@ final class NotebookCatalogDocument {
                 pinSequence += 1
                 activitySequence += 1
             }
+        }
+        try advanceRecentCache(for: ids, from: previousHeads)
+        advanceUnchangedMetadataCaches(from: previousHeads)
+    }
+
+    private func advanceUnchangedMetadataCaches(from previousHeads: Set<ChangeHash>) {
+        let currentHeads = Set(document.heads())
+        if let cache = itemsCache, cache.heads == previousHeads {
+            itemsCache = (heads: currentHeads, entries: cache.entries)
+        }
+        if let cache = linkLocationsCache, cache.heads == previousHeads {
+            linkLocationsCache = (heads: currentHeads, locations: cache.locations)
         }
     }
 
@@ -564,7 +630,7 @@ final class NotebookCatalogDocument {
     }
 
     func fork() throws -> NotebookCatalogDocument {
-        try NotebookCatalogDocument(validating: document.fork())
+        NotebookCatalogDocument(forking: document.fork(), from: self)
     }
 
     func merge(_ other: NotebookCatalogDocument) throws {
