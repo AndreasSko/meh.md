@@ -12,6 +12,8 @@ and the evidence collected along the way.
 - [Native editor decision](decisions/001-native-text-editor.md).
 - [Document boundary](decisions/002-document-persistence-boundary.md).
 - [Automerge save-state decision](decisions/003-automerge-save-state.md).
+- [One CloudKit record per document](decisions/004-one-cloudkit-record-per-document.md)
+  (proposed).
 
 ## Build and validate
 
