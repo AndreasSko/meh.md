@@ -169,8 +169,7 @@ extension MarkdownTextView {
 #if os(macOS)
         guard let textStorage else { return markdownSyntaxCache.result(for: commandSource) }
 #endif
-        let source = markdownSyntaxCache.prepare(in: textStorage)
-        return markdownSyntaxCache.result(for: source)
+        return markdownSyntaxCache.preparedSyntax(in: textStorage)
     }
 
     var availableTableCommands: Set<MarkdownEditingCommand> {
