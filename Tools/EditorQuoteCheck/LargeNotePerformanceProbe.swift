@@ -22,7 +22,11 @@ enum LargeNotePerformanceProbe {
                 rawValue: environment["EDITOR_PERFORMANCE_MODE"] ?? "livePreview"
             ) ?? .livePreview
             try verifyMultilineBold()
-            let initial = fixture(minimumBytes: kilobytes * 1_000)
+            let context = environment["EDITOR_PERFORMANCE_CONTEXT"] ?? "standard"
+            let prefix = context == "mixed"
+                ? "---\naliases: [Observatory]\n---\n\n<!-- Hidden [[Sky]]\nexample -->\n\nHorizon\n---\n\n"
+                : ""
+            let initial = prefix + fixture(minimumBytes: kilobytes * 1_000)
             try initial.write(
                 to: directory.appending(path: "large-note-fixture.md"),
                 atomically: true, encoding: .utf8
@@ -86,6 +90,7 @@ enum LargeNotePerformanceProbe {
                     : oldSelection
                 let fullParses = cache.parseCount
                 let incrementalParses = cache.incrementalParseCount
+                let savedHeads = session.persistedSnapshot?.heads
                 let signpost = OSSignpostID(log: log)
                 os_signpost(.begin, log: log, name: "Large note edit", signpostID: signpost)
                 let start = CACurrentMediaTime()
@@ -98,6 +103,7 @@ enum LargeNotePerformanceProbe {
                 measurements["\(kind)_to_idle_ms", default: []].append(idleMS)
                 steps.append(["action": kind, "synchronous_ms": synchronousMS,
                               "to_idle_ms": idleMS,
+                              "save_completed_during_edit": savedHeads != session.persistedSnapshot?.heads,
                               "presentation_current_at_idle": cache.currentPresentation != nil,
                               "full_parses": cache.parseCount - fullParses,
                               "incremental_parses": cache.incrementalParseCount - incrementalParses,
@@ -169,7 +175,7 @@ enum LargeNotePerformanceProbe {
                 throw ProbeError.failed("Saved text did not round-trip")
             }
             report = [
-                "scenario": "large-note", "mode": mode.rawValue,
+                "scenario": "large-note", "mode": mode.rawValue, "context": context,
                 "requested_kb": kilobytes, "utf8_bytes": initial.utf8.count,
                 "utf16_length": initial.utf16.count, "prior_edit_history": 0,
                 "system": UIDevice.current.systemVersion,

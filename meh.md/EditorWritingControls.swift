@@ -163,6 +163,16 @@ extension MarkdownTextView {
 #endif
     }
 
+    // Use the observed storage revision so menu refreshes cannot consume a
+    // pending character edit through the arbitrary-string/full-parse path.
+    private var preparedCommandSyntax: MarkdownSyntaxResult {
+#if os(macOS)
+        guard let textStorage else { return markdownSyntaxCache.result(for: commandSource) }
+#endif
+        let source = markdownSyntaxCache.prepare(in: textStorage)
+        return markdownSyntaxCache.result(for: source)
+    }
+
     var availableTableCommands: Set<MarkdownEditingCommand> {
 #if os(macOS)
         guard isEditable, !hasMarkedText(),
@@ -173,7 +183,7 @@ extension MarkdownTextView {
 #endif
         return MarkdownTableEditing.availableCommands(
             text: commandSource, selection: commandSelection,
-            syntax: markdownSyntaxCache.result(for: commandSource)
+            syntax: preparedCommandSyntax
         )
     }
 
@@ -185,7 +195,7 @@ extension MarkdownTextView {
 #endif
         return MarkdownTableEditing.currentAlignment(
             text: commandSource, selection: commandSelection,
-            syntax: markdownSyntaxCache.result(for: commandSource)
+            syntax: preparedCommandSyntax
         )
     }
 

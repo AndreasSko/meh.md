@@ -27,10 +27,11 @@ public struct NotebookLinkOccurrence: Sendable, Equatable {
 /// Incomplete occurrences are opt-in for paint-only typing styles; consumers
 /// resolving, indexing, or rewriting links must use the complete default.
 public enum NotebookLinkParser {
-    public static func parse(_ text: String, includingIncomplete: Bool = false) -> [NotebookLinkOccurrence] {
+    public static func parse(_ text: String, includingIncomplete: Bool = false,
+                             allowFrontmatter: Bool = true) -> [NotebookLinkOccurrence] {
         let source = text as NSString
         let units = Array(text.utf16)
-        let blocked = excludedUnits(text)
+        let blocked = excludedUnits(text, allowFrontmatter: allowFrontmatter)
         var result: [NotebookLinkOccurrence] = []
         var i = 0
         func escaped(_ offset: Int) -> Bool {
@@ -352,7 +353,29 @@ public enum NotebookLinkParser {
         return slug == destination.lowercased()
     }
 
-    private static func excludedUnits(_ text: String) -> [Bool] {
+    /// Neutral boundaries for incremental editor parsing. A substring must
+    /// never restart inside frontmatter or a multiline HTML comment.
+    public static func incrementalContext(
+        in text: String, allowFrontmatter: Bool = true
+    ) -> (ranges: [NSRange], hasOpenComment: Bool) {
+        var ranges: [NSRange] = []
+        var open = false
+        _ = excludedUnits(text, allowFrontmatter: allowFrontmatter,
+                          contextRanges: &ranges, hasOpenComment: &open)
+        return (ranges, open)
+    }
+
+    private static func excludedUnits(_ text: String, allowFrontmatter: Bool = true) -> [Bool] {
+        var ranges: [NSRange] = []
+        var open = false
+        return excludedUnits(text, allowFrontmatter: allowFrontmatter,
+                             contextRanges: &ranges, hasOpenComment: &open)
+    }
+
+    private static func excludedUnits(
+        _ text: String, allowFrontmatter: Bool,
+        contextRanges: inout [NSRange], hasOpenComment: inout Bool
+    ) -> [Bool] {
         let source = text as NSString
         let units = Array(text.utf16)
         var blocked = Array(repeating: false, count: units.count)
@@ -362,8 +385,12 @@ public enum NotebookLinkParser {
         var fence: (Character, Int)?
         var frontmatter = false
         var firstLine = true
+        var frontmatterEnd = 0
         let firstLineEnd = source.lineRange(for: NSRange(location: 0, length: 0)).length
-        let remainder = source.length > firstLineEnd ? source.substring(from: firstLineEnd) : ""
+        let startsFrontmatter = allowFrontmatter && source.substring(to: firstLineEnd)
+            .trimmingCharacters(in: .whitespacesAndNewlines) == "---"
+        let remainder = startsFrontmatter && source.length > firstLineEnd
+            ? source.substring(from: firstLineEnd) : ""
         let hasFrontmatterEnd = remainder.components(separatedBy: .newlines).contains {
             let line = $0.trimmingCharacters(in: .whitespaces)
             return line == "---" || line == "..."
@@ -371,11 +398,14 @@ public enum NotebookLinkParser {
         source.enumerateSubstrings(in: NSRange(location: 0, length: source.length), options: .byLines) { line, _, enclosing, _ in
             let value = line ?? ""
             let trimmed = value.trimmingCharacters(in: .whitespaces)
-            if firstLine && trimmed == "---" && hasFrontmatterEnd { frontmatter = true; mark(enclosing); firstLine = false; return }
+            if allowFrontmatter && firstLine && trimmed == "---" && hasFrontmatterEnd { frontmatter = true; mark(enclosing); firstLine = false; return }
             firstLine = false
             if frontmatter {
                 mark(enclosing)
-                if trimmed == "---" || trimmed == "..." { frontmatter = false }
+                if trimmed == "---" || trimmed == "..." {
+                    frontmatter = false
+                    frontmatterEnd = NSMaxRange(enclosing)
+                }
                 return
             }
             let indentation = value.prefix(while: { $0 == " " }).count
@@ -392,6 +422,9 @@ public enum NotebookLinkParser {
             }
             if indentation >= 4 || value.hasPrefix("\t") { mark(enclosing) }
         }
+        if frontmatterEnd > 0 {
+            contextRanges.append(NSRange(location: 0, length: frontmatterEnd))
+        }
         // Scan inline code and comments together: comment examples in code
         // cannot hide subsequent prose, and backticks in comments are literal.
         func escaped(_ offset: Int) -> Bool {
@@ -403,10 +436,14 @@ public enum NotebookLinkParser {
         var cursor = 0
         while cursor < units.count {
             guard !blocked[cursor], !escaped(cursor) else { cursor += 1; continue }
-            if cursor + 3 < units.count, Array(units[cursor...cursor + 3]) == [60, 33, 45, 45] {
+            if cursor + 3 < units.count, units[cursor] == 60,
+               units[cursor + 1] == 33, units[cursor + 2] == 45, units[cursor + 3] == 45 {
                 let end = source.range(of: "-->", range: NSRange(location: cursor + 4, length: source.length - cursor - 4))
                 let upper = end.location == NSNotFound ? source.length : NSMaxRange(end)
-                mark(NSRange(location: cursor, length: upper - cursor)); cursor = upper
+                let range = NSRange(location: cursor, length: upper - cursor)
+                contextRanges.append(range)
+                hasOpenComment = end.location == NSNotFound
+                mark(range); cursor = upper
                 continue
             }
             guard units[cursor] == 96 else { cursor += 1; continue }

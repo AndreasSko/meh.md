@@ -58,6 +58,8 @@ acceptance of later implementations.
 
 - [Editor investigation](editor-investigation.md): alternatives and spike
   tests.
+- [Large-note typing regression](editor-typing-regression.md): regression
+  evidence, root cause, and the CI guard contract.
 - [Automerge spike](automerge-spike.md): local persistence experiments.
 - [Milestone 1](milestone-1-plan.md) and
   [local note verification](local-note-verification.md): one durable note.
