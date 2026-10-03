@@ -1587,15 +1587,28 @@ public final class NotebookReplica {
         // can duplicate text when two devices rename/move offline.
         try next.recordLinkLocations(changedLocations)
         try linkLocationFaultInjector?(.beforeCatalogSave)
-        try await storage.save(next.snapshot())
-        try install(next.snapshot())
+        let snapshot = next.snapshot()
+        try await storage.save(snapshot)
+        guard !localEditsSuspended else { throw NotebookReplicaError.resetPending }
+        try install(snapshot, using: next)
         try linkLocationFaultInjector?(.catalogSaved)
     }
 
     private func install(_ snapshot: NotebookCatalogSnapshot) throws {
+        let document = try NotebookCatalogDocument(snapshot: snapshot)
+        try install(snapshot, using: document)
+    }
+
+    private func install(
+        _ snapshot: NotebookCatalogSnapshot,
+        using document: NotebookCatalogDocument
+    ) throws {
+        guard document.notebookID == snapshot.notebookID,
+            document.heads == snapshot.heads else {
+            throw NotebookCatalogError.identityMismatch
+        }
         // Any metadata change or recovery requires full acceptance again.
         acceptedCatalog = nil
-        let document = try NotebookCatalogDocument(snapshot: snapshot)
         let nextPlacements = try document.placements().filter {
             !rememberedDeletions.contains($0.item.id)
         }
