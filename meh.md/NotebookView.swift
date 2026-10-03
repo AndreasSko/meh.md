@@ -674,8 +674,17 @@ struct NotebookView: View {
     }
     #endif
 
-    private var searchNavigation: some View {
+    private var snippetNavigation: some View {
         notebookNavigationContainer
+        .task(id: ObjectIdentifier(editorNavigation)) { configureSnippetNavigation() }
+        .onChange(of: replica.snippets, initial: true) { _, _ in updateSnippetMenu() }
+        .onChange(of: busy) { _, _ in updateSnippetMenu() }
+        .onChange(of: historyBrowser == nil) { _, _ in updateSnippetMenu() }
+        .onChange(of: session?.isEditingEnabled) { _, _ in updateSnippetMenu() }
+    }
+
+    private var searchNavigation: some View {
+        snippetNavigation
         .task(id: ObjectIdentifier(editorNavigation)) { configureLinkNavigation() }
         .focusedSceneValue(\.notebookSearch, search)
         .focusedSceneValue(\.notebookRecentCommands, recentCommands)
@@ -1359,6 +1368,15 @@ struct NotebookView: View {
             setTemplateSource(id, enabled: !replica.isTemplateSource(id))
         })
         menuActions.append(UIAction(
+            title: replica.isSnippetSource(id)
+                ? String(localized: "Stop Using as Snippet")
+                : String(localized: "Use as Snippet"),
+            image: UIImage(systemName: "text.badge.plus"),
+            attributes: busy ? .disabled : []
+        ) { _ in
+            setSnippetSource(id, enabled: !replica.isSnippetSource(id))
+        })
+        menuActions.append(UIAction(
             title: String(localized: "Move to Trash"),
             attributes: .destructive
         ) { _ in
@@ -1788,6 +1806,17 @@ struct NotebookView: View {
             }
             .disabled(busy)
             .accessibilityIdentifier("notebook-use-as-template-\(placement.item.id)")
+            let snippetRegistered = replica.isSnippetSource(placement.item.id)
+            let snippetTitle: LocalizedStringKey = placement.item.kind == .folder
+                ? (snippetRegistered ? "Stop Using as Snippet Folder" : "Use as Snippet Folder")
+                : (snippetRegistered ? "Stop Using as Snippet" : "Use as Snippet")
+            Button {
+                setSnippetSource(placement.item.id, enabled: !snippetRegistered)
+            } label: {
+                Label(snippetTitle, systemImage: "text.badge.plus")
+            }
+            .disabled(busy)
+            .accessibilityIdentifier("notebook-use-as-snippet-\(placement.item.id)")
         }
         Button("Move…") {
             beginMoving([placement.item.id], fromTrash: placement.isInTrash)
@@ -1950,6 +1979,56 @@ struct NotebookView: View {
         perform {
             try await flushEditor()
             showingTemplates = true
+        }
+    }
+
+    private func setSnippetSource(_ id: UUID, enabled: Bool) {
+        perform {
+            try await replica.setSnippetSource(id, enabled: enabled)
+        }
+    }
+
+    private func updateSnippetMenu() {
+        editorNavigation.snippetMenu.update(replica.snippets)
+        editorNavigation.snippetMenu.isEnabled = !busy && historyBrowser == nil
+            && session?.isEditingEnabled == true
+    }
+
+    private func configureSnippetNavigation() {
+        let navigation = editorNavigation
+        updateSnippetMenu()
+        navigation.insertSnippet = { [weak navigation] id in
+            guard let navigation, navigation === editorNavigation,
+                  !busy, historyBrowser == nil, let targetID = selectedID,
+                  session?.isEditingEnabled == true else { return }
+            guard let insert = navigation.prepareSnippetInsertion?() else {
+                errorMessage = String(localized:
+                    "Place the cursor in the note before inserting a snippet. For a table cell, switch to Source mode.")
+                return
+            }
+            let title = selectedPlacement.map {
+                NotebookNoteName.title(from: $0.displayName)
+            } ?? ""
+            let date = Date()
+            Task { @MainActor in
+                do {
+                    let source = try await replica.snippetText(id)
+                    guard selectedID == targetID, navigation === editorNavigation,
+                          !busy, historyBrowser == nil,
+                          session?.isEditingEnabled == true else { return }
+                    let text = NotebookSnippetText.expand(
+                        text: source, title: title, date: date
+                    )
+                    guard insert(text) else {
+                        errorMessage = String(localized:
+                            "The note or cursor changed while the snippet was loading. Choose the snippet again.")
+                        return
+                    }
+                } catch {
+                    guard selectedID == targetID, navigation === editorNavigation else { return }
+                    errorMessage = error.localizedDescription
+                }
+            }
         }
     }
 

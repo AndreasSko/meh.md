@@ -1,5 +1,6 @@
 import SwiftUI
 import Observation
+import NoteCore
 
 #if os(iOS)
 import UIKit
@@ -20,6 +21,92 @@ struct EditorModeControl: View {
         }
         .disabled(!isEnabled)
         .accessibilityIdentifier("editor-mode")
+    }
+}
+
+/// Derived menu entries keep folder identities stable while names change.
+struct EditorSnippetMenuEntry: Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    var snippetID: UUID?
+    var children: [Self] = []
+
+    static func tree(_ snippets: [NotebookSnippet]) -> [Self] {
+        var entries: [Self] = []
+        for snippet in snippets {
+            insert(snippet, categories: ArraySlice(snippet.categories), into: &entries)
+        }
+        return entries
+    }
+
+    private static func insert(
+        _ snippet: NotebookSnippet,
+        categories: ArraySlice<NotebookSnippetCategory>, into entries: inout [Self]
+    ) {
+        guard let category = categories.first else {
+            let title = (snippet.name as NSString).deletingPathExtension
+            entries.append(Self(id: snippet.id, name: title, snippetID: snippet.id))
+            return
+        }
+        if !entries.contains(where: { $0.id == category.id }) {
+            entries.append(Self(id: category.id, name: category.name))
+        }
+        guard let index = entries.firstIndex(where: { $0.id == category.id }) else { return }
+        insert(snippet, categories: categories.dropFirst(), into: &entries[index].children)
+    }
+}
+
+@Observable
+@MainActor
+final class EditorSnippetMenuState {
+    private(set) var entries: [EditorSnippetMenuEntry] = []
+    var isEnabled = false
+
+    func update(_ snippets: [NotebookSnippet]) {
+        let next = EditorSnippetMenuEntry.tree(snippets)
+        if entries != next { entries = next }
+    }
+}
+
+private struct EditorSnippetMenu: View {
+    let navigation: MarkdownEditorNavigation
+
+    var body: some View {
+        Menu {
+            if navigation.snippetMenu.entries.isEmpty {
+                Text("No Snippets Yet")
+                Text("Use a note or folder as a snippet in Files.")
+            } else {
+                EditorSnippetMenuContent(
+                    entries: navigation.snippetMenu.entries,
+                    insert: { navigation.insertSnippet?($0) }
+                )
+            }
+        } label: {
+            Label("Insert Snippet", systemImage: "text.badge.plus")
+        }
+        .disabled(!navigation.snippetMenu.isEnabled)
+        .accessibilityIdentifier("editor-snippet-menu")
+    }
+}
+
+private struct EditorSnippetMenuContent: View {
+    let entries: [EditorSnippetMenuEntry]
+    let insert: (UUID) -> Void
+
+    var body: some View {
+        ForEach(entries) { entry in
+            if let id = entry.snippetID {
+                Button(entry.name) { insert(id) }
+                    .accessibilityIdentifier("editor-snippet-choice-" + id.uuidString)
+            } else {
+                Menu {
+                    EditorSnippetMenuContent(entries: entry.children, insert: insert)
+                } label: {
+                    Label(entry.name, systemImage: "folder")
+                }
+            }
+        }
     }
 }
 
@@ -62,6 +149,7 @@ struct EditorWritingControls: View {
             )
             Divider()
             EditorTableMenu(navigation: navigation)
+            EditorSnippetMenu(navigation: navigation)
             Divider()
 
             commandButton(
@@ -343,7 +431,7 @@ private struct KeyboardCommandDefinition: Identifiable {
     let id: String
     let title: LocalizedStringResource
     let image: String
-    let command: MarkdownEditingCommand
+    let command: MarkdownEditingCommand?
 
     static let all: [Self] = [
         .init(id: "bold", title: "Bold", image: "bold", command: .bold),
@@ -352,6 +440,8 @@ private struct KeyboardCommandDefinition: Identifiable {
               command: .taskList),
         .init(id: "insertTable", title: "Insert Table", image: "tablecells",
               command: .insertTable),
+        .init(id: "snippets", title: "Insert Snippet", image: "text.badge.plus",
+              command: nil),
         .init(id: "indent", title: "Indent", image: "increase.indent",
               command: .indent),
         .init(id: "outdent", title: "Outdent", image: "decrease.indent",
@@ -448,7 +538,9 @@ struct EditorKeyboardToolbar: View {
         KeyboardToolbarCollection(
             navigation: navigation,
             availableTableCommands: navigation.tableCommands.available,
-            currentAlignment: navigation.tableCommands.currentAlignment
+            currentAlignment: navigation.tableCommands.currentAlignment,
+            snippetEntries: navigation.snippetMenu.entries,
+            snippetsEnabled: navigation.snippetMenu.isEnabled
         ) { definition in
             guard let action = navigation.prepareCommand?(definition.command) else {
                 return
@@ -475,6 +567,8 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
     let navigation: MarkdownEditorNavigation
     let availableTableCommands: Set<MarkdownEditingCommand>
     let currentAlignment: MarkdownTableAlignment?
+    let snippetEntries: [EditorSnippetMenuEntry]
+    let snippetsEnabled: Bool
     let performTableCommand: (TableCommandDefinition) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -506,7 +600,8 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             navigation: navigation,
             availableTableCommands: availableTableCommands,
             currentAlignment: currentAlignment,
-            performTableCommand: performTableCommand
+            performTableCommand: performTableCommand,
+            snippetEntries: snippetEntries, snippetsEnabled: snippetsEnabled
         )
         return view
     }
@@ -516,7 +611,8 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             navigation: navigation,
             availableTableCommands: availableTableCommands,
             currentAlignment: currentAlignment,
-            performTableCommand: performTableCommand
+            performTableCommand: performTableCommand,
+            snippetEntries: snippetEntries, snippetsEnabled: snippetsEnabled
         )
     }
 
@@ -529,6 +625,8 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         private var performTableCommand: (TableCommandDefinition) -> Void
         private var availableTableCommands: Set<MarkdownEditingCommand> = []
         private var currentAlignment: MarkdownTableAlignment?
+        private var snippetEntries: [EditorSnippetMenuEntry] = []
+        private var snippetsEnabled = false
         private var commands: [KeyboardCommandDefinition]
         private var needsReloadAfterDrag = false
         private var dragItemFrames: [(index: Int, frame: CGRect)] = []
@@ -546,12 +644,17 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             navigation: MarkdownEditorNavigation,
             availableTableCommands: Set<MarkdownEditingCommand>,
             currentAlignment: MarkdownTableAlignment?,
-            performTableCommand: @escaping (TableCommandDefinition) -> Void
+            performTableCommand: @escaping (TableCommandDefinition) -> Void,
+            snippetEntries: [EditorSnippetMenuEntry], snippetsEnabled: Bool
         ) {
             self.navigation = navigation
             self.performTableCommand = performTableCommand
             let changed = self.availableTableCommands != availableTableCommands
                 || self.currentAlignment != currentAlignment
+                || self.snippetEntries != snippetEntries
+                || self.snippetsEnabled != snippetsEnabled
+            self.snippetEntries = snippetEntries
+            self.snippetsEnabled = snippetsEnabled
             self.availableTableCommands = availableTableCommands
             self.currentAlignment = currentAlignment
             guard changed else { return }
@@ -579,14 +682,18 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
                 image: definition.image,
                 title: String(localized: definition.title),
                 identifier: definition.command == .insertTable
-                    ? "editor-table-menu" : definition.command.accessibilityIdentifier,
+                    ? "editor-table-menu" : definition.command?.accessibilityIdentifier
+                    ?? "editor-snippet-menu",
                 color: .label,
                 selected: false,
-                enabled: definition.command != .insertTable
-                    || availableTableCommands.contains(.insertTable)
-                    || availableTableCommands.contains(.tableNextCell),
+                enabled: definition.id == "snippets" ? snippetsEnabled
+                    : (definition.command != .insertTable
+                        || availableTableCommands.contains(.insertTable)
+                        || availableTableCommands.contains(.tableNextCell)),
                 action: { [weak self] in
-                    self?.navigation.performCommand?(definition.command)
+                    if let command = definition.command {
+                        self?.navigation.performCommand?(command)
+                    }
                 },
                 moveLeft: { [weak self] in
                     self?.move(definition.id, by: -1) ?? false
@@ -599,6 +706,11 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
                availableTableCommands.contains(.tableNextCell) {
                 cell.configureTableMenu(makeTableMenu())
             }
+            if definition.id == "snippets" {
+                cell.configureMenu(makeSnippetMenu(), image: "text.badge.plus",
+                                   title: String(localized: "Insert Snippet"),
+                                   identifier: "editor-snippet-menu")
+            }
             return cell
         }
 
@@ -608,6 +720,29 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             sizeForItemAt indexPath: IndexPath
         ) -> CGSize {
             CGSize(width: 44, height: 44)
+        }
+
+        private func makeSnippetMenu() -> UIMenu {
+            guard !snippetEntries.isEmpty else {
+                return UIMenu(children: [
+                    UIAction(title: String(localized: "No Snippets Yet"),
+                             attributes: .disabled) { _ in },
+                    UIAction(title: String(localized: "Use as Snippet in Files"),
+                             attributes: .disabled) { _ in },
+                ])
+            }
+            return UIMenu(children: snippetEntries.map(makeSnippetEntry))
+        }
+
+        private func makeSnippetEntry(_ entry: EditorSnippetMenuEntry) -> UIMenuElement {
+            if let id = entry.snippetID {
+                return UIAction(
+                    title: entry.name,
+                    identifier: UIAction.Identifier("editor-snippet-choice-" + id.uuidString)
+                ) { [weak self] _ in self?.navigation.insertSnippet?(id) }
+            }
+            return UIMenu(title: entry.name, image: UIImage(systemName: "folder"),
+                          children: entry.children.map(makeSnippetEntry))
         }
 
         private func makeTableMenu() -> UIMenu {
@@ -862,9 +997,14 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
     }
 
     func configureTableMenu(_ menu: UIMenu) {
+        configureMenu(menu, image: "tablecells", title: String(localized: "Table"),
+                      identifier: "editor-table-menu")
+    }
+
+    func configureMenu(_ menu: UIMenu, image: String, title: String, identifier: String) {
         action = nil
         var configuration = UIButton.Configuration.plain()
-        configuration.image = UIImage(systemName: "tablecells")
+        configuration.image = UIImage(systemName: image)
         configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(
             pointSize: 18, weight: .regular
         )
@@ -874,8 +1014,8 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
         button.configuration = configuration
         button.menu = menu
         button.isContextMenuInteractionEnabled = false
-        button.accessibilityLabel = String(localized: "Table")
-        button.accessibilityIdentifier = "editor-table-menu"
+        button.accessibilityLabel = title
+        button.accessibilityIdentifier = identifier
     }
 
     @objc private func activate() {
