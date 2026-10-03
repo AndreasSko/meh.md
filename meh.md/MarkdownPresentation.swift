@@ -1,4 +1,5 @@
 import Foundation
+import NoteCore
 import ObjectiveC
 
 #if os(macOS)
@@ -2238,12 +2239,34 @@ final class MarkdownSyntaxCache: NSObject {
     private var cachedGroupLefts: [GroupGeometryKey: CGFloat] = [:]
     private(set) var parseCount = 0
     private(set) var incrementalParseCount = 0
+    private(set) var fullTextComparisonCount = 0
     private struct CharacterEdit {
         let range: NSRange
         let delta: Int
     }
     var isApplyingLayoutAttributes = false
     private var characterEdit: CharacterEdit?
+    // Toolbar and presentation preparation may consume characterEdit before
+    // the model commit. Native edit intent survives until acknowledgement.
+    private var nativeCharacterEdit: CharacterEdit?
+
+    func nativeTextChange(in storage: NSTextStorage) -> NoteEditorTextChange? {
+        guard observedTextStorage === storage, let edit = nativeCharacterEdit else { return nil }
+        let oldLength = edit.range.length - edit.delta
+        guard oldLength >= 0, edit.range.location >= 0,
+              NSMaxRange(edit.range) <= storage.length,
+              oldLength == 0 || edit.range.length == 0 else { return nil }
+        // Pure insertions/deletions have one unambiguous native intent. Mixed
+        // replacements retain the existing whole-text diff and merge path.
+        return NoteEditorTextChange(
+            range: NSRange(location: edit.range.location, length: oldLength),
+            replacement: (textSnapshot(in: storage) as NSString).substring(with: edit.range)
+        )
+    }
+
+    func acknowledgeNativeText() {
+        nativeCharacterEdit = nil
+    }
     private var cachedCharacterRevision: UInt64 = 0
     // nil means that the complete layout must be refreshed.
     private var dirtyLayoutRange: NSRange?
@@ -2348,12 +2371,21 @@ final class MarkdownSyntaxCache: NSObject {
         return text
     }
 
+    /// The observed storage revision already identifies this prepared result.
+    /// Native consumers must not recheck an unrelated string's contents.
+    func preparedSyntax(in textStorage: NSTextStorage) -> MarkdownSyntaxResult {
+        _ = prepare(in: textStorage)
+        return cachedResult!
+    }
+
     // Arbitrary strings have no native revision identity. Keep exact equality
     // here, including for callers that reuse a cache with unrelated text.
     func result(for text: String) -> MarkdownSyntaxResult {
-        if let cachedText, cachedText.utf8.elementsEqual(text.utf8),
-           let cachedResult {
-            return cachedResult
+        if let cachedText {
+            fullTextComparisonCount += 1
+            if cachedText.utf8.elementsEqual(text.utf8), let cachedResult {
+                return cachedResult
+            }
         }
         // Only the observed storage path can apply its pending edit range.
         let result = MarkdownSyntax.parse(text)
@@ -2450,6 +2482,7 @@ final class MarkdownSyntaxCache: NSObject {
             )
         }
         observedTextStorage = textStorage
+        nativeCharacterEdit = nil
         characterRevision &+= 1
         characterEdit = nil
         storageSnapshot = nil
@@ -2476,6 +2509,17 @@ final class MarkdownSyntaxCache: NSObject {
         characterRevision &+= 1
         let range = textStorage.editedRange
         let delta = textStorage.changeInLength
+        if let pending = nativeCharacterEdit {
+            let replaced = NSRange(location: range.location, length: range.length - delta)
+            let start = min(pending.range.location, replaced.location)
+            let end = max(NSMaxRange(pending.range), NSMaxRange(replaced))
+            nativeCharacterEdit = CharacterEdit(
+                range: NSRange(location: start, length: end - start + delta),
+                delta: pending.delta + delta
+            )
+        } else {
+            nativeCharacterEdit = CharacterEdit(range: range, delta: delta)
+        }
         if let pending = characterEdit {
             // Both ranges below use coordinates immediately before this edit.
             // Enclose the previous changes and this replacement, then map the

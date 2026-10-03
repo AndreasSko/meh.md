@@ -10,6 +10,12 @@ revision="${2:-working-tree}"
 mode="${3:-livePreview}"
 scenario="${6:-large-note}"
 case "$scenario" in presentation|large-note) ;; *) exit 2 ;; esac
+performance_host="${EDITOR_PERFORMANCE_HOST:-editor}"
+case "$performance_host" in editor|notebook) ;; *) exit 2 ;; esac
+if [[ "$scenario" != large-note && "$performance_host" != editor ]]; then
+  echo "notebook host requires the large-note scenario" >&2
+  exit 2
+fi
 default_size=150
 maximum_size=500
 if [[ "$scenario" == large-note ]]; then
@@ -74,54 +80,105 @@ files=(MarkdownSyntax MarkdownPresentation MarkdownEditor MarkdownEditingCommand
 if [[ "$revision" != working-tree ]]; then
   revision="$(git -C "$repo_root" rev-parse --verify "$revision^{commit}")"
 fi
-for name in "${files[@]}"; do
-  if [[ "$revision" == working-tree ]]; then
-    cp "$repo_root/meh.md/$name.swift" "$check_root/sources/$name.swift"
-  else
-    git -C "$repo_root" show "$revision:meh.md/$name.swift" \
-      > "$check_root/sources/$name.swift"
-  fi
-done
-# Table support is absent in historical comparison revisions.
-for name in MarkdownTablePresentation MarkdownTableEditing MarkdownTableScrolling \
-            MarkdownTableAccessibility MarkdownTableCellEditing MarkdownTableCellEditor; do
-  if [[ "$revision" == working-tree ]]; then
-    if [[ -f "$repo_root/meh.md/$name.swift" ]]; then
+if [[ "$performance_host" == notebook ]]; then
+  for source in "$repo_root"/meh.md/*.swift; do
+    name="${source##*/}"
+    case "$name" in
+      NotebookSyncLabApp.swift|CloudKitSmokeCheck.swift|NotebookTypingDiagnostics.swift)
+        continue
+        ;;
+    esac
+    cp "$source" "$check_root/sources/$name"
+  done
+else
+  for name in "${files[@]}"; do
+    if [[ "$revision" == working-tree ]]; then
       cp "$repo_root/meh.md/$name.swift" "$check_root/sources/$name.swift"
+    else
+      git -C "$repo_root" show "$revision:meh.md/$name.swift" \
+        > "$check_root/sources/$name.swift"
     fi
-  elif git -C "$repo_root" cat-file -e "$revision:meh.md/$name.swift" 2>/dev/null; then
-    git -C "$repo_root" show "$revision:meh.md/$name.swift" \
-      > "$check_root/sources/$name.swift"
-  fi
-done
+  done
+  # Table support is absent in historical comparison revisions.
+  for name in MarkdownTablePresentation MarkdownTableEditing MarkdownTableScrolling \
+              MarkdownTableAccessibility MarkdownTableCellEditing MarkdownTableCellEditor; do
+    if [[ "$revision" == working-tree ]]; then
+      if [[ -f "$repo_root/meh.md/$name.swift" ]]; then
+        cp "$repo_root/meh.md/$name.swift" "$check_root/sources/$name.swift"
+      fi
+    elif git -C "$repo_root" cat-file -e "$revision:meh.md/$name.swift" 2>/dev/null; then
+      git -C "$repo_root" show "$revision:meh.md/$name.swift" \
+        > "$check_root/sources/$name.swift"
+    fi
+  done
+fi
 cp "$repo_root/Tools/EditorQuoteCheck/Info.plist" "$check_app/Info.plist"
-extra_arguments=("$repo_root/Tools/EditorQuoteCheck/EditorQuoteCheck.swift")
-if [[ "$scenario" == large-note ]] || rg -q "import NoteCore" "$check_root/sources"; then
-  sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-  target="$(uname -m)-apple-ios27.0-simulator"
-  build_args=(--package-path "$repo_root" -c release --product NoteCore
-              --triple "$target" --sdk "$sdk")
-  swift build "${build_args[@]}"
-  products="$(swift build "${build_args[@]}" --show-bin-path)"
-  extra_arguments+=(-I "$products"
-    -I "$products/include" -L "$products" -luniffi_automerge
-    "$products/NoteCore.o" "$products/Automerge.o"
-    "$products/AutomergeUniffi.o" "$products/AutomergeUtilities.o")
+sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+target="$(uname -m)-apple-ios27.0-simulator"
+app_cache="${EDITOR_PERFORMANCE_APP_CACHE:-}"
+cache_helper="$repo_root/scripts/editor_performance_app_cache.py"
+cache_key=""
+cache_hit=0
+if [[ -n "$app_cache" ]]; then
+  compiler_version="$(xcrun swiftc --version)
+$(swift --version)"
+  key_arguments=(key --repo "$repo_root" --sources "$check_root/sources"
+    --compiler "$compiler_version" --sdk "$sdk" --target "$target"
+    --scenario "$scenario" --host "$performance_host")
+  cache_key="$(python3 "$cache_helper" "${key_arguments[@]}")"
+  if python3 "$cache_helper" lookup --cache "$app_cache" --key "$cache_key" --app "$check_app"; then
+    cache_hit=1
+    echo "Reusing verified compiled performance probe: $cache_key"
+  else
+    status=$?
+    [[ "$status" == 1 ]] || exit "$status"
+  fi
 fi
-if [[ "$scenario" == large-note ]]; then
-  extra_arguments+=(-D LARGE_NOTE_PERFORMANCE
-    "$repo_root/meh.md/NotebookNoteEditor.swift"
-    "$repo_root/Tools/EditorQuoteCheck/LargeNotePerformanceProbe.swift")
+if [[ "$cache_hit" == 0 ]]; then
+  extra_arguments=("$repo_root/Tools/EditorQuoteCheck/EditorQuoteCheck.swift")
+  if [[ "$scenario" == large-note ]] || rg -q "import NoteCore" "$check_root/sources"; then
+    build_args=(--package-path "$repo_root" -c release --product NoteCore
+                --triple "$target" --sdk "$sdk")
+    # SwiftPM compiles its manifest for macOS before targeting iOS.
+    # Keep inherited simulator SDKROOT out of that host compilation.
+    env -u SDKROOT swift build "${build_args[@]}"
+    products="$(env -u SDKROOT swift build "${build_args[@]}" --show-bin-path)"
+    extra_arguments+=(-I "$products"
+      -I "$products/include" -L "$products" -luniffi_automerge
+      "$products/NoteCore.o" "$products/Automerge.o"
+      "$products/AutomergeUniffi.o" "$products/AutomergeUtilities.o")
+  fi
+  if [[ "$scenario" == large-note ]]; then
+    extra_arguments+=(-D LARGE_NOTE_PERFORMANCE
+      "$repo_root/Tools/EditorQuoteCheck/LargeNotePerformanceProbe.swift"
+      "$repo_root/Tools/EditorQuoteCheck/NotebookPerformanceHost.swift")
+    if [[ "$performance_host" == notebook ]]; then
+      extra_arguments+=(-D NOTEBOOK_PERFORMANCE_HOST -D DEBUG
+        -D ICLOUD_ENABLED -D ICLOUD_DEV -D SYNC_LAB)
+    else
+      extra_arguments+=("$repo_root/meh.md/NotebookNoteEditor.swift")
+    fi
+  fi
+  CLANG_MODULE_CACHE_PATH="$check_root/module-cache" \
+  SWIFT_MODULE_CACHE_PATH="$check_root/module-cache" \
+  xcrun swiftc -O -parse-as-library -swift-version 6 \
+    -default-isolation MainActor \
+    -sdk "$sdk" \
+    -target "$target" \
+    "$check_root"/sources/*.swift \
+    "${extra_arguments[@]}" \
+    -o "$check_app/EditorQuoteCheck"
+
+  if [[ -n "$app_cache" ]]; then
+    # Never label a binary with inputs that changed during compilation.
+    final_key="$(python3 "$cache_helper" "${key_arguments[@]}")"
+    [[ "$final_key" == "$cache_key" ]] || {
+      echo "Performance probe inputs changed during compilation; retry the run" >&2
+      exit 1
+    }
+    python3 "$cache_helper" store --cache "$app_cache" --key "$cache_key" --app "$check_app"
+  fi
 fi
-CLANG_MODULE_CACHE_PATH="$check_root/module-cache" \
-SWIFT_MODULE_CACHE_PATH="$check_root/module-cache" \
-xcrun swiftc -O -parse-as-library -swift-version 6 \
-  -default-isolation MainActor \
-  -sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
-  -target "$(uname -m)-apple-ios27.0-simulator" \
-  "$check_root"/sources/*.swift \
-  "${extra_arguments[@]}" \
-  -o "$check_app/EditorQuoteCheck"
 
 xcrun simctl bootstatus "$device" -b >/dev/null
 xcrun simctl install "$device" "$check_app"
@@ -129,15 +186,19 @@ container="$(xcrun simctl get_app_container "$device" "$bundle_id" data)"
 report="$container/Documents/performance.json"
 rm -f "$report"
 SIMCTL_CHILD_EDITOR_PERFORMANCE_CONTEXT="${EDITOR_PERFORMANCE_CONTEXT:-standard}" \
+SIMCTL_CHILD_EDITOR_PERFORMANCE_SHAPE="${EDITOR_PERFORMANCE_SHAPE:-standard}" \
+SIMCTL_CHILD_EDITOR_PERFORMANCE_HOST="$performance_host" \
+SIMCTL_CHILD_EDITOR_PERFORMANCE_PRESERVE_FAILED_HOST="${EDITOR_PERFORMANCE_PRESERVE_FAILED_HOST:-0}" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_CHECK=1 \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_SCROLL_ROUNDS="${EDITOR_PERFORMANCE_SCROLL_ROUNDS:-1}" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_BLOCKS="$blocks" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_MODE="$mode" \
 xcrun simctl launch --terminate-running-process "$device" "$bundle_id"
 probe_launched=1
-for ((attempt=0; attempt<180; attempt++)); do
+for ((attempt=0; attempt<360; attempt++)); do
   if [[ -f "$report" ]]; then
     python3 - "$report" "$output" "$revision" "$repo_root" "$device" <<'PY'
+import hashlib
 import json
 import shutil
 import statistics
@@ -155,6 +216,11 @@ report["checkout_dirty"] = bool(subprocess.check_output(
 report["simulator_udid"] = sys.argv[5]
 output = Path(sys.argv[2])
 output.parent.mkdir(parents=True, exist_ok=True)
+if report.get("scenario") == "large-note":
+    fixture = Path(sys.argv[1]).with_name("large-note-fixture.md").read_bytes()
+    if len(fixture) != report.get("utf8_bytes"):
+        raise SystemExit("Exported fixture length does not match the measured note")
+    report["fixture_sha256"] = hashlib.sha256(fixture).hexdigest()
 output.write_text(json.dumps(report, indent=2) + "\n")
 if not report["source_and_selection_preserved"]:
     raise SystemExit(report.get("error", "Source or selection preservation failed"))

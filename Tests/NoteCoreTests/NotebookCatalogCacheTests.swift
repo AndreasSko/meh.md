@@ -31,6 +31,36 @@ final class NotebookCatalogCacheTests: XCTestCase {
         XCTAssertEqual(catalog.readItemsDecodeCount, before + 1)
     }
 
+    func testForkAndRecentWritesReuseUnchangedValidatedCaches() throws {
+        let catalog = try NotebookCatalogDocument()
+        let note = try catalog.add(kind: .note, name: "Current.md")
+        try catalog.recordLinkLocations([
+            NotebookLinkNote(id: note, name: "Former.md", path: "")
+        ])
+        _ = try catalog.items()
+        _ = try catalog.historicalLinkLocations()
+
+        let fork = try catalog.fork()
+        XCTAssertEqual(fork.readItemsDecodeCount, 0)
+        XCTAssertEqual(fork.historicalLinkLocationsDecodeCount, 0)
+        try fork.recordRecentActivity(for: note)
+        try fork.setPinnedInRecents(true, for: note)
+        XCTAssertEqual(try fork.items().map(\.id), [note])
+        XCTAssertEqual(
+            try fork.historicalLinkLocations()[note]?.map(\.name), ["Former.md"]
+        )
+        XCTAssertEqual(fork.readItemsDecodeCount, 0)
+        XCTAssertEqual(fork.historicalLinkLocationsDecodeCount, 0)
+
+        let added = try fork.add(kind: .note, name: "Added.md")
+        XCTAssertEqual(Set(try fork.items().map(\.id)), [note, added])
+        XCTAssertEqual(fork.readItemsDecodeCount, 1)
+        XCTAssertEqual(
+            try fork.historicalLinkLocations()[note]?.map(\.name), ["Former.md"]
+        )
+        XCTAssertEqual(fork.historicalLinkLocationsDecodeCount, 1)
+    }
+
     func testMergeInvalidatesDerivedItemsByHeads() throws {
         let base = try NotebookCatalogDocument()
         let first = try base.add(kind: .note, name: "First.md")
@@ -169,6 +199,122 @@ final class NotebookCatalogCacheTests: XCTestCase {
         XCTAssertEqual(catalog.heads, originalHeads)
         XCTAssertTrue(try catalog.historicalLinkLocations().isEmpty)
         XCTAssertEqual(catalog.historicalLinkLocationsDecodeCount, decodeCount)
+    }
+
+    private func assertRecentMatchesReopened(
+        _ catalog: NotebookCatalogDocument,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        let reopened = try NotebookCatalogDocument(snapshot: catalog.snapshot())
+        let actual = try catalog.recentStates()
+        let expected = try reopened.recentStates()
+        XCTAssertEqual(Set(actual.keys), Set(expected.keys), file: file, line: line)
+        for id in expected.keys {
+            XCTAssertEqual(actual[id]?.pinned, expected[id]?.pinned, file: file, line: line)
+            XCTAssertEqual(actual[id]?.pinOrder, expected[id]?.pinOrder, file: file, line: line)
+            XCTAssertEqual(actual[id]?.pinActionID, expected[id]?.pinActionID,
+                           file: file, line: line)
+            XCTAssertEqual(actual[id]?.activityOrder, expected[id]?.activityOrder,
+                           file: file, line: line)
+            XCTAssertEqual(actual[id]?.activityActionID, expected[id]?.activityActionID,
+                           file: file, line: line)
+        }
+    }
+
+    func testWarmRecentReadsAndForkWritesReuseValidatedCache() throws {
+        let catalog = try NotebookCatalogDocument()
+        let first = UUID()
+        let second = UUID()
+        try catalog.recordRecentActivity(for: first)
+        try catalog.setPinnedInRecents(true, for: first)
+        let before = catalog.recentStatesDecodeCount
+        _ = try catalog.recentStates()
+        _ = try catalog.recentStates()
+        XCTAssertEqual(catalog.recentStatesDecodeCount, before)
+
+        let fork = try catalog.fork()
+        try fork.recordRecentActivity(for: second)
+        try fork.setPinnedInRecents(true, for: second)
+        XCTAssertEqual(try fork.recentStates()[second]?.activityOrder, 2)
+        XCTAssertEqual(try fork.recentStates()[second]?.pinOrder, 2)
+        try assertRecentMatchesReopened(fork)
+        try fork.clearRecents(for: [first, second])
+        XCTAssertFalse(try XCTUnwrap(fork.recentStates()[first]).pinned)
+        XCTAssertNil(try fork.recentStates()[second]?.activityOrder)
+        try assertRecentMatchesReopened(fork)
+        try fork.recordRecentActivity(for: first)
+        try fork.setPinnedInRecents(true, for: first)
+        XCTAssertEqual(try fork.recentStates()[first]?.activityOrder, 5)
+        XCTAssertEqual(try fork.recentStates()[first]?.pinOrder, 5)
+        XCTAssertNil(try fork.recentStates()[second]?.activityOrder)
+        XCTAssertEqual(fork.recentStatesDecodeCount, 0)
+        try assertRecentMatchesReopened(fork)
+        XCTAssertEqual(try catalog.recentStates()[first]?.activityOrder, 1)
+    }
+
+    func testItemChangesAndRemoteMergeInvalidateRecentCache() throws {
+        let catalog = try NotebookCatalogDocument()
+        let id = try catalog.add(kind: .note, name: "First.md")
+        try catalog.recordRecentActivity(for: id)
+        let before = catalog.recentStatesDecodeCount
+        _ = try catalog.add(kind: .note, name: "Second.md")
+        try assertRecentMatchesReopened(catalog)
+        XCTAssertEqual(catalog.recentStatesDecodeCount, before + 1)
+        let remote = try catalog.fork()
+        try remote.setPinnedInRecents(true, for: id)
+        try remote.recordRecentActivity(for: id)
+        try catalog.merge(remote)
+        try assertRecentMatchesReopened(catalog)
+        XCTAssertEqual(catalog.recentStatesDecodeCount, before + 2)
+        XCTAssertEqual(try catalog.recentStates()[id]?.activityOrder, 2)
+        XCTAssertTrue(try XCTUnwrap(catalog.recentStates()[id]).pinned)
+    }
+
+    func testConflictedClearAndUnpinPreserveAllSequenceMaxima() throws {
+        let catalog = try NotebookCatalogDocument()
+        let id = UUID()
+        let original = try Document(catalog.snapshot().data)
+        let lower = original.fork()
+        let higher = original.fork()
+        try lower.put(obj: .ROOT, key: "recent.pin.\(id.uuidString)",
+                      value: .String("unpin:3:\(UUID().uuidString)"))
+        try lower.put(obj: .ROOT, key: "recent.activity.\(id.uuidString)",
+                      value: .String("clear:4:\(UUID().uuidString)"))
+        try higher.put(obj: .ROOT, key: "recent.pin.\(id.uuidString)",
+                       value: .String("pin:50:\(UUID().uuidString)"))
+        try higher.put(obj: .ROOT, key: "recent.activity.\(id.uuidString)",
+                       value: .String("edit:60:\(UUID().uuidString)"))
+        try lower.merge(other: higher)
+        let loaded = try NotebookCatalogDocument(serializedData: lower.save())
+        XCTAssertFalse(try XCTUnwrap(loaded.recentStates()[id]).pinned)
+        XCTAssertNil(try loaded.recentStates()[id]?.activityOrder)
+        try assertRecentMatchesReopened(loaded)
+        let fork = try loaded.fork()
+        try fork.setPinnedInRecents(true, for: id)
+        try fork.recordRecentActivity(for: id)
+        XCTAssertEqual(try fork.recentStates()[id]?.pinOrder, 51)
+        XCTAssertEqual(try fork.recentStates()[id]?.activityOrder, 61)
+        XCTAssertEqual(fork.recentStatesDecodeCount, 0)
+        try assertRecentMatchesReopened(fork)
+    }
+
+    func testRecentCacheDoesNotHideMalformedNativeRegisters() throws {
+        let catalog = try NotebookCatalogDocument()
+        _ = try catalog.recentStates()
+        let id = UUID()
+        for key in ["recent.pin.bad", "recent.extra.\(id.uuidString)"] {
+            let malformed = try Document(catalog.snapshot().data)
+            try malformed.put(obj: .ROOT, key: key,
+                              value: .String("pin:1:\(UUID().uuidString)"))
+            XCTAssertThrowsError(try NotebookCatalogDocument(serializedData: malformed.save()))
+        }
+        let left = try Document(catalog.snapshot().data)
+        let right = left.fork()
+        let key = "recent.pin.\(id.uuidString)"
+        try left.put(obj: .ROOT, key: key, value: .String("pin:1:\(UUID().uuidString)"))
+        try right.put(obj: .ROOT, key: key, value: .String("malformed"))
+        try left.merge(other: right)
+        XCTAssertThrowsError(try NotebookCatalogDocument(serializedData: left.save()))
     }
 
 }

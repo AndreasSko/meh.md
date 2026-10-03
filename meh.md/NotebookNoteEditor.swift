@@ -48,9 +48,11 @@ struct NotebookNoteEditor: View {
                             }
                         }),
                     editRevision: session.editorRevision,
-                    commitEdit: { text, revision in
+                    commitNativeEdit: { text, revision, change in
                         let changed = text != session.text
-                        let revision = try session.commitEditorText(text, basedOn: revision)
+                        let revision = try session.commitEditorText(
+                            text, basedOn: revision, change: change
+                        )
                         if changed { onLocalEdit() }
                         unrecordedText = nil
                         editError = nil

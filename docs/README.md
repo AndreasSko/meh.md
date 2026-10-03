@@ -60,6 +60,10 @@ acceptance of later implementations.
   tests.
 - [Large-note typing regression](editor-typing-regression.md): regression
   evidence, root cause, and the CI guard contract.
+- [Catalog startup and first-edit benchmark](editor-catalog-performance.md):
+  catalog cache changes, async startup decoding, and measured responsiveness.
+- [Physical iPhone typing hangs](iphone-typing-hangs-2026-10-03.md): sanitized
+  baseline profile and attribution, distinct from simulator fix validation.
 - [Automerge spike](automerge-spike.md): local persistence experiments.
 - [Milestone 1](milestone-1-plan.md) and
   [local note verification](local-note-verification.md): one durable note.

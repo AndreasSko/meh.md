@@ -1,0 +1,159 @@
+{
+  "measurement_date": "2026-10-03",
+  "scope": "Serial macOS27 Swift package CPU-only full parsing, seven samples per fictional Unicode note. Debug and release, baseline parser versus contiguous Foundation UTF16 source and fixed isolated-pair checks. Physical input-to-display performance not measured.",
+  "semantic_verification": "All full syntax-result SHA256 values match baseline across both sizes and both compiler configurations.",
+  "reports": [
+    {
+      "fixture": "fictional Unicode paragraphs with paired markup",
+      "label": "baseline-debug",
+      "measurements": [
+        {
+          "median_ms": 27.731,
+          "p95_ms": 28.136833,
+          "samples_ms": [
+            27.792416,
+            27.798125,
+            28.136833,
+            27.731,
+            27.361458,
+            26.7165,
+            27.274166
+          ],
+          "syntax_sha256": "558c3b459129d66a76a7e7c0f31e9ea729c9313d0f6f6cc40586a4b7ed8b29ef",
+          "utf8_bytes": 50040,
+          "utf16_length": 43090
+        },
+        {
+          "median_ms": 258.8685,
+          "p95_ms": 277.705375,
+          "samples_ms": [
+            261.105875,
+            277.705375,
+            255.595458,
+            257.370709,
+            260.236875,
+            258.14175,
+            258.8685
+          ],
+          "syntax_sha256": "b0d5ecb9f733594f0f68ed6b78536c38c39829a0655ccca79ae6469f13f60e47",
+          "utf8_bytes": 500040,
+          "utf16_length": 430590
+        }
+      ]
+    },
+    {
+      "fixture": "fictional Unicode paragraphs with paired markup",
+      "label": "baseline-release",
+      "measurements": [
+        {
+          "median_ms": 18.331042,
+          "p95_ms": 18.723958,
+          "samples_ms": [
+            18.723958,
+            17.808625,
+            18.315666,
+            18.331042,
+            18.64625,
+            18.501666,
+            18.227458
+          ],
+          "syntax_sha256": "558c3b459129d66a76a7e7c0f31e9ea729c9313d0f6f6cc40586a4b7ed8b29ef",
+          "utf8_bytes": 50040,
+          "utf16_length": 43090
+        },
+        {
+          "median_ms": 171.456791,
+          "p95_ms": 174.303292,
+          "samples_ms": [
+            169.805208,
+            168.654416,
+            171.792666,
+            171.141959,
+            173.623917,
+            174.303292,
+            171.456791
+          ],
+          "syntax_sha256": "b0d5ecb9f733594f0f68ed6b78536c38c39829a0655ccca79ae6469f13f60e47",
+          "utf8_bytes": 500040,
+          "utf16_length": 430590
+        }
+      ]
+    },
+    {
+      "fixture": "fictional Unicode paragraphs with paired markup",
+      "label": "candidate-debug",
+      "measurements": [
+        {
+          "median_ms": 19.369291,
+          "p95_ms": 19.756834,
+          "samples_ms": [
+            19.756834,
+            18.835708,
+            19.373875,
+            18.936042,
+            19.495667,
+            19.230916,
+            19.369291
+          ],
+          "syntax_sha256": "558c3b459129d66a76a7e7c0f31e9ea729c9313d0f6f6cc40586a4b7ed8b29ef",
+          "utf8_bytes": 50040,
+          "utf16_length": 43090
+        },
+        {
+          "median_ms": 183.809875,
+          "p95_ms": 185.093,
+          "samples_ms": [
+            183.450208,
+            183.683,
+            185.093,
+            183.809875,
+            184.224833,
+            183.4995,
+            184.979083
+          ],
+          "syntax_sha256": "b0d5ecb9f733594f0f68ed6b78536c38c39829a0655ccca79ae6469f13f60e47",
+          "utf8_bytes": 500040,
+          "utf16_length": 430590
+        }
+      ]
+    },
+    {
+      "fixture": "fictional Unicode paragraphs with paired markup",
+      "label": "candidate-release",
+      "measurements": [
+        {
+          "median_ms": 10.212125,
+          "p95_ms": 10.292583,
+          "samples_ms": [
+            10.1335,
+            10.193417,
+            10.292583,
+            10.178834,
+            10.256375,
+            10.257166,
+            10.212125
+          ],
+          "syntax_sha256": "558c3b459129d66a76a7e7c0f31e9ea729c9313d0f6f6cc40586a4b7ed8b29ef",
+          "utf8_bytes": 50040,
+          "utf16_length": 43090
+        },
+        {
+          "median_ms": 97.150709,
+          "p95_ms": 97.911208,
+          "samples_ms": [
+            97.911208,
+            97.668875,
+            97.131125,
+            97.150709,
+            97.152583,
+            96.718,
+            97.129791
+          ],
+          "syntax_sha256": "b0d5ecb9f733594f0f68ed6b78536c38c39829a0655ccca79ae6469f13f60e47",
+          "utf8_bytes": 500040,
+          "utf16_length": 430590
+        }
+      ]
+    }
+  ]
+}

@@ -268,7 +268,8 @@ public final class NoteSession {
     @discardableResult
     public func commitEditorText(
         _ replacement: String,
-        basedOn revision: Data
+        basedOn revision: Data,
+        change: NoteEditorTextChange? = nil
     ) throws -> Data {
         guard isEditingEnabled, let document else {
             throw SyncError.localSaveRequired
@@ -277,6 +278,21 @@ public final class NoteSession {
             throw SyncError.invalidRecord
         }
         let heads = document.editorHeads
+        if revision == editorIdentity + heads,
+           let change,
+           let scalarRange = try? change.validatedScalarRange(
+               in: text, resultingIn: replacement
+           ) {
+            guard !text.utf8.elementsEqual(replacement.utf8) else {
+                return editorIdentity + heads
+            }
+            try document.applyValidatedEditorChange(
+                change.replacement, scalarRange: scalarRange
+            )
+            text = replacement
+            queueSave()
+            return editorIdentity + document.editorHeads
+        }
         try document.applyEditorText(
             replacement, basedOn: Data(revision.dropFirst(editorIdentity.count))
         )

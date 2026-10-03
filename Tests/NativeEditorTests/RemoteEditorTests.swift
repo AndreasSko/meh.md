@@ -1,3 +1,4 @@
+import NoteCore
 import SwiftUI
 import XCTest
 
@@ -393,7 +394,9 @@ final class RemoteEditorTests: XCTestCase {
     }
 
     func testRemoteReplacementDropsStaleUndoThenLocalUndoWorks() throws {
-        let model = EditorModel(text: "hello", revision: revision(0))
+        let model = EditorModel(
+            text: "hello", revision: revision(0), nativeHintsEnabled: true
+        )
         let mounted = mount(model)
         let textView = try XCTUnwrap(mounted.textView)
         defer { mounted.tearDown() }
@@ -419,6 +422,34 @@ final class RemoteEditorTests: XCTestCase {
             revision(9),
             revision(2),
         ])
+        undoManager.redo()
+        XCTAssertEqual(nativeText(in: textView), "Remote hello!?")
+        XCTAssertEqual(model.text, "Remote hello!?")
+        XCTAssertEqual(model.nativeChanges.count, 4)
+        XCTAssertEqual(
+            model.nativeChanges[0],
+            NoteEditorTextChange(
+                range: NSRange(location: 5, length: 0), replacement: "!"
+            )
+        )
+        XCTAssertEqual(
+            model.nativeChanges[1],
+            NoteEditorTextChange(
+                range: NSRange(location: 13, length: 0), replacement: "?"
+            )
+        )
+        XCTAssertEqual(
+            model.nativeChanges[2],
+            NoteEditorTextChange(
+                range: NSRange(location: 13, length: 1), replacement: ""
+            )
+        )
+        XCTAssertEqual(
+            model.nativeChanges[3],
+            NoteEditorTextChange(
+                range: NSRange(location: 13, length: 0), replacement: "?"
+            )
+        )
     }
 
     func testSameTextRemoteRevisionBecomesNextEditBase() throws {
@@ -545,14 +576,17 @@ private final class EditorModel: ObservableObject {
     @Published var mode: MarkdownEditorMode = .source
     let navigation = MarkdownEditorNavigation()
     var requests: [Request] = []
+    var nativeHintsEnabled: Bool
+    var nativeChanges: [NoteEditorTextChange?] = []
     var bindingWrites: [String] = []
     @Published var errorCount = 0
     var commitResult: ((String, Data) throws -> MarkdownEditorCommit)?
     private var nextRevision: UInt8 = 1
 
-    init(text: String, revision: Data) {
+    init(text: String, revision: Data, nativeHintsEnabled: Bool = false) {
         self.text = text
         self.revision = revision
+        self.nativeHintsEnabled = nativeHintsEnabled
     }
 
     func receiveRemote(text: String, revision: Data) {
@@ -594,6 +628,12 @@ private struct EditorHost: View {
             commitEdit: { replacement, revision in
                 try model.commit(replacement, basedOn: revision)
             },
+            commitNativeEdit: model.nativeHintsEnabled
+                ? { replacement, revision, change in
+                    model.nativeChanges.append(change)
+                    return try model.commit(replacement, basedOn: revision)
+                }
+                : nil,
             onEditError: { _ in model.errorCount += 1 },
             navigation: model.navigation,
             fontSize: model.fontSize,
