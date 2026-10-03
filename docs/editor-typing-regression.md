@@ -51,28 +51,42 @@ later distribution is claimed here.
 ## CI contract
 
 `Editor performance guard` runs on every pull request using the repository's
-Xcode 27 runner. It opens the actual native editor in a newly created iPhone
+Xcode 27 runner. It opens the actual `NotebookView` editor in a new iPhone
 iOS 27 or newer simulator and removes only that simulator afterward. It runs
-a 50 KB live-preview note with mixed frontmatter, comments, and horizontal
-rules, then a standard 500 KB live-preview note. The runs are serial and use
-local storage, without opening a user's notebook or contacting CloudKit.
+a mixed 50 KB live-preview note, a standard 500 KB note, and a 50 KB note
+near a table. The runs are serial and use local storage, without opening a
+user's notebook or contacting CloudKit.
 
 The regression escaped because the large-note benchmark was opt-in, outside
 the regular Swift test run, and had no timing ceiling. CI now runs
 deterministic checker tests and a native simulator workflow with timing
-gates. The report checker gates these invariants:
+gates. The 0.10.6 baseline control and candidate run serially on each pull
+request, using the same runner and benchmark harness. The catalog control
+must fail its heartbeat gate. The candidate must improve the 500 KB native
+synchronous and to-idle medians and p95 values by at least 20% against that
+baseline, while passing the absolute limits below. Its literal text,
+selection, saved text, final presentation, and syntax results must remain
+correct. Native comparisons also require a matching literal-fixture SHA-256.
 
 - Text, selection, saved text, and final presentation checks all pass.
-- Each measured edit performs zero full parses and exactly one incremental
-  parse; step totals must match the report aggregates.
+- Standard and mixed measured edits perform zero full parses and exactly one
+  incremental parse; the nearby-table case permits its validated structural
+  fallback. Per-step parse counts must match report aggregates.
 - Expected typing, deletion, bulk insertion, and middle-bold samples exist,
   with bounded formatted ranges and current presentation at each idle point.
 - Required timings are present and finite. Repeated typing, deletion, and
-  middle-bold edit p95 limits are 50 ms synchronous / 100 ms to idle at 50 KB,
-  and 150 ms / 250 ms at 500 KB.
-- The single bulk-insert sample has separate idle ceilings: 250 ms at 50 KB
-  and 1,500 ms at 500 KB. Its synchronous limits remain 50 ms and 150 ms,
+  middle-bold edit p95 synchronous limits are 50 ms at 50 KB and 150 ms at
+  500 KB. To-idle limits are 250 ms for standard 50 KB, 500 ms for the
+  nearby-table 50 KB case, and 1,000 ms for standard 500 KB.
+- The single bulk-insert sample has separate to-idle ceilings: 500 ms at
+  50 KB and 2,000 ms at 500 KB. Synchronous limits remain 50 ms and 150 ms,
   respectively. This is a single-sample ceiling, not a p95 threshold.
+
+The Unicode full-parser benchmark runs seven samples at 50 KB and 500 KB.
+Both fixture sizes must improve median and p95 by at least 20% over the
+0.10.6 baseline from the same runner. Absolute ceilings are 50 ms at 50 KB
+and 300 ms at 500 KB. Fixture byte count, UTF-16 length, and syntax hash must
+match between baseline and candidate.
 
 The bulk insertion can trigger a multiline viewport stall that is distinct
 from repeated character edits. Earlier 500 KB runs measured about 783–810 ms
@@ -228,3 +242,21 @@ these reports have `host: notebook` and include the local notebook screen.
 The physical profile records baseline hangs, not a before/after device test.
 Candidate physical-device performance, long-lived document history, and live
 CloudKit remain separate verification work.
+
+A frozen fixed-source reference (`editor-performance-reference-0.10.7`)
+also runs on the same runner. Parser median and p95 at both sizes, and
+native 500 KB typing synchronous and to-idle median and p95, must stay
+within 20% of that reference. The slower 0.10.6 comparison remains a
+negative control; it is not the only regression threshold. Reference and
+candidate must use the same fictional input and match literal or syntax
+checksums. This catches partial slowdowns that still beat 0.10.6.
+
+The first character remains in the measured samples; the probe does not
+warm it away with a discarded edit. A CI reference run measured a 1,736 ms
+first edit at 500 KB, followed by roughly 130 ms edits. Its cause is not
+isolated, and physical-device before/after verification remains open.
+Because p95 of 21 typing samples omits one outlier, CI also bounds the
+first character at 500 ms for 50 KB or 2,000 ms for 500 KB. Every subsequent
+character must finish within 500 ms, including the nearby-table case.
+These simulator ceilings are regression controls, not physical latency
+guarantees.
