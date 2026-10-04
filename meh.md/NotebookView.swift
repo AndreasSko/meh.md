@@ -182,8 +182,7 @@ struct NotebookView: View {
     @State private var detailOriginalName = ""
     @State private var detailProposedTitle = ""
     @State private var detailTitleHeight: CGFloat = 32
-    @State private var selectGeneratedTitle = false
-    @FocusState private var focusedTitleID: UUID?
+    @State private var detailTitleFocusRequest: NotebookTitleFocusRequest?
     @State private var movingIDs: [UUID] = []
     @State private var movingFromTrash = false
     @State private var browserSelection = NotebookBrowserSelection()
@@ -1024,8 +1023,8 @@ struct NotebookView: View {
     private func detailTitle(for placement: NotebookPlacement) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
             if detailEditingID == placement.item.id {
-                TextField(
-                    "Note title",
+                NotebookTitleField(
+                    noteID: placement.item.id,
                     text: Binding(
                         get: { detailProposedTitle },
                         set: { value in
@@ -1045,43 +1044,17 @@ struct NotebookView: View {
                             }
                         }
                     ),
-                    axis: .vertical
-                )
-                .textFieldStyle(.plain)
-                .font(editorTitleFont)
-                .lineLimit(1...4)
-                .focused($focusedTitleID, equals: placement.item.id)
-                .disabled(busy)
-                .submitLabel(.done)
-                .onSubmit { submitDetailTitle() }
-                .onKeyPress(.tab) {
-                    submitDetailTitle()
-                    return .handled
-                }
-                .onChange(of: busy, initial: true) { _, isBusy in
-                    if !isBusy, detailEditingID == placement.item.id {
-                        focusedTitleID = placement.item.id
-                        if selectGeneratedTitle {
-                            selectGeneratedTitle = false
-                            Task { @MainActor in
-                                await Task.yield()
-                                #if os(macOS)
-                                NSApp.sendAction(
-                                    #selector(NSText.selectAll(_:)),
-                                    to: nil, from: nil
-                                )
-                                #else
-                                UIApplication.shared.sendAction(
-                                    #selector(UIResponder.selectAll(_:)),
-                                    to: nil, from: nil, for: nil
-                                )
-                                #endif
-                            }
+                    font: editorTitleFont,
+                    isEnabled: !busy,
+                    focusRequest: detailTitleFocusRequest,
+                    onFocusHandled: { request in
+                        if detailTitleFocusRequest == request {
+                            detailTitleFocusRequest = nil
                         }
-                    }
-                }
-                .notebookEscapeAction { cancelDetailTitle() }
-                .accessibilityIdentifier("title-field")
+                    },
+                    onSubmit: { submitDetailTitle() },
+                    onCancel: cancelDetailTitle
+                )
             } else {
                 Button {
                     beginDetailRenaming(placement)
@@ -1982,7 +1955,9 @@ struct NotebookView: View {
                 detailOriginalName = name
                 detailProposedTitle = NotebookNoteName.title(from: name)
                 detailTitleHeight = 32
-                selectGeneratedTitle = true
+                detailTitleFocusRequest = NotebookTitleFocusRequest(
+                    noteID: id, selectsAll: true
+                )
             case .folder:
                 createdFolderID = try await replica.createFolder(
                     name: "Untitled Folder", parentID: parentID,
@@ -2124,7 +2099,9 @@ struct NotebookView: View {
             detailEditingID = placement.item.id
             detailOriginalName = placement.item.name
             detailProposedTitle = NotebookNoteName.title(from: placement.item.name)
-            focusedTitleID = placement.item.id
+            detailTitleFocusRequest = NotebookTitleFocusRequest(
+                noteID: placement.item.id, selectsAll: false
+            )
         }
     }
 
@@ -2148,14 +2125,14 @@ struct NotebookView: View {
             try await replica.rename(id, to: filename)
         }
         detailEditingID = nil
-        focusedTitleID = nil
+        detailTitleFocusRequest = nil
         detailOriginalName = ""
         detailProposedTitle = ""
     }
 
     private func cancelDetailTitle() {
         detailEditingID = nil
-        focusedTitleID = nil
+        detailTitleFocusRequest = nil
         detailOriginalName = ""
         detailProposedTitle = ""
         editorNavigation.resumeEditing?()
@@ -3528,7 +3505,9 @@ struct NotebookView: View {
                 if let editingID {
                     Task { @MainActor in focusedNameID = editingID }
                 } else if let detailEditingID {
-                    Task { @MainActor in focusedTitleID = detailEditingID }
+                    detailTitleFocusRequest = NotebookTitleFocusRequest(
+                        noteID: detailEditingID, selectsAll: false
+                    )
                 }
             }
             editorNavigation.resumeEditing?()

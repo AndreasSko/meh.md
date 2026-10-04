@@ -1584,16 +1584,58 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             } else {
                 let host = UIHostingController(rootView: title)
                 host.view.backgroundColor = .clear
-                addSubview(host.view)
                 markdownState.titleHost = host
             }
+            attachMarkdownTitleHostIfNeeded()
         } else {
-            markdownState.titleHost?.view.removeFromSuperview()
-            markdownState.titleHost = nil
+            removeMarkdownTitleHost()
         }
         markdownState.titleHeight = max(0, height)
         measureMarkdownTitle()
         setNeedsLayout()
+    }
+
+    private func attachMarkdownTitleHostIfNeeded() {
+        guard let host = markdownState.titleHost else { return }
+        var responder = next
+        var owner: UIViewController?
+        while let current = responder {
+            if let controller = current as? UIViewController {
+                owner = controller
+                break
+            }
+            responder = current.next
+        }
+        if let owner, host.parent !== owner {
+            detachMarkdownTitleHost(host)
+            owner.addChild(host)
+            addSubview(host.view)
+            host.didMove(toParent: owner)
+        } else if host.view.superview !== self {
+            // Representable construction can precede its owning controller.
+            // Adopt the host once the native editor joins that hierarchy.
+            addSubview(host.view)
+        }
+    }
+
+    private func detachMarkdownTitleHost(_ host: UIHostingController<AnyView>) {
+        if host.parent != nil { host.willMove(toParent: nil) }
+        host.view.removeFromSuperview()
+        if host.parent != nil { host.removeFromParent() }
+    }
+
+    func removeMarkdownTitleHost() {
+        if let host = markdownState.titleHost { detachMarkdownTitleHost(host) }
+        markdownState.titleHost = nil
+    }
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        if superview == nil {
+            if let host = markdownState.titleHost { detachMarkdownTitleHost(host) }
+        } else {
+            attachMarkdownTitleHostIfNeeded()
+        }
     }
 
     private func layoutMarkdownTitle() {
@@ -1655,6 +1697,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        if window != nil { attachMarkdownTitleHostIfNeeded() }
         reportWindowAttachmentIfNeeded()
     }
 
@@ -2236,6 +2279,10 @@ struct MarkdownEditor: UIViewRepresentable {
         context.coordinator.consumeFocusRequest(
             focusRequest, in: textView
         )
+    }
+
+    static func dismantleUIView(_ textView: UITextView, coordinator: Coordinator) {
+        (textView as? MarkdownTextView)?.removeMarkdownTitleHost()
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {

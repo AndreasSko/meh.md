@@ -1,6 +1,116 @@
 import XCTest
 
 final class WritingFlowUITests: XCTestCase {
+    func testNewNoteSelectsTitleAndKeepsWritingFlowAcrossNotes() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        app.launchArguments += ["-editor.mode", "source"]
+        app.launch()
+
+        let newNote = app.buttons["notebook-new-item"].firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        activate(newNote)
+
+        let titleField = app.textFields["title-field"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 10))
+        assertKeyboardFocus(on: titleField)
+        let generatedTitle = try XCTUnwrap(titleField.value as? String)
+        XCTAssertFalse(generatedTitle.isEmpty)
+        capture(app, name: "Generated title selected on new note")
+
+        let replacement = "Fictional observatory log"
+        titleField.typeText(replacement)
+        XCTAssertEqual(titleField.value as? String, replacement)
+        capture(app, name: "New note title replaced without tapping")
+
+        submitTitle(titleField)
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        assertKeyboardFocus(on: editor)
+        XCTAssertEqual(app.buttons["note-title"].label, replacement)
+        let firstBody = "Fictional first note body."
+        editor.typeText(firstBody)
+        XCTAssertEqual(editor.value as? String, firstBody)
+        capture(app, name: "First note body before creating another note")
+
+        // Create another note while the body editor still owns keyboard focus.
+        activate(newNote)
+        let nextTitle = app.textFields["title-field"]
+        XCTAssertTrue(nextTitle.waitForExistence(timeout: 10))
+        assertKeyboardFocus(on: nextTitle)
+        let nextGeneratedTitle = try XCTUnwrap(nextTitle.value as? String)
+        XCTAssertFalse(nextGeneratedTitle.isEmpty)
+        let nextReplacement = "Fictional second observatory log"
+        nextTitle.typeText(nextReplacement)
+        XCTAssertEqual(nextTitle.value as? String, nextReplacement)
+
+        submitTitle(nextTitle)
+        assertKeyboardFocus(on: editor)
+        XCTAssertEqual(app.buttons["note-title"].label, nextReplacement)
+        XCTAssertEqual(editor.value as? String, "")
+
+        activate(newNote)
+        let thirdTitle = app.textFields["title-field"]
+        XCTAssertTrue(thirdTitle.waitForExistence(timeout: 10))
+        assertKeyboardFocus(on: thirdTitle)
+        let thirdGeneratedTitle = try XCTUnwrap(thirdTitle.value as? String)
+        XCTAssertFalse(thirdGeneratedTitle.isEmpty)
+
+        submitTitle(thirdTitle)
+        assertKeyboardFocus(on: editor)
+        XCTAssertEqual(app.buttons["note-title"].label, thirdGeneratedTitle)
+        XCTAssertEqual(editor.value as? String, "")
+    }
+
+    func testRenamingTitleKeepsExistingTitleAndReturnsToBody() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        app.launchArguments += ["-editor.mode", "source"]
+        app.launch()
+
+        let newNote = app.buttons["notebook-new-item"].firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        activate(newNote)
+        let titleField = app.textFields["title-field"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 10))
+        assertKeyboardFocus(on: titleField)
+        let title = "Fictional rename regression"
+        titleField.typeText(title)
+        XCTAssertEqual(titleField.value as? String, title)
+        submitTitle(titleField)
+
+        let titleButton = app.buttons["note-title"]
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        assertKeyboardFocus(on: editor)
+        let body = "Text retained while renaming the note."
+        editor.typeText(body)
+        XCTAssertEqual(editor.value as? String, body)
+
+        activate(titleButton)
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        assertKeyboardFocus(on: titleField)
+        XCTAssertEqual(titleField.value as? String, title)
+        titleField.typeText(" revised")
+        let revisedTitle = try XCTUnwrap(titleField.value as? String)
+        // A title tap places the native caret where the user tapped.
+        XCTAssertNotEqual(revisedTitle, title)
+        XCTAssertEqual(
+            revisedTitle.replacingOccurrences(of: " revised", with: ""), title
+        )
+        submitTitle(titleField)
+
+        assertKeyboardFocus(on: editor)
+        XCTAssertEqual(titleButton.label, revisedTitle)
+        XCTAssertEqual(editor.value as? String, body)
+    }
+
     func testNewNoteTitleCommitsIntoBodyWithoutTitleActions() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -210,6 +320,22 @@ final class WritingFlowUITests: XCTestCase {
     private func saveStatus(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(identifier: "note-save-status").firstMatch
+    }
+
+    private func assertKeyboardFocus(on element: XCUIElement) {
+        let focused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
+            object: element
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [focused], timeout: 5), .completed)
+    }
+
+    private func submitTitle(_ field: XCUIElement) {
+        #if os(macOS)
+        field.typeKey(.return, modifierFlags: [])
+        #else
+        field.typeText("\n")
+        #endif
     }
 
     private func capture(_ app: XCUIApplication, name: String) {
