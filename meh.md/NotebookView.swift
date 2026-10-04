@@ -500,13 +500,16 @@ struct NotebookView: View {
                             #endif
                             ToolbarItem {
                                 Menu {
-                                    Button {
-                                        shareMarkdown()
+                                    Menu {
+                                        Button("Markdown") { shareMarkdown() }
+                                            .accessibilityIdentifier("notebook-share-markdown")
+                                        Button("PDF") { sharePDF() }
+                                            .accessibilityIdentifier("notebook-share-pdf")
                                     } label: {
                                         Label("Share", systemImage: "square.and.arrow.up")
                                     }
                                     .disabled(!session.isEditingEnabled || busy || sharedFile != nil)
-                                    .accessibilityIdentifier("notebook-share-markdown")
+                                    .accessibilityIdentifier("notebook-share")
                                     Divider()
                                     #if os(macOS)
                                     if linkHistory.forwardTarget != nil {
@@ -2909,6 +2912,23 @@ struct NotebookView: View {
                   let placement = selectedPlacement else { return }
             sharedFile = try NotebookSharedFile.markdown(
                 text: session.text, filename: placement.displayName
+            )
+        }
+    }
+
+    private func sharePDF() {
+        guard sharedFile == nil, let session, let noteID = selectedID else { return }
+        perform {
+            try await flushEditor()
+            guard selectedID == noteID, session.isEditingEnabled,
+                  let placement = selectedPlacement else { return }
+            let title = NotebookNoteName.title(from: placement.displayName)
+            let data = try MarkdownPDFRenderer.data(
+                text: session.text, title: title,
+                fontSize: editorFontSize, fontFamily: editorFontFamily
+            )
+            sharedFile = try NotebookSharedFile.create(
+                data: data, filename: title + ".pdf"
             )
         }
     }
