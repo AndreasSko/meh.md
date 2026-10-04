@@ -90,6 +90,7 @@ final class NotebookCatalogDocument {
         var token: String { "\(verb):\(sequence):\(id.uuidString)" }
     }
     struct RecentState {
+        let hidden: Bool
         let pinned: Bool
         let pinOrder: UInt64?
         let pinActionID: UUID?
@@ -402,6 +403,14 @@ final class NotebookCatalogDocument {
     private func updateRecentState(_ id: UUID, in cache: inout RecentCache) throws {
         let pins = try recentActions(.pin, id)
         let activities = try recentActions(.activity, id)
+        let visibility = try document.getAll(
+            obj: .ROOT, key: "recentsHidden.\(id.uuidString)"
+        ).map { value in
+            guard case .Scalar(.Boolean(let hidden)) = value else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            return hidden
+        }
         for action in pins {
             cache.maxPinSequence = max(cache.maxPinSequence, action.sequence)
         }
@@ -416,6 +425,8 @@ final class NotebookCatalogDocument {
                 ($0.sequence, $0.id.uuidString) < ($1.sequence, $1.id.uuidString)
             }
         cache.states[id] = RecentState(
+            // A concurrent hide wins over show; an observed show can restore.
+            hidden: visibility.contains(true),
             pinned: winningPin != nil,
             pinOrder: winningPin?.sequence,
             pinActionID: winningPin?.id,
@@ -435,6 +446,13 @@ final class NotebookCatalogDocument {
                 let id = UUID(uuidString: String(parts[2])),
                 id.uuidString == parts[2]
             else { throw NotebookCatalogError.invalidDocument }
+            ids.insert(id)
+        }
+        for key in document.keys(obj: .ROOT) where key.hasPrefix("recentsHidden.") {
+            let suffix = String(key.dropFirst("recentsHidden.".count))
+            guard let id = UUID(uuidString: suffix), id.uuidString == suffix else {
+                throw NotebookCatalogError.invalidDocument
+            }
             ids.insert(id)
         }
         var cache = RecentCache(heads: currentHeads)
@@ -483,6 +501,17 @@ final class NotebookCatalogDocument {
             verb: "edit", sequence: try nextRecentSequence(.activity), id: UUID()
         )
         try document.put(obj: .ROOT, key: recentKey(.activity, id), value: .String(action.token))
+        try advanceRecentCache(for: [id], from: previousHeads)
+        advanceUnchangedMetadataCaches(from: previousHeads)
+    }
+
+    func setHiddenFromRecents(_ hidden: Bool, for id: UUID) throws {
+        let previousHeads = Set(document.heads())
+        // Older clients validate every recent.* key. Keep this optional
+        // preference outside that namespace so their catalogs still load.
+        try document.put(
+            obj: .ROOT, key: "recentsHidden.\(id.uuidString)", value: .Boolean(hidden)
+        )
         try advanceRecentCache(for: [id], from: previousHeads)
         advanceUnchangedMetadataCaches(from: previousHeads)
     }

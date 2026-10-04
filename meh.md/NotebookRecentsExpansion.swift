@@ -27,6 +27,7 @@ struct NotebookRecentsExpansionHost<Browser: View, Row: View>: View {
     @ViewBuilder let rowContent: (UUID, Int, Int) -> Row
     let onTogglePin: (UUID) -> Void
     let onTrash: (UUID, @escaping (Bool) -> Void) -> Void
+    let onHide: (UUID, @escaping (Bool) -> Void) -> Void
     let contextMenu: (UUID) -> UIMenu
     let onVisibleIDs: ([UUID]) -> Void
     @ViewBuilder let browser: (Bool) -> Browser
@@ -50,6 +51,7 @@ struct NotebookRecentsExpansionHost<Browser: View, Row: View>: View {
                         isExpanded: $isExpanded, isPulling: $isPulling,
                         rowContent: rowContent, onTogglePin: onTogglePin,
                         onTrash: onTrash,
+                        onHide: onHide,
                         contextMenu: contextMenu,
                         onVisibleIDs: onVisibleIDs
                     )
@@ -83,6 +85,7 @@ private struct NotebookRecentsSurface<Row: View>: View {
     let rowContent: (UUID, Int, Int) -> Row
     let onTogglePin: (UUID) -> Void
     let onTrash: (UUID, @escaping (Bool) -> Void) -> Void
+    let onHide: (UUID, @escaping (Bool) -> Void) -> Void
     let contextMenu: (UUID) -> UIMenu
     let onVisibleIDs: ([UUID]) -> Void
 
@@ -150,7 +153,7 @@ private struct NotebookRecentsSurface<Row: View>: View {
                             rowContent(id, index, items.count)
                         }
                     },
-                    onTogglePin: onTogglePin, onTrash: onTrash,
+                    onTogglePin: onTogglePin, onTrash: onTrash, onHide: onHide,
                     contextMenu: contextMenu,
                     usesViewport: true,
                     scrollingEnabled: isExpanded && !isPulling,
