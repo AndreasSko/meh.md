@@ -3,6 +3,26 @@ import Foundation
 import XCTest
 
 final class CloudKitStateValidationTests: XCTestCase {
+    @MainActor
+    func testOpeningStoreLeavesMainActorBeforeDiskWork() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try await CloudKitTransportStateStore.open(
+            directory: directory, accountRecordName: "account", zoneName: "zone",
+            writeState: { data, url in
+                XCTAssertFalse(Thread.isMainThread)
+                try data.write(to: url)
+            }
+        )
+        let state = await store.snapshot()
+        XCTAssertEqual(state.accountRecordName, "account")
+        let reopened = try await CloudKitTransportStateStore.open(
+            directory: directory, accountRecordName: "account", zoneName: "zone"
+        )
+        let persisted = await reopened.snapshot()
+        XCTAssertEqual(persisted, state)
+    }
+
     func testChangedInboxPayloadOrHeadsCannotReuseValidation() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

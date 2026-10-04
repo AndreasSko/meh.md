@@ -339,20 +339,23 @@ public final class NotebookReplica {
         }
     }
 
-    public func createNote(name: String, text: String = "", parentID: UUID? = nil) async throws
-        -> UUID
-    {
-        guard let catalog else { throw NotebookReplicaError.notJoined }
-        let next = try catalog.fork()
-        let note = try NoteDocument(text: text)
-        // Validate metadata before writing the body. Persist the body before
-        // its catalog reference; interrupted operations may leave an orphan.
-        try next.add(id: note.noteID, kind: .note, name: name, parentID: parentID)
+    public func createNote(
+        name: String, text: String = "", parentID: UUID? = nil,
+        position: NotebookCreationPosition = .append
+    ) async throws -> UUID {
         try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            let note = try NoteDocument(text: text)
+            // Validate metadata before writing the body. Persist the body before
+            // its catalog reference; interrupted operations may leave an orphan.
+            try next.add(
+                id: note.noteID, kind: .note, name: name,
+                parentID: parentID, position: position)
             try await self.noteStorage(note.noteID).save(note.snapshot())
             try await self.persistCatalog(next)
+            return note.noteID
         }
-        return note.noteID
     }
 
     public func createNoteInDefaultFolder(
@@ -381,12 +384,18 @@ public final class NotebookReplica {
         }
     }
 
-    public func createFolder(name: String, parentID: UUID? = nil) async throws -> UUID {
-        guard let catalog else { throw NotebookReplicaError.notJoined }
-        let next = try catalog.fork()
-        let id = try next.add(kind: .folder, name: name, parentID: parentID)
-        try await saveCatalog(next)
-        return id
+    public func createFolder(
+        name: String, parentID: UUID? = nil,
+        position: NotebookCreationPosition = .append
+    ) async throws -> UUID {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            let id = try next.add(
+                kind: .folder, name: name, parentID: parentID, position: position)
+            try await self.persistCatalog(next)
+            return id
+        }
     }
 
     public func importMarkdown(

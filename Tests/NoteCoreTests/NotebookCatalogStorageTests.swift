@@ -13,6 +13,36 @@ final class NotebookCatalogStorageTests: XCTestCase {
         uuidString: "789AD90E-8C82-4021-98AC-524DD668A257"
     )!
 
+    func testRepeatedWritesReuseValidationWithoutTrustingChangedBytes()
+        async throws
+    {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = NotebookCatalogStorage(directory: directory)
+        let catalog = try NotebookCatalogDocument(notebookID: notebookID)
+        try await store.save(catalog.snapshot())
+        _ = try catalog.add(kind: .folder, name: "Folder")
+        try await store.save(catalog.snapshot())
+        let decodeCount = await store.validationDecodeCount
+        XCTAssertEqual(decodeCount, 2)
+
+        let loaded = await store.load()
+        XCTAssertEqual(loaded, .current(catalog.snapshot()))
+        let afterLoad = await store.validationDecodeCount
+        XCTAssertEqual(afterLoad, decodeCount)
+
+        // Same-size damage must invalidate the cached acceptance too.
+        var damaged = catalog.snapshot().data
+        damaged[damaged.startIndex] ^= 0xff
+        try damaged.write(to: store.currentURL)
+        guard case .recoveryRequired = await store.load() else {
+            return XCTFail("Changed bytes must be validated again")
+        }
+        await assertSaveError(
+            store, catalog.snapshot(), .invalidCurrentDocument
+        )
+    }
+
     func testReplacementKeepsPreviousAndContinuousHistory() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

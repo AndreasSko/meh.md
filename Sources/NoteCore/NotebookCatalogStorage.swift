@@ -85,6 +85,13 @@ public actor NotebookCatalogStorage {
     public nonisolated let currentURL: URL
     public nonisolated let previousURL: URL
 
+    // Reuse validation only after reading and comparing the actual bytes.
+    // External replacements and damaged files still pass through validation.
+    private var validatedCurrent: (
+        snapshot: NotebookCatalogSnapshot, document: NotebookCatalogDocument
+    )?
+    private(set) var validationDecodeCount = 0
+
     public init(directory: URL) {
         currentURL = directory.appendingPathComponent("catalog.automerge")
         previousURL = directory.appendingPathComponent(
@@ -95,7 +102,7 @@ public actor NotebookCatalogStorage {
     public func load() -> NotebookCatalogLoadResult {
         let current = candidate(at: currentURL)
         switch current {
-        case .valid(let snapshot):
+        case .valid(let snapshot, _):
             return .current(snapshot)
         case .unsupportedSchemaVersion:
             return .blocked(
@@ -109,7 +116,7 @@ public actor NotebookCatalogStorage {
         }
 
         let previous = candidate(at: previousURL)
-        if case .valid(let snapshot) = previous {
+        if case .valid(let snapshot, _) = previous {
             return .recoveryRequired(
                 NotebookCatalogRecovery(
                     previous: snapshot,
@@ -154,7 +161,7 @@ public actor NotebookCatalogStorage {
         afterStage: (NotebookCatalogRecoveryStage) throws -> Void
     ) throws -> NotebookCatalogSnapshot {
         let source = candidate(at: previousURL)
-        guard case .valid(let previous) = source,
+        guard case .valid(let previous, _) = source,
             previous == recovery.previous
         else {
             throw NotebookCatalogStorageError.recoverySourceChanged
@@ -177,7 +184,7 @@ public actor NotebookCatalogStorage {
         let sourceAlreadyRetained: Bool
         if observedCurrent.marker == expectedMarker {
             sourceAlreadyRetained = retainedURL != nil
-        } else if case .valid(let current) = observedCurrent,
+        } else if case .valid(let current, _) = observedCurrent,
             current == previous,
             retainedURL != nil || expectedMarker == .absent
         {
@@ -225,7 +232,12 @@ public actor NotebookCatalogStorage {
     ) throws {
         let incoming: NotebookCatalogDocument
         do {
-            incoming = try NotebookCatalogDocument(snapshot: snapshot)
+            if let cached = validatedCurrent, cached.snapshot == snapshot {
+                incoming = cached.document
+            } else {
+                validationDecodeCount += 1
+                incoming = try NotebookCatalogDocument(snapshot: snapshot)
+            }
         } catch {
             throw NotebookCatalogStorageError.invalidIncomingDocument
         }
@@ -252,10 +264,7 @@ public actor NotebookCatalogStorage {
         switch candidate(at: currentURL) {
         case .absent:
             break
-        case .valid(let currentSnapshot):
-            let current = try NotebookCatalogDocument(
-                snapshot: currentSnapshot
-            )
+        case .valid(let currentSnapshot, let current):
             guard current.notebookID == incoming.notebookID else {
                 throw NotebookCatalogStorageError.notebookIdentityMismatch
             }
@@ -277,6 +286,7 @@ public actor NotebookCatalogStorage {
         }
 
         try DurableFileIO.renameReplacing(temporary, with: currentURL)
+        validatedCurrent = (snapshot, incoming)
         try afterStage(.currentReplaced)
         try DurableFileIO.syncDirectory(directory)
         try afterStage(.directorySynced)
@@ -284,7 +294,7 @@ public actor NotebookCatalogStorage {
 
     private enum Candidate {
         case absent
-        case valid(NotebookCatalogSnapshot)
+        case valid(NotebookCatalogSnapshot, NotebookCatalogDocument)
         case corrupt(Data)
         case unreadable(String)
         case unsupportedSchemaVersion(Data)
@@ -308,7 +318,7 @@ public actor NotebookCatalogStorage {
             switch self {
             case .absent:
                 .absent
-            case .valid(let snapshot):
+            case .valid(let snapshot, _):
                 .bytes(snapshot.data)
             case .corrupt(let data),
                 .unsupportedSchemaVersion(let data):
@@ -331,17 +341,19 @@ public actor NotebookCatalogStorage {
         guard let data = try? Data(contentsOf: url) else {
             return .unreadable(Self.identity(for: information))
         }
+        if url == currentURL, let cached = validatedCurrent,
+            cached.snapshot.data == data {
+            return .valid(cached.snapshot, cached.document)
+        }
         do {
-            let document = try NotebookCatalogDocument(
-                serializedData: data
+            validationDecodeCount += 1
+            let document = try NotebookCatalogDocument(serializedData: data)
+            let snapshot = NotebookCatalogSnapshot(
+                data: data, heads: document.heads,
+                notebookID: document.notebookID
             )
-            return .valid(
-                NotebookCatalogSnapshot(
-                    data: data,
-                    heads: document.heads,
-                    notebookID: document.notebookID
-                )
-            )
+            if url == currentURL { validatedCurrent = (snapshot, document) }
+            return .valid(snapshot, document)
         } catch NotebookCatalogError.unsupportedSchemaVersion {
             return .unsupportedSchemaVersion(data)
         } catch {

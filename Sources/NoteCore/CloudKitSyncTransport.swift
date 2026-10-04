@@ -398,6 +398,23 @@ actor CloudKitTransportStateStore {
     nonisolated let writeHealth = CloudKitWriteHealth()
     private let writeState: @Sendable (Data, URL) throws -> Void
 
+    /// Decoding and validating the durable inbox can be substantial. Leave
+    /// the caller's executor before opening it, including MainActor callers.
+    @concurrent
+    nonisolated static func open(
+        directory: URL,
+        accountRecordName: String,
+        zoneName: String,
+        protocolVersion: Int = 1,
+        writeState: (@Sendable (Data, URL) throws -> Void)? = nil
+    ) async throws -> CloudKitTransportStateStore {
+        try CloudKitTransportStateStore(
+            directory: directory, accountRecordName: accountRecordName,
+            zoneName: zoneName, protocolVersion: protocolVersion,
+            writeState: writeState
+        )
+    }
+
     init(
         directory: URL,
         accountRecordName: String,
@@ -1682,7 +1699,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 throw CloudKitSyncTransportError.corruptState
             }
         }
-        let store = try CloudKitTransportStateStore(
+        let store = try await CloudKitTransportStateStore.open(
             directory: stateDirectory,
             accountRecordName: userRecordID.recordName,
             zoneName: zoneName,
