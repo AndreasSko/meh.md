@@ -1,0 +1,66 @@
+diff --git i/meh.md/MyApp.swift w/meh.md/MyApp.swift
+index 944cba3..4f4b6d2 100644
+--- i/meh.md/MyApp.swift
++++ w/meh.md/MyApp.swift
+@@ -21,24 +21,44 @@ struct NotebookWindowValue: Codable, Hashable {
+     private var appDelegate
+     #endif
+
+-    @State private var workspace = NotebookWorkspace.shared
++    #if DEBUG && os(iOS)
++    @State private var workspace: NotebookWorkspace? =
++        SelectionImplementationLaunch.enabled ? nil : NotebookWorkspace.shared
++    #else
++    @State private var workspace: NotebookWorkspace? = NotebookWorkspace.shared
++    #endif
+
+     var body: some Scene {
+         WindowGroup("meh.md", id: "notebook", for: NotebookWindowValue.self) { value in
+             #if DEBUG
+-            if let launch = CloudKitSmokeLaunch.current {
++            #if os(iOS)
++            if SelectionImplementationLaunch.enabled {
++                SelectionImplementationView()
++            } else if let launch = CloudKitSmokeLaunch.current {
+                 CloudKitSmokeCheckView(launch: launch)
+-            } else {
++            } else if let workspace {
+                 NotebookApplicationView(
+                     workspace: workspace,
+                     preferredNoteID: value.wrappedValue.noteID
+                 )
+             }
+             #else
++            if let launch = CloudKitSmokeLaunch.current {
++                CloudKitSmokeCheckView(launch: launch)
++            } else if let workspace {
++                NotebookApplicationView(
++                    workspace: workspace,
++                    preferredNoteID: value.wrappedValue.noteID
++                )
++            }
++            #endif
++            #else
++            if let workspace {
+             NotebookApplicationView(
+                 workspace: workspace,
+                 preferredNoteID: value.wrappedValue.noteID
+             )
++            }
+             #endif
+         } defaultValue: {
+             NotebookWindowValue()
+diff --git i/meh.md/NotebookAppDelegate.swift w/meh.md/NotebookAppDelegate.swift
+index c26e82d..87849d3 100644
+--- i/meh.md/NotebookAppDelegate.swift
++++ w/meh.md/NotebookAppDelegate.swift
+@@ -26,6 +26,9 @@ final class NotebookAppDelegate: NSObject, UIApplicationDelegate {
+             UIApplication.LaunchOptionsKey: Any
+         ]? = nil
+     ) -> Bool {
++        #if DEBUG
++        if SelectionImplementationLaunch.enabled { return true }
++        #endif
+         NotebookBackupBackgroundScheduler.register()
+         NotebookBackupBackgroundScheduler.scheduleNext()
+         guard RemoteNotificationLaunch.isEnabled else { return true }

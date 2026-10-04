@@ -51,7 +51,6 @@ let package = Package(
                 "MarkdownPresentation.swift", "MarkdownTablePresentation.swift", "MarkdownSyntax.swift", "MyApp.swift",
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
                 "NotebookQuickActionRequests.swift",
-                "NotebookBackupBackgroundScheduler.swift",
                 "NotebookSettingsView.swift", "NotebookTemplateViews.swift",
                 "NotebookNewNoteButton.swift",
                 "NotebookTitleField.swift",
@@ -69,6 +68,7 @@ let package = Package(
             ],
             sources: [
                 "NotebookWorkspace.swift",
+                "NotebookBackupBackgroundScheduler.swift",
                 "NotebookIncomingImportRequests.swift",
                 "NotebookSyncIndicator.swift",
                 "NotebookNoteName.swift",
