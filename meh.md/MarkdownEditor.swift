@@ -1495,6 +1495,62 @@ nonisolated(unsafe) private var markdownTextViewStateKey: UInt8 = 0
 // Keep editor state in a normally initialized object attached to the view.
 final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     UIPointerInteractionDelegate {
+    /// Give deliberate navigation and editing ownership of the viewport.
+    /// Keep this nested: UIKit can reveal a range while handling an edit.
+    func markdownWithAllowedScrolling<Result>(
+        _ operation: () throws -> Result
+    ) rethrows -> Result {
+        let state = markdownState
+        state.allowedScrollDepth += 1
+        defer { state.allowedScrollDepth -= 1 }
+        return try operation()
+    }
+
+    override func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
+        // Native selection edge scrolling uses animated offset requests.
+        // Leave direct offsets, bounds, and ordinary scroll gestures alone.
+        let state = markdownState
+        let pan = panGestureRecognizer.state
+        let isManualScroll = pan == .began || pan == .changed
+            || isDragging || isDecelerating
+        if animated, isFirstResponder, selectedRange.length > 0,
+           !isManualScroll, state.allowedScrollDepth == 0,
+           !state.isFinding, !state.isApplyingCommand, !state.isPasting,
+           state.keyboardPresses.isEmpty, markedTextRange == nil,
+           undoManager?.isUndoing != true, undoManager?.isRedoing != true,
+           !UIAccessibility.isVoiceOverRunning,
+           !UIAccessibility.isSwitchControlRunning {
+            return
+        }
+        super.setContentOffset(contentOffset, animated: animated)
+    }
+
+    override func scrollRangeToVisible(_ range: NSRange) {
+        markdownWithAllowedScrolling { super.scrollRangeToVisible(range) }
+    }
+
+    override func scrollRectToVisible(_ rect: CGRect, animated: Bool) {
+        markdownWithAllowedScrolling {
+            super.scrollRectToVisible(rect, animated: animated)
+        }
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        markdownState.keyboardPresses.formUnion(presses.filter { $0.key != nil })
+        super.pressesBegan(presses, with: event)
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        // Keep the exemption until UIKit has handled the final key event.
+        defer { markdownState.keyboardPresses.subtract(presses) }
+        super.pressesEnded(presses, with: event)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        defer { markdownState.keyboardPresses.subtract(presses) }
+        super.pressesCancelled(presses, with: event)
+    }
+
     var markdownFindPresentation: MarkdownEditorFindPresentation? {
         get { markdownState.findPresentation }
         set { markdownState.findPresentation = newValue }
@@ -1503,8 +1559,8 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     override func findInteraction(
         _ interaction: UIFindInteraction, didBegin session: UIFindSession
     ) {
-        super.findInteraction(interaction, didBegin: session)
         markdownState.isFinding = true
+        super.findInteraction(interaction, didBegin: session)
         markdownFindPresentation?.isVisible = true
         setNeedsLayout()
     }
@@ -1535,6 +1591,11 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     }
 
     override func layoutSubviews() {
+        // Keyboard, rotation, and TextKit layout retain their native reveal.
+        markdownWithAllowedScrolling { layoutMarkdownSubviews() }
+    }
+
+    private func layoutMarkdownSubviews() {
         super.layoutSubviews()
         updateFindKeyboardInsets()
         // Scroll-past-end space belongs to the document. A content inset
@@ -1566,13 +1627,14 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
            undoManager?.isUndoing != true, undoManager?.isRedoing != true {
             markdownCellController.end()
         }
-        let accepted = super.becomeFirstResponder()
+        let accepted = markdownWithAllowedScrolling { super.becomeFirstResponder() }
         markdownState.linkPointer?.invalidate()
         return accepted
     }
 
     override func resignFirstResponder() -> Bool {
-        let accepted = super.resignFirstResponder()
+        let accepted = markdownWithAllowedScrolling { super.resignFirstResponder() }
+        if accepted { markdownState.keyboardPresses.removeAll() }
         markdownState.linkPointer?.invalidate()
         return accepted
     }
@@ -1939,6 +2001,10 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     }
 
     override func insertText(_ text: String) {
+        markdownWithAllowedScrolling { insertMarkdownText(text) }
+    }
+
+    private func insertMarkdownText(_ text: String) {
         if text == "\n", markdownLinkNavigation?.hasLinkCompletion == true,
            markedTextRange == nil,
            markdownLinkNavigation?.completionCommand?("accept") == true { return }
@@ -1950,6 +2016,28 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             if let command, performMarkdownCommand(command) { return }
         }
         super.insertText(text)
+    }
+
+    override func deleteBackward() {
+        markdownWithAllowedScrolling { super.deleteBackward() }
+    }
+
+    override func replace(_ range: UITextRange, withText text: String) {
+        markdownWithAllowedScrolling { super.replace(range, withText: text) }
+    }
+
+    override func setMarkedText(_ markedText: String?, selectedRange: NSRange) {
+        markdownWithAllowedScrolling {
+            super.setMarkedText(markedText, selectedRange: selectedRange)
+        }
+    }
+
+    override func unmarkText() {
+        markdownWithAllowedScrolling { super.unmarkText() }
+    }
+
+    override func selectAll(_ sender: Any?) {
+        markdownWithAllowedScrolling { super.selectAll(sender) }
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -2038,6 +2126,8 @@ private final class MarkdownTextViewState: NSObject {
     var isFinding = false
     var isApplyingCommand = false
     var isPasting = false
+    var allowedScrollDepth = 0
+    var keyboardPresses: Set<UIPress> = []
     var reportedWindowAttachment = false
     var didAttachToWindow: (() -> Void)?
     var didLayout: (() -> Void)?
