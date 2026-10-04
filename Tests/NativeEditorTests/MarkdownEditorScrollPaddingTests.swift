@@ -298,6 +298,7 @@ final class MarkdownEditorScrollPaddingTests: XCTestCase {
             // the caret. Document whitespace must not consume that space.
             XCTAssertEqual(textView.contentInset.bottom, 0)
             XCTAssertEqual(textView.adjustedContentInset.bottom, 0)
+            XCTAssertEqual(textView.textContainerInset.bottom, 18)
             XCTAssertEqual(textView.selectedRange, selection)
             let caret = textView.caretRect(for: textView.selectedTextRange!.start)
             XCTAssertGreaterThanOrEqual(caret.minY, textView.bounds.minY - 1)
@@ -372,8 +373,45 @@ final class MarkdownEditorScrollPaddingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(caret.minY, textView.bounds.minY - 1)
         XCTAssertEqual(
             textView.textContainerInset.bottom,
-            18 + MarkdownEditorScrollPadding.bottom(for: textView.bounds.height)
+            18
         )
+    }
+
+    func testRepeatedLayoutAndResizeDoNotAccumulateEndSpace() throws {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        let host = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.rootViewController = host
+        host.view.addSubview(textView)
+        textView.frame = CGRect(x: 0, y: 0, width: 402, height: 488)
+        textView.font = .systemFont(ofSize: 17)
+        textView.text = (1...80).map { "Fictional journal entry \($0)" }
+            .joined(separator: "\n")
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let manager = try XCTUnwrap(textView.textLayoutManager)
+        let content = try XCTUnwrap(manager.textContentManager)
+        // This test checks extent arithmetic after geometry is known, not
+        // estimated-layout scrolling (covered by the gesture and UI tests).
+        manager.ensureLayout(for: content.documentRange)
+        textView.setNeedsLayout()
+        textView.layoutIfNeeded()
+        let naturalHeight = textView.contentSize.height
+            - textView.markdownScrollPastEndPadding
+
+        for height: CGFloat in [488, 488, 706, 343, 488, 488] {
+            textView.frame.size.height = height
+            for _ in 0..<3 {
+                textView.setNeedsLayout()
+                textView.layoutIfNeeded()
+                XCTAssertEqual(textView.textContainerInset.bottom, 18)
+                XCTAssertEqual(
+                    textView.contentSize.height - textView.markdownScrollPastEndPadding,
+                    naturalHeight, accuracy: 1,
+                    "Repeated layout must add optional end space exactly once"
+                )
+            }
+        }
     }
 #endif
 }

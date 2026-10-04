@@ -1544,6 +1544,21 @@ nonisolated(unsafe) private var markdownTextViewStateKey: UInt8 = 0
 // Keep editor state in a normally initialized object attached to the view.
 final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     UIPointerInteractionDelegate {
+    override var contentSize: CGSize {
+        get { super.contentSize }
+        set {
+            // UIKit supplies the natural text extent. Extend the scrollable
+            // document without turning whitespace into a caret-reveal margin.
+            markdownState.naturalContentSize = newValue
+            super.contentSize = contentSizeWithEndPadding(newValue)
+        }
+    }
+
+    private func contentSizeWithEndPadding(_ size: CGSize) -> CGSize {
+        CGSize(width: size.width,
+               height: size.height + markdownScrollPastEndPadding)
+    }
+
     var markdownFindPresentation: MarkdownEditorFindPresentation? {
         get { markdownState.findPresentation }
         set { markdownState.findPresentation = newValue }
@@ -1594,19 +1609,27 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         let titleExtent = markdownState.titleHost == nil
             ? 0 : markdownState.titleHeight + 12
         insets.top = 18 + titleExtent
-        // Small system gestures can briefly resize the editor. Rewriting
-        // document padding for those changes invalidates TextKit's estimated
-        // extent and can move the viewport by much more than the resize.
+        // Small system gestures can briefly resize the editor. Keep optional
+        // end space stable so those changes do not move the scrollable extent.
         // Optional space below the document may differ from half the viewport
         // by less than half a body-font line. Compare against applied padding
         // so accumulated resizes still update it, independently of the title.
-        if markdownState.appliedEndPadding == nil
+        let previousPadding = markdownState.appliedEndPadding
+        if previousPadding == nil
             || abs(markdownScrollPastEndPadding - padding) >= markdownBodyLineHeight / 2 {
             markdownState.appliedEndPadding = padding
         }
-        insets.bottom = 18 + markdownScrollPastEndPadding
+        // Text margins also affect native caret reveal. Keep optional space
+        // below the note in its scrollable extent instead.
+        insets.bottom = 18
         if insets != textContainerInset {
             textContainerInset = insets
+        }
+        if previousPadding != markdownState.appliedEndPadding,
+           let naturalSize = markdownState.naturalContentSize {
+            // A viewport resize can change padding without a new text extent.
+            // Start from the last native size so layout never adds it twice.
+            super.contentSize = contentSizeWithEndPadding(naturalSize)
         }
         layoutMarkdownTitle()
         markdownSyntaxCache.refreshTablesAfterResize(
@@ -1622,13 +1645,18 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
            undoManager?.isUndoing != true, undoManager?.isRedoing != true {
             markdownCellController.end()
         }
+        let wasFirstResponder = isFirstResponder
         let accepted = super.becomeFirstResponder()
+        if accepted, !wasFirstResponder {
+            markdownState.pendingKeyboardSelectionReveal = true
+        }
         markdownState.linkPointer?.invalidate()
         return accepted
     }
 
     override func resignFirstResponder() -> Bool {
         let accepted = super.resignFirstResponder()
+        if accepted { markdownState.pendingKeyboardSelectionReveal = false }
         markdownState.linkPointer?.invalidate()
         return accepted
     }
@@ -1768,7 +1796,39 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil { attachMarkdownTitleHostIfNeeded() }
+        let center = NotificationCenter.default
+        if let observer = markdownState.keyboardRevealObserver {
+            center.removeObserver(observer)
+            markdownState.keyboardRevealObserver = nil
+        }
+        if window != nil {
+            markdownState.keyboardRevealObserver = center.addObserver(
+                forName: UIResponder.keyboardDidShowNotification,
+                object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.revealSelectionAfterKeyboardDidShow()
+                }
+            }
+        } else {
+            markdownState.pendingKeyboardSelectionReveal = false
+        }
         reportWindowAttachmentIfNeeded()
+    }
+
+    private func revealSelectionAfterKeyboardDidShow() {
+        guard markdownState.pendingKeyboardSelectionReveal else { return }
+        markdownState.pendingKeyboardSelectionReveal = false
+        guard window != nil, isFirstResponder, isEditable,
+              !markdownState.isFinding else { return }
+        let selection = selectedRange
+        let length = textStorage.length
+        guard selection.location != NSNotFound,
+              selection.location <= length,
+              selection.length <= length - selection.location else { return }
+        // Estimated TextKit extents can leave the caret covered on focus.
+        // Reveal the current selection once native keyboard bounds settle.
+        scrollRangeToVisible(selection)
     }
 
     private func reportWindowAttachmentIfNeeded() {
@@ -2104,7 +2164,17 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 }
 
 private final class MarkdownTextViewState: NSObject {
+    var keyboardRevealObserver: NSObjectProtocol?
+    var pendingKeyboardSelectionReveal = false
+
+    isolated deinit {
+        if let keyboardRevealObserver {
+            NotificationCenter.default.removeObserver(keyboardRevealObserver)
+        }
+    }
+
     var appliedEndPadding: CGFloat?
+    var naturalContentSize: CGSize?
     var bodyLineHeight = UIFont.systemFont(
         ofSize: MarkdownPresentation.defaultFontSize
     ).lineHeight
