@@ -27,6 +27,7 @@ final class MarkdownEditorNavigation {
     let snippetMenu = EditorSnippetMenuState()
     var insertSnippet: ((UUID) -> Void)?
     let tableCommands = MarkdownTableCommandState()
+    let headingCommands = MarkdownHeadingCommandState()
     let findPresentation = MarkdownEditorFindPresentation()
     var showFind: (() -> Void)?
     var openLink: ((NotebookLinkOccurrence) -> Void)? {
@@ -43,6 +44,8 @@ final class MarkdownEditorNavigation {
     var capturePosition: (() -> MarkdownEditorPosition?)?
     var restorePosition: ((MarkdownEditorPosition) -> Void)?
     #if os(iOS)
+    // Present editor controls in the document window, never the keyboard window.
+    weak var editorPresentationView: UIView?
     var restorePositionAndNotify: ((MarkdownEditorPosition, @escaping () -> Void) -> Void)?
     var captureViewportInsets: (() -> UIEdgeInsets?)?
     var captureViewportOriginY: (() -> CGFloat?)?
@@ -587,7 +590,7 @@ final class MarkdownTextView: NSTextView {
             request(string, selectedRange())
             return true
         }
-        let syntaxResult = command == .toggleTask
+        let syntaxResult = command == .toggleTask || command.headingLevel != nil
             ? markdownSyntaxCache.result(for: string) : nil
         guard let change = MarkdownEditingRules.change(
             for: command, text: string, selection: selectedRange(),
@@ -916,6 +919,7 @@ struct MarkdownEditor: NSViewRepresentable {
         private func refreshTableCommands(in textView: NSTextView) {
             guard let textView = textView as? MarkdownTextView else { return }
             parent.navigation?.tableCommands.scheduleRefresh(from: textView)
+            parent.navigation?.headingCommands.scheduleRefresh(from: textView)
         }
 
         func attachNavigation(to textView: MarkdownTextView) {
@@ -1967,7 +1971,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             return true
         }
         let source = text ?? ""
-        let syntaxResult = command == .toggleTask
+        let syntaxResult = command == .toggleTask || command.headingLevel != nil
             ? markdownSyntaxCache.result(for: source) : nil
         guard let change = MarkdownEditingRules.change(
             for: command, text: source, selection: selectedRange,
@@ -2497,6 +2501,7 @@ struct MarkdownEditor: UIViewRepresentable {
         private func refreshTableCommands(in textView: UITextView) {
             guard let textView = textView as? MarkdownTextView else { return }
             parent.navigation?.tableCommands.scheduleRefresh(from: textView)
+            parent.navigation?.headingCommands.scheduleRefresh(from: textView)
         }
 
         func attachNavigation(to textView: MarkdownTextView) {

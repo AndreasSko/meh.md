@@ -2455,7 +2455,7 @@ final class MarkdownSyntaxCache: NSObject {
     // nil means that the complete layout must be refreshed.
     private var dirtyLayoutRange: NSRange?
     private var appliedPreviewRanges: MarkdownLivePreviewRanges?
-    private var appliedBodyFont: PlatformFont?
+    private(set) var appliedBodyFont: PlatformFont?
     private(set) var lastLayoutRange = NSRange(location: 0, length: 0)
 
     func recordAppliedLayoutRange(_ range: NSRange) {

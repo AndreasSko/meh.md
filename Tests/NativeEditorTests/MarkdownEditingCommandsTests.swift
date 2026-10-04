@@ -10,7 +10,8 @@ final class MarkdownEditingCommandsTests: XCTestCase {
             MarkdownEditingCommand.allCases,
             [
                 .continueLine, .indent, .outdent, .bold, .italic,
-                .strikethrough, .highlight, .heading, .link,
+                .strikethrough, .highlight, .heading, .body,
+                .heading1, .heading2, .heading3, .heading4, .heading5, .heading6, .link,
                 .inlineCode, .codeBlock, .taskList, .toggleTask, .insertTable,
                 .tableRowAbove, .tableRowBelow,
                 .tableColumnBefore, .tableColumnAfter,
@@ -477,6 +478,75 @@ final class MarkdownEditingCommandsTests: XCTestCase {
             equals: "## ",
             selected: NSRange(location: 3, length: 0)
         )
+    }
+
+    func testExplicitHeadingLevelsPreserveUnicodeAndCaret() throws {
+        for (level, command) in [MarkdownEditingCommand.heading1, .heading2,
+                                  .heading3, .heading4, .heading5, .heading6].enumerated() {
+            let text = "Before\r\n🪐 café\r\nAfter"
+            let selection = (text as NSString).range(of: "café")
+            let change = try XCTUnwrap(MarkdownEditingRules.change(
+                for: command, text: text, selection: selection
+            ))
+            let result = applying(change, to: text)
+            XCTAssertEqual(result, "Before\r\n" + String(repeating: "#", count: level + 1)
+                + " 🪐 café\r\nAfter")
+            XCTAssertEqual((result as NSString).substring(with: change.selection), "café")
+            XCTAssertNil(MarkdownEditingRules.change(
+                for: command, text: result, selection: change.selection
+            ))
+        }
+    }
+
+    func testHeadingMenuNormalizesMixedLevelsAndBodyPreservesContainers() throws {
+        let text = "# Moon\n### Stars\n\n* > ## Orbit"
+        let selection = NSRange(location: 0, length: text.utf16.count)
+        XCTAssertNil(MarkdownEditingRules.headingLevel(text: text, selection: selection))
+        let change = try XCTUnwrap(MarkdownEditingRules.change(
+            for: .heading3, text: text, selection: selection
+        ))
+        let result = applying(change, to: text)
+        XCTAssertEqual(result, "### Moon\n### Stars\n\n* > ### Orbit")
+        XCTAssertEqual(MarkdownEditingRules.headingLevel(
+            text: result, selection: change.selection
+        ), 3)
+        let body = try XCTUnwrap(MarkdownEditingRules.change(
+            for: .body, text: result, selection: change.selection
+        ))
+        let plain = applying(body, to: result)
+        XCTAssertEqual(plain, "Moon\nStars\n\n* > Orbit")
+        XCTAssertEqual(MarkdownEditingRules.headingLevel(
+            text: plain, selection: body.selection
+        ), 0)
+        XCTAssertNil(MarkdownEditingRules.change(
+            for: .body, text: plain, selection: body.selection
+        ))
+    }
+
+    func testHeadingMenuHandlesEmptyLineAndExcludesNextParagraph() throws {
+        try assertChange(.heading1, text: "", selection: NSRange(location: 0, length: 0),
+                         equals: "# ", selected: NSRange(location: 2, length: 0))
+        try assertChange(.body, text: "### ", selection: NSRange(location: 4, length: 0),
+                         equals: "", selected: NSRange(location: 0, length: 0))
+        try assertChange(.heading2, text: "Moon\nStars",
+                         selection: NSRange(location: 0, length: 5),
+                         equals: "## Moon\nStars", selected: NSRange(location: 3, length: 5))
+    }
+
+    func testHeadingMenuRejectsCodeAndTables() {
+        for text in ["```\nMoon\n```", "`Moon`",
+                     "| Moon | Stars |\n| --- | --- |\n| a | b |"] {
+            let selection = (text as NSString).range(of: "Moon")
+            let syntax = MarkdownSyntax.parse(text)
+            XCTAssertFalse(MarkdownEditingRules.headingCommandsAvailable(
+                text: text, selection: selection, syntax: syntax
+            ))
+            for command in [MarkdownEditingCommand.body, .heading1, .heading6] {
+                XCTAssertNil(MarkdownEditingRules.change(
+                    for: command, text: text, selection: selection, syntaxResult: syntax
+                ))
+            }
+        }
     }
 
     func testLinkCreatesDestinationSelectionAndRevealsExistingURL() throws {
