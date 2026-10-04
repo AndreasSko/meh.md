@@ -154,6 +154,7 @@ struct NotebookView: View {
     @State private var pendingPresentedItemID: UUID?
     @State private var showingTrash = false
     @State private var showingTextSize = false
+    @State private var sharedFile: NotebookSharedFile?
     @State private var historyBrowser: NoteHistoryBrowserState?
     @State private var isLoadingHistory = false
     @State private var historyLoadTask: Task<Void, Never>?
@@ -518,6 +519,14 @@ struct NotebookView: View {
                             #endif
                             ToolbarItem {
                                 Menu {
+                                    Button {
+                                        shareMarkdown()
+                                    } label: {
+                                        Label("Share", systemImage: "square.and.arrow.up")
+                                    }
+                                    .disabled(!session.isEditingEnabled || busy || sharedFile != nil)
+                                    .accessibilityIdentifier("notebook-share-markdown")
+                                    Divider()
                                     #if os(macOS)
                                     if linkHistory.forwardTarget != nil {
                                         Button("Go Forward") {
@@ -570,6 +579,11 @@ struct NotebookView: View {
                                     Label("Note Actions", systemImage: "ellipsis.circle")
                                 }
                                 .accessibilityIdentifier("notebook-note-actions")
+                                #if os(macOS)
+                                .background(NotebookSharePicker(
+                                    file: $sharedFile, onFinish: presentSharedImport
+                                ))
+                                #endif
                                 .popover(isPresented: $showingTextSize) {
                                     EditorTextSizeControl(
                                         fontSize: $editorFontSize,
@@ -918,6 +932,13 @@ struct NotebookView: View {
             .frame(minWidth: 400, idealWidth: 560, minHeight: 360, idealHeight: 540)
             #endif
         }
+        #if os(iOS)
+        .sheet(item: $sharedFile, onDismiss: presentSharedImport) { file in
+            NotebookShareSheet(file: file) {
+                if sharedFile?.id == file.id { sharedFile = nil }
+            }
+        }
+        #endif
         .sheet(isPresented: $showingTemplates, onDismiss: finishTemplatePresentation) {
             NotebookTemplatePicker(
                 replica: replica,
@@ -2508,7 +2529,8 @@ struct NotebookView: View {
     }
 
     private func presentSharedImport() {
-        guard sharedImportID == nil, !busy, !showingSettings, !showingTemplates, !showingTrash,
+        guard sharedFile == nil, sharedImportID == nil, !busy,
+              !showingSettings, !showingTemplates, !showingTrash,
               !showingImport, movingIDs.isEmpty, !replica.hasPendingImport,
               let request = incomingImports?.requests.first else { return }
         sharedImportID = request.id
@@ -2970,6 +2992,18 @@ struct NotebookView: View {
         }
         navigation.revealSearchMatch?(match)
         searchLandingPosition = navigation.capturePosition?()
+    }
+
+    private func shareMarkdown() {
+        guard sharedFile == nil, let session, let noteID = selectedID else { return }
+        perform {
+            try await flushEditor()
+            guard selectedID == noteID, session.isEditingEnabled,
+                  let placement = selectedPlacement else { return }
+            sharedFile = try NotebookSharedFile.markdown(
+                text: session.text, filename: placement.displayName
+            )
+        }
     }
 
     private func flushEditor() async throws {
