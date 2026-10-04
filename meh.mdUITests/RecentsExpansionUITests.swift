@@ -181,11 +181,66 @@ final class RecentsExpansionUITests: XCTestCase {
         XCTAssertTrue((editor.value as? String ?? "").contains("aurora watch"))
         if UIDevice.current.userInterfaceIdiom == .phone {
             showSidebar(app)
-            XCTAssertTrue(footer.waitForExistence(timeout: 5))
-            XCTAssertFalse(close.isHittable)
-        } else {
-            XCTAssertTrue(close.isHittable)
         }
+        XCTAssertTrue(close.isHittable)
+    }
+
+    func testExpandedRecentsSurvivesNoteNavigationUntilClosed() throws {
+        continueAfterFailure = false
+        let app = try makeFixture()
+        let footer = app.buttons["notebook-recents-show-all"]
+        let close = app.buttons["notebook-recents-close"]
+        XCTAssertTrue(footer.waitForExistence(timeout: 10))
+        footer.tap()
+        XCTAssertTrue(close.isHittable)
+
+        let older = recentButtons(app).matching(NSPredicate(
+            format: "label CONTAINS %@", "Moonrise"
+        )).firstMatch
+        for _ in 0..<4 where !older.isHittable {
+            let row = recentButtons(app).allElementsBoundByIndex.first {
+                $0.isHittable && $0.frame.midY > app.frame.height * 0.4
+            }
+            try XCTUnwrap(row).swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(older.isHittable)
+        let visibleNeighbor = try XCTUnwrap(
+            recentButtons(app).allElementsBoundByIndex.first {
+                $0.isHittable && $0.identifier != older.identifier
+                    && ($0.label.contains("Telescope setup")
+                        || $0.label.contains("Star chart"))
+            }
+        )
+        let neighborID = visibleNeighbor.identifier
+        capture(app, name: "Expanded Recents before opening older note")
+        older.tap()
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertTrue((editor.value as? String ?? "").contains("moonrise"))
+        showSidebar(app)
+        capture(app, name: "Recents after returning from older note")
+        XCTAssertTrue(close.isHittable,
+                      "Recents must stay expanded until explicitly closed")
+        XCTAssertGreaterThan(recentButtons(app).count, 5)
+        XCTAssertTrue(recentButtons(app).matching(identifier: neighborID)
+            .firstMatch.isHittable, "Keep the older Recents viewport on return")
+
+        // Opening a note updates its recent order. Assert the expanded list
+        // survives navigation rather than freezing the previous row order.
+        close.tap()
+        XCTAssertTrue(footer.waitForExistence(timeout: 5))
+        XCTAssertTrue(footer.isHittable)
+        XCTAssertEqual(recentButtons(app).count, 5)
+        let compactNote = try XCTUnwrap(
+            recentButtons(app).allElementsBoundByIndex.first { $0.isHittable }
+        )
+        compactNote.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        showSidebar(app)
+        XCTAssertTrue(footer.isHittable)
+        XCTAssertFalse(close.isHittable)
+        XCTAssertEqual(recentButtons(app).count, 5)
+        capture(app, name: "Recents remains compact after explicit close")
     }
 
     func testCaptureRecentSwipeComparison() throws {
