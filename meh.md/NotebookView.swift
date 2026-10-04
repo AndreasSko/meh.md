@@ -29,6 +29,20 @@ private struct NotebookBrowserViewport: Equatable {
 
 private final class NotebookBrowserScrollReference {
     weak var value: UIScrollView?
+
+    func creationPosition(relativeTo id: UUID) -> NotebookCreationPosition {
+        guard let list = value as? UICollectionView,
+              let interaction = list.interactions.compactMap({
+                  $0 as? UIContextMenuInteraction
+              }).first,
+              interaction.menuAppearance != .unknown else { return .after(id) }
+        let point = interaction.location(in: list)
+        guard list.bounds.contains(point),
+              let indexPath = list.indexPathForItem(at: point),
+              let attributes = list.layoutAttributesForItem(at: indexPath),
+              attributes.frame.contains(point) else { return .after(id) }
+        return point.y < attributes.frame.midY ? .before(id) : .after(id)
+    }
 }
 
 /// Reads the Files header's enclosing list, without owning its scrolling.
@@ -193,6 +207,7 @@ struct NotebookView: View {
         @State private var awaitingQuickActionSheetDismissal = false
         @State private var browserScrollView = NotebookBrowserScrollReference()
         @State private var browserViewport: NotebookBrowserViewport?
+        @State private var browserViewportHeight: CGFloat = 0
         @State private var browserReturnViewport: NotebookBrowserViewport?
         @State private var browserToolbarWasHidden = false
         @State private var linkRootRoute: NotebookLinkRoute?
@@ -1120,6 +1135,9 @@ struct NotebookView: View {
                             onTrash: { id, completion in
                                 trashItems([id], onCompletion: completion)
                             },
+                            onHide: { id, completion in
+                                setRecentHidden(true, for: id, onCompletion: completion)
+                            },
                             contextMenu: recentUIKitMenu,
                             accessibilityHidden: hidesCompactRows
                         )
@@ -1260,6 +1278,9 @@ struct NotebookView: View {
         .accessibilityAction(named: Text("Move to Trash")) {
             trashItems([placement.item.id])
         }
+        .accessibilityAction(named: Text("Hide from Recents")) {
+            setRecentHidden(true, for: placement.item.id)
+        }
         .background(NotebookRecentCardBackground(
             position: recentCardPosition(index: index, count: count)
         ).opacity(showsCardBackground ? 1 : 0))
@@ -1279,9 +1300,18 @@ struct NotebookView: View {
             Button(role: .destructive) {
                 trashItems([placement.item.id])
             } label: {
-                Label("Trash", systemImage: "trash")
+                Image(systemName: "trash")
             }
+            .accessibilityLabel("Move to Trash")
             .accessibilityIdentifier("notebook-recent-swipe-trash")
+            Button {
+                setRecentHidden(true, for: placement.item.id)
+            } label: {
+                Image(systemName: "eye.slash")
+            }
+            .tint(.gray)
+            .accessibilityLabel("Hide from Recents")
+            .accessibilityIdentifier("notebook-recent-swipe-hide")
         }
         .contextMenu {
             actions(for: placement, allowsCreation: false,
@@ -1318,6 +1348,13 @@ struct NotebookView: View {
             attributes: !pinned && !replica.canPinInRecents(id) ? .disabled : []
         ) { _ in
             setRecentPinned(!pinned, for: id)
+        })
+        menuActions.append(UIAction(
+            title: String(localized: "Hide from Recents"),
+            image: UIImage(systemName: "eye.slash"),
+            attributes: busy ? .disabled : []
+        ) { _ in
+            setRecentHidden(true, for: id)
         })
         menuActions.append(UIAction(
             title: replica.isTemplateSource(id)
@@ -1374,6 +1411,15 @@ struct NotebookView: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private func setRecentHidden(
+        _ hidden: Bool, for id: UUID,
+        onCompletion: @escaping @MainActor (Bool) -> Void = { _ in }
+    ) {
+        perform({
+            try await replica.setHiddenFromRecents(hidden, for: id)
+        }, onCompletion: onCompletion)
     }
 
     private var showsCurrentNote: Bool {
@@ -1666,13 +1712,21 @@ struct NotebookView: View {
     }
 
     private func activateSidebarRow(_ placement: NotebookPlacement) {
-        guard !busy, editingID == nil, !showsSelectionControls else { return }
-        if placement.item.kind == .folder {
+        guard !busy, !showsSelectionControls,
+              editingID != placement.item.id else { return }
+        if placement.item.kind == .folder, editingID == nil {
             toggleFolder(placement.item.id)
             return
         }
         perform {
-            try await selectNote(placement.item.id)
+            // A tap outside the naming row finishes its pending name before
+            // navigating. Otherwise an unsubmitted folder traps all Files taps.
+            try await commitInlineNameIfNeeded()
+            if placement.item.kind == .folder {
+                toggleFolder(placement.item.id)
+            } else {
+                try await selectNote(placement.item.id)
+            }
         }
     }
 
@@ -1718,12 +1772,29 @@ struct NotebookView: View {
     }
 
     @ViewBuilder
-    private func creationActions(parentID: UUID?) -> some View {
-        Button("New Note") { createItem(kind: .note, parentID: parentID) }
+    private func creationActions(for placement: NotebookPlacement) -> some View {
+        let parentID = creationParent(for: placement)
+        let position = contextualCreationPosition(for: placement)
+        Button("New Note") {
+            createItem(kind: .note, parentID: parentID, position: position)
+        }
             .disabled(busy)
         templateCreationButton
-        Button("New Folder") { createItem(kind: .folder, parentID: parentID) }
+        Button("New Folder") {
+            createItem(kind: .folder, parentID: parentID, position: position)
+        }
             .disabled(busy)
+    }
+
+    private func contextualCreationPosition(
+        for placement: NotebookPlacement
+    ) -> NotebookCreationPosition {
+        if placement.item.kind == .folder { return .first }
+        #if os(iOS)
+        return browserScrollView.creationPosition(relativeTo: placement.item.id)
+        #else
+        return .after(placement.item.id)
+        #endif
     }
 
     @ViewBuilder
@@ -1732,7 +1803,7 @@ struct NotebookView: View {
         allowsRename: Bool = true, allowsShowInFiles: Bool = false
     ) -> some View {
         if allowsCreation, !placement.isInTrash {
-            creationActions(parentID: creationParent(for: placement))
+            creationActions(for: placement)
             Divider()
         }
         if placement.item.kind == .note, !placement.isInTrash,
@@ -1767,7 +1838,20 @@ struct NotebookView: View {
                 Button("Show in Files") { showInFiles(placement.item.id) }
                     .accessibilityIdentifier("notebook-show-in-files")
             }
-            recentPinButton(for: placement.item.id)
+            if !replica.isHiddenFromRecents(placement.item.id) {
+                recentPinButton(for: placement.item.id)
+            }
+            let hidden = replica.isHiddenFromRecents(placement.item.id)
+            let visibilityTitle: LocalizedStringKey = hidden
+                ? "Show in Recents" : "Hide from Recents"
+            Button {
+                setRecentHidden(!hidden, for: placement.item.id)
+            } label: {
+                Label(visibilityTitle,
+                      systemImage: hidden ? "eye" : "eye.slash")
+            }
+            .disabled(busy)
+            .accessibilityIdentifier("notebook-recents-visibility-" + placement.item.id.uuidString)
         }
         if placement.isInTrash {
             if placement.item.isTrashed {
@@ -1843,8 +1927,10 @@ struct NotebookView: View {
 
     private func createItem(
         kind: NotebookItemKind, parentID: UUID?,
+        position: NotebookCreationPosition = .append,
         usesDefaultDestination: Bool = false
     ) {
+        var createdFolderID: UUID?
         perform {
             try await flushEditor()
             let destinationID = usesDefaultDestination
@@ -1861,7 +1947,8 @@ struct NotebookView: View {
                 )
                 let id = try await (usesDefaultDestination
                     ? replica.createNoteInDefaultFolder(name: name)
-                    : replica.createNote(name: name, parentID: parentID))
+                    : replica.createNote(
+                        name: name, parentID: parentID, position: position))
                 reveal(id)
                 try await selectNote(id)
                 detailEditingID = id
@@ -1872,10 +1959,16 @@ struct NotebookView: View {
                     noteID: id, selectsAll: true
                 )
             case .folder:
-                let id = try await replica.createFolder(
-                    name: "Untitled Folder", parentID: parentID)
-                beginRenaming(id: id, name: "Untitled Folder")
+                createdFolderID = try await replica.createFolder(
+                    name: "Untitled Folder", parentID: parentID,
+                    position: position)
             }
+        } onSuccess: {
+            guard let id = createdFolderID else { return }
+            navigationState.isTreeExpanded = true
+            reveal(id)
+            beginRenaming(id: id, name: "Untitled Folder")
+            fileRevealRequest = NotebookFileReveal(id: id, highlights: false)
         }
     }
 
@@ -2378,6 +2471,9 @@ struct NotebookView: View {
                 onTrash: { id, completion in
                     trashItems([id], onCompletion: completion)
                 },
+                onHide: { id, completion in
+                    setRecentHidden(true, for: id, onCompletion: completion)
+                },
                 contextMenu: recentUIKitMenu,
                 onVisibleIDs: { visibleRecentPreviewIDs = $0 },
                 browser: { hidesCompactRows in
@@ -2456,6 +2552,10 @@ struct NotebookView: View {
         }
         .listStyle(.plain)
         #if os(iOS)
+        // Keep a small buffer above the floating controls, including in
+        // shorter windows, without leaving half the browser empty.
+        .contentMargins(.bottom, max(96, browserViewportHeight / 5),
+                        for: .scrollContent)
         .listSectionSpacing(12)
         .listSectionMargins(.top, 8)
         .listSectionMargins(.bottom, 0)
@@ -2465,6 +2565,11 @@ struct NotebookView: View {
                                     size: geometry.containerSize)
         } action: { _, viewport in
             browserViewport = viewport
+            // Rendering must depend only on size. Reading the full viewport
+            // for the margin would rebuild the list on every scroll offset.
+            if browserViewportHeight != viewport.size.height {
+                browserViewportHeight = viewport.size.height
+            }
             restoreBrowserViewportIfReady()
         }
         .onScrollPhaseChange { _, phase in
@@ -2473,6 +2578,8 @@ struct NotebookView: View {
                 browserToolbarWasHidden = false
             }
         }
+        #else
+        .contentMargins(.bottom, 120, for: .scrollContent)
         #endif
         .scrollContentBackground(.hidden)
         .background(NotebookSidebarPalette.background)

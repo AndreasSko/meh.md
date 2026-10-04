@@ -90,6 +90,7 @@ final class NotebookCatalogDocument {
         var token: String { "\(verb):\(sequence):\(id.uuidString)" }
     }
     struct RecentState {
+        let hidden: Bool
         let pinned: Bool
         let pinOrder: UInt64?
         let pinActionID: UUID?
@@ -402,6 +403,14 @@ final class NotebookCatalogDocument {
     private func updateRecentState(_ id: UUID, in cache: inout RecentCache) throws {
         let pins = try recentActions(.pin, id)
         let activities = try recentActions(.activity, id)
+        let visibility = try document.getAll(
+            obj: .ROOT, key: "recentsHidden.\(id.uuidString)"
+        ).map { value in
+            guard case .Scalar(.Boolean(let hidden)) = value else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            return hidden
+        }
         for action in pins {
             cache.maxPinSequence = max(cache.maxPinSequence, action.sequence)
         }
@@ -416,6 +425,8 @@ final class NotebookCatalogDocument {
                 ($0.sequence, $0.id.uuidString) < ($1.sequence, $1.id.uuidString)
             }
         cache.states[id] = RecentState(
+            // A concurrent hide wins over show; an observed show can restore.
+            hidden: visibility.contains(true),
             pinned: winningPin != nil,
             pinOrder: winningPin?.sequence,
             pinActionID: winningPin?.id,
@@ -435,6 +446,13 @@ final class NotebookCatalogDocument {
                 let id = UUID(uuidString: String(parts[2])),
                 id.uuidString == parts[2]
             else { throw NotebookCatalogError.invalidDocument }
+            ids.insert(id)
+        }
+        for key in document.keys(obj: .ROOT) where key.hasPrefix("recentsHidden.") {
+            let suffix = String(key.dropFirst("recentsHidden.".count))
+            guard let id = UUID(uuidString: suffix), id.uuidString == suffix else {
+                throw NotebookCatalogError.invalidDocument
+            }
             ids.insert(id)
         }
         var cache = RecentCache(heads: currentHeads)
@@ -483,6 +501,17 @@ final class NotebookCatalogDocument {
             verb: "edit", sequence: try nextRecentSequence(.activity), id: UUID()
         )
         try document.put(obj: .ROOT, key: recentKey(.activity, id), value: .String(action.token))
+        try advanceRecentCache(for: [id], from: previousHeads)
+        advanceUnchangedMetadataCaches(from: previousHeads)
+    }
+
+    func setHiddenFromRecents(_ hidden: Bool, for id: UUID) throws {
+        let previousHeads = Set(document.heads())
+        // Older clients validate every recent.* key. Keep this optional
+        // preference outside that namespace so their catalogs still load.
+        try document.put(
+            obj: .ROOT, key: "recentsHidden.\(id.uuidString)", value: .Boolean(hidden)
+        )
         try advanceRecentCache(for: [id], from: previousHeads)
         advanceUnchangedMetadataCaches(from: previousHeads)
     }
@@ -646,8 +675,10 @@ final class NotebookCatalogDocument {
     }
 
     @discardableResult
-    func add(id: UUID = UUID(), kind: NotebookItemKind, name: String, parentID: UUID? = nil) throws
-        -> UUID
+    func add(
+        id: UUID = UUID(), kind: NotebookItemKind, name: String,
+        parentID: UUID? = nil, position: NotebookCreationPosition = .append
+    ) throws -> UUID
     {
         try NotebookName.validate(name)
         guard try document.get(obj: itemsObject, key: id.uuidString) == nil else {
@@ -655,12 +686,33 @@ final class NotebookCatalogDocument {
         }
         try validateParent(parentID, for: nil)
         try ensureOrder(parentID: parentID)
-        let lower = try orderedChildren(parentID: parentID, inTrash: false)
+        let siblings = try orderedChildren(parentID: parentID, inTrash: false)
             .filter { $0.item.parentID == parentID }
-            .last?.item.orderKey
-        let order = try NotebookOrderKeyFactory.between(
-            lower, nil, itemID: id
-        )
+        let insertionIndex: Int
+        switch position {
+        case .append: insertionIndex = siblings.endIndex
+        case .first: insertionIndex = siblings.startIndex
+        case .before(let siblingID):
+            guard let index = siblings.firstIndex(where: { $0.item.id == siblingID }) else {
+                throw NotebookCatalogError.invalidOrder
+            }
+            insertionIndex = index
+        case .after(let siblingID):
+            guard let index = siblings.firstIndex(where: { $0.item.id == siblingID }) else {
+                throw NotebookCatalogError.invalidOrder
+            }
+            insertionIndex = siblings.index(after: index)
+        }
+        let lower = insertionIndex > siblings.startIndex
+            ? siblings[siblings.index(before: insertionIndex)].item.orderKey : nil
+        let upper = insertionIndex < siblings.endIndex
+            ? siblings[insertionIndex].item.orderKey : nil
+        let order = try NotebookOrderKeyFactory.between(lower, upper, itemID: id)
+        // Read inherited metadata while the sibling projection is still cached,
+        // before creating a partially populated item invalidates its heads.
+        let importRootID = try parentID.flatMap { parent in
+            try items().first(where: { $0.id == parent })?.importRootID
+        }
         let item = try document.putObject(obj: itemsObject, key: id.uuidString, ty: .Map)
         try document.put(obj: item, key: "kind", value: .String(kind.rawValue))
         try document.put(obj: item, key: "name", value: .String(name))
@@ -668,10 +720,9 @@ final class NotebookCatalogDocument {
             obj: item, key: "parent", value: parentID.map { .String($0.uuidString) } ?? .Null)
         try document.put(
             obj: item, key: "visibility", value: .String("active:\(UUID().uuidString)"))
-        if let parentID,
-           let scope = try items().first(where: { $0.id == parentID })?.importRootID {
+        if let importRootID {
             try document.put(
-                obj: item, key: "importRootID", value: .String(scope.uuidString))
+                obj: item, key: "importRootID", value: .String(importRootID.uuidString))
         }
         try writeOrder(order, parentID: parentID, object: item)
         return id

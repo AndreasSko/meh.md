@@ -98,6 +98,7 @@ public final class NotebookReplica {
     /// All eligible recent notes, with pins first and no ordinary-note cap.
     public private(set) var allRecentNotes: [NotebookRecentNote] = []
     public private(set) var pinnedRecentCount = 0
+    public private(set) var hiddenRecentNoteIDs: Set<UUID> = []
     public private(set) var hasPendingImport: Bool
     public private(set) var localEditsSuspended = false
     public private(set) var deletionCleanupErrorMessage: String?
@@ -338,20 +339,23 @@ public final class NotebookReplica {
         }
     }
 
-    public func createNote(name: String, text: String = "", parentID: UUID? = nil) async throws
-        -> UUID
-    {
-        guard let catalog else { throw NotebookReplicaError.notJoined }
-        let next = try catalog.fork()
-        let note = try NoteDocument(text: text)
-        // Validate metadata before writing the body. Persist the body before
-        // its catalog reference; interrupted operations may leave an orphan.
-        try next.add(id: note.noteID, kind: .note, name: name, parentID: parentID)
+    public func createNote(
+        name: String, text: String = "", parentID: UUID? = nil,
+        position: NotebookCreationPosition = .append
+    ) async throws -> UUID {
         try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            let note = try NoteDocument(text: text)
+            // Validate metadata before writing the body. Persist the body before
+            // its catalog reference; interrupted operations may leave an orphan.
+            try next.add(
+                id: note.noteID, kind: .note, name: name,
+                parentID: parentID, position: position)
             try await self.noteStorage(note.noteID).save(note.snapshot())
             try await self.persistCatalog(next)
+            return note.noteID
         }
-        return note.noteID
     }
 
     public func createNoteInDefaultFolder(
@@ -380,12 +384,18 @@ public final class NotebookReplica {
         }
     }
 
-    public func createFolder(name: String, parentID: UUID? = nil) async throws -> UUID {
-        guard let catalog else { throw NotebookReplicaError.notJoined }
-        let next = try catalog.fork()
-        let id = try next.add(kind: .folder, name: name, parentID: parentID)
-        try await saveCatalog(next)
-        return id
+    public func createFolder(
+        name: String, parentID: UUID? = nil,
+        position: NotebookCreationPosition = .append
+    ) async throws -> UUID {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            let id = try next.add(
+                kind: .folder, name: name, parentID: parentID, position: position)
+            try await self.persistCatalog(next)
+            return id
+        }
     }
 
     public func importMarkdown(
@@ -490,9 +500,32 @@ public final class NotebookReplica {
     }
 
     public func canPinInRecents(_ id: UUID) -> Bool {
-        canPinInRecents && placements.contains {
+        canPinInRecents && !isHiddenFromRecents(id) && placements.contains {
             $0.item.id == id && $0.item.kind == .note &&
                 !$0.isInTrash && !$0.item.isPermanentlyDeleted
+        }
+    }
+
+    public func isHiddenFromRecents(_ id: UUID) -> Bool {
+        hiddenRecentNoteIDs.contains(id)
+    }
+
+    public func setHiddenFromRecents(_ hidden: Bool, for id: UUID) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            guard self.placements.contains(where: {
+                $0.item.id == id && $0.item.kind == .note &&
+                    !$0.isInTrash && !$0.item.isPermanentlyDeleted
+            }) else { throw NotebookReplicaError.noteUnavailable(id) }
+            guard self.isHiddenFromRecents(id) != hidden else { return }
+            let next = try catalog.fork()
+            try next.setHiddenFromRecents(hidden, for: id)
+            try next.clearRecents(for: [id])
+            if !hidden {
+                // Explicitly showing a note adds it back immediately.
+                try next.recordRecentActivity(for: id)
+            }
+            try await self.persistCatalog(next)
         }
     }
 
@@ -505,6 +538,9 @@ public final class NotebookReplica {
             }) else { throw NotebookReplicaError.noteUnavailable(id) }
             let wasPinned = self.isPinnedInRecents(id)
             guard wasPinned != pinned else { return }
+            if pinned && self.isHiddenFromRecents(id) {
+                throw NotebookReplicaError.noteUnavailable(id)
+            }
             if pinned && !self.canPinInRecents {
                 throw NotebookReplicaError.pinLimitReached
             }
@@ -536,7 +572,7 @@ public final class NotebookReplica {
                 $0.item.id == id && $0.item.kind == .note &&
                     !$0.isInTrash && !$0.item.isPermanentlyDeleted
             }) else { throw NotebookReplicaError.noteUnavailable(id) }
-            if self.latestRecentActivityID == id { return }
+            if self.isHiddenFromRecents(id) || self.latestRecentActivityID == id { return }
             let next = try catalog.fork()
             try next.recordRecentActivity(for: id)
             try await self.persistCatalog(next)
@@ -1642,8 +1678,10 @@ public final class NotebookReplica {
         placements: [NotebookPlacement]
     ) throws {
         let states = try document.recentStates()
+        hiddenRecentNoteIDs = Set(states.compactMap { $0.value.hidden ? $0.key : nil })
         let active = Set(placements.filter {
             $0.item.kind == .note && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+                && !hiddenRecentNoteIDs.contains($0.item.id)
         }.map { $0.item.id })
         let pinned = active.compactMap { id -> (UUID, NotebookCatalogDocument.RecentState)? in
             guard let state = states[id], state.pinned else { return nil }

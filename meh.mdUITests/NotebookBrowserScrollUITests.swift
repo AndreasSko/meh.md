@@ -11,10 +11,9 @@ final class NotebookBrowserScrollUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
-        app.launchEnvironment["MEH_SYNC_URL"] = "http://127.0.0.1:8765"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         let reuseWorkspace = ProcessInfo.processInfo.environment["MEH_FILES_UI_WORKSPACE"]
-        app.launchEnvironment["MEH_SYNC_WORKSPACE"] = reuseWorkspace
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = reuseWorkspace
             ?? "files-return-\(UUID().uuidString)"
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
