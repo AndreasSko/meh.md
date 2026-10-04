@@ -1257,9 +1257,6 @@ struct NotebookView: View {
     ) -> some View {
         let row = Button {
             perform {
-                #if os(iOS)
-                if horizontalSizeClass == .compact { browsingAllRecents = false }
-                #endif
                 try await selectNote(placement.item.id)
             }
         } label: {
