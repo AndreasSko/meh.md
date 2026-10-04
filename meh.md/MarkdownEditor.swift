@@ -1495,31 +1495,6 @@ nonisolated(unsafe) private var markdownTextViewStateKey: UInt8 = 0
 // Keep editor state in a normally initialized object attached to the view.
 final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     UIPointerInteractionDelegate {
-    override var bounds: CGRect {
-        willSet { reportViewportResize(from: bounds.size, to: newValue.size) }
-    }
-
-    override var frame: CGRect {
-        willSet { reportViewportResize(from: frame.size, to: newValue.size) }
-    }
-
-    private func reportViewportResize(from old: CGSize, to new: CGSize) {
-        guard old.width > 0, old.height > 0, new.width == old.width,
-              new.height != old.height, window != nil else { return }
-        let state = markdownState
-        guard !state.isReportingViewportResize,
-              let willResize = state.willResizeViewport else { return }
-        // Capture can ask TextKit for geometry; avoid nested size callbacks.
-        state.isReportingViewportResize = true
-        defer { state.isReportingViewportResize = false }
-        willResize(new.height > old.height)
-    }
-
-    var markdownWillResizeViewport: ((Bool) -> Void)? {
-        get { markdownState.willResizeViewport }
-        set { markdownState.willResizeViewport = newValue }
-    }
-
     var markdownFindPresentation: MarkdownEditorFindPresentation? {
         get { markdownState.findPresentation }
         set { markdownState.findPresentation = newValue }
@@ -1572,14 +1547,9 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         var insets = textContainerInset
         let titleExtent = markdownState.titleHost == nil
             ? 0 : markdownState.titleHeight + 12
-        // A home gesture briefly changes the viewport by a fraction of a
-        // point before the scene deactivates. Rewriting document padding for
-        // that transient size invalidates TextKit's viewport and shifts text.
-        if abs(insets.bottom - bottom) > 1 {
+        if insets.top != 18 + titleExtent || insets.bottom != bottom {
+            insets.top = 18 + titleExtent
             insets.bottom = bottom
-        }
-        insets.top = 18 + titleExtent
-        if textContainerInset != insets {
             textContainerInset = insets
         }
         layoutMarkdownTitle()
@@ -2028,8 +1998,6 @@ private final class MarkdownTextViewState: NSObject {
     var reportedWindowAttachment = false
     var didAttachToWindow: (() -> Void)?
     var didLayout: (() -> Void)?
-    var willResizeViewport: ((Bool) -> Void)?
-    var isReportingViewportResize = false
     let syntaxCache = MarkdownSyntaxCache()
     var taskTap: UITapGestureRecognizer?
     var tappedLink: NotebookLinkOccurrence?
@@ -2292,25 +2260,6 @@ struct MarkdownEditor: UIViewRepresentable {
         private var pendingInitialPreviewPosition: MarkdownEditorPosition?
         private var initialPreviewGeometry: DestinationCenterGeometry?
         private var initialPreviewOriginY: CGFloat?
-        private weak var sceneTextView: MarkdownTextView?
-        private var interruptedViewport: InterruptedViewport?
-        private var preResizeViewport: InterruptedViewport?
-        private var laidOutViewport: InterruptedViewport?
-        private var isCapturingLaidOutViewport = false
-        private var sceneViewportMaterialized = false
-        private var sceneViewportGeneration = 0
-        private var sceneViewportCompletionGeneration = 0
-        private var isResumingSceneViewport = false
-        private var isApplyingSceneViewport = false
-
-        private struct InterruptedViewport {
-            let window: ObjectIdentifier
-            let size: CGSize
-            let offset: CGPoint
-            let position: MarkdownEditorPosition
-            let selection: NSRange
-            let text: String
-        }
 
         private struct DestinationCenterGeometry: Equatable {
             let size: CGSize
@@ -2333,239 +2282,11 @@ struct MarkdownEditor: UIViewRepresentable {
             displayedFontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
             )
-            super.init()
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(sceneWillDeactivate(_:)),
-                name: UIScene.willDeactivateNotification, object: nil
-            )
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(sceneDidActivate(_:)),
-                name: UIScene.didActivateNotification, object: nil
-            )
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(keyboardDidChangeFrame(_:)),
-                name: UIResponder.keyboardDidChangeFrameNotification, object: nil
-            )
-        }
-
-        deinit {
-            NotificationCenter.default.removeObserver(self)
-        }
-
-        @objc private func sceneWillDeactivate(_ notification: Notification) {
-            guard let textView = sceneTextView,
-                  let scene = textView.window?.windowScene,
-                  notification.object as? UIScene === scene else { return }
-            suspendSceneViewport(in: textView)
-        }
-
-        @objc private func sceneDidActivate(_ notification: Notification) {
-            guard let textView = sceneTextView,
-                  let scene = textView.window?.windowScene,
-                  notification.object as? UIScene === scene else { return }
-            resumeSceneViewport(in: textView)
-        }
-
-        @objc private func keyboardDidChangeFrame(_ notification: Notification) {
-            guard isResumingSceneViewport, let view = sceneTextView else { return }
-            scheduleSceneViewportCompletion(in: view)
-        }
-
-        func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            guard isResumingSceneViewport, !isApplyingSceneViewport,
-                  let view = scrollView as? MarkdownTextView else { return }
-            // UIKit can animate an offscreen caret into view after activation.
-            // Keep the user's viewport pinned through that system animation.
-            scheduleSceneViewportCompletion(in: view)
-            restoreSceneViewport(in: view, generation: sceneViewportGeneration,
-                                 passes: 0)
-        }
-
-        private func captureViewportBeforeExpansion(in textView: MarkdownTextView) {
-            guard interruptedViewport == nil, preResizeViewport == nil,
-                  !isCapturingLaidOutViewport else { return }
-            // UIKit can expand the editor before keyboard and scene events.
-            // TextKit may already be changing fragment coordinates here.
-            // Prefer the last completed layout for the same editor state.
-            // This candidate is recovery-only; ordinary captures stay live.
-            let current = makeInterruptedViewport(in: textView)
-            if let laidOut = laidOutViewport, let current,
-               laidOut.window == current.window,
-               laidOut.size == current.size,
-               laidOut.selection == current.selection,
-               laidOut.text == current.text {
-                preResizeViewport = laidOut
-            } else {
-                preResizeViewport = current
-            }
-        }
-
-        private func captureLaidOutViewport(in textView: MarkdownTextView) {
-            guard interruptedViewport == nil, preResizeViewport == nil,
-                  !isCapturingLaidOutViewport else { return }
-            isCapturingLaidOutViewport = true
-            defer { isCapturingLaidOutViewport = false }
-            laidOutViewport = makeInterruptedViewport(in: textView)
-        }
-
-        func scrollViewDidEndDragging(_ scrollView: UIScrollView,
-                                      willDecelerate decelerate: Bool) {
-            guard !decelerate, let view = scrollView as? MarkdownTextView else { return }
-            captureLaidOutViewport(in: view)
-        }
-
-        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-            guard let view = scrollView as? MarkdownTextView else { return }
-            captureLaidOutViewport(in: view)
-        }
-
-        func suspendSceneViewport(in textView: MarkdownTextView) {
-            let candidate = interruptedViewport ?? preResizeViewport
-            cancelSceneViewport()
-            guard let current = makeInterruptedViewport(in: textView) else { return }
-            if let candidate, candidate.window == current.window,
-               candidate.size.width == current.size.width,
-               candidate.selection == current.selection,
-               candidate.text == current.text {
-                interruptedViewport = candidate
-            } else {
-                interruptedViewport = current
-            }
-        }
-
-        private func makeInterruptedViewport(
-            in textView: MarkdownTextView
-        ) -> InterruptedViewport? {
-            guard let window = textView.window, textView.isEditable,
-                  textView.isFirstResponder, textView.markedTextRange == nil,
-                  !textView.markdownCellController.hasFocus,
-                  !textView.isDragging, !textView.isDecelerating,
-                  parent.navigation?.findPresentation.isVisible != true,
-                  pendingPosition == nil, pendingSearchMatch == nil,
-                  let position = capturePosition(in: textView) else { return nil }
-            return InterruptedViewport(
-                window: ObjectIdentifier(window), size: textView.bounds.size,
-                offset: textView.contentOffset, position: position,
-                selection: textView.selectedRange, text: textView.text ?? ""
-            )
-        }
-
-        func resumeSceneViewport(in textView: MarkdownTextView) {
-            guard interruptedViewport != nil else { return }
-            isResumingSceneViewport = true
-            let generation = sceneViewportGeneration
-            restoreSceneViewport(in: textView, generation: generation, passes: 2)
-        }
-
-        private func scheduleSceneViewportCompletion(in textView: MarkdownTextView) {
-            guard isResumingSceneViewport, interruptedViewport != nil else { return }
-            sceneViewportCompletionGeneration &+= 1
-            let completionGeneration = sceneViewportCompletionGeneration
-            let generation = sceneViewportGeneration
-            // A quiet interval spans several display frames. A late native
-            // caret animation resets it on every scroll instead of outliving
-            // three restoration passes before the next display frame.
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(80)) {
-                [weak self, weak textView] in
-                guard let self, let textView,
-                      generation == self.sceneViewportGeneration,
-                      completionGeneration == self.sceneViewportCompletionGeneration,
-                      self.isResumingSceneViewport else { return }
-                self.restoreSceneViewport(in: textView, generation: generation,
-                    passes: 2, completionGeneration: completionGeneration)
-            }
-        }
-
-        private func restoreSceneViewport(
-            in textView: MarkdownTextView, generation: Int, passes: Int,
-            completionGeneration: Int? = nil
-        ) {
-            DispatchQueue.main.async { [weak self, weak textView] in
-                guard let self, let textView,
-                      generation == self.sceneViewportGeneration,
-                      let saved = self.interruptedViewport else { return }
-                if let completionGeneration,
-                   completionGeneration != self.sceneViewportCompletionGeneration {
-                    return
-                }
-                guard let window = textView.window,
-                      ObjectIdentifier(window) == saved.window,
-                      textView.isEditable, textView.markedTextRange == nil,
-                      textView.selectedRange == saved.selection,
-                      textView.text == saved.text,
-                      textView.bounds.width == saved.size.width else {
-                    self.cancelSceneViewport()
-                    return
-                }
-                textView.layoutIfNeeded()
-                if var anchor = self.localCaretRect(
-                    at: saved.position.scrollAnchor, in: textView
-                ) {
-                    let inset = textView.adjustedContentInset
-                    let minY = -inset.top
-                    var maxY = max(minY, textView.contentSize.height
-                        - textView.bounds.height + inset.bottom)
-                    var targetY = anchor.minY
-                        - CGFloat(saved.position.scrollAnchorOffset)
-                    if targetY > maxY + 1, !self.sceneViewportMaterialized,
-                       let manager = textView.textLayoutManager,
-                       let content = manager.textContentManager {
-                        // A keyboard transition can leave a provisional
-                        // extent that clamps an otherwise valid saved line.
-                        // Materialize only when that bound blocks recovery,
-                        // once per interruption, outside the typing path.
-                        self.sceneViewportMaterialized = true
-                        manager.ensureLayout(for: content.documentRange)
-                        textView.scrollRangeToVisible(NSRange(
-                            location: saved.position.scrollAnchor, length: 0
-                        ))
-                        textView.setNeedsLayout()
-                        textView.layoutIfNeeded()
-                        anchor = self.localCaretRect(
-                            at: saved.position.scrollAnchor, in: textView
-                        ) ?? anchor
-                        targetY = anchor.minY
-                            - CGFloat(saved.position.scrollAnchorOffset)
-                        maxY = max(minY, textView.contentSize.height
-                            - textView.bounds.height + inset.bottom)
-                    }
-                    // Pin the visible line without changing focus/selection.
-                    let target = CGPoint(x: saved.offset.x,
-                        y: min(maxY, max(minY, targetY)))
-                    if abs(textView.contentOffset.y - target.y) > 0.5
-                        || abs(textView.contentOffset.x - target.x) > 0.5 {
-                        self.isApplyingSceneViewport = true
-                        textView.setContentOffset(target, animated: false)
-                        self.isApplyingSceneViewport = false
-                    }
-                }
-                if passes > 0 {
-                    self.restoreSceneViewport(in: textView,
-                        generation: generation, passes: passes - 1,
-                        completionGeneration: completionGeneration)
-                } else if completionGeneration != nil {
-                    self.isResumingSceneViewport = false
-                    self.interruptedViewport = nil
-                } else {
-                    self.scheduleSceneViewportCompletion(in: textView)
-                }
-            }
-        }
-
-        private func cancelSceneViewport() {
-            sceneViewportGeneration &+= 1
-            sceneViewportCompletionGeneration &+= 1
-            isResumingSceneViewport = false
-            interruptedViewport = nil
-            preResizeViewport = nil
-            laidOutViewport = nil
-            sceneViewportMaterialized = false
         }
 
         func consumeFocusRequest(_ request: Int, in textView: UITextView) {
             guard request != handledFocusRequest else { return }
             handledFocusRequest = request
-            cancelSceneViewport()
             // Wait for the hosting controller to remove the title text field.
             DispatchQueue.main.async { [weak textView] in
                 guard let textView, textView.isEditable else { return }
@@ -2579,15 +2300,6 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func attachNavigation(to textView: MarkdownTextView) {
-            sceneTextView = textView
-            textView.markdownWillResizeViewport = { [weak self, weak textView] expanding in
-                guard let self, let textView else { return }
-                if expanding {
-                    self.captureViewportBeforeExpansion(in: textView)
-                } else {
-                    self.preResizeViewport = nil
-                }
-            }
             textView.installMarkdownKeyboardToolbar(navigation: parent.navigation)
             textView.markdownFindPresentation = parent.navigation?.findPresentation
             textView.markdownCellController.onCompositionEnded = { [weak self, weak textView] in
@@ -2599,7 +2311,6 @@ struct MarkdownEditor: UIViewRepresentable {
                 guard let self, let textView else { return }
                 self.restoreInitialPreviewIfNeeded(in: textView)
                 self.centerDestinationIfGeometryChanged(in: textView)
-                self.captureLaidOutViewport(in: textView)
             }
             refreshTableCommands(in: textView)
             parent.navigation?.prepareCommand = { [weak textView] command in
@@ -2610,7 +2321,6 @@ struct MarkdownEditor: UIViewRepresentable {
                 guard let self, let textView else { return true }
                 guard textView.markedTextRange == nil,
                       !textView.markdownCellController.hasMarkedText else { return false }
-                self.cancelSceneViewport()
                 textView.markdownCellController.end()
                 self.textViewDidChange(textView)
                 guard !self.hasUncommittedText else { return false }
@@ -2655,10 +2365,7 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             parent.navigation?.capturePosition = { [weak self, weak textView] in
                 guard let self, let textView else { return nil }
-                // Background/termination saves must retain the position from
-                // before UIKit adjusted the suspended keyboard viewport.
-                return self.interruptedViewport?.position
-                    ?? self.capturePosition(in: textView)
+                return self.capturePosition(in: textView)
             }
             parent.navigation?.restorePosition = {
                 [weak self, weak textView] position in
@@ -2760,10 +2467,6 @@ struct MarkdownEditor: UIViewRepresentable {
 
         func textViewDidChangeSelection(_ textView: UITextView) {
             guard !isUpdating else { return }
-            if let saved = interruptedViewport ?? preResizeViewport,
-               textView.selectedRange != saved.selection {
-                cancelSceneViewport()
-            }
             refreshTableCommands(in: textView)
             reportLinkSelection(in: textView)
             if parent.mode == .livePreview {
@@ -2774,7 +2477,6 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            cancelSceneViewport()
             guard !isUpdating, textView.markedTextRange == nil else { return }
             defer { reportLinkSelection(in: textView) }
             refreshTableCommands(in: textView)
@@ -3015,11 +2717,11 @@ struct MarkdownEditor: UIViewRepresentable {
             let source = textView.text ?? ""
             let selection = source.clampedSelection(textView.selectedRange)
             let visibleBounds = textView.bounds
-            let point = textView.convert(CGPoint(
+            let point = CGPoint(
                 x: visibleBounds.minX + textView.textContainerInset.left
                     + textView.textContainer.lineFragmentPadding + 1,
-                y: visibleBounds.minY + textView.adjustedContentInset.top + 1
-            ), to: textView.textInputView)
+                y: visibleBounds.minY + 1
+            )
             let rawAnchor: Int
             if let textPosition = textView.closestPosition(to: point) {
                 rawAnchor = textView.offset(
@@ -3079,7 +2781,6 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         private func cancelPositionRestore() {
-            cancelSceneViewport()
             positionRestoreGeneration &+= 1
             pendingPosition = nil
             let completion = pendingPositionCompletion
@@ -3261,7 +2962,7 @@ struct MarkdownEditor: UIViewRepresentable {
             ) else { return nil }
             let rect = textView.caretRect(for: position)
             guard rect.minX.isFinite, rect.minY.isFinite else { return nil }
-            return textView.convert(rect, from: textView.textInputView)
+            return rect
         }
 
         private func acceptParentRevision(_ revision: Data?) {
@@ -3293,7 +2994,6 @@ struct MarkdownEditor: UIViewRepresentable {
             revision: Data?,
             in textView: UITextView
         ) {
-            cancelSceneViewport()
             clearDestinationHighlight(in: textView)
             let oldText = textView.text ?? ""
             let selection = MarkdownEditorSelection.map(
@@ -3336,11 +3036,6 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            if isResumingSceneViewport {
-                cancelSceneViewport()
-            } else {
-                preResizeViewport = nil
-            }
             MarkdownPresentation.refresh(
                 textView,
                 fontSize: parent.fontSize,
