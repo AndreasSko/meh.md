@@ -5,6 +5,7 @@ import UIKit
 /// Keeps the primary tap and secondary menu gesture on the same native control.
 struct NotebookNewNoteButton: UIViewRepresentable {
     let isEnabled: Bool
+    let hasTemplates: Bool
     let onNewNote: () -> Void
     let onNewFromTemplate: () -> Void
 
@@ -45,6 +46,7 @@ struct NotebookNewNoteButton: UIViewRepresentable {
 
     private func configure(_ button: UIButton, coordinator: Coordinator) {
         coordinator.isEnabled = isEnabled
+        coordinator.canCreateFromTemplate = isEnabled && hasTemplates
         coordinator.onNewNote = onNewNote
         coordinator.onNewFromTemplate = onNewFromTemplate
         button.isEnabled = isEnabled
@@ -59,24 +61,25 @@ struct NotebookNewNoteButton: UIViewRepresentable {
             UIAction(title: String(localized: "New from Template…"),
                      image: UIImage(systemName: "doc.on.doc"),
                      identifier: UIAction.Identifier("notebook-new-from-template"),
-                     attributes: attributes) { [weak coordinator] _ in
+                     attributes: coordinator.canCreateFromTemplate ? [] : .disabled) { [weak coordinator] _ in
                 coordinator?.createFromTemplate()
             },
         ])
-        button.accessibilityCustomActions = [
+        button.accessibilityCustomActions = coordinator.canCreateFromTemplate ? [
             UIAccessibilityCustomAction(
                 name: String(localized: "New from Template…")
             ) { [weak coordinator] _ in
-                guard let coordinator, coordinator.isEnabled else { return false }
+                guard let coordinator, coordinator.canCreateFromTemplate else { return false }
                 coordinator.createFromTemplate()
                 return true
             },
-        ]
+        ] : []
     }
 
     @MainActor
     final class Coordinator: NSObject {
         var isEnabled = true
+        var canCreateFromTemplate = false
         var onNewNote: (() -> Void)?
         var onNewFromTemplate: (() -> Void)?
         var feedback: UIImpactFeedbackGenerator?
@@ -87,7 +90,7 @@ struct NotebookNewNoteButton: UIViewRepresentable {
         }
 
         func createFromTemplate() {
-            guard isEnabled else { return }
+            guard canCreateFromTemplate else { return }
             onNewFromTemplate?()
         }
 

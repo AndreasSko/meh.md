@@ -2628,7 +2628,8 @@ struct NotebookView: View {
     private var libraryNewNote: some View {
         #if os(iOS)
         NotebookNewNoteButton(
-            isEnabled: !busy, onNewNote: createDefaultNote,
+            isEnabled: !busy, hasTemplates: !replica.templates.isEmpty,
+            onNewNote: createDefaultNote,
             onNewFromTemplate: showTemplates
         )
         .frame(width: 44, height: 44)
@@ -2651,7 +2652,7 @@ struct NotebookView: View {
         Button(action: showTemplates) {
             Label("New from Template…", systemImage: "doc.on.doc")
         }
-        .disabled(busy)
+        .disabled(busy || replica.templates.isEmpty)
         .accessibilityIdentifier("notebook-new-from-template")
     }
 
