@@ -271,10 +271,23 @@ final class RemoteEditorTests: XCTestCase {
         let textView = try XCTUnwrap(mounted.textView)
         defer { mounted.tearDown() }
 
+        // Menu availability is deliberately published on the next main
+        // queue turn. A single 20 ms run-loop pass does not guarantee that
+        // publication; wait for it with a bounded deadline.
+        func flushUntilAvailable(_ command: MarkdownEditingCommand) {
+            let deadline = Date().addingTimeInterval(1)
+            repeat {
+                mounted.flushUpdates()
+            } while !model.navigation.tableCommands.available.contains(command)
+                && Date() < deadline
+        }
+
         let cell = (source as NSString).range(of: "Walk")
         setSelection(NSRange(location: cell.location, length: 0),
                      in: textView)
-        mounted.flushUpdates()
+        flushUntilAvailable(.tableRowBelow)
+        XCTAssertEqual(selectedRange(in: textView),
+                       NSRange(location: cell.location, length: 0))
         let inside = model.navigation.tableCommands.available
         XCTAssertTrue(inside.contains(.tableRowBelow))
         XCTAssertTrue(inside.contains(.tableDeleteRow))
@@ -282,7 +295,9 @@ final class RemoteEditorTests: XCTestCase {
         XCTAssertFalse(inside.contains(.insertTable))
 
         moveInsertionPointToEnd(of: textView)
-        mounted.flushUpdates()
+        flushUntilAvailable(.insertTable)
+        XCTAssertEqual(selectedRange(in: textView),
+                       NSRange(location: (source as NSString).length, length: 0))
         let outside = model.navigation.tableCommands.available
         XCTAssertTrue(outside.contains(.insertTable))
         XCTAssertFalse(outside.contains(.tableDeleteRow))

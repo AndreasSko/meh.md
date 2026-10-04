@@ -42,6 +42,8 @@ and the evidence collected along the way.
 - [Local durability](durability-contract.md): per-note save and recovery rules.
 - [Notebook sync](notebook-sync-contract.md): bootstrap and durable
   replication.
+- [Notebook upgrades](notebook-upgrade-safety.md): update requirements,
+  atomic CloudKit publication, and release order.
 - [Sync progress](notebook-sync-progress.md): batching, status, and
   diagnostics.
 - [Permanent deletion](notebook-permanent-deletion.md): confirmed cleanup.
