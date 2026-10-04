@@ -5,6 +5,69 @@ import XCTest
 final class NotebookTemplatesUITests: XCTestCase {
     private let meetingBody = "# Meeting\n\n## Agenda\nProject update\n\n## Decisions\nNext steps"
 
+    func testTemplateMenuAvailabilityTracksUsableNotes() throws {
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(timeout: 15))
+        app.buttons["notebook-new-item"].firstMatch.press(forDuration: 1)
+        let templateAction = app.buttons["notebook-new-from-template"]
+        XCTAssertTrue(app.buttons["New from Template…"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["New from Template…"].isEnabled)
+        XCTAssertTrue(app.buttons["New Note"].isEnabled)
+        capture(app, "empty-template-menu")
+        app.buttons["New Note"].tap()
+        commitBlankNote(in: app)
+        XCTAssertEqual(app.textViews["markdown-editor"].value as? String, "")
+        app.buttons["notebook-new-item"].firstMatch.press(forDuration: 1)
+        XCTAssertTrue(app.buttons["New from Template…"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["New from Template…"].isEnabled)
+        XCTAssertTrue(app.buttons["New Note"].isEnabled)
+        capture(app, "empty-editor-template-menu")
+        app.buttons["New Note"].tap()
+        commitBlankNote(in: app)
+        showFiles(app)
+
+        createNote(in: app, named: "Meeting", body: meetingBody)
+        showFiles(app)
+        let sourceID = itemID(named: "Meeting", in: app)
+        markTemplate(sourceID, named: "Meeting", in: app)
+        app.buttons["notebook-new-item"].firstMatch.press(forDuration: 1)
+        let plusTemplateAction = app.buttons["New from Template…"]
+        XCTAssertTrue(plusTemplateAction.waitForExistence(timeout: 5))
+        XCTAssertTrue(plusTemplateAction.isEnabled)
+        plusTemplateAction.tap()
+        XCTAssertTrue(app.buttons["notebook-template-choice-" + sourceID]
+            .waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        app.buttons["notebook-app-menu"].tap()
+        XCTAssertTrue(templateAction.waitForExistence(timeout: 5))
+        XCTAssertTrue(templateAction.isEnabled)
+        templateAction.tap()
+        XCTAssertTrue(app.buttons["notebook-template-choice-" + sourceID]
+            .waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+
+        openTemplatesSettings(app)
+        app.buttons["notebook-template-options-" + sourceID].tap()
+        app.buttons["Remove from Templates"].tap()
+        closeTemplatesSettings(app)
+        app.buttons["notebook-app-menu"].tap()
+        XCTAssertTrue(templateAction.waitForExistence(timeout: 5))
+        XCTAssertFalse(templateAction.isEnabled)
+        app.buttons["New Folder"].tap()
+        let folderName = app.textFields["Name"]
+        XCTAssertTrue(folderName.waitForExistence(timeout: 5))
+        folderName.typeText("Empty Templates\n")
+        let folderID = itemID(named: "Empty Templates", in: app)
+        markTemplate(folderID, named: "Empty Templates", in: app)
+        app.buttons["notebook-app-menu"].tap()
+        XCTAssertTrue(templateAction.waitForExistence(timeout: 5))
+        XCTAssertFalse(templateAction.isEnabled,
+                       "An empty registered folder offers no usable template")
+        capture(app, "empty-registered-folder-template-menu")
+    }
+
     func testAppIconTemplateAndNewNoteShortcuts() throws {
         continueAfterFailure = false
         let app = makeApp()
