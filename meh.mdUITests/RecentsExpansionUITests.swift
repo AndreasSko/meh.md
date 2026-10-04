@@ -307,8 +307,88 @@ final class RecentsExpansionUITests: XCTestCase {
         capture(app, name: "Recents restored after fictional Trash checks")
     }
 
-    private func makeFixture() throws -> XCUIApplication {
-        if let workspace = ProcessInfo.processInfo.environment[
+    func testHiddenRecentStaysInFilesUntilExplicitlyShown() throws {
+        continueAfterFailure = false
+        let app = try makeFixture(reusingWorkspace: false)
+        let target = recentButtons(app).matching(NSPredicate(
+            format: "label CONTAINS %@", "Aurora watch"
+        )).firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: 10))
+        let rowID = target.identifier
+        let noteID = rowID.replacingOccurrences(
+            of: "notebook-recent-", with: ""
+        )
+        let filesTitle = app.staticTexts["notebook-sidebar-title-" + noteID]
+        let recentToggle = app.buttons["notebook-recents-toggle"]
+        let filesToggle = app.buttons["notebook-tree-toggle"]
+
+        for expanded in [false, true] {
+            if expanded {
+                app.buttons["notebook-recents-show-all"].tap()
+                XCTAssertTrue(app.buttons["notebook-recents-close"].isHittable)
+            }
+            revealTrailingSwipeActions(target)
+            let hide = app.buttons["Hide from Recents"]
+            XCTAssertTrue(hide.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Move to Trash"].exists)
+            XCTAssertTrue(target.exists, "Swiping must leave the note intact")
+            capture(app, name: expanded
+                ? "Expanded Recents icon-only Trash and Hide swipe"
+                : "Compact Recents icon-only Trash and Hide swipe")
+            hide.tap()
+            XCTAssertTrue(target.waitForNonExistence(timeout: 5))
+            if expanded { app.buttons["notebook-recents-close"].tap() }
+            recentToggle.tap()
+            if filesToggle.value as? String == "Collapsed" { filesToggle.tap() }
+            if !expanded {
+                app.buttons["notebook-app-menu"].tap()
+                app.buttons["notebook-sort-root"].tap()
+                app.buttons["Name, A–Z"].tap()
+            }
+            XCTAssertTrue(filesTitle.waitForExistence(timeout: 5))
+            XCTAssertTrue(filesTitle.isHittable)
+            filesTitle.tap()
+            let editor = app.textViews["markdown-editor"]
+            XCTAssertTrue(editor.waitForExistence(timeout: 5))
+            XCTAssertTrue((editor.value as? String ?? "").contains("aurora watch"))
+            editor.tap()
+            editor.typeText(" Still safely in Files.")
+            app.terminate()
+            app.launch()
+            showSidebar(app)
+            XCTAssertTrue(target.waitForNonExistence(timeout: 5),
+                          "Opening, editing and relaunching must keep it hidden")
+            if recentToggle.value as? String == "Expanded" { recentToggle.tap() }
+            if filesToggle.value as? String == "Collapsed" { filesToggle.tap() }
+            XCTAssertTrue(filesTitle.waitForExistence(timeout: 5))
+            filesTitle.press(forDuration: 1)
+            let show = app.buttons["Show in Recents"]
+            XCTAssertTrue(show.waitForExistence(timeout: 5))
+            capture(app, name: "Hidden note Show in Recents Files menu")
+            show.tap()
+            recentToggle.tap()
+            XCTAssertTrue(target.waitForExistence(timeout: 5))
+            capture(app, name: expanded
+                ? "Expanded hidden note explicitly restored to Recents"
+                : "Compact hidden note explicitly restored to Recents")
+        }
+    }
+
+    private func revealTrailingSwipeActions(_ row: XCUIElement) {
+        let start = row.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)
+        )
+        let end = row.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)
+        )
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow,
+                    thenHoldForDuration: 0.2)
+    }
+
+    private func makeFixture(
+        reusingWorkspace: Bool = true
+    ) throws -> XCUIApplication {
+        if reusingWorkspace, let workspace = ProcessInfo.processInfo.environment[
             "MEH_RECENTS_UI_REUSE_WORKSPACE"
         ] {
             let app = launchApp(workspace: workspace)

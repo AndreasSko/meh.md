@@ -4,6 +4,159 @@ import XCTest
 @testable import NoteCore
 
 final class NotebookRecentsTests: XCTestCase {
+    func testConcurrentHideWinsOverShowAndStaleActivity() throws {
+        let base = try NotebookCatalogDocument()
+        let note = try base.add(kind: .note, name: "Private draft.md")
+        try base.recordRecentActivity(for: note)
+        let left = try base.fork()
+        let right = try base.fork()
+        try left.setHiddenFromRecents(true, for: note)
+        try right.setHiddenFromRecents(false, for: note)
+        try right.recordRecentActivity(for: note)
+        try right.setPinnedInRecents(true, for: note)
+        try left.merge(right)
+        try right.merge(left)
+        XCTAssertTrue(try left.recentStates()[note]!.hidden)
+        XCTAssertTrue(try right.recentStates()[note]!.hidden)
+        try left.setHiddenFromRecents(false, for: note)
+        try right.merge(left)
+        XCTAssertFalse(try right.recentStates()[note]!.hidden)
+        let reloaded = try NotebookCatalogDocument(snapshot: right.snapshot())
+        XCTAssertFalse(try reloaded.recentStates()[note]!.hidden)
+    }
+
+    @MainActor
+    func testHiddenNoteStaysEditableAndExcludedUntilExplicitlyShown() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "recents-hidden-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replica = NotebookReplica(directory: directory)
+        try await replica.createLocalNotebook()
+        var ids: [UUID] = []
+        for index in 0..<6 {
+            let id = try await replica.createNote(name: "\(index).md", text: "draft")
+            ids.append(id)
+            try await replica.recordRecentActivity(for: id)
+        }
+        let note = ids[5]
+        try await replica.setPinnedInRecents(true, for: note)
+        let session = try await replica.openNote(note)
+        try session.replaceAll(with: "unsaved fictional draft")
+        let revision = session.editorRevision
+        let placements = replica.placements
+        try await replica.setHiddenFromRecents(true, for: note)
+        XCTAssertTrue(replica.isHiddenFromRecents(note))
+        XCTAssertFalse(replica.allRecentNotes.contains { $0.id == note })
+        XCTAssertEqual(replica.recentNotes.count, 5)
+        XCTAssertEqual(replica.pinnedRecentCount, 0)
+        XCTAssertFalse(replica.canPinInRecents(note))
+        XCTAssertEqual(replica.placements, placements)
+        XCTAssertEqual(session.text, "unsaved fictional draft")
+        XCTAssertEqual(session.editorRevision, revision)
+        let heads = replica.catalogSnapshot?.heads
+        try await replica.recordRecentActivity(for: note)
+        XCTAssertEqual(replica.catalogSnapshot?.heads, heads)
+        try await replica.flushOpenNotes()
+        let reloaded = NotebookReplica(directory: directory)
+        try await reloaded.load()
+        XCTAssertTrue(reloaded.isHiddenFromRecents(note))
+        let reopened = try await reloaded.openNote(note)
+        XCTAssertEqual(reopened.text, "unsaved fictional draft")
+        try await reloaded.recordRecentActivity(for: note)
+        XCTAssertFalse(reloaded.allRecentNotes.contains { $0.id == note })
+        try await reloaded.setHiddenFromRecents(false, for: note)
+        XCTAssertFalse(reloaded.isHiddenFromRecents(note))
+        XCTAssertEqual(reloaded.recentNotes.first?.id, note)
+        XCTAssertFalse(reloaded.isPinnedInRecents(note))
+    }
+
+    @MainActor
+    func testNoteCanBeHiddenBeforeFirstActivity() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "recents-hidden-untouched-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replica = NotebookReplica(directory: directory)
+        try await replica.createLocalNotebook()
+        let note = try await replica.createNote(name: "Reference.md")
+        XCTAssertFalse(replica.isHiddenFromRecents(note))
+        try await replica.setHiddenFromRecents(true, for: note)
+        try await replica.recordRecentActivity(for: note)
+        XCTAssertTrue(replica.allRecentNotes.isEmpty)
+        do {
+            try await replica.setPinnedInRecents(true, for: note)
+            XCTFail("Pinning must not silently unhide a note")
+        } catch NotebookReplicaError.noteUnavailable(note) {}
+        try await replica.setHiddenFromRecents(false, for: note)
+        XCTAssertEqual(replica.recentNotes.first?.id, note)
+    }
+
+    @MainActor
+    func testHiddenPreferenceSyncsAndSurvivesTrashRestore() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "recents-hidden-sync-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let left = NotebookReplica(directory: root.appending(path: "left"))
+        let right = NotebookReplica(directory: root.appending(path: "right"))
+        try await left.createLocalNotebook()
+        let note = try await left.createNote(name: "Draft.md")
+        try await left.recordRecentActivity(for: note)
+        try await right.load()
+        try await right.acceptSeed(SyncRecord(catalog: left.catalogSnapshot!))
+        try await left.setHiddenFromRecents(true, for: note)
+        try await right.recordRecentActivity(for: note)
+        try await right.setPinnedInRecents(true, for: note)
+        let leftSnapshot = left.catalogSnapshot!
+        let rightSnapshot = right.catalogSnapshot!
+        try await left.acceptSeed(SyncRecord(catalog: rightSnapshot))
+        try await right.acceptSeed(SyncRecord(catalog: leftSnapshot))
+        XCTAssertTrue(left.isHiddenFromRecents(note))
+        XCTAssertTrue(right.isHiddenFromRecents(note))
+        XCTAssertTrue(left.allRecentNotes.isEmpty)
+        XCTAssertEqual(left.allRecentNotes, right.allRecentNotes)
+        try await left.setTrashed(note, true)
+        try await left.setTrashed(note, false)
+        try await left.recordRecentActivity(for: note)
+        XCTAssertTrue(left.allRecentNotes.isEmpty)
+        try await left.setHiddenFromRecents(false, for: note)
+        try await right.acceptSeed(SyncRecord(catalog: left.catalogSnapshot!))
+        XCTAssertEqual(left.recentNotes.first?.id, note)
+        XCTAssertEqual(left.recentNotes, right.recentNotes)
+        XCTAssertFalse(right.isHiddenFromRecents(note))
+    }
+
+    @MainActor
+    func testFailedVisibilitySaveKeepsExistingRecentsAndPreference() async throws {
+        enum InjectedFailure: Error { case save }
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "recents-hidden-failure-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replica = NotebookReplica(directory: directory)
+        try await replica.createLocalNotebook()
+        let note = try await replica.createNote(name: "Draft.md")
+        try await replica.recordRecentActivity(for: note)
+        try await replica.setPinnedInRecents(true, for: note)
+        let notes = replica.allRecentNotes
+        let heads = replica.catalogSnapshot?.heads
+        replica.catalogWriteSuspension = { throw InjectedFailure.save }
+        do {
+            try await replica.setHiddenFromRecents(true, for: note)
+            XCTFail("The injected save failure must escape")
+        } catch InjectedFailure.save {}
+        XCTAssertEqual(replica.catalogSnapshot?.heads, heads)
+        XCTAssertEqual(replica.allRecentNotes, notes)
+        XCTAssertFalse(replica.isHiddenFromRecents(note))
+        XCTAssertTrue(replica.isPinnedInRecents(note))
+        replica.catalogWriteSuspension = nil
+        try await replica.setHiddenFromRecents(true, for: note)
+        replica.catalogWriteSuspension = { throw InjectedFailure.save }
+        do {
+            try await replica.setHiddenFromRecents(false, for: note)
+            XCTFail("The injected save failure must escape")
+        } catch InjectedFailure.save {}
+        XCTAssertTrue(replica.isHiddenFromRecents(note))
+        XCTAssertTrue(replica.allRecentNotes.isEmpty)
+    }
+
     func testConcurrentPinAndUnpinResolveToUnpinAndObservedPinCanRestore() throws {
         let base = try NotebookCatalogDocument()
         let note = try base.add(kind: .note, name: "Note.md")

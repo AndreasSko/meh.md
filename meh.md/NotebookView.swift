@@ -1147,6 +1147,9 @@ struct NotebookView: View {
                             onTrash: { id, completion in
                                 trashItems([id], onCompletion: completion)
                             },
+                            onHide: { id, completion in
+                                setRecentHidden(true, for: id, onCompletion: completion)
+                            },
                             contextMenu: recentUIKitMenu,
                             accessibilityHidden: hidesCompactRows
                         )
@@ -1287,6 +1290,9 @@ struct NotebookView: View {
         .accessibilityAction(named: Text("Move to Trash")) {
             trashItems([placement.item.id])
         }
+        .accessibilityAction(named: Text("Hide from Recents")) {
+            setRecentHidden(true, for: placement.item.id)
+        }
         .background(NotebookRecentCardBackground(
             position: recentCardPosition(index: index, count: count)
         ).opacity(showsCardBackground ? 1 : 0))
@@ -1306,9 +1312,18 @@ struct NotebookView: View {
             Button(role: .destructive) {
                 trashItems([placement.item.id])
             } label: {
-                Label("Trash", systemImage: "trash")
+                Image(systemName: "trash")
             }
+            .accessibilityLabel("Move to Trash")
             .accessibilityIdentifier("notebook-recent-swipe-trash")
+            Button {
+                setRecentHidden(true, for: placement.item.id)
+            } label: {
+                Image(systemName: "eye.slash")
+            }
+            .tint(.gray)
+            .accessibilityLabel("Hide from Recents")
+            .accessibilityIdentifier("notebook-recent-swipe-hide")
         }
         .contextMenu {
             actions(for: placement, allowsCreation: false,
@@ -1345,6 +1360,13 @@ struct NotebookView: View {
             attributes: !pinned && !replica.canPinInRecents(id) ? .disabled : []
         ) { _ in
             setRecentPinned(!pinned, for: id)
+        })
+        menuActions.append(UIAction(
+            title: String(localized: "Hide from Recents"),
+            image: UIImage(systemName: "eye.slash"),
+            attributes: busy ? .disabled : []
+        ) { _ in
+            setRecentHidden(true, for: id)
         })
         menuActions.append(UIAction(
             title: replica.isTemplateSource(id)
@@ -1401,6 +1423,15 @@ struct NotebookView: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private func setRecentHidden(
+        _ hidden: Bool, for id: UUID,
+        onCompletion: @escaping @MainActor (Bool) -> Void = { _ in }
+    ) {
+        perform({
+            try await replica.setHiddenFromRecents(hidden, for: id)
+        }, onCompletion: onCompletion)
     }
 
     private var showsCurrentNote: Bool {
@@ -1794,7 +1825,20 @@ struct NotebookView: View {
                 Button("Show in Files") { showInFiles(placement.item.id) }
                     .accessibilityIdentifier("notebook-show-in-files")
             }
-            recentPinButton(for: placement.item.id)
+            if !replica.isHiddenFromRecents(placement.item.id) {
+                recentPinButton(for: placement.item.id)
+            }
+            let hidden = replica.isHiddenFromRecents(placement.item.id)
+            let visibilityTitle: LocalizedStringKey = hidden
+                ? "Show in Recents" : "Hide from Recents"
+            Button {
+                setRecentHidden(!hidden, for: placement.item.id)
+            } label: {
+                Label(visibilityTitle,
+                      systemImage: hidden ? "eye" : "eye.slash")
+            }
+            .disabled(busy)
+            .accessibilityIdentifier("notebook-recents-visibility-" + placement.item.id.uuidString)
         }
         if placement.isInTrash {
             if placement.item.isTrashed {
@@ -2400,6 +2444,9 @@ struct NotebookView: View {
                 },
                 onTrash: { id, completion in
                     trashItems([id], onCompletion: completion)
+                },
+                onHide: { id, completion in
+                    setRecentHidden(true, for: id, onCompletion: completion)
                 },
                 contextMenu: recentUIKitMenu,
                 onVisibleIDs: { visibleRecentPreviewIDs = $0 },

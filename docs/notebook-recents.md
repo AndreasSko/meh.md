@@ -46,7 +46,7 @@ full projection exposes all of these notes, with pins first. It is a list of
 recent notes, not a separate event for every visit. The compact five-item
 projection and local five-pin limit retain their existing behavior, including
 concurrent-pin conflict handling. Trash and permanently deleted notes remain
-excluded. No new catalog fields or migration are required.
+excluded. Hidden notes are also excluded from both projections.
 
 Expanded previews read only a visible batch with a small prefetch margin.
 Requests are capped at 64 notes; a cache retains 128 rendered excerpts. Stored
@@ -84,10 +84,24 @@ from flashing during the animation.
 ## Row actions
 
 In compact and expanded Recents, swipe toward the leading edge (left in
-left-to-right layouts) to reveal the red Trash action. It requires a tap;
-a full swipe does not trash a note. Swipe the other way to Pin or Unpin,
-including the existing full-swipe shortcut. These are native UIKit actions
-on iPhone and iPad, and SwiftUI List actions on Mac.
+left-to-right layouts) to reveal the red Trash and gray Hide from Recents
+icons. Both require a tap; a full swipe does not trash or hide a note. Swipe
+the other way to Pin or Unpin, including the existing full-swipe shortcut.
+These are native UIKit actions on iPhone and iPad, and SwiftUI List actions
+on Mac. VoiceOver announces each icon's action.
+
+Hide from Recents keeps the note in Files and leaves the editor untouched.
+It clears its pin and recent activity, freeing a compact slot. Opening or
+editing the note does not bring it back. The note's Files context menu offers
+Show in Recents, which adds it back immediately as an unpinned recent note.
+The same menus can hide an eligible note before it first appears in Recents.
+
+The preference persists with the notebook catalog and syncs between devices.
+A concurrent hide wins over show; an explicit show after observing the hide
+restores visibility. The optional `recentsHidden.<note UUID>` root registers
+stay outside the older clients' strictly validated `recent.*` namespace, so
+those clients can still load the catalog. Older app versions do not apply
+this preference to their own Recents list. Trash and restore retain it.
 
 Trash flushes the open editor and uses the existing recoverable Trash and
 browser Undo operation. UIKit receives success only after that operation
@@ -98,7 +112,9 @@ offers Move to Trash. Trashing remains available when the pin limit is full.
 
 Focused model tests cover full and compact ordering, pin rollback, Trash,
 preview freshness, cancellation, bounded caching, and reading without opening
-sessions or changing recent activity.
+sessions or changing recent activity. Hide/show checks cover persistence,
+replica exchange, concurrent activity and pins, save failures, Trash restore,
+and preserving the open editor.
 
 `RecentsExpansionUITests` uses fictional notes in a disposable loopback
 workspace with the iCloud Dev build. Start the local sync server on port 9874

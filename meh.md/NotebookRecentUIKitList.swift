@@ -18,6 +18,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
     let rowContent: (UUID) -> RowContent
     let onTogglePin: (UUID) -> Void
     let onTrash: (UUID, @escaping (Bool) -> Void) -> Void
+    let onHide: (UUID, @escaping (Bool) -> Void) -> Void
     let contextMenu: (UUID) -> UIMenu
     var usesViewport = false
     var scrollingEnabled = false
@@ -29,6 +30,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
         @ViewBuilder rowContent: @escaping (UUID) -> RowContent,
         onTogglePin: @escaping (UUID) -> Void,
         onTrash: @escaping (UUID, @escaping (Bool) -> Void) -> Void,
+        onHide: @escaping (UUID, @escaping (Bool) -> Void) -> Void,
         contextMenu: @escaping (UUID) -> UIMenu,
         usesViewport: Bool = false,
         scrollingEnabled: Bool = false,
@@ -39,6 +41,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
         self.rowContent = rowContent
         self.onTogglePin = onTogglePin
         self.onTrash = onTrash
+        self.onHide = onHide
         self.contextMenu = contextMenu
         self.usesViewport = usesViewport
         self.scrollingEnabled = scrollingEnabled
@@ -104,6 +107,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
             rowContent: rowContent,
             onTogglePin: onTogglePin,
             onTrash: onTrash,
+            onHide: onHide,
             contextMenu: contextMenu,
             onVisibleIDs: onVisibleIDs
         )
@@ -130,6 +134,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
         private var rowContent: ((UUID) -> RowContent)?
         private var onTogglePin: ((UUID) -> Void)?
         private var onTrash: ((UUID, @escaping (Bool) -> Void) -> Void)?
+        private var onHide: ((UUID, @escaping (Bool) -> Void) -> Void)?
         private var contextMenu: ((UUID) -> UIMenu)?
         private var onVisibleIDs: (([UUID]) -> Void)?
         private var reportedIDs: [UUID] = []
@@ -140,12 +145,14 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
             rowContent: @escaping (UUID) -> RowContent,
             onTogglePin: @escaping (UUID) -> Void,
             onTrash: @escaping (UUID, @escaping (Bool) -> Void) -> Void,
+            onHide: @escaping (UUID, @escaping (Bool) -> Void) -> Void,
             contextMenu: @escaping (UUID) -> UIMenu,
             onVisibleIDs: @escaping ([UUID]) -> Void
         ) {
             self.rowContent = rowContent
             self.onTogglePin = onTogglePin
             self.onTrash = onTrash
+            self.onHide = onHide
             self.contextMenu = contextMenu
             self.onVisibleIDs = onVisibleIDs
             guard items != newItems else { return }
@@ -240,7 +247,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
                   itemByID[id] != nil else { return nil }
 
             let action = UIContextualAction(
-                style: .destructive, title: String(localized: "Trash")
+                style: .destructive, title: nil
             ) { [weak self] _, _, completion in
                 guard let onTrash = self?.onTrash else {
                     completion(false)
@@ -253,9 +260,21 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
             let image = UIImage(systemName: "trash")
             image?.accessibilityLabel = String(localized: "Move to Trash")
             action.image = image
-            let configuration = UISwipeActionsConfiguration(actions: [action])
-            // Moving the familiar pin gesture must not turn a remembered
-            // full swipe into deletion. Trash always requires a button tap.
+            let hide = UIContextualAction(style: .normal, title: nil) {
+                [weak self] _, _, completion in
+                guard let onHide = self?.onHide else {
+                    completion(false)
+                    return
+                }
+                onHide(id, completion)
+            }
+            let hideImage = UIImage(systemName: "eye.slash")
+            hideImage?.accessibilityLabel = String(localized: "Hide from Recents")
+            hide.image = hideImage
+            hide.backgroundColor = .systemGray
+            let configuration = UISwipeActionsConfiguration(actions: [action, hide])
+            // Both actions require a tap, so a full swipe cannot hide a
+            // note or move it to Trash.
             configuration.performsFirstActionWithFullSwipe = false
             return configuration
         }
