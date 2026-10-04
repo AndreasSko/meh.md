@@ -8,65 +8,253 @@ struct NotebookTemplatesSettingsView: View {
     var body: some View {
         let folders = replica.templateSources.filter { $0.kind == .folder }
         let templates = replica.templates
+        let isEmpty = folders.isEmpty && templates.isEmpty
+            && replica.snippetSources.isEmpty && replica.snippets.isEmpty
         List {
-            if folders.isEmpty && templates.isEmpty {
+            if isEmpty {
                 ContentUnavailableView {
-                    Label("No Templates Yet", systemImage: "doc.on.doc")
+                    Label("No Templates or Snippets Yet", systemImage: "doc.on.doc")
                 } description: {
-                    Text("Touch and hold a note or folder in Files, then choose Use as Template. On Mac, use its context menu.")
+                    Text("In Files, touch and hold a note or folder to use it as a template or snippet. On Mac, use its context menu. Templates create new notes; snippets insert Markdown into the note you’re editing.")
                 }
-            }
-            if !folders.isEmpty {
-                Section {
-                    ForEach(folders) { folder in
-                        NavigationLink {
-                            NotebookTemplateOptionsView(
-                                replica: replica, sourceID: folder.id,
-                                onOpenNote: onOpenNote
-                            )
-                        } label: {
-                            NotebookTemplateRow(
-                                name: folder.name, path: folder.path,
-                                systemImage: "folder"
+            } else {
+                if folders.isEmpty && templates.isEmpty {
+                    Section {
+                        Text("No Templates Yet").foregroundStyle(.secondary)
+                    } header: {
+                        Text("Templates")
+                    } footer: {
+                        Text("Templates create new notes. In Files, use a note or folder’s context menu and choose Use as Template.")
+                    }
+                }
+                if !folders.isEmpty {
+                    Section {
+                        ForEach(folders) { folder in
+                            NavigationLink {
+                                NotebookTemplateOptionsView(
+                                    replica: replica, sourceID: folder.id,
+                                    onOpenNote: onOpenNote
+                                )
+                            } label: {
+                                NotebookTemplateRow(
+                                    name: folder.name, path: folder.path,
+                                    systemImage: "folder"
+                                )
+                            }
+                            .accessibilityIdentifier(
+                                "notebook-template-folder-options-" + folder.id.uuidString
                             )
                         }
-                        .accessibilityIdentifier(
-                            "notebook-template-folder-options-" + folder.id.uuidString
-                        )
+                    } header: {
+                        Text("Template Folders")
+                    } footer: {
+                        Text("All notes in these folders and their subfolders are available as templates. Folder defaults can be overridden for each template.")
                     }
-                } header: {
-                    Text("Template Folders")
-                } footer: {
-                    Text("All notes in these folders and their subfolders are available as templates. Folder defaults can be overridden for each template.")
                 }
-            }
-            if !templates.isEmpty {
-                Section {
-                    ForEach(templates) { template in
-                        NavigationLink {
-                            NotebookTemplateOptionsView(
-                                replica: replica, sourceID: template.id,
-                                onOpenNote: onOpenNote
-                            )
-                        } label: {
-                            NotebookTemplateRow(
-                                name: template.name, path: template.path,
-                                systemImage: "doc.text"
+                if !templates.isEmpty {
+                    Section {
+                        ForEach(templates) { template in
+                            NavigationLink {
+                                NotebookTemplateOptionsView(
+                                    replica: replica, sourceID: template.id,
+                                    onOpenNote: onOpenNote
+                                )
+                            } label: {
+                                NotebookTemplateRow(
+                                    name: template.name, path: template.path,
+                                    systemImage: "doc.text"
+                                )
+                            }
+                            .accessibilityIdentifier(
+                                "notebook-template-options-" + template.id.uuidString
                             )
                         }
-                        .accessibilityIdentifier(
-                            "notebook-template-options-" + template.id.uuidString
+                    } header: {
+                        Text("Templates")
+                    } footer: {
+                        Text("Creating from a template copies its current Markdown into an independent new note.")
+                    }
+                }
+                NotebookSnippetOverviewSections(
+                    replica: replica, onOpenNote: onOpenNote
+                )
+            }
+        }
+        .navigationTitle("Templates & Snippets")
+        .accessibilityIdentifier("notebook-templates-overview")
+    }
+}
+
+private struct NotebookSnippetOverviewSections: View {
+    let replica: NotebookReplica
+    let onOpenNote: ((UUID) -> Void)?
+
+    var body: some View {
+        let folders = replica.snippetSources.filter { $0.kind == .folder }
+        let snippets = replica.snippets
+        if !folders.isEmpty {
+            Section {
+                ForEach(folders) { folder in
+                    NavigationLink {
+                        NotebookSnippetSourceView(
+                            replica: replica, sourceID: folder.id,
+                            onOpenNote: onOpenNote
+                        )
+                    } label: {
+                        NotebookTemplateRow(
+                            name: folder.name, path: folder.path,
+                            systemImage: "folder"
                         )
                     }
-                } header: {
-                    Text("Templates")
-                } footer: {
-                    Text("Creating from a template copies its current Markdown into an independent new note.")
+                    .accessibilityIdentifier(
+                        "notebook-snippet-folder-overview-" + folder.id.uuidString
+                    )
+                }
+            } header: {
+                Text("Snippet Folders")
+            } footer: {
+                Text("All notes in these folders and their subfolders are available as snippets, including notes you add later.")
+            }
+        }
+        Section {
+            if snippets.isEmpty {
+                Text("No Snippets Yet")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(snippets) { snippet in
+                NavigationLink {
+                    NotebookSnippetSourceView(
+                        replica: replica, sourceID: snippet.id,
+                        onOpenNote: onOpenNote
+                    )
+                } label: {
+                    NotebookTemplateRow(
+                        name: snippet.name, path: snippet.path,
+                        systemImage: "doc.text"
+                    )
+                }
+                .accessibilityIdentifier(
+                    "notebook-snippet-overview-" + snippet.id.uuidString
+                )
+            }
+        } header: {
+            Text("Snippets")
+        } footer: {
+            if snippets.isEmpty {
+                Text("Snippets insert Markdown into the note you’re editing. In Files, use a note or folder’s context menu and choose Use as Snippet or Use as Snippet Folder.")
+            } else {
+                Text("Snippets insert their current Markdown into the note you’re editing. Open a snippet here to edit its source.")
+            }
+        }
+    }
+}
+
+private struct NotebookSnippetSourceView: View {
+    let replica: NotebookReplica
+    let sourceID: UUID
+    let onOpenNote: ((UUID) -> Void)?
+    @Environment(\.dismiss) private var dismiss
+    @State private var removing = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        let source = replica.snippetSources.first { $0.id == sourceID }
+        let snippet = replica.snippets.first { $0.id == sourceID }
+        let isFolder = source?.kind == .folder
+        Form {
+            if let name = source?.name ?? snippet?.name,
+               let path = source?.path ?? snippet?.path {
+                NotebookSnippetSourceSection(
+                    name: name, path: path, isFolder: isFolder,
+                    sourceID: sourceID, onOpenNote: onOpenNote
+                )
+                if replica.isSnippetSource(sourceID) {
+                    Section {
+                        Button(role: .destructive, action: removeSource) {
+                            if isFolder {
+                                Text("Stop Using as Snippet Folder")
+                            } else {
+                                Text("Stop Using as Snippet")
+                            }
+                        }
+                        .accessibilityIdentifier("notebook-remove-snippet-source")
+                        if removing { ProgressView("Updating Snippets…") }
+                    } footer: {
+                        Text("The original note or folder and its contents are kept. Notes may remain available through other snippet folders or individual registrations.")
+                    }
+                } else {
+                    Section {
+                        Text("To stop using this snippet, move the note outside its snippet folders or stop using those folders as snippets.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                ContentUnavailableView(
+                    "Snippet Unavailable", systemImage: "doc.text",
+                    description: Text("This source is no longer available as a snippet.")
+                )
+            }
+            if let errorMessage {
+                Section {
+                    Text(errorMessage).foregroundStyle(.red)
+                        .accessibilityIdentifier("notebook-snippet-source-error")
                 }
             }
         }
-        .navigationTitle("Templates")
-        .accessibilityIdentifier("notebook-templates-overview")
+        .formStyle(.grouped)
+        .navigationTitle(Text(isFolder
+            ? LocalizedStringResource("Snippet Folder")
+            : LocalizedStringResource("Snippet")))
+        .disabled(removing)
+        .accessibilityIdentifier("notebook-snippet-source-detail")
+    }
+
+    private func removeSource() {
+        guard !removing else { return }
+        removing = true
+        errorMessage = nil
+        Task { @MainActor in
+            defer { removing = false }
+            do {
+                try await replica.setSnippetSource(sourceID, enabled: false)
+                dismiss()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+}
+
+private struct NotebookSnippetSourceSection: View {
+    let name: String
+    let path: String
+    let isFolder: Bool
+    let sourceID: UUID
+    let onOpenNote: ((UUID) -> Void)?
+
+    var body: some View {
+        Section {
+            NotebookTemplateRow(
+                name: name, path: path,
+                systemImage: isFolder ? "folder" : "doc.text"
+            )
+            if let onOpenNote {
+                Button {
+                    onOpenNote(sourceID)
+                } label: {
+                    if isFolder {
+                        Text("Show Folder in Files")
+                    } else {
+                        Text("Edit Snippet")
+                    }
+                }
+                .accessibilityIdentifier("notebook-open-snippet-source")
+            }
+        } footer: {
+            if isFolder {
+                Text("Notes in this folder and its subfolders are available as snippets. Edit those Markdown notes in Files to change what is inserted.")
+            } else {
+                Text("Edit this Markdown note to change the snippet. Type {{ in the source for variables. Inserting copies its current content; previously inserted text stays unchanged.")
+            }
+        }
     }
 }
 

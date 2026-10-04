@@ -52,7 +52,7 @@ struct NotebookSettingsView: View {
                             replica: replica, onOpenNote: onOpenNote
                         )
                     } label: {
-                        Label("Templates", systemImage: "doc.on.doc")
+                        Label("Templates & Snippets", systemImage: "doc.on.doc")
                     }
                     .accessibilityIdentifier("notebook-templates-settings")
                 }

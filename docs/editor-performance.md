@@ -497,3 +497,18 @@ paragraph separator edits, block boundaries, Unicode, incremental/full-parser
 agreement, and a large-note check that unfinished bold reparses fewer than
 256 UTF-16 units. The benchmark now reports per-edit parse counts and formatted
 lengths so future changes can expose this specific fallback regression.
+
+## Mixed 50 KB typing guard
+
+The standard-shape mixed 50 KB fixture allows a typing-to-idle p95 of 300 ms,
+up from 250 ms (+20%). CI evidence showed 267 and 258 ms for the first two
+characters, with the remaining 19 at 38–105 ms. The second character's native
+edit took 9 ms; its delay occurred before the next main-run-loop idle. Both
+steps used one incremental parse and no full parse. Frozen controls and main
+also showed initial typing stalls, so this narrow allowance accounts for
+observed startup variance without changing other action or fixture budgets.
+
+Every character still has its separate 500 ms ceiling. Source, selection,
+save, presentation, parse, and fixture checks remain required. Long-line and
+nearby-table budgets are unchanged. These simulator timings measure arrival
+at run-loop idle, not physical-display latency.

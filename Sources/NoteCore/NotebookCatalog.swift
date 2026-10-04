@@ -170,6 +170,7 @@ final class NotebookCatalogDocument {
         _ = try legacyMigration()
         _ = try historicalLinkLocations()
         _ = try templateMetadata()
+        _ = try snippetMetadata()
     }
 
     /// A fork owns a distinct Automerge document but initially has the same
@@ -240,6 +241,35 @@ final class NotebookCatalogDocument {
             $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
         }) else { throw NotebookTemplateError.sourceUnavailable }
         try document.put(obj: .ROOT, key: "template.source.\(id.uuidString)",
+                         value: .Boolean(enabled))
+    }
+
+    func snippetMetadata() throws -> NotebookSnippetMetadata {
+        var result = NotebookSnippetMetadata()
+        for key in document.keys(obj: .ROOT).sorted() where key.hasPrefix("snippet.") {
+            let parts = key.split(separator: ".")
+            guard parts.count == 3, parts[1] == "source",
+                  let id = UUID(uuidString: String(parts[2])),
+                  id.uuidString == parts[2] else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            for value in try document.getAll(obj: .ROOT, key: key) {
+                guard case .Scalar(.Boolean) = value else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+            }
+            if try document.get(obj: .ROOT, key: key) == .Scalar(.Boolean(true)) {
+                result.sources.insert(id)
+            }
+        }
+        return result
+    }
+
+    func setSnippetSource(_ id: UUID, enabled: Bool) throws {
+        guard try placements().contains(where: {
+            $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+        }) else { throw NotebookSnippetError.sourceUnavailable }
+        try document.put(obj: .ROOT, key: "snippet.source.\(id.uuidString)",
                          value: .Boolean(enabled))
     }
 
