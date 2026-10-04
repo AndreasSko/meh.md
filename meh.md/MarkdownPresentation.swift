@@ -411,6 +411,7 @@ enum MarkdownPresentation {
             for: fontFamily,
             pointSize: normalizedFontSize(fontSize)
         )
+        (textView as? MarkdownTextView)?.markdownBodyLineHeight = bodyFont.lineHeight
         let previewRanges = presentation.previewRanges
         var layoutRange = syntaxCache.layoutRange(
             for: presentation, text: text, bodyFont: bodyFont

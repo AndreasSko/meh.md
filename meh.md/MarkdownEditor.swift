@@ -1586,19 +1586,26 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     override func layoutSubviews() {
         super.layoutSubviews()
         updateFindKeyboardInsets()
-        // Scroll-past-end space belongs to the document. A content inset
-        // also reduces UIKit's caret-reveal viewport, which can become
-        // smaller than that inset as the keyboard appears.
-        let bottom = 18 + MarkdownEditorScrollPadding.bottom(
+        let padding = MarkdownEditorScrollPadding.bottom(
             for: max(0, bounds.height - (markdownState.isFinding
                 ? adjustedContentInset.bottom : 0))
         )
         var insets = textContainerInset
         let titleExtent = markdownState.titleHost == nil
             ? 0 : markdownState.titleHeight + 12
-        if insets.top != 18 + titleExtent || insets.bottom != bottom {
-            insets.top = 18 + titleExtent
-            insets.bottom = bottom
+        insets.top = 18 + titleExtent
+        // Small system gestures can briefly resize the editor. Rewriting
+        // document padding for those changes invalidates TextKit's estimated
+        // extent and can move the viewport by much more than the resize.
+        // Optional space below the document may differ from half the viewport
+        // by less than half a body-font line. Compare against applied padding
+        // so accumulated resizes still update it, independently of the title.
+        if markdownState.appliedEndPadding == nil
+            || abs(markdownScrollPastEndPadding - padding) >= markdownBodyLineHeight / 2 {
+            markdownState.appliedEndPadding = padding
+        }
+        insets.bottom = 18 + markdownScrollPastEndPadding
+        if insets != textContainerInset {
             textContainerInset = insets
         }
         layoutMarkdownTitle()
@@ -1729,6 +1736,20 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 
     var markdownSyntaxCache: MarkdownSyntaxCache {
         markdownState.syntaxCache
+    }
+
+    var markdownBodyLineHeight: CGFloat {
+        get { markdownState.bodyLineHeight }
+        set {
+            guard newValue.isFinite, newValue > 0,
+                  newValue != markdownState.bodyLineHeight else { return }
+            markdownState.bodyLineHeight = newValue
+            setNeedsLayout()
+        }
+    }
+
+    var markdownScrollPastEndPadding: CGFloat {
+        markdownState.appliedEndPadding ?? 0
     }
 
     var markdownDidAttachToWindow: (() -> Void)? {
@@ -2083,6 +2104,10 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 }
 
 private final class MarkdownTextViewState: NSObject {
+    var appliedEndPadding: CGFloat?
+    var bodyLineHeight = UIFont.systemFont(
+        ofSize: MarkdownPresentation.defaultFontSize
+    ).lineHeight
     weak var findPresentation: MarkdownEditorFindPresentation?
     var isFinding = false
     var isApplyingCommand = false
