@@ -1,5 +1,13 @@
 import Foundation
 
+/// Where a newly created item belongs among its active siblings.
+public enum NotebookCreationPosition: Equatable, Sendable {
+    case append
+    case first
+    case after(UUID)
+    case before(UUID)
+}
+
 /// A persisted, parent-scoped position in a notebook's manual order.
 ///
 /// The encoded components are intentionally opaque outside NoteCore. They are

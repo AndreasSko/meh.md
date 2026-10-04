@@ -31,6 +31,28 @@ final class NotebookCatalogCacheTests: XCTestCase {
         XCTAssertEqual(catalog.readItemsDecodeCount, before + 1)
     }
 
+    func testNestedCreationDecodesOnlyCompleteItemAndInheritsImportScope() throws {
+        let root = UUID()
+        let base = try NotebookCatalogDocument()
+        let catalog = try base.forkAddingImportEntries([
+            NotebookImportEntry(
+                id: root, kind: .folder, name: "Imported", parentID: nil, text: nil)
+        ])
+        let parent = try catalog.add(kind: .folder, name: "Nested", parentID: root)
+        _ = try catalog.items()
+        let before = catalog.readItemsDecodeCount
+
+        let note = try catalog.add(kind: .note, name: "New.md", parentID: parent)
+
+        XCTAssertEqual(catalog.readItemsDecodeCount, before)
+        let items = try catalog.items()
+        XCTAssertEqual(catalog.readItemsDecodeCount, before + 1)
+        XCTAssertEqual(items.first(where: { $0.id == parent })?.importRootID, root)
+        XCTAssertEqual(items.first(where: { $0.id == note })?.importRootID, root)
+        let reopened = try NotebookCatalogDocument(snapshot: catalog.snapshot())
+        XCTAssertEqual(try reopened.items(), items)
+    }
+
     func testForkAndRecentWritesReuseUnchangedValidatedCaches() throws {
         let catalog = try NotebookCatalogDocument()
         let note = try catalog.add(kind: .note, name: "Current.md")

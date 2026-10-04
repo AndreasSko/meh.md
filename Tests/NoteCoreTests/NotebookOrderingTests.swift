@@ -20,6 +20,20 @@ final class NotebookOrderingTests: XCTestCase {
         XCTAssertTrue(try legacy.items().allSatisfy { $0.orderKey == nil })
     }
 
+    func testContextualCreationPreservesLegacySiblingOrder() throws {
+        let catalog = try NotebookCatalogDocument()
+        let note = try catalog.add(kind: .note, name: "A.md")
+        let folder = try catalog.add(kind: .folder, name: "Folder")
+        let legacy = try removingOrderMetadata(from: catalog)
+
+        let inserted = try legacy.add(
+            kind: .note, name: "New.md", position: .after(folder))
+
+        XCTAssertEqual(
+            try legacy.orderedChildren(parentID: nil, inTrash: false).map(\.item.id),
+            [folder, inserted, note])
+    }
+
     func testFullReorderAllowsFoldersAndNotesToInterleaveAfterReload() throws {
         let catalog = try NotebookCatalogDocument()
         let folder = try catalog.add(kind: .folder, name: "Folder")

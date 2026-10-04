@@ -675,8 +675,10 @@ final class NotebookCatalogDocument {
     }
 
     @discardableResult
-    func add(id: UUID = UUID(), kind: NotebookItemKind, name: String, parentID: UUID? = nil) throws
-        -> UUID
+    func add(
+        id: UUID = UUID(), kind: NotebookItemKind, name: String,
+        parentID: UUID? = nil, position: NotebookCreationPosition = .append
+    ) throws -> UUID
     {
         try NotebookName.validate(name)
         guard try document.get(obj: itemsObject, key: id.uuidString) == nil else {
@@ -684,12 +686,33 @@ final class NotebookCatalogDocument {
         }
         try validateParent(parentID, for: nil)
         try ensureOrder(parentID: parentID)
-        let lower = try orderedChildren(parentID: parentID, inTrash: false)
+        let siblings = try orderedChildren(parentID: parentID, inTrash: false)
             .filter { $0.item.parentID == parentID }
-            .last?.item.orderKey
-        let order = try NotebookOrderKeyFactory.between(
-            lower, nil, itemID: id
-        )
+        let insertionIndex: Int
+        switch position {
+        case .append: insertionIndex = siblings.endIndex
+        case .first: insertionIndex = siblings.startIndex
+        case .before(let siblingID):
+            guard let index = siblings.firstIndex(where: { $0.item.id == siblingID }) else {
+                throw NotebookCatalogError.invalidOrder
+            }
+            insertionIndex = index
+        case .after(let siblingID):
+            guard let index = siblings.firstIndex(where: { $0.item.id == siblingID }) else {
+                throw NotebookCatalogError.invalidOrder
+            }
+            insertionIndex = siblings.index(after: index)
+        }
+        let lower = insertionIndex > siblings.startIndex
+            ? siblings[siblings.index(before: insertionIndex)].item.orderKey : nil
+        let upper = insertionIndex < siblings.endIndex
+            ? siblings[insertionIndex].item.orderKey : nil
+        let order = try NotebookOrderKeyFactory.between(lower, upper, itemID: id)
+        // Read inherited metadata while the sibling projection is still cached,
+        // before creating a partially populated item invalidates its heads.
+        let importRootID = try parentID.flatMap { parent in
+            try items().first(where: { $0.id == parent })?.importRootID
+        }
         let item = try document.putObject(obj: itemsObject, key: id.uuidString, ty: .Map)
         try document.put(obj: item, key: "kind", value: .String(kind.rawValue))
         try document.put(obj: item, key: "name", value: .String(name))
@@ -697,10 +720,9 @@ final class NotebookCatalogDocument {
             obj: item, key: "parent", value: parentID.map { .String($0.uuidString) } ?? .Null)
         try document.put(
             obj: item, key: "visibility", value: .String("active:\(UUID().uuidString)"))
-        if let parentID,
-           let scope = try items().first(where: { $0.id == parentID })?.importRootID {
+        if let importRootID {
             try document.put(
-                obj: item, key: "importRootID", value: .String(scope.uuidString))
+                obj: item, key: "importRootID", value: .String(importRootID.uuidString))
         }
         try writeOrder(order, parentID: parentID, object: item)
         return id
