@@ -182,9 +182,8 @@ final class MarkdownTableUITests: XCTestCase {
 
     private func isolatedApplication() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
-        app.launchEnvironment["MEH_SYNC_URL"] = "http://127.0.0.1:18888"
-        app.launchEnvironment["MEH_SYNC_WORKSPACE"] = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = "table-ui-\(UUID().uuidString)"
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         return app
     }

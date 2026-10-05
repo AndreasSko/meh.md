@@ -1579,19 +1579,24 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         super.findInteraction(interaction, didEnd: session)
         markdownState.isFinding = false
         markdownFindPresentation?.isVisible = false
-        updateFindKeyboardInsets()
+        updateKeyboardInsets()
     }
 
-    private func updateFindKeyboardInsets() {
+    private func updateKeyboardInsets() {
         // Read-only navigation previews pin the captured source viewport.
         // Their bottom inset must survive subsequent layout passes as well.
         if !isEditable, contentInsetAdjustmentBehavior == .never,
            !markdownState.isFinding { return }
-        // Find's glass accessory needs the dimmed document behind it.
-        // Keep matches above the keyboard while the view extends beneath it.
+        // UIKit owns keyboard avoidance while the editor keeps its frame.
+        // Reserve actual covered space without changing the text viewport.
         let overlap = bounds.intersection(keyboardLayoutGuide.layoutFrame)
-        let bottom = markdownState.isFinding && !overlap.isNull
-            ? overlap.height : 0
+        let coveredHeight = !overlap.isNull ? overlap.height : 0
+        // The keyboard includes the bottom safe area. UIKit already adds
+        // that automatic contribution to our custom scrolling inset.
+        let automaticBottom = max(
+            0, adjustedContentInset.bottom - contentInset.bottom
+        )
+        let bottom = max(0, coveredHeight - automaticBottom)
         if contentInset.bottom != bottom {
             contentInset.bottom = bottom
             verticalScrollIndicatorInsets.bottom = bottom
@@ -1600,10 +1605,9 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        updateFindKeyboardInsets()
+        updateKeyboardInsets()
         let padding = MarkdownEditorScrollPadding.bottom(
-            for: max(0, bounds.height - (markdownState.isFinding
-                ? adjustedContentInset.bottom : 0))
+            for: max(0, bounds.height - adjustedContentInset.bottom)
         )
         var insets = textContainerInset
         let titleExtent = markdownState.titleHost == nil
@@ -1817,9 +1821,14 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     }
 
     private func revealSelectionAfterKeyboardDidShow() {
+        guard window != nil else { return }
+        // The stable editor frame may not schedule a layout on keyboard
+        // guide changes. Resolve its covered area even when Find owns focus.
+        setNeedsLayout()
+        layoutIfNeeded()
         guard markdownState.pendingKeyboardSelectionReveal else { return }
         markdownState.pendingKeyboardSelectionReveal = false
-        guard window != nil, isFirstResponder, isEditable,
+        guard isFirstResponder, isEditable,
               !markdownState.isFinding else { return }
         let selection = selectedRange
         let length = textStorage.length

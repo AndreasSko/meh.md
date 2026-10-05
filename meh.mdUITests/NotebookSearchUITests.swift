@@ -151,12 +151,27 @@ final class NotebookSearchUITests: XCTestCase {
             app.buttons["editor-command-bold"].waitForExistence(timeout: 5),
             "Writing controls should return after closing Find"
         )
-        editor.typeText(" Written after Find.")
-        XCTAssertTrue((editor.value as? String ?? "").contains("Written after Find."))
-        XCTAssertEqual(
-            (editor.value as? String ?? "").replacingOccurrences(
-                of: " Written after Find.", with: ""
-            ), originalText
+        capture(app, name: "Native selection before writing after Find")
+        let insertion = " Written after Find."
+        editor.typeText(insertion)
+        let editedText = try XCTUnwrap(editor.value as? String)
+        let unchangedParts = editedText.components(separatedBy: insertion)
+        let insertionOnly = unchangedParts.count == 2
+            && Array(unchangedParts.joined().utf8) == Array(originalText.utf8)
+        // Native Find may retain its selected second match after closing.
+        // Permit replacement of that exact word, preserving all other bytes.
+        let sentence = "The lantern marks the turn toward the river."
+        XCTAssertEqual(originalText.components(separatedBy: sentence).count, 2)
+        let sentenceRange = try XCTUnwrap(originalText.range(of: sentence))
+        let selectedMatch = try XCTUnwrap(
+            originalText.range(of: "lantern", range: sentenceRange)
+        )
+        let replacedMatch = originalText.replacingCharacters(
+            in: selectedMatch, with: insertion
+        )
+        XCTAssertTrue(
+            insertionOnly || Array(editedText.utf8) == Array(replacedMatch.utf8),
+            "Writing must insert text or replace only the selected second match"
         )
         capture(app, name: "Writing resumes after closing native Find")
 #endif
@@ -189,17 +204,9 @@ final class NotebookSearchUITests: XCTestCase {
 
     private func makeApp() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-#if ICLOUD_ENABLED
-        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
-        app.launchEnvironment["MEH_SYNC_URL"] =
-            ProcessInfo.processInfo.environment["MEH_SYNC_TEST_URL"]
-            ?? "http://127.0.0.1:8765"
-        app.launchEnvironment["MEH_SYNC_WORKSPACE"] = "find-\(UUID().uuidString)"
-#else
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-#endif
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = "search-ui-\(UUID().uuidString)"
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "source"]
         return app
     }

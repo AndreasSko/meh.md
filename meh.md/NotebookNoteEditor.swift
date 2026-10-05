@@ -87,10 +87,10 @@ struct NotebookNoteEditor: View {
                 .accessibilityIdentifier("note-save-status")
             }
         }
-        // Find needs the dimmed document behind its glass keyboard accessory.
-        // UIKit reserves scrolling space; actionable errors keep a safe area.
+        // Let UIKit reserve keyboard space in the stable editor frame.
+        // Actionable errors still keep their keyboard-safe area.
         .ignoresSafeArea(
-            navigation.findPresentation.isVisible ? .all : .container,
+            .all,
             edges: ignoredSafeAreaEdges
         )
         .onChange(of: session.persistedSnapshot) { _, _ in onPersist() }
