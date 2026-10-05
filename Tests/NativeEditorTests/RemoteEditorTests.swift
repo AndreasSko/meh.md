@@ -270,19 +270,39 @@ final class RemoteEditorTests: XCTestCase {
         let mounted = mount(model)
         let textView = try XCTUnwrap(mounted.textView)
         defer { mounted.tearDown() }
+        let markdownView = try XCTUnwrap(textView as? MarkdownTextView)
+        func waitForPublishedCommands(_ expected: Set<MarkdownEditingCommand>) {
+            // Availability publishes asynchronously after native selection.
+            let deadline = Date().addingTimeInterval(1)
+            while model.navigation.tableCommands.available != expected,
+                  Date() < deadline {
+                mounted.flushUpdates()
+            }
+            XCTAssertEqual(model.navigation.tableCommands.available, expected,
+                           "Table commands did not follow native selection: "
+                            + "\(selectedRange(in: textView))")
+        }
 
         let cell = (source as NSString).range(of: "Walk")
-        setSelection(NSRange(location: cell.location, length: 0),
-                     in: textView)
-        mounted.flushUpdates()
+        let cellSelection = NSRange(location: cell.location, length: 0)
+        setSelection(cellSelection, in: textView)
+        XCTAssertEqual(selectedRange(in: textView), cellSelection)
+        waitForPublishedCommands(markdownView.availableTableCommands)
+        XCTAssertEqual(selectedRange(in: textView), cellSelection)
         let inside = model.navigation.tableCommands.available
         XCTAssertTrue(inside.contains(.tableRowBelow))
         XCTAssertTrue(inside.contains(.tableDeleteRow))
         XCTAssertTrue(inside.contains(.tableColumnAfter))
         XCTAssertFalse(inside.contains(.insertTable))
 
+        let endSelection = NSRange(location: (source as NSString).length,
+                                   length: 0)
         moveInsertionPointToEnd(of: textView)
-        mounted.flushUpdates()
+        XCTAssertEqual(selectedRange(in: textView), endSelection)
+        let nativeOutside = markdownView.availableTableCommands
+        XCTAssertEqual(nativeOutside, [.insertTable])
+        waitForPublishedCommands(nativeOutside)
+        XCTAssertEqual(selectedRange(in: textView), endSelection)
         let outside = model.navigation.tableCommands.available
         XCTAssertTrue(outside.contains(.insertTable))
         XCTAssertFalse(outside.contains(.tableDeleteRow))

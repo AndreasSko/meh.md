@@ -411,6 +411,7 @@ enum MarkdownPresentation {
             for: fontFamily,
             pointSize: normalizedFontSize(fontSize)
         )
+        (textView as? MarkdownTextView)?.markdownBodyLineHeight = bodyFont.lineHeight
         let previewRanges = presentation.previewRanges
         var layoutRange = syntaxCache.layoutRange(
             for: presentation, text: text, bodyFont: bodyFont
@@ -425,6 +426,11 @@ enum MarkdownPresentation {
             layoutRange = layoutRange.length == 0 ? tableRange
                 : NSUnionRange(layoutRange, tableRange)
         }
+        // Gap ownership can change on either side of an edit, especially
+        // when a formerly empty EOF gains its first stored character.
+        let renderingRange = layoutRange
+        layoutRange = paragraphGapLayoutRange(layoutRange, in: text)
+        syntaxCache.recordAppliedLayoutRange(layoutRange)
         syntaxCache.tableRefresh = { [weak textView] in
             guard let textView else { return }
             refresh(textView, fontSize: fontSize, fontFamily: fontFamily, mode: mode)
@@ -452,7 +458,7 @@ enum MarkdownPresentation {
             text: text,
             syntaxCache: syntaxCache,
             presentation: presentation,
-            invalidatedRange: layoutRange
+            invalidatedRange: renderingRange
         )
         textView.setNeedsDisplay()
         (textView as? MarkdownTextView)?.updateMarkdownTableScrollOverlays()
@@ -487,7 +493,36 @@ enum MarkdownPresentation {
         var attributes = textView.typingAttributes
         attributes[.font] = bodyFont
         attributes[.foregroundColor] = primaryTextColor
-        attributes[.paragraphStyle] = bodyParagraphStyle(for: bodyFont)
+        let style = bodyParagraphStyle(for: bodyFont)
+        let source = (textView.text ?? "") as NSString
+        let position = min(source.length, textView.selectedRange.location)
+        let paragraph = source.paragraphRange(
+            for: NSRange(location: position, length: 0)
+        )
+        let cache = syntaxCache(for: textView)
+        if paragraph.location > 0, paragraph.length > 0,
+           let presentation = cache.currentPresentation {
+            let previous = source.paragraphRange(
+                for: NSRange(location: paragraph.location - 1, length: 0)
+            )
+            var taskParagraphs: Set<Int> = []
+            if MarkdownLivePreview.snapshot(for: textView).mode == .livePreview,
+               let run = presentation.result.paragraphRuns.last(where: {
+                   NSLocationInRange(previous.location, $0.range)
+               }) {
+                presentation.forEachSpan(intersecting: run.range) { span in
+                    if case .taskMarker = span.role {
+                        taskParagraphs.insert(run.range.location)
+                    }
+                }
+            }
+            style.paragraphSpacingBefore = originalParagraphSpacing(
+                at: previous.location, source: source,
+                result: presentation.result, bodyFont: bodyFont,
+                taskParagraphs: taskParagraphs, tableLayout: cache.tableLayout
+            )
+        }
+        attributes[.paragraphStyle] = style
         textView.typingAttributes = attributes
     }
 
@@ -1054,12 +1089,9 @@ enum MarkdownPresentation {
             }
         }
         let source = text as NSString
-        let taskParagraphs = livePreview
-            ? Set(result.spans.compactMap { span -> Int? in
-                guard case .taskMarker = span.role else { return nil }
-                return source.paragraphRange(for: span.range).location
-            })
-            : []
+        let taskParagraphs = taskParagraphLocations(
+            in: result, source: source, livePreview: livePreview
+        )
         for run in result.paragraphRuns {
             guard let localRange = local(run.range) else { continue }
             let style = paragraphStyle(
@@ -1108,16 +1140,26 @@ enum MarkdownPresentation {
             )
         }
         tableLayout?.apply(to: desired, sourceRange: range)
+        #if os(iOS)
+        applyLeadingParagraphGaps(
+            to: desired, sourceRange: range, source: source,
+            result: result, bodyFont: bodyFont,
+            taskParagraphs: taskParagraphs, tableLayout: tableLayout
+        )
+        #endif
         var changes: [AttributeChange] = []
-        for key in [
-            NSAttributedString.Key.font,
+        var layoutAttributeKeys: [NSAttributedString.Key] = [
+            .font,
             .paragraphStyle,
-            .foregroundColor,
             .kern,
             .obliqueness,
             .strikethroughColor,
             .strikethroughStyle,
-        ] {
+        ]
+        #if os(macOS)
+        layoutAttributeKeys.append(.foregroundColor)
+        #endif
+        for key in layoutAttributeKeys {
             changes.append(contentsOf: changedAttributes(
                 key,
                 from: desired,
@@ -1221,6 +1263,18 @@ enum MarkdownPresentation {
             contentManager: contentManager
         )
 
+        #if os(iOS)
+        // Appearance must reset without editing native layout attributes.
+        if let textRange = textRange(
+            for: fragmentRange,
+            documentStart: documentStart,
+            contentManager: contentManager
+        ) {
+            layoutManager.addRenderingAttribute(
+                .foregroundColor, value: primaryTextColor, for: textRange
+            )
+        }
+        #endif
         var appliedCount = 0
         presentation.forEachSpan(intersecting: fragmentRange) { span in
             let intersection = NSIntersectionRange(span.range, fragmentRange)
@@ -1679,6 +1733,136 @@ enum MarkdownPresentation {
         }
         return attributes
     }
+
+    private static func taskParagraphLocations(
+        in result: MarkdownSyntaxResult,
+        source: NSString,
+        livePreview: Bool
+    ) -> Set<Int> {
+        guard livePreview else { return [] }
+        return Set(result.spans.compactMap { span in
+            guard case .taskMarker = span.role else { return nil }
+            return source.paragraphRange(for: span.range).location
+        })
+    }
+
+    #if os(iOS)
+    private static func paragraphGapLayoutRange(
+        _ range: NSRange, in text: String
+    ) -> NSRange {
+        guard range.length > 0 else { return range }
+        let source = text as NSString
+        let full = NSRange(location: 0, length: source.length)
+        var paragraphs = source.paragraphRange(
+            for: NSIntersectionRange(range, full)
+        )
+        if paragraphs.location > 0 {
+            let previous = source.paragraphRange(for: NSRange(
+                location: paragraphs.location - 1, length: 0
+            ))
+            paragraphs = NSUnionRange(previous, paragraphs)
+        }
+        let end = NSMaxRange(paragraphs)
+        if end < source.length {
+            let next = source.paragraphRange(
+                for: NSRange(location: end, length: 0)
+            )
+            paragraphs = NSUnionRange(paragraphs, next)
+        }
+        return paragraphs
+    }
+
+    private static func originalParagraphSpacing(
+        at position: Int,
+        source: NSString,
+        result: MarkdownSyntaxResult,
+        bodyFont: PlatformFont,
+        taskParagraphs: Set<Int>,
+        tableLayout: MarkdownTableLayout?
+    ) -> CGFloat {
+        if let tableLayout,
+           tableLayout.rows.contains(where: {
+               NSLocationInRange(position, $0.range)
+           }) || tableLayout.delimiters.contains(where: {
+               NSLocationInRange(position, $0)
+           }) {
+            return 0
+        }
+        guard let run = result.paragraphRuns.last(where: {
+            NSLocationInRange(position, $0.range)
+        }) else { return bodyParagraphStyle(for: bodyFont).paragraphSpacing }
+        return paragraphStyle(
+            for: run, text: source, bodyFont: bodyFont,
+            isTask: taskParagraphs.contains(run.range.location)
+        ).paragraphSpacing
+    }
+
+    private static func applyLeadingParagraphGaps(
+        to desired: NSMutableAttributedString,
+        sourceRange: NSRange,
+        source: NSString,
+        result: MarkdownSyntaxResult,
+        bodyFont: PlatformFont,
+        taskParagraphs: Set<Int>,
+        tableLayout: MarkdownTableLayout?
+    ) {
+        var previousSpacing: CGFloat = 0
+        if sourceRange.location > 0 {
+            let previous = source.paragraphRange(for: NSRange(
+                location: sourceRange.location - 1, length: 0
+            ))
+            // Read the original syntax, not an already transformed neighbor.
+            // Otherwise repeated incremental refreshes accumulate the gap.
+            previousSpacing = originalParagraphSpacing(
+                at: previous.location, source: source, result: result,
+                bodyFont: bodyFont, taskParagraphs: taskParagraphs,
+                tableLayout: tableLayout
+            )
+        }
+        var cursor = sourceRange.location
+        while cursor < NSMaxRange(sourceRange) {
+            let paragraph = source.paragraphRange(for: NSRange(
+                location: cursor, length: 0
+            ))
+            let local = NSRange(
+                location: paragraph.location - sourceRange.location,
+                length: paragraph.length
+            )
+            guard let original = desired.attribute(
+                .paragraphStyle, at: local.location, effectiveRange: nil
+            ) as? NSParagraphStyle,
+                  let style = original.mutableCopy()
+                    as? NSMutableParagraphStyle else { return }
+            let trailingSpacing = original.paragraphSpacing
+            // UIKit's pre-selection layout can re-anchor a long document
+            // when fragments have trailing paragraph gaps. Apple's gap
+            // contract is previous.after + current.before, so assign the
+            // same distance to the following paragraph instead.
+            style.paragraphSpacingBefore += previousSpacing
+            if paragraph.location == 0,
+               let run = result.paragraphRuns.last(where: {
+                   NSLocationInRange(paragraph.location, $0.range)
+               }), case let .heading(level) = run.kind {
+                // A concealed heading marker can otherwise make native
+                // pre-selection layout add the first heading's line height
+                // to already visible fragment positions. Keep its natural
+                // minimum while allowing taller fallback glyphs to grow.
+                style.minimumLineHeight = headingFont(
+                    level: level, bodyFont: bodyFont
+                ).lineHeight
+            }
+            // UIKit's virtual empty EOF does not apply a leading gap until
+            // its first glyph exists. Keep the last stored trailing gap;
+            // it transfers to the next paragraph when text is inserted.
+            if NSMaxRange(paragraph) < source.length {
+                style.paragraphSpacing = 0
+            }
+            desired.addAttribute(.paragraphStyle, value: style, range: local)
+            previousSpacing = trailingSpacing
+            cursor = NSMaxRange(paragraph)
+        }
+    }
+    #endif
 
     private static func bodyParagraphStyle(
         for bodyFont: PlatformFont
@@ -2274,6 +2458,10 @@ final class MarkdownSyntaxCache: NSObject {
     private var appliedBodyFont: PlatformFont?
     private(set) var lastLayoutRange = NSRange(location: 0, length: 0)
 
+    func recordAppliedLayoutRange(_ range: NSRange) {
+        lastLayoutRange = range
+    }
+
     func layoutRange(
         for presentation: MarkdownRenderingPresentation,
         text: String,
@@ -2342,6 +2530,19 @@ final class MarkdownSyntaxCache: NSObject {
                 transparent: shifted(oldPreview.transparent)
             )
             dirtyLayoutRange = update.invalidatedRange
+            #if os(iOS)
+            if update.invalidatedRange.length == 0,
+               update.invalidatedRange.location == (text as NSString).length,
+               !text.isEmpty {
+                // Removing the last paragraph transfers its leading gap
+                // back to the preceding stored paragraph. A zero-length
+                // parse invalidation would otherwise leave its gap stale.
+                dirtyLayoutRange = (text as NSString).paragraphRange(
+                    for: NSRange(location: (text as NSString).length - 1,
+                                 length: 0)
+                )
+            }
+            #endif
         }
         return true
     }

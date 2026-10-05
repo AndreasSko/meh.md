@@ -125,6 +125,73 @@ final class NativeEditorIntegrationTests: XCTestCase {
         XCTAssertEqual(try boundary.note.text, source + "\n")
     }
 
+#if os(iOS)
+    func testNativePlainReturnCommitsAndUndoes() throws {
+        let source = "Moon 🪐"
+        try assertNativeNewline(
+            source: source,
+            selection: NSRange(location: source.utf16.count, length: 0),
+            expected: source + "\n",
+            expectedSelection: NSRange(location: source.utf16.count + 1, length: 0)
+        )
+    }
+
+    func testNativeReturnReplacesUTF16SelectionAndUndoes() throws {
+        try assertNativeNewline(
+            source: "Moon 🪐 orbit",
+            // The planet occupies two UTF-16 code units.
+            selection: NSRange(location: 5, length: 8),
+            expected: "Moon \n",
+            expectedSelection: NSRange(location: 6, length: 0)
+        )
+    }
+
+    func testNativeReturnInsideCodeStaysLiteralAndUndoes() throws {
+        try assertNativeNewline(
+            source: "```\n- sample\n```",
+            selection: NSRange(location: 12, length: 0),
+            expected: "```\n- sample\n\n```",
+            expectedSelection: NSRange(location: 13, length: 0)
+        )
+    }
+
+    private func assertNativeNewline(
+        source: String, selection: NSRange, expected: String,
+        expectedSelection: NSRange
+    ) throws {
+        for mode in [MarkdownEditorMode.source, .livePreview] {
+            let boundary = try DocumentBinding(note: TextDocument(text: source))
+            let editor = MarkdownEditor(
+                text: Binding(get: { boundary.text }, set: { boundary.text = $0 }),
+                mode: mode
+            )
+            let mounted = mount(editor)
+            defer { mounted.tearDown() }
+            let textView = try XCTUnwrap(mounted.textView)
+            let undoManager = try XCTUnwrap(textView.undoManager)
+            undoManager.removeAllActions()
+            textView.selectedRange = selection
+
+            textView.insertText("\n")
+            XCTAssertEqual(nativeText(in: textView), expected)
+            XCTAssertEqual(try boundary.note.text, expected)
+            XCTAssertEqual(textView.selectedRange, expectedSelection)
+            XCTAssertTrue(undoManager.canUndo)
+
+            undoManager.undo()
+            XCTAssertEqual(nativeText(in: textView), source)
+            XCTAssertEqual(try boundary.note.text, source)
+            XCTAssertTrue(undoManager.canRedo)
+
+            undoManager.redo()
+            XCTAssertEqual(nativeText(in: textView), expected)
+            XCTAssertEqual(try boundary.note.text, expected)
+            XCTAssertEqual(textView.selectedRange, expectedSelection)
+            XCTAssertNil(boundary.receivedError)
+        }
+    }
+#endif
+
     func testNestedListReturnAndQuotedItemIndentReachBinding() throws {
         for mode in [MarkdownEditorMode.source, .livePreview] {
             for (source, commands, suffixes) in [

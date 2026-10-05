@@ -128,6 +128,156 @@ final class MarkdownEditorScrollPaddingTests: XCTestCase {
 #endif
 
 #if os(iOS)
+    func testPaddingTracksAccumulatedSmallResizes() {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        textView.markdownBodyLineHeight = 20
+        textView.frame = CGRect(x: 0, y: 0, width: 402, height: 488)
+        textView.layoutIfNeeded()
+        let initialPadding = textView.markdownScrollPastEndPadding
+
+        for height: CGFloat in [490, 496, 504] {
+            textView.frame.size.height = height
+            textView.setNeedsLayout()
+            textView.layoutIfNeeded()
+            XCTAssertEqual(textView.markdownScrollPastEndPadding, initialPadding)
+        }
+
+        textView.frame.size.height = 510
+        textView.setNeedsLayout()
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.markdownScrollPastEndPadding, 510 / 2)
+    }
+
+    func testTopInsetUpdatePreservesSmallBottomResize() {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        textView.markdownBodyLineHeight = 20
+        textView.frame = CGRect(x: 0, y: 0, width: 402, height: 488)
+        textView.layoutIfNeeded()
+        let initialPadding = textView.markdownScrollPastEndPadding
+
+        // A changed title inset must not also commit suppressed bottom jitter.
+        textView.textContainerInset.top = 100
+        textView.frame.size.height = 491.667
+        textView.setNeedsLayout()
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.textContainerInset.top, 18)
+        XCTAssertEqual(textView.markdownScrollPastEndPadding, initialPadding)
+    }
+
+    func testBodyLineHeightChangeReevaluatesPaddingTolerance() {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        textView.markdownBodyLineHeight = 20
+        textView.frame = CGRect(x: 0, y: 0, width: 402, height: 488)
+        textView.layoutIfNeeded()
+        let initialPadding = textView.markdownScrollPastEndPadding
+        textView.frame.size.height = 504
+        textView.setNeedsLayout()
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.markdownScrollPastEndPadding, initialPadding)
+
+        textView.markdownBodyLineHeight = 10
+        textView.layoutIfNeeded()
+        XCTAssertEqual(textView.markdownScrollPastEndPadding, 504 / 2)
+    }
+
+    func testPaddingToleranceUsesConfiguredBodyFont() {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        textView.text = "# A large heading\nOrdinary body text"
+        textView.selectedRange = NSRange(location: 3, length: 0)
+
+        for size: Double in [13, 28] {
+            MarkdownPresentation.configure(
+                textView, fontSize: size, fontFamily: .monospaced,
+                mode: .livePreview
+            )
+            let bodyFont = MarkdownPresentation.bodyFont(
+                for: .monospaced, pointSize: CGFloat(size)
+            )
+            XCTAssertEqual(textView.markdownBodyLineHeight, bodyFont.lineHeight)
+        }
+    }
+
+    func testSmallViewportResizeKeepsNearEndCaretPosition() async throws {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        let host = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.rootViewController = host
+        host.view.addSubview(textView)
+        textView.frame = CGRect(x: 0, y: 116, width: 402, height: 488)
+        textView.contentInsetAdjustmentBehavior = .never
+
+        let precedingLines = (1...504).map { index in
+            switch index % 8 {
+            case 0: return "## Section \(index)"
+            case 1: return "- [ ] Fictional task \(index)"
+            case 2: return "- A short item \(index)"
+            default:
+                return "Paragraph \(index) contains **bold** and ordinary text."
+            }
+        }
+        let target = "Gesture target close to the end"
+        let followingLines = (1...8).map { "Final paragraph \($0)" }
+        let source = (precedingLines + [target] + followingLines)
+            .joined(separator: "\n")
+        textView.text = source
+        let targetRange = (source as NSString).range(of: target)
+        let selection = NSRange(location: NSMaxRange(targetRange), length: 0)
+        textView.selectedRange = selection
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        MarkdownPresentation.configure(
+            textView, fontSize: 13, fontFamily: .monospaced,
+            mode: .livePreview
+        )
+        host.view.layoutIfNeeded()
+
+        // Reach only the target viewport. Full-document ensureLayout would
+        // conceal failures caused by TextKit's estimated document extent.
+        textView.scrollRangeToVisible(selection)
+        textView.layoutIfNeeded()
+        let position = try XCTUnwrap(textView.position(
+            from: textView.beginningOfDocument, offset: selection.location
+        ))
+        // Estimated layout can settle after scrolling. Center using the
+        // actual window coordinates, with a bounded correction for setup.
+        for _ in 0..<3 {
+            let caret = textView.textInputView.convert(
+                textView.caretRect(for: position), to: window
+            )
+            let viewport = textView.convert(textView.bounds, to: window)
+            textView.setContentOffset(
+                CGPoint(x: textView.contentOffset.x,
+                        y: textView.contentOffset.y + caret.midY - viewport.midY),
+                animated: false
+            )
+            textView.layoutIfNeeded()
+            await Task.yield()
+        }
+        let beforeY = textView.textInputView.convert(
+            textView.caretRect(for: position), to: window
+        ).minY
+        XCTAssertGreaterThan(beforeY, textView.frame.minY + 100)
+        XCTAssertLessThan(beforeY, textView.frame.maxY - 100)
+
+        // A canceled Home gesture briefly changed the measured editor
+        // height by this amount while leaving the keyboard and caret intact.
+        for height: CGFloat in [491.667, 488, 491.667, 488] {
+            textView.frame.size.height = height
+            textView.setNeedsLayout()
+            textView.layoutIfNeeded()
+            await Task.yield()
+            textView.layoutIfNeeded()
+            if height == 488 {
+                let afterY = textView.textInputView.convert(
+                    textView.caretRect(for: position), to: window
+                ).minY
+                XCTAssertEqual(afterY, beforeY, accuracy: 1)
+                XCTAssertEqual(textView.selectedRange, selection)
+                XCTAssertEqual(textView.text, source)
+            }
+        }
+    }
+
     func testKeyboardResizeKeepsPaddingOutOfCaretViewport() {
         let textView = MarkdownTextView(usingTextLayoutManager: true)
         textView.font = .systemFont(ofSize: 17)
@@ -148,6 +298,7 @@ final class MarkdownEditorScrollPaddingTests: XCTestCase {
             // the caret. Document whitespace must not consume that space.
             XCTAssertEqual(textView.contentInset.bottom, 0)
             XCTAssertEqual(textView.adjustedContentInset.bottom, 0)
+            XCTAssertEqual(textView.textContainerInset.bottom, 18)
             XCTAssertEqual(textView.selectedRange, selection)
             let caret = textView.caretRect(for: textView.selectedTextRange!.start)
             XCTAssertGreaterThanOrEqual(caret.minY, textView.bounds.minY - 1)
@@ -222,8 +373,45 @@ final class MarkdownEditorScrollPaddingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(caret.minY, textView.bounds.minY - 1)
         XCTAssertEqual(
             textView.textContainerInset.bottom,
-            18 + MarkdownEditorScrollPadding.bottom(for: textView.bounds.height)
+            18
         )
+    }
+
+    func testRepeatedLayoutAndResizeDoNotAccumulateEndSpace() throws {
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        let host = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.rootViewController = host
+        host.view.addSubview(textView)
+        textView.frame = CGRect(x: 0, y: 0, width: 402, height: 488)
+        textView.font = .systemFont(ofSize: 17)
+        textView.text = (1...80).map { "Fictional journal entry \($0)" }
+            .joined(separator: "\n")
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let manager = try XCTUnwrap(textView.textLayoutManager)
+        let content = try XCTUnwrap(manager.textContentManager)
+        // This test checks extent arithmetic after geometry is known, not
+        // estimated-layout scrolling (covered by the gesture and UI tests).
+        manager.ensureLayout(for: content.documentRange)
+        textView.setNeedsLayout()
+        textView.layoutIfNeeded()
+        let naturalHeight = textView.contentSize.height
+            - textView.markdownScrollPastEndPadding
+
+        for height: CGFloat in [488, 488, 706, 343, 488, 488] {
+            textView.frame.size.height = height
+            for _ in 0..<3 {
+                textView.setNeedsLayout()
+                textView.layoutIfNeeded()
+                XCTAssertEqual(textView.textContainerInset.bottom, 18)
+                XCTAssertEqual(
+                    textView.contentSize.height - textView.markdownScrollPastEndPadding,
+                    naturalHeight, accuracy: 1,
+                    "Repeated layout must add optional end space exactly once"
+                )
+            }
+        }
     }
 #endif
 }
