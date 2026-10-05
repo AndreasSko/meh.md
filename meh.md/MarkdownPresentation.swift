@@ -1110,15 +1110,18 @@ enum MarkdownPresentation {
         }
         tableLayout?.apply(to: desired, sourceRange: range)
         var changes: [AttributeChange] = []
-        for key in [
-            NSAttributedString.Key.font,
+        var layoutAttributeKeys: [NSAttributedString.Key] = [
+            .font,
             .paragraphStyle,
-            .foregroundColor,
             .kern,
             .obliqueness,
             .strikethroughColor,
             .strikethroughStyle,
-        ] {
+        ]
+        #if os(macOS)
+        layoutAttributeKeys.append(.foregroundColor)
+        #endif
+        for key in layoutAttributeKeys {
             changes.append(contentsOf: changedAttributes(
                 key,
                 from: desired,
@@ -1222,6 +1225,18 @@ enum MarkdownPresentation {
             contentManager: contentManager
         )
 
+        #if os(iOS)
+        // Appearance must reset without editing native layout attributes.
+        if let textRange = textRange(
+            for: fragmentRange,
+            documentStart: documentStart,
+            contentManager: contentManager
+        ) {
+            layoutManager.addRenderingAttribute(
+                .foregroundColor, value: primaryTextColor, for: textRange
+            )
+        }
+        #endif
         var appliedCount = 0
         presentation.forEachSpan(intersecting: fragmentRange) { span in
             let intersection = NSIntersectionRange(span.range, fragmentRange)
