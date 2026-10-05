@@ -5,6 +5,11 @@ import UIKit
 import Vision
 
 final class EditorScrollTypingUITests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        XCUIDevice.shared.orientation = .portrait
+    }
+
     func testSourceReopeningKeyboardNearEndRevealsCaret() throws {
         try checkReopeningKeyboardNearEnd(mode: "source")
     }
@@ -187,7 +192,7 @@ final class EditorScrollTypingUITests: XCTestCase {
             ]
         }
         lines += [
-            "## Final discussion", "", "- TARGET Cedar meeting",
+            "## Final discussion", "", "- TARGET Cedar meeting 12345 67890",
             "- Follow up with Morgan.", "- Review the draft agenda.", "",
             "## Remaining items", "", "- Pack the sample folders.",
             "- Check the room booking.", "- Close the fictional journal.",
@@ -232,8 +237,10 @@ final class EditorScrollTypingUITests: XCTestCase {
         XCTAssertTrue(lowerBand.contains(closedTarget.midY))
         XCTAssertFalse(keyboard.exists)
         capture(app, name: "\(mode)-cold-focus-before-tap")
+        // Use the numeric suffix: tapping a spellchecked word can select it
+        // legitimately, which does not produce an insertion caret.
         app.coordinate(withNormalizedOffset: .zero).withOffset(
-            CGVector(dx: 205, dy: closedTarget.midY)
+            CGVector(dx: 280, dy: closedTarget.midY)
         ).tap()
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
         try requireVisibleCaret(in: app, editor: editor)
@@ -247,7 +254,13 @@ final class EditorScrollTypingUITests: XCTestCase {
         let changed = try XCTUnwrap(editor.value as? String)
         let before = Array(fixture.utf16), after = Array(changed.utf16)
         let location = zip(before, after).prefix { $0.0 == $0.1 }.count
-        XCTAssertGreaterThanOrEqual(location, before.count - 400)
+        let tappedParagraph = (fixture as NSString).paragraphRange(for:
+            (fixture as NSString).range(of: "- TARGET Cedar meeting")
+        )
+        XCTAssertTrue(
+            NSLocationInRange(location, tappedParagraph),
+            "Typing must start in the tapped paragraph, not a nearby line"
+        )
         let expected = (fixture as NSString).replacingCharacters(
             in: NSRange(location: location, length: 0), with: inserted
         )
@@ -281,8 +294,16 @@ final class EditorScrollTypingUITests: XCTestCase {
                 context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             }
             let scale = CGFloat(height) / app.frame.height
-            let top = Int(max(116, editor.frame.minY) * scale)
-            let bottom = Int(min(app.frame.maxY, editor.frame.maxY - 8) * scale)
+            let visible = unobscuredEditor(
+                editor, keyboard: app.keyboards.firstMatch
+            )
+            let toolbar = app.otherElements["editor-keyboard-toolbar"]
+            let bold = app.buttons["editor-command-bold"]
+            let accessoryTop = toolbar.exists ? toolbar.frame.minY
+                : bold.exists ? bold.frame.minY : visible.maxY
+            let coveredY = min(visible.maxY, accessoryTop)
+            let top = Int(max(116, visible.minY) * scale)
+            let bottom = Int(min(app.frame.maxY, coveredY - 8) * scale)
             var firstRow = height, lastRow = -1
             for y in top..<bottom {
                 for x in 0..<width {
@@ -320,12 +341,14 @@ final class EditorScrollTypingUITests: XCTestCase {
             NSPredicate(format: "label IN %@", labels)
         ).firstMatch
         if menuItem.waitForExistence(timeout: 2) {
+            UIPasteboard.general.string = text
             menuItem.tap()
         } else {
             let button = app.buttons.matching(
                 NSPredicate(format: "label IN %@", labels)
             ).firstMatch
             XCTAssertTrue(button.waitForExistence(timeout: 3))
+            UIPasteboard.general.string = text
             button.tap()
         }
         let allow = app.alerts.buttons["Allow Paste"].firstMatch
