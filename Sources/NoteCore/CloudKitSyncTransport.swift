@@ -1523,7 +1523,7 @@ struct CloudKitAvailabilityCooldownStore {
 }
 
 @available(macOS 14.0, iOS 17.0, *)
-public final actor CloudKitSyncTransport: HaltableSyncTransport {
+public final actor CloudKitSyncTransport: HaltableSyncTransport, ReceivePrioritizingSyncTransport {
     public nonisolated let scope: String
     public nonisolated let activity: AsyncStream<CloudKitSyncActivity>
     public private(set) var recoveredRetryMetadata = false
@@ -1544,6 +1544,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private var assetStaging: CloudKitAssetStaging
     private var engineAssetLeases: [String: [URL]] = [:]
     private var batchStagingFailure: Error?
+    private var isReceiving = false
+    private var receivingGeneration: UInt64 = 0
+    private var needsFreshReceiveFetch = false
     private var availabilityCooldown: CloudKitAvailabilityCooldownStore
     private var engine: (any CloudKitSyncEngineClient)!
     private var retiredEngineID: ObjectIdentifier?
@@ -1632,14 +1635,15 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     static func makeNotebook(
         services: CloudKitServices,
         containerIdentifier: String,
-        stateDirectory: URL
+        stateDirectory: URL,
+        automaticallySync: Bool = false
     ) async throws -> CloudKitSyncTransport {
         try await make(
             containerIdentifier: containerIdentifier,
             stateDirectory: stateDirectory,
             zoneName: CloudKitTransportMode.notebook.zoneName,
             mode: .notebook,
-            automaticallySync: false,
+            automaticallySync: automaticallySync,
             services: services
         )
     }
@@ -1777,6 +1781,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         assetStaging = CloudKitAssetStaging(directory: assetDirectory)
         self.availabilityCooldown = availabilityCooldown
         self.automaticallySync = automaticallySync
+        isReceiving = automaticallySync
+        needsFreshReceiveFetch = automaticallySync
         scope = "\(containerIdentifier)/private/\(userRecordID.recordName)/\(zoneName)"
     }
 
@@ -2025,11 +2031,46 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         )
     }
 
+    public func beginReceiving() async {
+        receivingGeneration &+= 1
+        isReceiving = true
+        needsFreshReceiveFetch = true
+    }
+
+    public func didApplyRemoteChanges() async throws {
+        let generation = receivingGeneration
+        await acquirePublishLease()
+        defer { releasePublishLease() }
+        try await assertHealthy()
+        try Task.checkCancellation()
+        guard generation == receivingGeneration else { return }
+        guard !engine.pendingRecordZoneChanges.isEmpty else {
+            isReceiving = false
+            return
+        }
+        try await verifyAccount()
+        try Task.checkCancellation()
+        guard generation == receivingGeneration else { return }
+        isReceiving = false
+        // A scheduled send may have stopped at the closed gate. Resume its
+        // durable pending work even when the replica has no new snapshots.
+        guard !engine.pendingRecordZoneChanges.isEmpty else { return }
+        try await cloudRequest(labLabel: "receive.resumeEngineSend") {
+            try await engine.sendChanges(.init(scope: .zoneIDs([zoneID])))
+        }
+        try await assertHealthy()
+    }
+
     public func fetch(after cursor: String?) async throws -> SyncPage {
         try await assertHealthy()
         try await verifyAccount()
         let current = await store.snapshot()
-        if current.unresolvedRemoteDeletionRecordIDs.isEmpty {
+        if isReceiving, !needsFreshReceiveFetch,
+           current.unresolvedRemoteDeletionRecordIDs.isEmpty {
+            try current.validateRemoteDeletions()
+            return try current.page(after: cursor, limit: Self.pageSize)
+        }
+        if !needsFreshReceiveFetch, current.unresolvedRemoteDeletionRecordIDs.isEmpty {
             if let buffered = try current.bufferedPage(
                 after: cursor,
                 limit: Self.pageSize
@@ -2037,12 +2078,14 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 return buffered
             }
         }
+        let generation = receivingGeneration
         try await cloudRequest(labLabel: "fetch.engineFetch") {
             try await engine.fetchChanges(.init(scope: .zoneIDs([zoneID])))
         }
         if let delegateFailure {
             throw delegateFailure
         }
+        if generation == receivingGeneration { needsFreshReceiveFetch = false }
         let fetched = await store.snapshot()
         if !fetched.unresolvedRemoteDeletionRecordIDs.isEmpty {
             try await store.update {
@@ -2794,6 +2837,7 @@ extension CloudKitSyncTransport {
         pending: [CKSyncEngine.PendingRecordZoneChange],
         from syncEngine: any CloudKitSyncEngineClient
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
+        let generation = receivingGeneration
         do {
             let prepared = try await CloudKitOutgoingBatchPreparer.assemble(
                 allowed: { await self.canOfferOutgoingBatch(syncEngine) },
@@ -2835,7 +2879,8 @@ extension CloudKitSyncTransport {
                 releaseOutgoingBatchLeases(prepared.leasedIDs)
                 throw stagingFailure
             }
-            guard !isRetired, delegateFailure == nil,
+            guard !isReceiving, generation == receivingGeneration,
+                  !isRetired, delegateFailure == nil,
                   store.writeHealth.failure == nil,
                   !unexpectedDeletionObserved,
                   syncEngine === engine else {
@@ -2857,12 +2902,12 @@ extension CloudKitSyncTransport {
     ) async -> Bool
     {
         if let failure = store.writeHealth.failure { latchFailure(failure) }
-        guard !isRetired, delegateFailure == nil,
+        guard !isReceiving, !isRetired, delegateFailure == nil,
               !unexpectedDeletionObserved,
               syncEngine === engine else { return false }
         let unexpectedDeletion = await store.snapshot().hasUnexpectedDeletion
         if let failure = store.writeHealth.failure { latchFailure(failure) }
-        guard !isRetired, delegateFailure == nil,
+        guard !isReceiving, !isRetired, delegateFailure == nil,
               !unexpectedDeletionObserved,
               syncEngine === engine else { return false }
         if unexpectedDeletion {

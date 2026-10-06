@@ -356,7 +356,8 @@ final class NotebookWorkspace {
         }
     }
 
-    func runDueBackup() async {
+    func runDueBackup(whileLoading: Bool = false) async {
+        guard whileLoading || !isLoading else { return }
         guard !isResetPending, backupFrequency != .off,
               !Task.isCancelled else { return }
         if replica == nil { await start() }
@@ -418,12 +419,10 @@ final class NotebookWorkspace {
                 // any network request, so offline reopening remains useful.
                 replica = loaded
             }
-            // A local backup can succeed even when the following cloud
-            // exchange is delayed or unavailable.
-            await runDueBackup()
             startConnectivityMonitoring()
             await refresh(whileLoading: true, manual: manualRetry, trigger: "startup")
-            await runDueBackup()
+            // Pull first; a local backup still runs if cloud setup fails.
+            await runDueBackup(whileLoading: true)
         } catch {
             setRecoveryAction(for: error)
             errorMessage = error.localizedDescription
@@ -471,9 +470,13 @@ final class NotebookWorkspace {
         armScheduledRefresh()
     }
 
-    func requestAutomaticRefresh(trigger: String) {
+    func requestAutomaticRefresh(trigger: String, immediately: Bool = false) {
         guard !isResetPending, automaticSync else { return }
-        scheduleRefresh(trigger: trigger)
+        if immediately {
+            Task { await refresh(trigger: trigger, immediately: true) }
+        } else {
+            scheduleRefresh(trigger: trigger)
+        }
     }
 
     func contentDidSave(trigger: String = "saved content or catalog update") {
@@ -553,7 +556,7 @@ final class NotebookWorkspace {
         isForeground = newForeground
         guard !isResetPending, automaticSync, changed else { return }
         if newForeground {
-            requestAutomaticRefresh(trigger: "foreground activation")
+            requestAutomaticRefresh(trigger: "foreground activation", immediately: true)
         } else {
             // The engine owns background scheduling. App retry timers resume
             // at the next activation; their durable pending work stays saved.
@@ -600,13 +603,14 @@ final class NotebookWorkspace {
     }
 
     func refresh(
-        whileLoading: Bool = false, manual: Bool = false, trigger: String = "recovery"
+        whileLoading: Bool = false, manual: Bool = false, trigger: String = "recovery",
+        immediately: Bool = false
     ) async {
         guard !isResetPending else { return }
-        guard whileLoading || !isLoading else { return }
+        guard whileLoading || !isLoading || (immediately && isRefreshing) else { return }
         guard let replica else { return }
         await updateRetryDeadline()
-        if !manual, !whileLoading,
+        if !manual,
            let deadline = syncRetryNotBefore, deadline > Date() {
             if isForeground { scheduleRefresh(trigger: trigger, notBefore: deadline) }
             return
@@ -615,7 +619,7 @@ final class NotebookWorkspace {
             if manual { showSyncCheck = true }
             if usesSync { syncEventLog.record("refresh coalesced: " + trigger) }
             needsAnotherRefresh = true
-            needsImmediateRefresh = needsImmediateRefresh || manual || !isForeground
+            needsImmediateRefresh = needsImmediateRefresh || manual || immediately || !isForeground
             needsManualRefresh = needsManualRefresh || manual
             return
         }
@@ -640,7 +644,9 @@ final class NotebookWorkspace {
                     needsImmediateRefresh = false
                     needsManualRefresh = false
                     Task {
-                        await refresh(manual: manual, trigger: "coalesced follow-up")
+                        await refresh(whileLoading: true, manual: manual,
+                                      trigger: "coalesced follow-up",
+                                      immediately: true)
                     }
                 } else {
                     contentDidSave(trigger: "coalesced follow-up")
@@ -884,14 +890,17 @@ final class NotebookWorkspace {
     ) async {
         guard !isResetPending else { return }
         if let generation, generation != transportGeneration { return }
+        var prioritizeReceive = false
         switch activity {
         case .remoteChanges(let records, let deletions, let reason):
+            prioritizeReceive = true
             syncEventLog.record("cloud \(reason.rawValue) changes delivered", counts: [
                 "records": records, "deletions": deletions])
         case .uploadsAcknowledged(let count):
             syncEventLog.record("cloud background uploads acknowledged",
                                 counts: ["records": count])
         case .accountChanged:
+            prioritizeReceive = true
             searchScopeGeneration += 1
             syncEventLog.record("cloud account changed")
         case .failed(let message):
@@ -919,7 +928,7 @@ final class NotebookWorkspace {
         // exchange applies the durable inbox to editors.
         guard automaticSync else { return }
         if isForeground {
-            requestAutomaticRefresh(trigger: "cloud activity")
+            requestAutomaticRefresh(trigger: "cloud activity", immediately: prioritizeReceive)
         } else {
             await refresh(trigger: "cloud activity")
         }
