@@ -1616,7 +1616,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ReceivePrioriti
     public static func makeIsolatedNotebookLab(
         containerIdentifier: String,
         stateDirectory: URL,
-        runID: UUID
+        runID: UUID,
+        automaticallySync: Bool = false
     ) async throws -> CloudKitSyncTransport {
         try await make(
             containerIdentifier: containerIdentifier,
@@ -1625,7 +1626,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ReceivePrioriti
             ),
             zoneName: CloudKitNotebookLabScope.zoneName(runID: runID),
             mode: .notebook,
-            automaticallySync: false,
+            automaticallySync: automaticallySync,
             labRunID: runID
         )
     }
