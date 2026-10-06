@@ -292,6 +292,104 @@ final class CloudKitSyncEngineTests: XCTestCase {
         }
     }
 
+    func testReceiveGateRetainsPendingUploadAndResumesAfterApply() async throws {
+        let transport = try await open("receive-gate")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        let note = try makeNote("local history pending")
+        await transport.beginReceiving()
+        let blocked = try await transport.publishBatch([note])
+        XCTAssertTrue(blocked.acknowledgedIDs.isEmpty)
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        _ = try await fetchAll(transport)
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        try await transport.didApplyRemoteChanges()
+        XCTAssertTrue(server.recordNames.contains(note.id))
+    }
+
+    func testReceiveGateSurvivesFailedFreshPullThenRetries() async throws {
+        let transport = try await open("receive-failure")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        // Populate the durable inbox: the next receive must still contact
+        // the engine instead of treating these buffered records as current.
+        _ = try await fetchAll(transport)
+        let note = try makeNote("preserved while offline")
+        await transport.beginReceiving()
+        _ = try await transport.publishBatch([note])
+        server.setOffline(true)
+        do {
+            _ = try await transport.fetch(after: nil)
+            XCTFail("The priority receive must perform a fresh fetch")
+        } catch {}
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        server.setOffline(false)
+        await transport.beginReceiving()
+        _ = try await fetchAll(transport)
+        try await transport.didApplyRemoteChanges()
+        XCTAssertTrue(server.recordNames.contains(note.id))
+    }
+
+    func testPendingUploadRemainsGatedThroughoutMultipleReceivePages() async throws {
+        let writer = try await open("receive-writer")
+        _ = try await writer.bootstrap(proposing: try makeCatalog())
+        let remote = try (0..<105).map { try makeNote("remote \($0)") }
+        let result = try await writer.publishBatch(remote)
+        XCTAssertNil(result.error)
+        let reader = try await open("receive-reader")
+        _ = try await reader.bootstrap(proposing: try makeCatalog())
+        let local = try makeNote("local pending history")
+        await reader.beginReceiving()
+        _ = try await reader.publishBatch([local])
+        let first = try await reader.fetch(after: nil)
+        XCTAssertTrue(first.hasMore)
+        XCTAssertFalse(server.recordNames.contains(local.id))
+        let second = try await reader.fetch(after: first.cursor)
+        XCTAssertFalse(second.hasMore)
+        XCTAssertEqual(first.records.count + second.records.count, 106)
+        XCTAssertFalse(server.recordNames.contains(local.id))
+        try await reader.didApplyRemoteChanges()
+        XCTAssertTrue(server.recordNames.contains(local.id))
+    }
+
+    func testPriorityReceiveFetchesNewChangesBeforeReplayingInbox() async throws {
+        let writer = try await open("fresh-writer")
+        _ = try await writer.bootstrap(proposing: try makeCatalog())
+        let old = try makeNote("already buffered")
+        _ = try await writer.publishBatch([old])
+        let reader = try await open("fresh-reader")
+        _ = try await reader.bootstrap(proposing: try makeCatalog())
+        _ = try await fetchAll(reader)
+        let new = try makeNote("arrived after the previous fetch")
+        _ = try await writer.publishBatch([new])
+        await reader.beginReceiving()
+        let page = try await reader.fetch(after: nil)
+        XCTAssertTrue(page.records.contains { $0.id == new.id })
+        XCTAssertFalse(page.hasMore)
+        try await reader.didApplyRemoteChanges()
+    }
+
+    func testAutomaticRelaunchGatesRestoredPendingSaves() async throws {
+        let device = "receive-relaunch"
+        let first = try await open(device)
+        _ = try await first.bootstrap(proposing: try makeCatalog())
+        let note = try makeNote("restored immutable history")
+        await first.beginReceiving()
+        _ = try await first.publishBatch([note])
+        await first.retire()
+        let reopened = try await CloudKitSyncTransport.makeNotebook(
+            services: server.services,
+            containerIdentifier: server.containerIdentifier,
+            stateDirectory: root.appending(path: device),
+            automaticallySync: true
+        )
+        // Manual sends use the same delegate gate as scheduled sends.
+        let blocked = try await reopened.publishBatch([note])
+        XCTAssertTrue(blocked.acknowledgedIDs.isEmpty)
+        XCTAssertFalse(server.recordNames.contains(note.id))
+        _ = try await fetchAll(reopened)
+        try await reopened.didApplyRemoteChanges()
+        XCTAssertTrue(server.recordNames.contains(note.id))
+    }
+
     // MARK: Helpers
 
     private func open(_ device: String) async throws -> CloudKitSyncTransport {

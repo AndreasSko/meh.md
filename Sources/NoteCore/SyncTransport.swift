@@ -159,6 +159,13 @@ public protocol SyncTransport: Sendable {
     func retryNotBefore() async -> Date?
 }
 
+/// A transport that holds scheduled uploads while a coordinator receives and
+/// durably applies remote history. Fetch scheduling remains enabled.
+public protocol ReceivePrioritizingSyncTransport: SyncTransport {
+    func beginReceiving() async
+    func didApplyRemoteChanges() async throws
+}
+
 extension SyncTransport {
     public func publishBatch(
         _ records: [SyncRecord]

@@ -114,6 +114,10 @@ public final class NotebookSyncCoordinator {
     }
 
     private func exchange() async throws {
+        let pullStartedAt = Date()
+        diagnosticLog?.record("pull_start")
+        let receivingTransport = transport as? any ReceivePrioritizingSyncTransport
+        await receivingTransport?.beginReceiving()
         try await replica.load()
         var state = try loadState()
         diagnosticLog?.record(
@@ -207,6 +211,16 @@ public final class NotebookSyncCoordinator {
                     "Notebook sync paused after too many pages. Retry to continue.")
             }
         }
+
+        try Task.checkCancellation()
+        diagnosticLog?.record(
+            "pull_end",
+            counts: [
+                "durationMilliseconds": Self.durationMilliseconds(since: pullStartedAt),
+                "pages": pages,
+            ]
+        )
+        try await receivingTransport?.didApplyRemoteChanges()
 
         let outgoing = try await replica.records()
         let pendingNotes = outgoing.filter {

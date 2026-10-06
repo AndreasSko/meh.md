@@ -13,10 +13,21 @@ APNs entitlements and the iOS remote-notification background mode.
   a 60-second maximum from the first pending request. Further edits or cloud
   events do not reset that maximum. With no recent typing, requests retain
   the short 750-millisecond coalescing delay.
-- Saved changes, foreground activation, incoming cloud activity, connectivity
-  restoration, and development polling share that automatic schedule.
-  Startup and Sync Now bypass the typing delay. An exchange already running
-  finishes normally; requests received meanwhile are combined into a follow-up.
+- Local saves, upload acknowledgements, connectivity restoration, and
+  development polling use that automatic schedule. Startup, foreground
+  activation, incoming remote changes, and account changes bypass the typing
+  delay. Automatic requests still respect server retry deadlines. An exchange
+  already running finishes normally; an urgent request gets an immediate
+  serialized follow-up.
+- Startup starts the cloud exchange before any due Markdown backup. Notes
+  already on this device remain available while the cloud is contacted.
+- CloudKit record uploads wait until the coordinator has downloaded and
+  durably applied all pages of the receiving pass. Restored pending uploads
+  remain saved and resume afterwards. A failed pull retains the upload gate
+  until a successful retry. Account, deletion, and server cooldown safeguards
+  still apply. Establishing a completely new cloud notebook can create its
+  canonical seed before fetching; that first-connection write is necessary
+  to give the devices a shared notebook identity.
 - CloudKit commits fetched changes and background upload acknowledgements to
   the transport store before notifying the workspace through an async stream.
   The workspace then applies the inbox through the existing coordinator.
@@ -67,6 +78,9 @@ APNs registration and actual system scheduling. See the
 
 Use disposable notes in the iCloud Dev build on both devices, with automatic
 sync enabled. Keep Sync Details and the event log available for diagnosis.
+Compare `pull_start` and `pull_end` with `pass_end` to distinguish downloading
+and applying changes from the later upload work. Timings do not establish a
+fixed iCloud delivery deadline.
 
 1. Create or edit a note on Mac while iPhone is active. Check that iPhone
    receives it without Sync Now, then repeat in the other direction.

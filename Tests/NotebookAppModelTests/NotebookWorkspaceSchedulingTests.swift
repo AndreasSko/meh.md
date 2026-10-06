@@ -109,12 +109,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
 
     func testBackgroundFlushesOnceAndForegroundResumes() async throws {
         let transport = RecordingTransport(scope: "foreground")
-        // The resumed exchange waits for the idle delay after the edit;
-        // a short one keeps the test from waiting ten real seconds.
-        let workspace = makeWorkspace(
-            transport: transport,
-            syncSchedule: NotebookSyncSchedule(idleDelay: .milliseconds(500))
-        )
+        let workspace = makeWorkspace(transport: transport)
         let sceneID = UUID()
         workspace.sceneActivityChanged(id: sceneID, isActive: true)
         await workspace.start()
@@ -220,7 +215,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         })
     }
 
-    func testTypingDefersSavesAndCloudEventsButManualSyncIsImmediate() async throws {
+    func testTypingDefersSavesAndUploadEventsButManualSyncIsImmediate() async throws {
         let transport = RecordingTransport(scope: "typing")
         let workspace = makeWorkspace(transport: transport)
         workspace.sceneActivityChanged(id: UUID(), isActive: true)
@@ -229,7 +224,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         workspace.noteDidEdit()
         workspace.contentDidSave()
         await workspace.receiveCloudActivity(
-            .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
+            .uploadsAcknowledged(recordCount: 1)
         )
         try await Task.sleep(for: .seconds(1))
         let deferred = await transport.fetchCount
@@ -256,6 +251,209 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         try await waitUntil { await transport.fetchCount >= baseline + 2 }
         let fetches = await transport.fetchCount
         XCTAssertEqual(fetches, baseline + 2)
+    }
+
+    func testForegroundActivationPullsImmediatelyDuringTyping() async throws {
+        let transport = RecordingTransport(scope: "foreground-typing")
+        let workspace = makeWorkspace(transport: transport)
+        await workspace.start()
+        let baseline = await transport.fetchCount
+        workspace.noteDidEdit()
+        workspace.contentDidSave()
+
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+
+        try await waitUntil(timeout: .seconds(1)) {
+            await transport.fetchCount > baseline
+        }
+    }
+
+    func testRemoteAndAccountChangesPullImmediatelyDuringTyping() async throws {
+        let transport = RecordingTransport(scope: "remote-typing")
+        let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        let baseline = await transport.fetchCount
+        workspace.noteDidEdit()
+        workspace.contentDidSave()
+
+        await workspace.receiveCloudActivity(
+            .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
+        )
+        try await waitUntil(timeout: .seconds(1)) {
+            await transport.fetchCount > baseline
+        }
+        try await waitUntil { await MainActor.run { !workspace.isRefreshing } }
+        workspace.noteDidEdit()
+        await workspace.receiveCloudActivity(.accountChanged)
+        try await waitUntil(timeout: .seconds(1)) {
+            await transport.fetchCount > baseline + 1
+        }
+    }
+
+    func testPriorityRequestDuringExchangeRunsImmediateFollowUp() async throws {
+        let transport = RecordingTransport(scope: "priority-in-flight")
+        let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        let baseline = await transport.fetchCount
+        await transport.pauseNextFetch()
+        let exchange = Task { await workspace.refresh() }
+        try await waitUntil { await transport.isFetchPaused }
+        workspace.noteDidEdit()
+        workspace.contentDidSave()
+        await workspace.receiveCloudActivity(
+            .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
+        )
+        // Wait until the priority task records its request on the active pass.
+        try await waitUntil {
+            await MainActor.run {
+                workspace.syncEventLog.entries.contains {
+                    $0.event == "refresh coalesced: cloud activity"
+                }
+            }
+        }
+        await transport.resumeFetch()
+        await exchange.value
+
+        try await waitUntil(timeout: .seconds(1)) {
+            await transport.fetchCount >= baseline + 2
+        }
+        let fetches = await transport.fetchCount
+        XCTAssertEqual(fetches, baseline + 2)
+    }
+
+    func testPriorityStartupHintRunsImmediateFollowUp() async throws {
+        let transport = RecordingTransport(scope: "startup-priority")
+        let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await transport.pauseNextFetch()
+        let startup = Task { await workspace.start() }
+        try await waitUntil { await transport.isFetchPaused }
+        workspace.noteDidEdit()
+        await workspace.receiveCloudActivity(
+            .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
+        )
+        try await waitForPriorityCoalescing(workspace)
+        await transport.resumeFetch()
+        await startup.value
+
+        try await waitUntil(timeout: .seconds(1)) {
+            await transport.fetchCount >= 2
+        }
+        let fetches = await transport.fetchCount
+        XCTAssertEqual(fetches, 2)
+    }
+
+    func testPriorityFollowUpAfterFailureRespectsNewCooldown() async throws {
+        let transport = RecordingTransport(scope: "follow-up-cooldown")
+        let workspace = makeWorkspace(transport: transport)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        let baseline = await transport.fetchCount
+        await transport.pauseNextFetch()
+        let exchange = Task { await workspace.refresh() }
+        try await waitUntil { await transport.isFetchPaused }
+        let deadline = Date().addingTimeInterval(30)
+        await transport.failPausedFetch(retryNotBefore: deadline)
+        workspace.noteDidEdit()
+        await workspace.receiveCloudActivity(
+            .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
+        )
+        try await waitForPriorityCoalescing(workspace)
+        await transport.resumeFetch()
+        await exchange.value
+        try await Task.sleep(for: .milliseconds(250))
+
+        let fetches = await transport.fetchCount
+        XCTAssertEqual(fetches, baseline + 1)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(workspace.syncRetryNotBefore), deadline)
+    }
+
+    private func waitForPriorityCoalescing(_ workspace: NotebookWorkspace) async throws {
+        try await waitUntil {
+            await MainActor.run {
+                workspace.syncEventLog.entries.contains {
+                    $0.event == "refresh coalesced: cloud activity"
+                }
+            }
+        }
+    }
+
+    func testImmediateAutomaticRequestsRespectCooldown() async throws {
+        let deadline = Date().addingTimeInterval(30)
+        let transport = FailingTransport(scope: "priority-cooldown",
+                                         retryNotBefore: deadline)
+        let workspace = makeWorkspace(transport: transport)
+        await workspace.start()
+        workspace.noteDidEdit()
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.receiveCloudActivity(.accountChanged)
+        await workspace.receiveCloudActivity(
+            .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
+        )
+        try await Task.sleep(for: .milliseconds(250))
+
+        let attempts = await transport.bootstrapCount
+        XCTAssertEqual(attempts, 1)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(workspace.syncRetryNotBefore), deadline)
+    }
+
+    func testStartupPullFinishesBeforeDueBackup() async throws {
+        let transport = RecordingTransport(scope: "backup-after-pull")
+        let workspace = makeWorkspace(transport: transport)
+        workspace.backupFrequency = .daily
+        // A cached notebook makes the backup immediately due before startup.
+        let cached = NotebookReplica(directory: workspace.directory)
+        try await cached.load()
+        try await cached.createLocalNotebook()
+        _ = try await cached.createNote(name: "cached.md", text: "local content")
+        await transport.pauseNextFetch()
+        let startup = Task { await workspace.start() }
+        try await waitUntil { await transport.isFetchPaused }
+
+        await workspace.runDueBackup()
+        XCTAssertNil(workspace.lastBackup)
+        XCTAssertFalse(workspace.isBackingUp)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: workspace.backupDirectory.path))
+        await transport.resumeFetch()
+        await startup.value
+
+        XCTAssertNotNil(workspace.lastBackup)
+    }
+
+    func testStartupRespectsExistingCooldownAndStillBacksUp() async throws {
+        let transport = RecordingTransport(scope: "startup-existing-cooldown")
+        let workspace = makeWorkspace(transport: transport)
+        workspace.backupFrequency = .daily
+        let cached = NotebookReplica(directory: workspace.directory)
+        try await cached.load()
+        try await cached.createLocalNotebook()
+        let deadline = Date().addingTimeInterval(30)
+        await transport.setCooldown(until: deadline)
+
+        await workspace.start()
+
+        let operations = await transport.operationCount
+        XCTAssertEqual(operations, 0)
+        XCTAssertNotNil(workspace.lastBackup)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(workspace.syncRetryNotBefore), deadline)
+    }
+
+    func testStartupStillBacksUpWhenCloudUnavailable() async throws {
+        let transport = FailingTransport(scope: "backup-offline",
+                                         retryNotBefore: Date().addingTimeInterval(30))
+        let workspace = makeWorkspace(transport: transport)
+        workspace.backupFrequency = .daily
+        let cached = NotebookReplica(directory: workspace.directory)
+        try await cached.load()
+        try await cached.createLocalNotebook()
+        _ = try await cached.createNote(name: "offline.md", text: "local content")
+
+        await workspace.start()
+
+        XCTAssertNotNil(workspace.lastBackup)
+        XCTAssertNotNil(workspace.syncFailure)
     }
 
     func testPendingResetRejectsManualAndAutomaticRefresh() async throws {
@@ -365,10 +563,17 @@ private actor RecordingTransport: SyncTransport {
     private(set) var fetchCount = 0
     private(set) var purgeCount = 0
     private var shouldPauseFetch = false
+    private var nextFetchFailureDeadline: Date?
+    private var cooldownDeadline: Date?
     private var pausedFetch: CheckedContinuation<Void, Never>?
     var isFetchPaused: Bool { pausedFetch != nil }
 
     func pauseNextFetch() { shouldPauseFetch = true }
+    func failPausedFetch(retryNotBefore deadline: Date) {
+        nextFetchFailureDeadline = deadline
+    }
+    func setCooldown(until deadline: Date) { cooldownDeadline = deadline }
+    func retryNotBefore() async -> Date? { cooldownDeadline }
     func resumeFetch() {
         pausedFetch?.resume()
         pausedFetch = nil
@@ -404,6 +609,11 @@ private actor RecordingTransport: SyncTransport {
             shouldPauseFetch = false
             await withCheckedContinuation { pausedFetch = $0 }
         }
+        if let deadline = nextFetchFailureDeadline {
+            nextFetchFailureDeadline = nil
+            cooldownDeadline = deadline
+            throw SyncError.unavailable("Temporarily unavailable")
+        }
         return try await base.fetch(after: cursor)
     }
 
@@ -438,5 +648,5 @@ private actor FailingTransport: SyncTransport {
         throw SyncError.unavailable("Temporarily unavailable")
     }
 
-    func retryNotBefore() async -> Date? { deadline }
+    func retryNotBefore() async -> Date? { bootstrapCount > 0 ? deadline : nil }
 }

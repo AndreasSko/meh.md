@@ -71,12 +71,123 @@ private struct NotebookSyncLabView: View {
         var expectedText: String?
         var observedText: String?
         var observedHeadsCount: Int?
+        var scenario: String?
+        var noteCount: Int?
+        var localNoteID: UUID?
+        var expectedLocalText: String?
+        var observedLocalText: String?
+        var engineAutomaticallySync: Bool?
+        var diagnosticChecks: [String: Bool] = [:]
+        var directReadbackErrorCode: String?
+        var remoteFixturePublisher: String?
     }
 
     struct FixtureManifest: Codable {
         let runID: UUID
         let firstNoteID: UUID
         let baseText: String
+    }
+
+    struct ActivationManifest: Codable {
+        let runID: UUID
+        let noteIDs: [UUID]
+        let remoteBaseText: String
+        let localBaseText: String
+        let remoteSuffix: String
+        let foregroundRemoteSuffix: String
+        let localSuffix: String
+        let foregroundLocalSuffix: String
+    }
+
+    struct ExternalForegroundReady: Codable {
+        let runID: UUID
+        let phase: String
+        let expectedText: String
+    }
+
+    static func milliseconds(since start: ContinuousClock.Instant) -> Double {
+        let duration = start.duration(to: .now).components
+        return Double(duration.seconds) * 1_000
+            + Double(duration.attoseconds) / 1_000_000_000_000_000
+    }
+
+    /// Opens this workspace's session once local loading exposes the replica.
+    /// Polling only measures model visibility; it makes no screen/APNs claim.
+    static func waitForVisibleText(
+        workspace: NotebookWorkspace, noteID: UUID, expected: String,
+        since start: ContinuousClock.Instant
+    ) async throws -> Double {
+        let deadline = start.advanced(by: .seconds(120))
+        var editor: NoteSession?
+        while ContinuousClock.now < deadline {
+            try Task.checkCancellation()
+            if editor == nil, let replica = workspace.replica {
+                editor = try await replica.openNote(noteID)
+            }
+            if editor?.text == expected { return milliseconds(since: start) }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw LabError.convergenceFailed
+    }
+
+    static func serverRecordChecks(
+        _ cloudRecord: CKRecord, expected: SyncRecord
+    ) throws -> [String: Bool] {
+        let asset = cloudRecord["document"] as? CKAsset
+        let data = try asset?.fileURL.map { try Data(contentsOf: $0) }
+        let encodedHeads = cloudRecord["heads"] as? Data
+        let heads = try encodedHeads.map {
+            try JSONDecoder().decode(Set<String>.self, from: $0)
+        }
+        return [
+            "serverAssetBytesMatch": data == expected.snapshot.data,
+            "serverHeadsMatch": heads == expected.snapshot.heads,
+            "serverMetadataMatch": cloudRecord.recordType == "AutomergeNotebookSnapshotV2"
+                && cloudRecord.recordID.recordName == expected.id
+                && cloudRecord["snapshotID"] as? String == expected.id
+                && cloudRecord["documentID"] as? String == expected.snapshot.noteID.uuidString
+                && cloudRecord["notebookID"] as? String == expected.notebookID?.uuidString
+                && cloudRecord["kind"] as? String == "note"
+                && (cloudRecord["protocolVersion"] as? NSNumber)?.intValue == 2,
+        ]
+    }
+
+    /// Synthetic remote fixture writer only. Production receiver operations
+    /// still use their ordinary transport; this avoids a second logical
+    /// CKSyncEngine sender sharing the same simulator's system cache.
+    static func publishRemoteFixture(
+        source: NotebookReplica, noteID: UUID, runID: UUID, activationRoot: URL
+    ) async throws {
+        let snapshots = try await source.persistedNoteSnapshots()
+        guard let snapshot = snapshots.first(where: { $0.noteID == noteID }),
+              let notebookID = source.catalogSnapshot?.notebookID else {
+            throw LabError.missingFixture
+        }
+        let value = SyncRecord(snapshot: snapshot, notebookID: notebookID)
+        try value.validate()
+        let assets = activationRoot.appending(path: "fixtureAssets")
+        try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+        let assetURL = assets.appending(path: value.id + ".automerge")
+        try snapshot.data.write(to: assetURL, options: .atomic)
+        let zoneID = CKRecordZone.ID(
+            zoneName: "meh-md-notebook-lab-v2-" + runID.uuidString.lowercased(),
+            ownerName: CKCurrentUserDefaultName
+        )
+        let recordID = CKRecord.ID(recordName: value.id, zoneID: zoneID)
+        let record = CKRecord(recordType: "AutomergeNotebookSnapshotV2", recordID: recordID)
+        record["snapshotID"] = value.id
+        record["protocolVersion"] = NSNumber(value: value.protocolVersion)
+        record["kind"] = value.kind.rawValue
+        record["notebookID"] = notebookID.uuidString
+        record["documentID"] = snapshot.noteID.uuidString
+        record["heads"] = try JSONEncoder().encode(snapshot.heads)
+        record["document"] = CKAsset(fileURL: assetURL)
+        let database = CKContainer(identifier: container).privateCloudDatabase
+        _ = try await database.save(record)
+        let saved = try await database.record(for: recordID)
+        guard try serverRecordChecks(saved, expected: value).values.allSatisfy({ $0 }) else {
+            throw LabError.convergenceFailed
+        }
     }
 
     enum LabError: String, Error {
@@ -109,7 +220,10 @@ private struct NotebookSyncLabView: View {
               let rawRun = environment["MEH_SYNC_LAB_RUN"],
               let runID = UUID(uuidString: rawRun),
               let phase = environment["MEH_SYNC_LAB_PHASE"],
-              ["account", "exchange", "publish", "receive", "edit", "verify"]
+              ["account", "exchange", "publish", "receive", "edit", "verify",
+               "activation-prepare", "activation-update", "activation-startup",
+               "activation-foreground", "activation-readback",
+               "activation-publish-startup", "activation-publish-foreground"]
                 .contains(phase) else {
             update("Stopped: explicit lab launch configuration required")
             return
@@ -170,7 +284,427 @@ private struct NotebookSyncLabView: View {
             guard account == .available else {
                 throw CloudKitSyncTransportError.accountUnavailable
             }
-            if phase == "exchange" {
+            if phase.hasPrefix("activation-") {
+                // A reused Dev container may carry normal app preferences.
+                // Do not let a pending normal reset reach Workspace.start().
+                guard !UserDefaults.standard.bool(forKey: "meh.md.resetLocalStorage") else {
+                    throw LabError.invalidLaunch
+                }
+                let externalPublisher = environment["MEH_SYNC_LAB_EXTERNAL_PUBLISHER"] == "1"
+                let activationRoot = runRoot.appending(path: "activation")
+                let manifestURL = activationRoot.appending(path: "manifest.json")
+                let sourceDirectory = activationRoot.appending(path: "source/notebook")
+                func baseText(_ index: Int) -> String {
+                    "Fictional activation lab \(runID) note \(index)\n"
+                }
+                func sourceCoordinator() async throws
+                    -> (NotebookReplica, NotebookSyncCoordinator) {
+                    let replica = NotebookReplica(directory: sourceDirectory)
+                    try await replica.load()
+                    let transport = try await measure("activation_source_transport") {
+                        try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                            containerIdentifier: container,
+                            stateDirectory: activationRoot.appending(path: "source/transport"),
+                            runID: runID
+                        )
+                    }
+                    transports["activation-source"] = transport
+                    let log = NotebookSyncEventLog(
+                        directory: activationRoot.appending(path: "source")
+                    )
+                    diagnostics["activation-source"] = log
+                    return (replica, NotebookSyncCoordinator(
+                        replica: replica, transport: transport, diagnosticLog: log
+                    ))
+                }
+                func workspace(
+                    role: String, engineAutomatic: Bool, workspaceAutomatic: Bool = true
+                ) -> NotebookWorkspace {
+                    let roleRoot = activationRoot.appending(path: role)
+                    let workspace = NotebookWorkspace(
+                        directory: roleRoot.appending(path: "notebook"),
+                        documentsDirectory: roleRoot.appending(path: "documents"),
+                        transport: nil, automaticSync: workspaceAutomatic, mode: .cloud,
+                        transportFactory: { expectedScope in
+                            let transport = try await CloudKitSyncTransport
+                                .makeIsolatedNotebookLab(
+                                    containerIdentifier: container,
+                                    stateDirectory: roleRoot.appending(path: "transport"),
+                                    runID: runID, automaticallySync: engineAutomatic
+                                )
+                            if let expectedScope, transport.scope != expectedScope {
+                                await transport.retire()
+                                throw SyncError.scopeChanged
+                            }
+                            transports[role] = transport
+                            return transport
+                        }
+                    )
+                    diagnostics[role] = workspace.syncEventLog
+                    return workspace
+                }
+                func loadActivationManifest() throws -> ActivationManifest {
+                    guard let data = try? Data(contentsOf: manifestURL),
+                          let manifest = try? JSONDecoder().decode(
+                            ActivationManifest.self, from: data
+                          ), manifest.runID == runID,
+                          (2...1_000).contains(manifest.noteIDs.count) else {
+                        throw LabError.missingFixture
+                    }
+                    return manifest
+                }
+                func validateWorkspace(_ workspace: NotebookWorkspace) throws {
+                    if let error = workspace.sync?.lastError { throw error }
+                    guard workspace.sync != nil, workspace.syncSetupError == nil else {
+                        throw LabError.syncFailed
+                    }
+                }
+                func dirtyLocalNotes(
+                    replica: NotebookReplica, manifest: ActivationManifest,
+                    notify: NotebookWorkspace? = nil, foreground: Bool = false
+                ) async throws {
+                    for index in 1..<manifest.noteIDs.count {
+                        let editor = try await replica.openNote(manifest.noteIDs[index])
+                        let before = baseText(index) + (foreground ? manifest.localSuffix : "")
+                        let suffix = foreground ? manifest.foregroundLocalSuffix : manifest.localSuffix
+                        let expected = before + suffix
+                        guard editor.text == before else {
+                            throw LabError.unexpectedContent
+                        }
+                        try editor.replaceAll(with: expected)
+                        notify?.noteDidEdit()
+                        try await editor.flush()
+                    }
+                    notify?.contentDidSave(trigger: "fictional lab local backlog")
+                }
+                if phase == "activation-prepare" {
+                    guard !FileManager.default.fileExists(atPath: activationRoot.path) else {
+                        throw LabError.existingFixture
+                    }
+                    let count = Int(environment["MEH_SYNC_LAB_NOTE_COUNT"] ?? "100") ?? 0
+                    guard (2...1_000).contains(count) else { throw LabError.invalidLaunch }
+                    report.noteCount = count
+                    let source = NotebookReplica(directory: sourceDirectory)
+                    try await source.createLocalNotebook()
+                    var ids: [UUID] = []
+                    for index in 0..<count {
+                        ids.append(try await source.createNote(
+                            name: "Fictional activation note \(index).md", text: baseText(index)
+                        ))
+                    }
+                    let manifest = ActivationManifest(
+                        runID: runID, noteIDs: ids,
+                        remoteBaseText: baseText(0), localBaseText: baseText(1),
+                        remoteSuffix: "Remote startup update \(runID)\n",
+                        foregroundRemoteSuffix: "Remote foreground update \(runID)\n",
+                        localSuffix: "Concurrent local edit \(runID)\n",
+                        foregroundLocalSuffix: "Concurrent foreground local edit \(runID)\n"
+                    )
+                    let (_, coordinator) = try await sourceCoordinator()
+                    try await measure("activation_fixture_upload") {
+                        try await synchronize(coordinator)
+                    }
+                    for role in ["receiver-startup"] {
+                        let receiver = workspace(role: role, engineAutomatic: false,
+                                                 workspaceAutomatic: false)
+                        receiver.backupFrequency = .off
+                        try await measure("activation_fixture_join_" + role) {
+                            await receiver.start()
+                            try validateWorkspace(receiver)
+                        }
+                        guard receiver.replica?.placements.filter({
+                            $0.item.kind == .note
+                        }).count == count else { throw LabError.convergenceFailed }
+                        if let transport = transports[role] { await transport.retire() }
+                    }
+                    try JSONEncoder().encode(manifest).write(to: manifestURL, options: .atomic)
+                } else {
+                    let manifest = try loadActivationManifest()
+                    report.noteCount = manifest.noteIDs.count
+                    report.noteID = manifest.noteIDs[0]
+                    report.localNoteID = manifest.noteIDs[1]
+                    report.expectedLocalText = manifest.localBaseText + manifest.localSuffix
+                    let publisherURL = activationRoot.appending(path: "fixture-publisher.json")
+                    report.remoteFixturePublisher = (try? Data(contentsOf: publisherURL))
+                        .flatMap { try? JSONDecoder().decode(String.self, from: $0) }
+                        ?? "direct_CKDatabase_verified_immutable_snapshot"
+                    if phase == "activation-update" {
+                        let expected = manifest.remoteBaseText + manifest.remoteSuffix
+                        if externalPublisher {
+                            // Runner contract: the verified Mac publisher
+                            // completed before this local-backlog phase.
+                            report.remoteFixturePublisher = "external_host_CKDatabase_verified_before_phase"
+                            report.expectedText = expected
+                            report.observedText = expected
+                        } else {
+                            let source = NotebookReplica(directory: sourceDirectory)
+                            try await source.load()
+                            let editor = try await source.openNote(manifest.noteIDs[0])
+                            guard editor.text == manifest.remoteBaseText else {
+                                throw LabError.unexpectedContent
+                            }
+                            try editor.replaceAll(with: expected)
+                            try await editor.flush()
+                            try await measure("activation_remote_upload") {
+                                try await publishRemoteFixture(
+                                    source: source, noteID: manifest.noteIDs[0],
+                                    runID: runID, activationRoot: activationRoot
+                                )
+                            }
+                            report.expectedText = expected
+                            report.observedText = editor.text
+                        }
+                        try JSONEncoder().encode(report.remoteFixturePublisher).write(
+                            to: publisherURL, options: .atomic
+                        )
+                        // A different note carries the local backlog so exact
+                        // text proves both independent edits survive the pass.
+                        let destination = NotebookReplica(directory: activationRoot.appending(
+                            path: "receiver-startup/notebook"
+                        ))
+                        try await destination.load()
+                        try await measure("activation_local_backlog") {
+                            try await dirtyLocalNotes(replica: destination, manifest: manifest)
+                        }
+                    } else if phase == "activation-publish-startup"
+                        || phase == "activation-publish-foreground" {
+                        report.scenario = "external_host_synthetic_fixture_publisher"
+                        report.remoteFixturePublisher = "external_host_CKDatabase_verified_immutable_snapshot"
+                        let source = NotebookReplica(directory: sourceDirectory)
+                        try await source.load()
+                        let editor = try await source.openNote(manifest.noteIDs[0])
+                        let isForegroundPublisher = phase == "activation-publish-foreground"
+                        let before = manifest.remoteBaseText
+                            + (isForegroundPublisher ? manifest.remoteSuffix : "")
+                        let suffix = isForegroundPublisher
+                            ? manifest.foregroundRemoteSuffix : manifest.remoteSuffix
+                        guard editor.text == before else { throw LabError.unexpectedContent }
+                        let expected = before + suffix
+                        try editor.replaceAll(with: expected)
+                        try await editor.flush()
+                        try await measure("activation_external_remote_upload") {
+                            try await publishRemoteFixture(
+                                source: source, noteID: manifest.noteIDs[0],
+                                runID: runID, activationRoot: activationRoot
+                            )
+                        }
+                        report.expectedText = expected
+                        report.observedText = editor.text
+                        report.observedHeadsCount = editor.currentSnapshot?.heads.count
+                    } else if phase == "activation-readback" {
+                        report.scenario = "isolated_backend_readback_and_fresh_receiver"
+                        report.engineAutomaticallySync = false
+                        let source = NotebookReplica(directory: sourceDirectory)
+                        try await source.load()
+                        let snapshots = try await source.persistedNoteSnapshots()
+                        guard let snapshot = snapshots.first(where: {
+                            $0.noteID == manifest.noteIDs[0]
+                        }), let notebookID = source.catalogSnapshot?.notebookID else {
+                            throw LabError.missingFixture
+                        }
+                        let editor = try await source.openNote(manifest.noteIDs[0])
+                        let initialRemote = manifest.remoteBaseText + manifest.remoteSuffix
+                        guard editor.text == initialRemote
+                            || editor.text == initialRemote + manifest.foregroundRemoteSuffix else {
+                            throw LabError.unexpectedContent
+                        }
+                        report.expectedText = editor.text
+                        let expectedRecord = SyncRecord(snapshot: snapshot, notebookID: notebookID)
+                        let zoneID = CKRecordZone.ID(
+                            zoneName: "meh-md-notebook-lab-v2-" + runID.uuidString.lowercased(),
+                            ownerName: CKCurrentUserDefaultName
+                        )
+                        let recordID = CKRecord.ID(recordName: expectedRecord.id, zoneID: zoneID)
+                        report.stage = "direct_source_readback"
+                        try save()
+                        let readbackStarted = ContinuousClock.now
+                        do {
+                            let cloudRecord = try await CKContainer(identifier: container)
+                                .privateCloudDatabase.record(for: recordID)
+                            report.diagnosticChecks.merge(
+                                try serverRecordChecks(cloudRecord, expected: expectedRecord)
+                            ) { _, current in current }
+                        } catch {
+                            report.directReadbackErrorCode = NotebookSyncEventLog.errorCode(error)
+                            report.diagnosticChecks["serverAssetBytesMatch"] = false
+                            report.diagnosticChecks["serverHeadsMatch"] = false
+                            report.diagnosticChecks["serverMetadataMatch"] = false
+                        }
+                        report.measurementsMS["direct_source_readback"] = [
+                            milliseconds(since: readbackStarted)
+                        ]
+                        try save()
+                        let freshRoot = activationRoot.appending(path: "receiver-readback")
+                        guard !FileManager.default.fileExists(atPath: freshRoot.path) else {
+                            throw LabError.existingFixture
+                        }
+                        let transport = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                            containerIdentifier: container,
+                            stateDirectory: freshRoot.appending(path: "transport"),
+                            runID: runID, automaticallySync: false
+                        )
+                        transports["receiver-readback"] = transport
+                        let destination = NotebookReplica(directory: freshRoot.appending(path: "notebook"))
+                        let log = NotebookSyncEventLog(directory: freshRoot)
+                        diagnostics["receiver-readback"] = log
+                        let coordinator = NotebookSyncCoordinator(
+                            replica: destination, transport: transport, diagnosticLog: log
+                        )
+                        try await measure("diagnostic_fresh_receiver_fetch") {
+                            try await synchronize(coordinator)
+                        }
+                        let received = try await destination.openNote(manifest.noteIDs[0])
+                        report.observedText = received.text
+                        report.observedHeadsCount = received.currentSnapshot?.heads.count
+                        report.diagnosticChecks["freshReceiverTextMatch"] = received.text == editor.text
+                        report.diagnosticChecks["freshReceiverContainsSourceHeads"] =
+                            received.currentSnapshot?.heads.isSuperset(of: snapshot.heads) == true
+                        guard report.diagnosticChecks.values.allSatisfy({ $0 }) else {
+                            throw LabError.convergenceFailed
+                        }
+                    } else {
+                        let isStartup = phase == "activation-startup"
+                        // Reopen the same durable receiver after its startup
+                        // sample, retaining its own acknowledged local edits.
+                        let role = "receiver-startup"
+                        let receiver = workspace(role: role, engineAutomatic: isStartup)
+                        report.engineAutomaticallySync = isStartup
+                        report.scenario = isStartup ? "cold_process_workspace_start"
+                            : "controlled_workspace_foreground"
+                        // Keep the due backup in the cold-start workload; the
+                        // fixture preparation deliberately created no backup.
+                        receiver.backupFrequency = isStartup ? .daily : .off
+                        var expected = manifest.remoteBaseText + manifest.remoteSuffix
+                        if !isStartup {
+                            try await measure("activation_foreground_preload") {
+                                await receiver.start()
+                                try validateWorkspace(receiver)
+                            }
+                            if externalPublisher {
+                                expected += manifest.foregroundRemoteSuffix
+                                report.stage = "awaiting_external_foreground_publisher"
+                                report.expectedText = expected
+                                report.remoteFixturePublisher = "external_host_CKDatabase_verified_handoff"
+                                try save()
+                                let handoffURL = activationRoot.appending(
+                                    path: "external-foreground-ready.json"
+                                )
+                                let handoffDeadline = ContinuousClock.now.advanced(by: .seconds(120))
+                                while !FileManager.default.fileExists(atPath: handoffURL.path) {
+                                    guard ContinuousClock.now < handoffDeadline else {
+                                        throw LabError.missingFixture
+                                    }
+                                    try await Task.sleep(for: .milliseconds(50))
+                                }
+                                let handoff = try JSONDecoder().decode(
+                                    ExternalForegroundReady.self,
+                                    from: Data(contentsOf: handoffURL)
+                                )
+                                guard handoff.runID == runID,
+                                      handoff.phase == "activation-publish-foreground",
+                                      handoff.expectedText == expected else {
+                                    throw LabError.unexpectedContent
+                                }
+                            } else {
+                                let source = NotebookReplica(directory: sourceDirectory)
+                                try await source.load()
+                                let editor = try await source.openNote(manifest.noteIDs[0])
+                                guard editor.text == expected else { throw LabError.unexpectedContent }
+                                expected += manifest.foregroundRemoteSuffix
+                                try editor.replaceAll(with: expected)
+                                try await editor.flush()
+                                try await measure("activation_foreground_remote_upload") {
+                                    try await publishRemoteFixture(
+                                        source: source, noteID: manifest.noteIDs[0],
+                                        runID: runID, activationRoot: activationRoot
+                                    )
+                                }
+                            }
+                            guard let replica = receiver.replica else { throw LabError.missingFixture }
+                            report.expectedLocalText = manifest.localBaseText
+                                + manifest.localSuffix + manifest.foregroundLocalSuffix
+                            try await dirtyLocalNotes(replica: replica, manifest: manifest,
+                                                      notify: receiver, foreground: true)
+                        }
+                        report.expectedText = expected
+                        report.stage = "activation_measuring"
+                        try save()
+                        let started = ContinuousClock.now
+                        let visibility = Task { @MainActor in
+                            try await waitForVisibleText(
+                                workspace: receiver, noteID: manifest.noteIDs[0],
+                                expected: expected, since: started
+                            )
+                        }
+                        defer { visibility.cancel() }
+                        func captureObservedContent() async {
+                            guard let replica = receiver.replica else { return }
+                            if let editor = try? await replica.openNote(manifest.noteIDs[0]) {
+                                report.observedText = editor.text
+                                report.observedHeadsCount = editor.currentSnapshot?.heads.count
+                            }
+                            if let editor = try? await replica.openNote(manifest.noteIDs[1]) {
+                                report.observedLocalText = editor.text
+                            }
+                        }
+                        do {
+                            if isStartup {
+                                await receiver.start()
+                                report.measurementsMS["activation_initial_start"] = [
+                                    milliseconds(since: started)
+                                ]
+                                // Deliver the initial foreground callback once
+                                // loading ends, so the same old/new lifecycle
+                                // cannot discard it through its loading guard.
+                                // Both startup and activation remain timed.
+                                report.scenario = "cold_process_workspace_start_then_foreground"
+                            }
+                            let refreshStartsBeforeActivation = receiver.syncEventLog.entries
+                                .filter { $0.event.hasPrefix("refresh started:") }.count
+                            receiver.sceneActivityChanged(id: UUID(), isActive: true)
+                            report.measurementsMS["activation_foreground_dispatch"] = [
+                                milliseconds(since: started)
+                            ]
+                            // Require the target text before testing idle: the
+                            // old foreground timer can be pending while the
+                            // workspace still reports no active refresh.
+                            report.measurementsMS["activation_visible"] = [
+                                try await visibility.value
+                            ]
+                            let deadline = started.advanced(by: .seconds(120))
+                            while receiver.isRefreshing || receiver.isSyncing
+                                || receiver.syncEventLog.entries.filter({
+                                    $0.event.hasPrefix("refresh started:")
+                                }).count <= refreshStartsBeforeActivation {
+                                guard ContinuousClock.now < deadline else {
+                                    throw LabError.syncFailed
+                                }
+                                try await Task.sleep(for: .milliseconds(10))
+                            }
+                            report.measurementsMS["activation_complete"] = [
+                                milliseconds(since: started)
+                            ]
+                            await captureObservedContent()
+                            try validateWorkspace(receiver)
+                            guard let replica = receiver.replica,
+                                  report.observedText == expected,
+                                  report.observedLocalText == report.expectedLocalText,
+                                  replica.placements.filter({ $0.item.kind == .note }).count
+                                    == manifest.noteIDs.count else {
+                                throw LabError.convergenceFailed
+                            }
+                        } catch {
+                            // A timeout is evidence about what actually
+                            // remained visible, not just a missing metric.
+                            await captureObservedContent()
+                            report.measurementsMS["activation_elapsed_at_failure"] = [
+                                milliseconds(since: started)
+                            ]
+                            throw error
+                        }
+                    }
+                }
+            } else if phase == "exchange" {
                 let senderTransport = try await measure("sender_transport") {
                     try await CloudKitSyncTransport.makeIsolatedNotebookLab(
                         containerIdentifier: container,

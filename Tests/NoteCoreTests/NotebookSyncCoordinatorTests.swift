@@ -1291,6 +1291,54 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         XCTAssertNil(cleaned["legacyNote"])
     }
 
+    func testReceiveReleaseFollowsFinalDurablePage() async throws {
+        let root = directory()
+        let notebookID = UUID()
+        let seed = SyncRecord(catalog: try NotebookCatalogDocument(
+            notebookID: notebookID).snapshot())
+        let document = try NoteDocument(noteID: UUID())
+        try document.replaceAll(with: "received remote history")
+        let note = SyncRecord(snapshot: document.snapshot(), notebookID: notebookID)
+        let transport = ReceiveCheckpointTransport(
+            seed: seed, note: note, directory: root, failSecondPage: false)
+        let coordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: root), transport: transport)
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+        let released = await transport.releaseCount
+        let checkpoint = await transport.checkpointValidated
+        XCTAssertEqual(released, 1)
+        XCTAssertTrue(checkpoint)
+    }
+
+    func testFailedReceiveKeepsUploadGateUntilDurableRetry() async throws {
+        let root = directory()
+        let notebookID = UUID()
+        let seed = SyncRecord(catalog: try NotebookCatalogDocument(
+            notebookID: notebookID).snapshot())
+        let document = try NoteDocument(noteID: UUID())
+        try document.replaceAll(with: "received after retry")
+        let note = SyncRecord(snapshot: document.snapshot(), notebookID: notebookID)
+        let transport = ReceiveCheckpointTransport(
+            seed: seed, note: note, directory: root, failSecondPage: true)
+        let coordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: root), transport: transport)
+        await coordinator.synchronize()
+        guard case .failed = coordinator.status else {
+            return XCTFail("Second receive page must fail")
+        }
+        let firstRelease = await transport.releaseCount
+        let firstPublish = await transport.publishCount
+        XCTAssertEqual(firstRelease, 0)
+        XCTAssertEqual(firstPublish, 0)
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+        let releases = await transport.releaseCount
+        let checkpoint = await transport.checkpointValidated
+        XCTAssertEqual(releases, 1)
+        XCTAssertTrue(checkpoint)
+    }
+
     private func directory() -> URL {
         let url = FileManager.default.temporaryDirectory.appending(
             path: "NotebookSyncCoordinatorTests-\(UUID().uuidString)"
@@ -1729,4 +1777,57 @@ private actor PhasePausingTransport: SyncTransport {
 
 private enum BatchTestError: Error {
     case failed
+}
+
+private actor ReceiveCheckpointTransport: ReceivePrioritizingSyncTransport {
+    nonisolated let scope = "receive-checkpoints"
+    let seed: SyncRecord
+    let note: SyncRecord
+    let directory: URL
+    var failSecondPage: Bool
+    private(set) var releaseCount = 0
+    private(set) var publishCount = 0
+    private(set) var checkpointValidated = false
+    private var receiving = true
+
+    init(seed: SyncRecord, note: SyncRecord, directory: URL, failSecondPage: Bool) {
+        self.seed = seed
+        self.note = note
+        self.directory = directory
+        self.failSecondPage = failSecondPage
+    }
+
+    func beginReceiving() { receiving = true }
+    func bootstrap(proposing record: SyncRecord) -> SyncRecord { seed }
+
+    func fetch(after cursor: String?) throws -> SyncPage {
+        if cursor == nil {
+            return SyncPage(records: [seed], cursor: "first", hasMore: true)
+        }
+        if failSecondPage {
+            failSecondPage = false
+            throw SyncError.unavailable("Second page interrupted")
+        }
+        return SyncPage(records: [note], cursor: "complete", hasMore: false)
+    }
+
+    func didApplyRemoteChanges() async throws {
+        let data = try Data(contentsOf: directory.appending(
+            path: "notebook-sync-state.json"))
+        let state = try JSONDecoder().decode(NotebookSyncState.self, from: data)
+        let reopened = await NotebookReplica(directory: directory)
+        try await reopened.load()
+        let durableRecords = try await reopened.records(includeUnlisted: true)
+        checkpointValidated = state.cursor == "complete"
+            && state.appliedHeads[note.documentKey] == note.snapshot.heads
+            && durableRecords.contains { $0.id == note.id }
+        guard checkpointValidated else { throw SyncError.localSaveRequired }
+        releaseCount += 1
+        receiving = false
+    }
+
+    func publish(_ record: SyncRecord) throws {
+        guard !receiving else { throw SyncError.localSaveRequired }
+        publishCount += 1
+    }
 }
