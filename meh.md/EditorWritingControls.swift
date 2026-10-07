@@ -4,6 +4,8 @@ import NoteCore
 
 #if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
 #endif
 
 struct EditorModeControl: View {
@@ -78,6 +80,7 @@ final class EditorSnippetMenuState {
 
 private struct EditorSnippetMenu: View {
     let navigation: MarkdownEditorNavigation
+    var didCommit: (() -> Void)?
 
     var body: some View {
         Menu {
@@ -87,7 +90,10 @@ private struct EditorSnippetMenu: View {
             } else {
                 EditorSnippetMenuContent(
                     entries: navigation.snippetMenu.entries,
-                    insert: { navigation.insertSnippet?($0) }
+                    insert: {
+                        navigation.insertSnippet?($0)
+                        didCommit?()
+                    }
                 )
             }
         } label: {
@@ -125,6 +131,9 @@ struct EditorWritingControls: View {
     @State private var pendingHeadingCommand: MarkdownEditingCommand?
 
     var body: some View {
+        #if os(macOS)
+        EditorMacWritingControls(navigation: navigation, isEnabled: isEnabled)
+        #else
         Menu {
             commandButton("Bold", systemImage: "bold", command: .bold)
             commandButton("Italic", systemImage: "italic", command: .italic)
@@ -192,6 +201,7 @@ struct EditorWritingControls: View {
                 }
             }
         }
+        #endif
     }
 
     private func commandButton(
@@ -207,6 +217,155 @@ struct EditorWritingControls: View {
         .accessibilityIdentifier(command.accessibilityIdentifier)
     }
 }
+
+#if os(macOS)
+/// Keep Mac controls at regular desktop density, with a little row padding.
+@MainActor
+private enum EditorMacFormattingMetrics {
+    static let itemHeight: CGFloat = {
+        let button = NSButton(title: "H1", target: nil, action: nil)
+        button.bezelStyle = .rounded
+        button.controlSize = .regular
+        return ceil(button.intrinsicContentSize.height) + 4
+    }()
+    static var rowHeight: CGFloat { itemHeight + 8 }
+    static var labelHeight: CGFloat { itemHeight - 8 }
+}
+
+private struct EditorMacWritingControls: View {
+    let navigation: MarkdownEditorNavigation
+    let isEnabled: Bool
+    @State private var isPresented = false
+    @State private var pendingCommand: MarkdownEditingCommand?
+
+    var body: some View {
+        Button { isPresented.toggle() } label: {
+            Label("Formatting", systemImage: "textformat")
+                .labelStyle(.iconOnly)
+        }
+        .help("Formatting")
+        .disabled(!isEnabled)
+        .accessibilityIdentifier("editor-formatting")
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            EditorMacFormattingPopover(navigation: navigation) { command in
+                // Apply after dismissal using the editor's retained selection.
+                pendingCommand = command
+                isPresented = false
+            } didCommit: {
+                isPresented = false
+            }
+            .onDisappear {
+                let command = pendingCommand
+                pendingCommand = nil
+                if let command { navigation.performCommand?(command) }
+                navigation.focusEditor?()
+            }
+        }
+    }
+}
+
+/// Related controls share one native popover instead of cascading panels.
+private struct EditorMacFormattingPopover: View {
+    let navigation: MarkdownEditorNavigation
+    let select: (MarkdownEditingCommand) -> Void
+    let didCommit: () -> Void
+    @State private var showsHeadings = false
+
+    var body: some View {
+        Group {
+            if showsHeadings {
+                HStack(spacing: 0) {
+                    Button { showsHeadings = false } label: {
+                        Label("Back to Formatting", systemImage: "chevron.backward")
+                            .labelStyle(.iconOnly)
+                            .frame(width: 40, height: EditorMacFormattingMetrics.itemHeight)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Back to Formatting")
+                    .accessibilityIdentifier("editor-formatting-back")
+                    EditorHeadingStylePicker(
+                        state: navigation.headingCommands,
+                        selectionPositionX: 140, select: select
+                    )
+                }
+                .padding(.horizontal, 4)
+            } else {
+                EditorMacFormattingRow(
+                    navigation: navigation, select: select, didCommit: didCommit,
+                    showHeadings: { showsHeadings = true }
+                )
+            }
+        }
+        .frame(width: 368, height: EditorMacFormattingMetrics.rowHeight)
+        .controlSize(.regular)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("editor-formatting-popover")
+    }
+}
+
+private struct EditorMacFormattingRow: View {
+    let navigation: MarkdownEditorNavigation
+    let select: (MarkdownEditingCommand) -> Void
+    let didCommit: () -> Void
+    let showHeadings: () -> Void
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 4) {
+                ForEach(KeyboardCommandDefinition.all) { definition in
+                    EditorMacFormattingChoice(
+                        definition: definition, navigation: navigation,
+                        select: select, didCommit: didCommit,
+                        showHeadings: showHeadings
+                    )
+                    .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
+                }
+            }
+            .padding(4)
+        }
+        .scrollIndicators(.hidden)
+        .accessibilityIdentifier("editor-formatting-commands")
+    }
+}
+
+private struct EditorMacFormattingChoice: View {
+    let definition: KeyboardCommandDefinition
+    let navigation: MarkdownEditorNavigation
+    let select: (MarkdownEditingCommand) -> Void
+    let didCommit: () -> Void
+    let showHeadings: () -> Void
+
+    var body: some View {
+        Group {
+            if definition.command == .heading {
+                Button(action: showHeadings) {
+                    Text(verbatim: "H").font(.system(size: 16))
+                        .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
+                }
+                .disabled(!navigation.headingCommands.isEnabled)
+                .accessibilityIdentifier("editor-command-heading")
+            } else if definition.command == .insertTable {
+                EditorTableMenu(navigation: navigation, didCommit: didCommit)
+                    .menuIndicator(.hidden)
+            } else if let command = definition.command {
+                Button { select(command) } label: {
+                    Image(systemName: definition.image)
+                        .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
+                }
+                .accessibilityIdentifier(command.accessibilityIdentifier)
+            } else {
+                EditorSnippetMenu(navigation: navigation, didCommit: didCommit)
+                    .menuIndicator(.hidden)
+            }
+        }
+        .font(.system(size: 16))
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .help(Text(definition.title))
+        .accessibilityLabel(Text(definition.title))
+    }
+}
+#endif
 
 private extension MarkdownEditingCommand {
     var accessibilityIdentifier: String {
@@ -263,6 +422,7 @@ private struct HeadingCommandDefinition: Identifiable {
         // Hint at the hierarchy without copying large document headings into
         // a compact control. Interface text size owns accessibility scaling.
         let previewPointSize: CGFloat
+        #if os(iOS)
         switch level {
         case 1: previewPointSize = 22
         case 2: previewPointSize = 20
@@ -272,6 +432,17 @@ private struct HeadingCommandDefinition: Identifiable {
         case 6: previewPointSize = 14
         default: previewPointSize = 17
         }
+        #else
+        switch level {
+        case 1: previewPointSize = 17
+        case 2: previewPointSize = 16
+        case 3: previewPointSize = 15
+        case 4: previewPointSize = 14
+        case 5: previewPointSize = 13
+        case 6: previewPointSize = 12
+        default: previewPointSize = NSFont.systemFontSize
+        }
+        #endif
         let size = interfacePointSize * previewPointSize / 17
         #if os(iOS)
         return font.withSize(size)
@@ -301,15 +472,14 @@ private struct EditorHeadingStylePicker: View {
     let select: (MarkdownEditingCommand) -> Void
 
     private var controlHeight: CGFloat {
+        #if os(iOS)
         let font = HeadingCommandDefinition.all[1].previewFont(
             bodyFont: state.bodyFont, interfacePointSize: interfacePointSize
         )
-        #if os(iOS)
-        let lineHeight = font.lineHeight
+        return max(44, ceil(font.lineHeight + 8))
         #else
-        let lineHeight = font.ascender - font.descender + font.leading
+        return EditorMacFormattingMetrics.itemHeight
         #endif
-        return max(44, ceil(lineHeight + 8))
     }
 
     var body: some View {
@@ -380,9 +550,12 @@ private struct EditorHeadingHorizontalChoice: View {
         Toggle(isOn: Binding(get: { selected }, set: { _ in action() })) {
             Text(definition.title)
                 .font(Font(font))
-                .fixedSize()
+                .lineLimit(1)
+                .frame(maxWidth: .infinity,
+                       minHeight: EditorMacFormattingMetrics.labelHeight)
         }
         .toggleStyle(.button)
+        .controlSize(.regular)
         .accessibilityLabel(Text(definition.accessibilityTitle))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier(definition.command.accessibilityIdentifier)
@@ -665,6 +838,7 @@ private struct TableDeletionConfirmation: ViewModifier {
 
 private struct EditorTableMenu: View {
     let navigation: MarkdownEditorNavigation
+    var didCommit: (() -> Void)?
     @State private var pendingDeletion: PendingTableDeletion?
 
     var body: some View {
@@ -677,11 +851,15 @@ private struct EditorTableMenu: View {
                             if item.isDestructive {
                                 if let action = navigation.prepareCommand?(item.command) {
                                     pendingDeletion = PendingTableDeletion(
-                                        command: item.command, action: action
+                                        command: item.command, action: {
+                                            action()
+                                            didCommit?()
+                                        }
                                     )
                                 }
                             } else {
                                 navigation.performCommand?(item.command)
+                                didCommit?()
                             }
                         } label: {
                             Label {
@@ -708,7 +886,6 @@ private struct EditorTableMenu: View {
     }
 }
 
-#if os(iOS)
 private struct KeyboardCommandDefinition: Identifiable {
     let id: String
     let title: LocalizedStringResource
@@ -745,6 +922,7 @@ private struct KeyboardCommandDefinition: Identifiable {
     ]
 }
 
+#if os(iOS)
 private nonisolated struct SymbolDragPreviewShape: Shape {
     let systemName: String
 
