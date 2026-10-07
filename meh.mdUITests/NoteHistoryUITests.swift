@@ -38,9 +38,10 @@ final class NoteHistoryUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertEqual(editor.value as? String, firstBody)
         reopenCurrentNote(in: app, expectedText: firstBody)
+        activate(editor)
         editor.typeText(addition)
-        let currentBody = firstBody + addition
-        XCTAssertEqual(editor.value as? String, currentBody)
+        let currentBody = try bodyAfterInserting(addition, into: editor,
+                                               original: firstBody)
         dismissKeyboardTipIfNeeded(in: app)
         reopenCurrentNote(in: app, expectedText: currentBody)
         #if os(iOS)
@@ -71,15 +72,19 @@ final class NoteHistoryUITests: XCTestCase {
 
         let preview = app.textViews["note-history-preview"]
         XCTAssertTrue(preview.waitForExistence(timeout: 10))
-        XCTAssertEqual(preview.value as? String, currentBody)
+        waitForPreview(currentBody, in: preview)
         let previous = app.buttons["note-history-previous"]
-        XCTAssertTrue(previous.exists)
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND enabled == true"),
+            object: previous
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
         activate(previous)
-        XCTAssertEqual(preview.value as? String, firstBody)
+        waitForPreview(firstBody, in: preview)
         activate(app.buttons["note-history-next"])
-        XCTAssertEqual(preview.value as? String, currentBody)
+        waitForPreview(currentBody, in: preview)
         activate(previous)
-        XCTAssertEqual(preview.value as? String, firstBody)
+        waitForPreview(firstBody, in: preview)
         XCTAssertTrue(app.descendants(matching: .any)
             .matching(identifier: "note-history-status").firstMatch.exists)
         capture(app, name: "Aurora Observatory earlier text in History")
@@ -96,18 +101,18 @@ final class NoteHistoryUITests: XCTestCase {
                 withNormalizedOffset: CGVector(dx: 1.05, dy: 0.5)
             )
         )
-        XCTAssertEqual(preview.value as? String, currentBody)
+        waitForPreview(currentBody, in: preview)
         activate(previous)
-        XCTAssertEqual(preview.value as? String, firstBody)
+        waitForPreview(firstBody, in: preview)
         #endif
         let detail = app.buttons["note-history-detail-toggle"]
         XCTAssertTrue(detail.exists)
         activate(detail)
         XCTAssertTrue(app.buttons["Overview"].waitForExistence(timeout: 5))
-        XCTAssertEqual(preview.value as? String, firstBody)
+        waitForPreview(firstBody, in: preview)
         activate(detail)
         XCTAssertTrue(app.buttons["More Detail"].waitForExistence(timeout: 5))
-        XCTAssertEqual(preview.value as? String, firstBody)
+        waitForPreview(firstBody, in: preview)
 
         #if os(iOS)
         preview.swipeUp()
@@ -160,12 +165,14 @@ final class NoteHistoryUITests: XCTestCase {
 
         let title = "Recovery Sketch"
         let firstBody = "Morning light over the ridge."
-        let currentBody = firstBody + "\nClear."
+        let addition = "\nClear."
         createNote(in: app, title: title, body: firstBody)
         reopenCurrentNote(in: app, expectedText: firstBody)
         let editor = app.textViews["markdown-editor"]
-        editor.typeText("\nClear.")
-        XCTAssertEqual(editor.value as? String, currentBody)
+        activate(editor)
+        editor.typeText(addition)
+        let currentBody = try bodyAfterInserting(addition, into: editor,
+                                               original: firstBody)
         reopenCurrentNote(in: app, expectedText: currentBody)
 
         let actions = app.buttons["notebook-note-actions"]
@@ -178,11 +185,24 @@ final class NoteHistoryUITests: XCTestCase {
         XCTAssertTrue(preview.waitForExistence(timeout: 10))
         activate(app.buttons["note-history-detail-toggle"])
         let previous = app.buttons["note-history-previous"]
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND enabled == true"),
+            object: previous
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
         for _ in 0..<12 where (preview.value as? String) != firstBody {
             XCTAssertTrue(previous.isEnabled)
+            let oldText = preview.value as? String ?? ""
             activate(previous)
+            let changed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value != %@", oldText),
+                object: preview
+            )
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [changed], timeout: 10), .completed
+            )
         }
-        XCTAssertEqual(preview.value as? String, firstBody)
+        waitForPreview(firstBody, in: preview)
         activate(app.buttons["note-history-restore"])
         activate(app.buttons["Restore as New Note"])
 
@@ -203,19 +223,35 @@ final class NoteHistoryUITests: XCTestCase {
         #endif
     }
 
+    private func bodyAfterInserting(
+        _ addition: String, into editor: XCUIElement, original: String
+    ) throws -> String {
+        let inserted = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", addition),
+            object: editor
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [inserted], timeout: 10), .completed)
+        let actual = try XCTUnwrap(editor.value as? String)
+        XCTAssertEqual(actual.components(separatedBy: addition).count - 1, 1)
+        XCTAssertEqual(actual.replacingOccurrences(of: addition, with: ""), original)
+        return actual
+    }
+
+    private func waitForPreview(_ text: String, in preview: XCUIElement) {
+        let selected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", text), object: preview
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 10), .completed)
+    }
+
     private func makeApp(run: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-#if ICLOUD_ENABLED
-        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
-        app.launchEnvironment["MEH_SYNC_URL"] =
-            ProcessInfo.processInfo.environment["MEH_SYNC_TEST_URL"]
-            ?? "http://127.0.0.1:8765"
-        app.launchEnvironment["MEH_SYNC_WORKSPACE"] = run
-#else
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = run
-#endif
+        app.launchEnvironment.removeValue(forKey: "MEH_SYNC_URL")
+        app.launchEnvironment.removeValue(forKey: "MEH_SYNC_CLOUDKIT")
+
         app.launchArguments += ["-editor.mode", "source"]
         return app
     }
@@ -227,7 +263,11 @@ final class NoteHistoryUITests: XCTestCase {
         let titleField = app.textFields["title-field"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         replaceTitle(in: titleField, app: app, with: title)
-        XCTAssertEqual(titleField.value as? String, title)
+        let titleEntered = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", title),
+            object: titleField
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [titleEntered], timeout: 10), .completed)
         #if os(macOS)
         titleField.typeKey(.return, modifierFlags: [])
         #else

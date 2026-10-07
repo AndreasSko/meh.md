@@ -409,6 +409,16 @@ final class NotebookWorkspace {
                 throw SyncError.unavailable("Set a valid local sync URL and workspace name.")
             }
             if replica == nil {
+                #if DEBUG && !NOTEBOOK_PERFORMANCE_HOST
+                // Custom optimized probes link Release NoteCore, which omits
+                // this DEBUG fixture. Real app tests use an isolated preview.
+                if isPreview,
+                   ProcessInfo.processInfo.environment[
+                    "MEH_NOTEBOOK_HISTORY_FIXTURE"
+                   ] == "1" {
+                    try await NoteHistoryTestFixture.seed(directory: directory)
+                }
+                #endif
                 let loaded = NotebookReplica(directory: directory)
                 try await loaded.load()
                 if !usesSync, loaded.catalogSnapshot == nil {
