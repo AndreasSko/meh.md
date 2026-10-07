@@ -1,5 +1,17 @@
 import Foundation
 
+/// The stored source location captured when a browser drag begins.
+/// A drop can require these locations to still match after waiting for a write.
+public struct NotebookBrowserPlacementExpectation: Equatable, Sendable {
+    public let itemID: UUID
+    public let parentID: UUID?
+
+    public init(itemID: UUID, parentID: UUID?) {
+        self.itemID = itemID
+        self.parentID = parentID
+    }
+}
+
 public enum NotebookBrowserChangeError: Error, Equatable, LocalizedError {
     case invalidSelection
     case invalidDestination

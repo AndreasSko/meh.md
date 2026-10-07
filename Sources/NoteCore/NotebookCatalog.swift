@@ -892,6 +892,40 @@ final class NotebookCatalogDocument {
         _ ids: [UUID],
         to parentID: UUID?
     ) throws -> NotebookBrowserUndo? {
+        try placeItems(ids, to: parentID, before: nil)
+    }
+
+    /// Moves and orders a browser selection in one validated catalog change.
+    /// A nil anchor appends; an anchor inserts before an active stored sibling.
+    func placeItems(
+        _ ids: [UUID],
+        to parentID: UUID?,
+        before beforeID: UUID?,
+        expecting expectations: [NotebookBrowserPlacementExpectation]? = nil,
+        notebookID expectedNotebookID: UUID? = nil
+    ) throws -> NotebookBrowserUndo? {
+        if let expectedNotebookID, expectedNotebookID != notebookID {
+            throw NotebookBrowserChangeError.notebookIdentityMismatch
+        }
+        if let expectations {
+            let supplied = Set(ids)
+            guard expectations.count == supplied.count,
+                  Set(expectations.map(\.itemID)) == supplied else {
+                throw NotebookBrowserChangeError.invalidSelection
+            }
+            let byID = Dictionary(
+                uniqueKeysWithValues: try placements()
+                    .map { ($0.item.id, $0) })
+            guard expectations.allSatisfy({ expectation in
+                guard let placement = byID[expectation.itemID],
+                      !placement.issues.contains(.concurrentMove) else {
+                    return false
+                }
+                return placement.item.parentID == expectation.parentID
+            }) else {
+                throw NotebookBrowserChangeError.invalidSelection
+            }
+        }
         let roots = try normalizedActiveSelection(ids)
         try validateBatchMove(roots, to: parentID)
 
@@ -906,13 +940,26 @@ final class NotebookCatalogDocument {
             parentID: parentID, inTrash: false
         ).filter { $0.item.parentID == parentID }
         let remaining = current.filter { !moving.contains($0.item.id) }
+        let insertionIndex: Int
+        if let beforeID {
+            guard let index = remaining.firstIndex(where: {
+                $0.item.id == beforeID
+            }) else {
+                throw NotebookBrowserChangeError.invalidDestination
+            }
+            insertionIndex = index
+        } else {
+            insertionIndex = remaining.endIndex
+        }
+        let desiredIDs = remaining.prefix(insertionIndex).map(\.item.id)
+            + roots + remaining.dropFirst(insertionIndex).map(\.item.id)
         let isUnconflictedNoOp = roots.allSatisfy { id in
             guard let placement = selected[id] else { return false }
             return placement.parentID == parentID
                 && placement.item.parentID == parentID
                 && !placement.issues.contains(.concurrentMove)
                 && !placement.issues.contains(.concurrentReorder)
-        } && current.map(\.item.id) == remaining.map(\.item.id) + roots
+        } && current.map(\.item.id) == desiredIDs
         if isUnconflictedNoOp { return nil }
 
         let parentKey = "parent"
@@ -937,7 +984,8 @@ final class NotebookCatalogDocument {
         }
 
         let candidate = try fork()
-        try candidate.applyBatchMove(roots, to: parentID)
+        try candidate.applyBatchMove(
+            roots, to: parentID, before: beforeID)
         _ = try NotebookCatalogDocument(snapshot: candidate.snapshot())
 
         var changes: [NotebookBrowserRegisterChange] = []
@@ -1536,9 +1584,15 @@ final class NotebookCatalogDocument {
             uniqueKeysWithValues: placements.map { ($0.item.id, $0) }
         )
         if let parentID {
+            let liveByID = Dictionary(
+                uniqueKeysWithValues: try items()
+                    .filter { !$0.isPermanentlyDeleted }
+                    .map { ($0.id, $0) })
             guard let destination = byID[parentID],
                   destination.item.kind == .folder,
-                  !destination.isInTrash else {
+                  !destination.isInTrash,
+                  hasRestorableAncestry(parentID, itemsByID: liveByID)
+            else {
                 throw NotebookBrowserChangeError.invalidDestination
             }
         }
@@ -1561,7 +1615,8 @@ final class NotebookCatalogDocument {
 
     private func applyBatchMove(
         _ ids: [UUID],
-        to parentID: UUID?
+        to parentID: UUID?,
+        before beforeID: UUID?
     ) throws {
         let moving = Set(ids)
         let byID = Dictionary(
@@ -1586,10 +1641,23 @@ final class NotebookCatalogDocument {
         ).filter {
             $0.item.parentID == parentID && !moving.contains($0.item.id)
         }
+        let insertionIndex: Int
+        if let beforeID {
+            guard let index = remaining.firstIndex(where: {
+                $0.item.id == beforeID
+            }) else {
+                throw NotebookBrowserChangeError.invalidDestination
+            }
+            insertionIndex = index
+        } else {
+            insertionIndex = remaining.endIndex
+        }
         let ranks = try NotebookOrderKeyFactory.distribute(
             itemIDs: ids,
-            lower: remaining.last?.item.orderKey,
-            upper: nil
+            lower: insertionIndex > remaining.startIndex
+                ? remaining[insertionIndex - 1].item.orderKey : nil,
+            upper: insertionIndex < remaining.endIndex
+                ? remaining[insertionIndex].item.orderKey : nil
         )
         for id in ids {
             let object = try object(for: id)

@@ -766,12 +766,26 @@ public final class NotebookReplica {
     public func moveItems(
         _ ids: [UUID], to parentID: UUID?
     ) async throws -> NotebookBrowserUndo? {
+        try await placeItems(ids, to: parentID, before: nil)
+    }
+
+    /// Places a normalized selection before a sibling or at the folder's end.
+    /// Moving across folders and changing order commit in one durable write.
+    /// Invalid or stale identities reject the whole selection; an unchanged
+    /// placement performs no write and returns no undo receipt.
+    public func placeItems(
+        _ ids: [UUID], to parentID: UUID?, before: UUID?,
+        expecting expectations: [NotebookBrowserPlacementExpectation]? = nil,
+        notebookID: UUID? = nil
+    ) async throws -> NotebookBrowserUndo? {
         return try await withCatalogWrite {
             guard let catalog = self.catalog else {
                 throw NotebookReplicaError.notJoined
             }
             let next = try catalog.fork()
-            let undo = try next.moveItems(ids, to: parentID)
+            let undo = try next.placeItems(
+                ids, to: parentID, before: before,
+                expecting: expectations, notebookID: notebookID)
             let changed = next.heads != catalog.heads
             if changed {
                 try await self.persistCatalog(next)
