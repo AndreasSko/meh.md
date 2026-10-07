@@ -191,6 +191,8 @@ struct NotebookView: View {
     @State private var movingIDs: [UUID] = []
     @State private var movingFromTrash = false
     @State private var browserSelection = NotebookBrowserSelection()
+    @State private var browserDrag = NotebookBrowserDragState()
+    @State private var browserDropViewportFrame: CGRect = .zero
     @State private var selectingItems = false
     @FocusState private var browserFocused: Bool
     @FocusState private var focusedRecentID: UUID?
@@ -827,6 +829,7 @@ struct NotebookView: View {
             workspace?.contentDidSave(trigger: "catalog snapshot changed")
             navigationState.refreshAvailability()
             if previous?.notebookID != current?.notebookID {
+                browserDrag.reset()
                 search.clear()
                 links.clear()
                 resetLinkJourney()
@@ -849,7 +852,10 @@ struct NotebookView: View {
             if let message { errorMessage = message }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { rememberEditorPosition() }
+            if phase != .active {
+                browserDrag.reset()
+                rememberEditorPosition()
+            }
         }
         #if os(iOS)
         .onChange(of: quickActionRequests.pendingActionCount, initial: true) { _, _ in
@@ -863,6 +869,7 @@ struct NotebookView: View {
         }
         #endif
         .onDisappear {
+            browserDrag.reset()
             historyLoadTask?.cancel()
             rememberEditorPosition()
         }
@@ -1512,18 +1519,151 @@ struct NotebookView: View {
     }
 
     private var activeTree: some View {
-        ForEach(visibleActiveRows) { row in
-            browserRow(row)
+        let rows = visibleActiveRows
+        let target = browserDrag.target
+        let targetDepth = rows.first { $0.id == target?.rowID }?.depth ?? 0
+        let afterEndID = browserAfterEndID(in: rows)
+        return ForEach(rows) { row in
+            browserRow(row, afterEndID: afterEndID, targetDepth: targetDepth)
                 .tag(row.id)
                 .id(row.id)
                 .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
+                // A custom clear background also hides the native selected fill.
+                .listRowBackground(browserSelection.contains(row.id) ? nil : Color.clear)
                 .listRowInsets(sidebarSectionInsets)
         }
     }
 
-    private func browserRow(_ row: NotebookSidebarRow) -> some View {
+    private func browserRow(
+        _ row: NotebookSidebarRow, afterEndID: UUID?, targetDepth: Int
+    ) -> some View {
         sidebarRow(row)
+            .notebookDragSource(enabled: editingID == nil) {
+                beginBrowserDrag(row.id)
+            }
+            .notebookBrowserRowGeometry(itemID: row.id, state: browserDrag)
+            .overlay(alignment: .top) {
+                if browserDrag.target?.position == .before,
+                   browserDrag.target?.rowID == row.id {
+                    browserInsertionLine(depth: row.depth)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if afterEndID == row.id {
+                    browserInsertionLine(depth: targetDepth)
+                }
+            }
+            .background {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.accentColor.opacity(
+                        browserDrag.target?.rowID == row.id
+                            && browserDrag.target?.position == .into ? 0.16 : 0
+                    ))
+            }
+    }
+
+    private func browserInsertionLine(depth: Int) -> some View {
+        Rectangle().fill(Color.accentColor).frame(height: 2)
+            .padding(.leading, CGFloat(depth) * 16 + 20)
+            .allowsHitTesting(false)
+    }
+
+    private func browserAfterEndID(in rows: [NotebookSidebarRow]) -> UUID? {
+        guard let target = browserDrag.target, target.position == .after,
+              let id = target.rowID,
+              let start = rows.firstIndex(where: { $0.id == id })
+        else { return nil }
+        let depth = rows[start].depth
+        return rows.dropFirst(start + 1).prefix { $0.depth > depth }.last?.id ?? id
+    }
+
+    private func beginBrowserDrag(_ id: UUID) -> NSItemProvider {
+        guard !busy, editingID == nil, !search.isPresented,
+              let notebookID = replica.catalogSnapshot?.notebookID else {
+            return NSItemProvider()
+        }
+        let ids = browserSelection.contains(id) && browserSelection.count > 1
+            ? browserSelection.orderedIDs(in: activeBrowserOrder) : [id]
+        let rootsByID = Dictionary(uniqueKeysWithValues:
+            effectiveSelectionRoots(ids).map { ($0.item.id, $0) })
+        let roots = ids.compactMap { rootsByID[$0] }
+        guard !roots.isEmpty, roots.allSatisfy({ !$0.isInTrash }) else {
+            return NSItemProvider()
+        }
+        return browserDrag.begin(NotebookBrowserDrag(
+            notebookID: notebookID,
+            sources: roots.map {
+                NotebookBrowserPlacementExpectation(
+                    itemID: $0.item.id, parentID: $0.item.parentID
+                )
+            }
+        ))
+    }
+
+    private func browserDropInteraction() -> NotebookBrowserDropInteraction {
+        NotebookBrowserDropInteraction(
+            state: browserDrag,
+            resolve: { point in
+                guard !busy, editingID == nil, let drag = browserDrag.drag,
+                      drag.notebookID == replica.catalogSnapshot?.notebookID else { return nil }
+                let viewport = browserDropViewportFrame
+                guard !viewport.isEmpty, viewport.contains(point) else { return nil }
+                let header = browserDrag.filesHeaderFrame
+                guard !header.isEmpty, point.y >= header.minY else { return nil }
+                let rows = visibleActiveRows.compactMap { row -> (NotebookSidebarRow, CGRect)? in
+                    guard let frame = browserDrag.rowFrame(for: row.id), !frame.isEmpty,
+                          frame.intersects(viewport) else { return nil }
+                    return (row, frame)
+                }
+                guard visibleActiveRows.isEmpty || !rows.isEmpty else { return nil }
+                let id: UUID?
+                let position: NotebookBrowserDropTarget.Position
+                if header.contains(point) || rows.isEmpty
+                    || point.y > (rows.map { $0.1.maxY }.max() ?? header.maxY) {
+                    id = nil
+                    position = .root
+                } else if let (row, frame) = rows.min(by: {
+                    abs($0.1.midY - point.y) < abs($1.1.midY - point.y)
+                }) {
+                    id = row.id
+                    let isFolder = replica.placements.first { $0.item.id == id }?.item.kind == .folder
+                    let fraction = (point.y - frame.minY) / frame.height
+                    if isFolder, fraction > 0.25, fraction < 0.75 { position = .into }
+                    else { position = fraction < 0.5 ? .before : .after }
+                } else { return nil }
+                return NotebookBrowserDragPlacement.target(
+                    rowID: id, position: position,
+                    drag: drag, placements: replica.placements
+                )
+            },
+            expand: { id in
+                if let id { expandedIDs.insert(id) }
+                else { navigationState.isTreeExpanded = true }
+            },
+            commit: { drag, target in
+                guard !busy else {
+                    errorMessage = String(localized:
+                        "Another action is still finishing. Try moving the files again.")
+                    return
+                }
+                perform {
+                    guard workspace == nil || workspace?.replica === replica else { return }
+                    try await flushEditor()
+                    guard workspace == nil || workspace?.replica === replica else { return }
+                    let oldHeads = replica.catalogSnapshot?.heads
+                    let undo = try await replica.placeItems(
+                        drag.itemIDs, to: target.parentID, before: target.beforeID,
+                        expecting: drag.sources, notebookID: drag.notebookID
+                    )
+                    if replica.catalogSnapshot?.heads != oldHeads {
+                        browserUndo = undo
+                        browserRedo = nil
+                    }
+                    if let parentID = target.parentID { expandedIDs.insert(parentID) }
+                    for id in drag.itemIDs { reveal(id) }
+                }
+            }
+        )
     }
 
     @ViewBuilder
@@ -1683,11 +1823,29 @@ struct NotebookView: View {
         return result
     }
 
+    private func inlineNameField(for id: UUID) -> some View {
+        #if os(macOS)
+        NotebookInlineNameField(text: $proposedName, isEnabled: !busy)
+        #else
+        TextField("Name", text: $proposedName)
+            .focused($focusedNameID, equals: id)
+        #endif
+    }
+
     @ViewBuilder
     private func sidebarRow(_ row: NotebookSidebarRow) -> some View {
         if let placement = replica.placements.first(where: { $0.item.id == row.id }) {
             HStack(spacing: 6) {
                 if placement.item.kind == .folder {
+                    #if os(macOS)
+                    NotebookNativeDisclosureButton(
+                        isExpanded: expandedIDs.contains(row.id),
+                        label: placement.displayName,
+                        identifier: "notebook-disclosure-" + row.id.uuidString,
+                        action: { toggleFolder(row.id) }
+                    )
+                    .frame(width: 20, height: sidebarRowHeight)
+                    #else
                     Button { toggleFolder(row.id) } label: {
                         disclosureIcon(expanded: expandedIDs.contains(row.id))
                             .frame(minWidth: 20, minHeight: sidebarRowHeight)
@@ -1696,14 +1854,14 @@ struct NotebookView: View {
                     .accessibilityLabel(placement.displayName)
                     .accessibilityValue(expandedIDs.contains(row.id) ? "Expanded" : "Collapsed")
                     .accessibilityIdentifier("notebook-disclosure-" + row.id.uuidString)
+                    #endif
                 } else {
                     Color.clear.frame(width: 20, height: 1)
                 }
                 if editingID == row.id {
-                    TextField("Name", text: $proposedName)
+                    inlineNameField(for: row.id)
                         .textFieldStyle(.plain)
                         .accessibilityIdentifier("notebook-inline-name")
-                        .focused($focusedNameID, equals: row.id)
                         .disabled(busy)
                         .onSubmit { submitInlineName() }
                         .notebookEscapeAction { cancelInlineName() }
@@ -2227,13 +2385,11 @@ struct NotebookView: View {
         editingID = id
         originalName = name
         proposedName = name
+        #if os(iOS)
         Task { @MainActor in
             focusedNameID = id
-            #if os(macOS)
-                await Task.yield()
-                NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
-            #endif
         }
+        #endif
     }
 
     private func beginDetailRenaming(_ placement: NotebookPlacement) {
@@ -2514,17 +2670,10 @@ struct NotebookView: View {
                           && ($0.isInTrash == movingFromTrash)
                   }
               }) else { return false }
-        let sources = Set(movingIDs)
-        var ancestor = parentID
-        var visited = Set<UUID>()
-        while let id = ancestor {
-            guard !sources.contains(id), visited.insert(id).inserted,
-                  let placement = replica.placements.first(where: { $0.item.id == id }),
-                  !placement.isInTrash, placement.item.kind == .folder
-            else { return false }
-            ancestor = placement.parentID
-        }
-        return true
+        let byID = Dictionary(uniqueKeysWithValues:
+            replica.placements.map { ($0.item.id, $0) })
+        return NotebookBrowserDragPlacement.allowsDestination(
+            parentID, excluding: Set(movingIDs), byID: byID)
     }
 
     private func sort(_ parentID: UUID?, by order: NotebookSortOrder) {
@@ -2689,12 +2838,48 @@ struct NotebookView: View {
                 .accessibilityHidden(hidesCompactRows)
                 .textCase(nil)
                 .listRowInsets(sidebarSectionInsets)
+                .onGeometryChange(for: CGRect.self) {
+                    $0.frame(in: .global)
+                } action: { browserDrag.filesHeaderFrame = $0 }
+                .background {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.accentColor.opacity(
+                            browserDrag.target?.position == .root ? 0.16 : 0
+                        ))
+                }
                 #if os(iOS)
                 .background(NotebookBrowserScrollReader(reference: browserScrollView))
+                .background(NotebookBrowserUIKitDropReader(interaction: browserDropInteraction()))
+                #else
+                .background(NotebookBrowserAppKitScrollReader(state: browserDrag))
                 #endif
             }
         }
         .listStyle(.plain)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+            browserDropViewportFrame = frame
+        }
+        #if os(macOS)
+        .overlay(NotebookBrowserAppKitDragReader(
+            state: browserDrag,
+            canBegin: {
+                !busy && editingID == nil && !search.isPresented
+                    && replica.catalogSnapshot?.notebookID != nil
+            },
+            sourceAt: { point in
+                guard browserDropViewportFrame.contains(point) else { return nil }
+                return visibleActiveRows.first { row in
+                    browserDrag.rowFrame(for: row.id)?.contains(point) == true
+                }?.id
+            },
+            selectSource: { id in
+                if !browserSelection.contains(id) { browserSelection.selectOnly(id) }
+                browserFocused = true
+            },
+            begin: beginBrowserDrag
+        ))
+        .overlay(NotebookBrowserAppKitDropSurface(interaction: browserDropInteraction()))
+        #endif
         #if os(iOS)
         // Keep a small buffer above the floating controls, including in
         // shorter windows, without leaving half the browser empty.
@@ -2748,6 +2933,15 @@ struct NotebookView: View {
             activateSidebarRow(placement)
         }
         .focused($browserFocused)
+        #if os(iOS)
+        .onDragSessionUpdated { session in
+            switch session.phase {
+            case .initial, .active: browserDrag.isSessionActive = true
+            case .ended, .dataTransferCompleted: browserDrag.reset()
+            default: break
+            }
+        }
+        #endif
         .onKeyPress { press in
             guard browserFocused, editingID == nil, detailEditingID == nil,
                   !search.isPresented, !busy else { return .ignored }
@@ -2799,6 +2993,13 @@ struct NotebookView: View {
         .task(id: fileRevealRequest) {
             guard let request = fileRevealRequest else { return }
             await Task.yield()
+            #if os(iOS)
+            // A new inline editor replaces the row's drag source. Allow
+            // that layout to finish before revealing a virtualized row.
+            if editingID == request.id {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            #endif
             guard !Task.isCancelled else { return }
             withAnimation { scrollProxy.scrollTo(request.id, anchor: .center) }
             guard request.highlights else {
@@ -3774,6 +3975,93 @@ private enum NotebookLinkUIError: LocalizedError {
         }
     }
 }
+
+#if os(macOS)
+/// A virtualized sidebar field owns focus only after its native row mounts.
+private struct NotebookInlineNameField: View {
+    @Binding var text: String
+    let isEnabled: Bool
+    @FocusState private var isFocused: Bool
+    @State private var selection: TextSelection?
+    @State private var isReady = false
+    @State private var hasFocused = false
+
+    private struct Readiness: Equatable {
+        let isReady: Bool
+        let isEnabled: Bool
+    }
+
+    var body: some View {
+        TextField("Name", text: $text, selection: $selection)
+            .focused($isFocused)
+            .background {
+                NotebookInlineNameReadiness { isReady = $0 }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            .task(id: Readiness(isReady: isReady, isEnabled: isEnabled)) {
+                guard isReady, isEnabled, !hasFocused else { return }
+                isFocused = true
+                selection = TextSelection(range: text.startIndex..<text.endIndex)
+            }
+            .onChange(of: isFocused) { _, focused in
+                if focused { hasFocused = true }
+            }
+            .onDisappear { isFocused = false }
+    }
+}
+
+private struct NotebookInlineNameReadiness: NSViewRepresentable {
+    let onReady: (Bool) -> Void
+
+    func makeNSView(context: Context) -> NotebookInlineNameReadinessView {
+        let view = NotebookInlineNameReadinessView()
+        view.onReady = onReady
+        return view
+    }
+
+    func updateNSView(_ view: NotebookInlineNameReadinessView, context: Context) {
+        view.onReady = onReady
+        view.checkReadiness()
+    }
+}
+
+private final class NotebookInlineNameReadinessView: NSView {
+    var onReady: ((Bool) -> Void)?
+    private var reportedReady = false
+    private var attachmentGeneration = 0
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        attachmentGeneration &+= 1
+        checkReadiness()
+    }
+
+    override func layout() {
+        super.layout()
+        checkReadiness()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func checkReadiness() {
+        let ready = window != nil && bounds.width > 0 && bounds.height > 0
+        guard reportedReady != ready else { return }
+        // Reveal the mounted field through its actual native scroll ancestors
+        // before requesting focus; no responder-chain action or timer is used.
+        reportedReady = ready
+        if ready { scrollToVisible(bounds) }
+        let generation = attachmentGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.attachmentGeneration == generation,
+                  ready == (self.window != nil
+                      && self.bounds.width > 0 && self.bounds.height > 0)
+            else { return }
+            self.onReady?(ready)
+        }
+    }
+}
+#endif
 
 private enum NotebookNavigationError: LocalizedError {
     case unrecordedEdit

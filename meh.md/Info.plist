@@ -70,6 +70,19 @@
 			</array>
 		</dict>
 	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>de.andreas-sk.meh-md.browser-item</string>
+			<key>UTTypeDescription</key>
+			<string>Notebook item</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>
