@@ -19,6 +19,11 @@ enum LargeNotePerformanceProbe {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let environment = ProcessInfo.processInfo.environment
+            // Optional profiler attachment window, outside all measured work.
+            if let delay = Double(environment["EDITOR_PERFORMANCE_START_DELAY_SECONDS"] ?? ""),
+               (0...60).contains(delay) {
+                try await Task.sleep(for: .seconds(delay))
+            }
             let kilobytes = Int(environment["EDITOR_PERFORMANCE_BLOCKS"] ?? "500") ?? 500
             let mode = MarkdownEditorMode(
                 rawValue: environment["EDITOR_PERFORMANCE_MODE"] ?? "livePreview"

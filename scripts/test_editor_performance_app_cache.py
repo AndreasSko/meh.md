@@ -74,7 +74,7 @@ class ProbeAppCacheTests(unittest.TestCase):
         original = self.key()
         for changes in ({"compiler": "Swift compiler build 2"}, {"sdk": "/new/sdk"},
                         {"target": "x86_64-ios27-simulator"}, {"host": "editor"},
-                        {"scenario": "presentation"}):
+                        {"scenario": "presentation"}, {"flags": "-O -g -D ICLOUD_DEV"}):
             self.assertNotEqual(original, self.key(**changes))
 
     def test_binary_and_bundle_tamper_rejected_then_replaceable(self):

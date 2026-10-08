@@ -71,8 +71,14 @@ class EditorPerformanceCIOrchestrationTests(unittest.TestCase):
     def _write_harness(self, root):
         write_executable(root / "scripts" / "run_editor_performance_check.sh", r'''#!/bin/bash
 set -euo pipefail
+if [[ "${EDITOR_PERFORMANCE_BUILD_ONLY:-0}" == 1 ]]; then
+  printf 'build:%s\n' "$(cd "$(dirname "$0")/.." && pwd)" >> "$ORCH_EVENT_LOG"
+  [[ "${ORCH_FAIL_BUILD:-}" != "$(basename "$(cd "$(dirname "$0")/.." && pwd)")" ]] || exit 3
+  exit 0
+fi
 label="$(basename "$5" .json)"
 printf 'probe:%s:%s\n' "$label" "$(cd "$(dirname "$0")/.." && pwd)" >> "$ORCH_EVENT_LOG"
+[[ "${ORCH_FAIL_PROBE:-}" != "$label" ]] || exit 4
 python3 - "$5" "$4" <<'PY'
 import json
 import os
@@ -229,6 +235,10 @@ fi
             "standard-500kb",
             "nearby-table-50kb",
         ])
+        builds = [event for event in events if event.startswith("build:")]
+        self.assertEqual(builds, [f"build:{root}" for root in
+                                  (self.baseline, self.reference, self.candidate)])
+        self.assertLess(events.index(builds[-1]), events.index(probes[0]))
         self.assertEqual(events.count("sim:shutdown"), 1)
         self.assertEqual(events.count("sim:delete"), 1)
         self.assertLess(events.index(probes[-1]), events.index("sim:shutdown"))
@@ -267,7 +277,7 @@ fi
             f"evidence_root={self.runner_temp}/editor-performance-evidence-"
         ))
 
-    def test_checker_failure_stops_later_cases_and_cleans_up_once(self):
+    def test_checker_failure_collects_later_cases_and_cleans_up_once(self):
         result = self._run_script(ORCH_FAIL_LABEL="mixed-50kb")
         self.assertNotEqual(result.returncode, 0)
         events = self._events()
@@ -276,16 +286,31 @@ fi
             "baseline-standard-500kb",
             "reference-standard-500kb",
             "mixed-50kb",
+            "standard-500kb",
+            "nearby-table-50kb",
         ])
-        self.assertFalse(any("probe:standard-500kb:" in event for event in events))
-        self.assertFalse(any("probe:nearby-table-50kb:" in event
-                             for event in events))
+        self.assertIn("Failed performance case: mixed-50kb", result.stderr)
         self.assertEqual(events.count("sim:shutdown"), 1)
         self.assertEqual(events.count("sim:delete"), 1)
         self.assertLess(events.index(probes[-1]), events.index("sim:shutdown"))
         self.assertLess(events.index("check:mixed-50kb"),
                         events.index("sim:shutdown"))
         self.assertLess(events.index("sim:shutdown"), events.index("sim:delete"))
+
+    def test_runner_failure_preserves_later_evidence(self):
+        result = self._run_script(ORCH_FAIL_PROBE="standard-500kb")
+        self.assertNotEqual(result.returncode, 0)
+        events = self._events()
+        self.assertIn("check:nearby-table-50kb", events)
+        self.assertIn("standard-500kb (status 4)", result.stderr)
+        self.assertEqual(events.count("sim:delete"), 1)
+
+    def test_failed_prebuild_never_starts_measurement(self):
+        result = self._run_script(ORCH_FAIL_BUILD="reference")
+        self.assertNotEqual(result.returncode, 0)
+        events = self._events()
+        self.assertFalse(any(event.startswith("probe:") for event in events))
+        self.assertEqual(events.count("sim:delete"), 1)
 
 
 if __name__ == "__main__":

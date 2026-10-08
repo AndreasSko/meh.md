@@ -512,3 +512,37 @@ Every character still has its separate 500 ms ceiling. Source, selection,
 save, presentation, parse, and fixture checks remain required. Long-line and
 nearby-table budgets are unchanged. These simulator timings measure arrival
 at run-loop idle, not physical-display latency.
+
+
+## Parser CI sampling and variance
+
+An audit on October 8, 2026 compared eight recent CI attempts from six runs:
+37673797369, 37681724290 (attempts 1 and 2), 37697735405, 37701928076,
+37703881317, and 37706858290 (attempts 1 and 2). Each used the same fictional
+Unicode fixtures and a frozen reference measured on its runner. These are
+historical runner measurements, not results from new editing optimizations.
+
+The 50 KB current medians ranged from 10.705 to 16.601 ms; reference medians
+ranged from 9.287 to 13.145 ms. At 500 KB, current medians ranged from 103.111
+to 158.927 ms and reference medians from 89.689 to 151.136 ms. Several small
+failures exceeded the 120% reference boundary by only 1.080 to 1.522 ms at
+50 KB, or 1.373 ms at 500 KB. The two attempts of run 37706858290 differed
+substantially: current medians changed from 16.601/158.927 ms to
+10.783/104.308 ms for the same head. This suggests runner variance; it does
+not prove every slowdown is noise.
+
+The benchmark now takes 21 samples after its initial correctness parse.
+Median is sorted sample 11; nearest-rank p95 is sample 20, which excludes one
+outlier. The old seven-sample p95 was the maximum. The reference median guard
+allows 120% plus 2 ms at 50 KB or 5 ms at 500 KB. This covers the observed
+small excesses while still rejecting the larger sustained drift above.
+Absolute median and p95 ceilings remain 50/300 ms. The historical slow
+baseline must still improve by 20% in both median and p95, with matching
+fixture and syntax fingerprints. No native editor latency budget changes
+follow from this parser calibration.
+
+The native CI harness builds all source variants before timing and collects
+all workload reports even when one budget fails. Every report records build
+optimization, debug information, and compilation conditions. Prebuilding
+reduces differences in compilation load between controls and current code;
+it does not establish physical-device typing or display latency.

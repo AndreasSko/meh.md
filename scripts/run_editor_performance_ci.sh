@@ -94,6 +94,8 @@ if errors:
     sys.exit("\n".join(errors))
 print("Control native fidelity and structure passed")
 PY
+    local check_status=${PIPESTATUS[0]}
+    [[ "$check_status" == 0 ]] || return "$check_status"
   else
     # Bash 3.2 treats an empty array as unset under nounset.
     local checker_arguments=("$report" --size-kb "$size" --mode "$mode"
@@ -107,8 +109,32 @@ PY
   fi
 }
 
-run_case baseline-standard-500kb 500 livePreview standard standard "$baseline_root" baseline
-run_case reference-standard-500kb 500 livePreview standard standard "$reference_root" reference
-run_case mixed-50kb 50 livePreview mixed standard
-run_case standard-500kb 500 livePreview standard standard
-run_case nearby-table-50kb 50 livePreview standard nearby-table
+# Compile every source variant before measuring any of them. The three
+# current workloads share one verified binary.
+for source_root in "$baseline_root" "$reference_root" "$repo_root"; do
+  EDITOR_PERFORMANCE_APP_CACHE="$app_cache_root" \
+    EDITOR_PERFORMANCE_BUILD_ONLY=1 EDITOR_PERFORMANCE_HOST=notebook \
+    "$source_root/scripts/run_editor_performance_check.sh" \
+    "$sim_udid" working-tree livePreview 500
+done
+
+failed_cases=()
+record_case() {
+  local label="$1"
+  if run_case "$@"; then
+    return 0
+  else
+    local status=$?
+    failed_cases+=("$label (status $status)")
+    return 0
+  fi
+}
+record_case baseline-standard-500kb 500 livePreview standard standard "$baseline_root" baseline
+record_case reference-standard-500kb 500 livePreview standard standard "$reference_root" reference
+record_case mixed-50kb 50 livePreview mixed standard
+record_case standard-500kb 500 livePreview standard standard
+record_case nearby-table-50kb 50 livePreview standard nearby-table
+if [[ "${#failed_cases[@]}" != 0 ]]; then
+  printf 'Failed performance case: %s\n' "${failed_cases[@]}" >&2
+  exit 1
+fi
