@@ -423,6 +423,9 @@ final class NotebookWorkspace {
                 try await loaded.load()
                 if !usesSync, loaded.catalogSnapshot == nil {
                     try await loaded.createLocalNotebook()
+                    #if DEBUG
+                    try await seedBrowserDragFixtureIfRequested(loaded)
+                    #endif
                 }
                 // Existing catalogs are visible before account discovery or
                 // any network request, so offline reopening remains useful.
@@ -439,6 +442,47 @@ final class NotebookWorkspace {
             errorMessage = error.localizedDescription
         }
     }
+
+    #if DEBUG
+    /// A bounded UI fixture lives only in a newly created preview-test folder.
+    private func seedBrowserDragFixtureIfRequested(
+        _ replica: NotebookReplica
+    ) async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard isPreview,
+              let fixture = environment["MEH_NOTEBOOK_DRAG_FIXTURE"],
+              ["long-list", "nested"].contains(fixture),
+              let run = environment["MEH_NOTEBOOK_PREVIEW_RUN"],
+              run.range(of: "^[A-Za-z0-9_-]{1,64}$",
+                        options: .regularExpression) != nil,
+              directory.lastPathComponent == run,
+              directory.deletingLastPathComponent().lastPathComponent
+                == "NotebookPreviewTests" else { return }
+        if fixture == "nested" {
+            _ = try await replica.createNote(
+                name: "Voyage checklist.md",
+                text: "# Fictional voyage\n\nSample checklist.\n")
+        } else {
+            for number in 1 ... 48 {
+                let name = String(format: "%02d Field observation.md", number)
+                _ = try await replica.createNote(
+                    name: name,
+                    text: "# Fictional observation \(number)\n\nSample voyage notes.\n"
+                )
+            }
+        }
+        let journeys = try await replica.createFolder(name: "Journeys")
+        let weekend = try await replica.createFolder(
+            name: "Weekend", parentID: journeys)
+        if fixture == "nested" {
+            _ = try await replica.createFolder(name: "Island", parentID: weekend)
+        } else {
+            _ = try await replica.createNote(
+                name: "Island.md", text: "# Fictional island\n\nA sample itinerary.\n",
+                parentID: weekend)
+        }
+    }
+    #endif
 
     func recoverCatalog() async {
         await recover(.catalog)

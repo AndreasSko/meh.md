@@ -1346,11 +1346,11 @@ struct MarkdownEditor: NSViewRepresentable {
             let clipView = scrollView.contentView
             let offset = position.scrollAnchorOffset.isFinite
                 ? CGFloat(position.scrollAnchorOffset) : 0
-            let minimumY = textView.bounds.minY
-            let maximumY = max(
-                minimumY, textView.bounds.maxY - clipView.bounds.height
-            )
-            let targetY = min(maximumY, max(minimumY, anchorRect.minY - offset))
+            // Native top insets can make the legal clip origin negative.
+            // Let AppKit preserve that space when restoring a note.
+            var proposedBounds = clipView.bounds
+            proposedBounds.origin.y = anchorRect.minY - offset
+            let targetY = clipView.constrainBoundsRect(proposedBounds).minY
             if abs(clipView.bounds.minY - targetY) <= 0.5 { return }
             clipView.scroll(to: NSPoint(x: clipView.bounds.minX, y: targetY))
             scrollView.reflectScrolledClipView(clipView)

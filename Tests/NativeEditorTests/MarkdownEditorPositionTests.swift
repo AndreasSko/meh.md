@@ -138,6 +138,111 @@ final class MarkdownEditorPositionTests: XCTestCase {
         XCTAssertFalse(isFirstResponder(restoredTextView))
     }
 
+    #if os(macOS)
+    func testFreshRestorePreservesNativeInsetAtTopMiddleAndBottom()
+        async throws {
+        let source = (0..<120).map { "Fictional observation \($0)." }
+            .joined(separator: "\n")
+        for requestedOffset: CGFloat in [-52, 200, 100_000] {
+            try await assertFreshInsetRestore(
+                source: source, requestedOffset: requestedOffset,
+                expectedOffset: requestedOffset < 1_000
+                    ? requestedOffset : nil
+            )
+        }
+    }
+
+    func testFreshShortNoteRestoreKeepsNativeTitleSpace() async throws {
+        let source = "# Fictional voyage\n\nSample checklist.\n"
+        try await assertFreshInsetRestore(
+            source: source, requestedOffset: -52, expectedOffset: -52
+        )
+    }
+
+    private func assertFreshInsetRestore(
+        source: String, requestedOffset: CGFloat, expectedOffset: CGFloat?
+    ) async throws {
+        let selection = NSRange(location: 7, length: 3)
+        let captureNavigation = MarkdownEditorNavigation()
+        // These regressions use a real native editor in an unordered
+        // window. They do not take focus or control the desktop pointer.
+        let original = mount(
+            text: source, navigation: captureNavigation, showWindow: false
+        )
+        defer { original.tearDown() }
+        let originalView = try XCTUnwrap(original.textView)
+        let originalScroll = try XCTUnwrap(originalView.enclosingScrollView)
+        originalScroll.automaticallyAdjustsContentInsets = false
+        originalScroll.contentInsets = NSEdgeInsets(
+            top: 52, left: 0, bottom: 0, right: 0
+        )
+        try await settleInsetEditor(original)
+        setSelection(selection, in: originalView)
+        var proposedBounds = originalScroll.contentView.bounds
+        proposedBounds.origin.y = requestedOffset
+        let originalOffset = originalScroll.contentView
+            .constrainBoundsRect(proposedBounds).minY
+        setVerticalScrollOffset(originalOffset, in: originalView)
+        try await settleInsetEditor(original)
+        if let expectedOffset {
+            XCTAssertEqual(originalOffset, expectedOffset, accuracy: 1)
+        } else {
+            XCTAssertGreaterThan(originalOffset, 200)
+        }
+        XCTAssertEqual(
+            verticalScrollOffset(in: originalView), originalOffset, accuracy: 1
+        )
+        let position = try XCTUnwrap(captureNavigation.capturePosition?())
+        original.tearDown()
+
+        let restoreNavigation = MarkdownEditorNavigation()
+        let incoming = mount(
+            text: source, navigation: restoreNavigation, showWindow: false
+        )
+        defer { incoming.tearDown() }
+        let incomingView = try XCTUnwrap(incoming.textView)
+        let incomingScroll = try XCTUnwrap(incomingView.enclosingScrollView)
+        incomingScroll.automaticallyAdjustsContentInsets = false
+        incomingScroll.contentInsets = NSEdgeInsets(
+            top: 52, left: 0, bottom: 0, right: 0
+        )
+        try await settleInsetEditor(incoming)
+        setSelection(NSRange(location: 0, length: 0), in: incomingView)
+        restoreNavigation.restorePosition?(position)
+        // Restoration defers its bounded retries until TextKit has laid out
+        // the requested anchor in the newly mounted editor.
+        for _ in 0..<4 {
+            await flushMainQueue()
+            layout(incoming)
+        }
+
+        XCTAssertEqual(
+            verticalScrollOffset(in: incomingView), originalOffset, accuracy: 1,
+            "Captured \(position); original visible \(originalView.visibleRect); "
+                + "incoming visible \(incomingView.visibleRect)"
+        )
+        XCTAssertEqual(selectedRange(in: incomingView), selection)
+        XCTAssertEqual(nativeText(in: incomingView), source)
+        XCTAssertFalse(isFirstResponder(incomingView))
+        let restored = try XCTUnwrap(restoreNavigation.capturePosition?())
+        XCTAssertEqual(restored.scrollAnchor, position.scrollAnchor)
+        XCTAssertEqual(
+            restored.scrollAnchorOffset, position.scrollAnchorOffset, accuracy: 1
+        )
+    }
+
+    private func settleInsetEditor(_ mounted: MountedEditor) async throws {
+        let textView = try XCTUnwrap(mounted.textView)
+        let layoutManager = try XCTUnwrap(textView.textLayoutManager)
+        let contentManager = try XCTUnwrap(layoutManager.textContentManager)
+        layoutManager.ensureLayout(for: contentManager.documentRange)
+        for _ in 0..<2 {
+            layout(mounted)
+            await flushMainQueue()
+        }
+    }
+    #endif
+
     func testRestoreClampsMalformedUTF16RangesAndScrollValues()
         async throws {
         let source = "A😀B\n" + String(repeating: "More text\n", count: 80)
@@ -310,7 +415,8 @@ private extension MarkdownEditorPositionTests {
 
     func mount(
         text: String,
-        navigation: MarkdownEditorNavigation
+        navigation: MarkdownEditorNavigation,
+        showWindow: Bool = true
     ) -> MountedEditor {
         _ = NSApplication.shared
         let editor = MarkdownEditor(
@@ -325,8 +431,10 @@ private extension MarkdownEditorPositionTests {
         )
         let host = NSHostingView(rootView: editor)
         window.contentView = host
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(host)
+        if showWindow {
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(host)
+        }
         host.layoutSubtreeIfNeeded()
         return MountedEditor(
             window: window,
