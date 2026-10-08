@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check_parser_performance import check_report
+from check_parser_performance import check_report, check_paired_reports, read_paired_paths
 
 
 def report():
@@ -321,6 +321,82 @@ class ParserPerformanceGateTests(unittest.TestCase):
             value["measurements"][index].update(
                 samples_ms=[budget] * 21, median_ms=budget, p95_ms=budget)
             self.assertEqual(check_report(value), [])
+
+
+class PairedParserGateTests(unittest.TestCase):
+    def groups(self):
+        groups = []
+        for cost in (10, 20, 10):
+            runs = [report() for _ in range(3)]
+            for run in runs:
+                for row in run["measurements"]:
+                    row.update(samples_ms=[cost] * 21,
+                               median_ms=cost, p95_ms=cost)
+            groups.append(runs)
+        return groups
+
+    def test_isolated_run_hump_and_sustained_tail_regression(self):
+        groups = self.groups()
+        row = groups[0][0]["measurements"][1]
+        row.update(samples_ms=[10] * 19 + [25] * 2, p95_ms=25)
+        self.assertEqual(check_paired_reports(*groups), [])
+        groups[0][1]["measurements"][1].update(
+            samples_ms=[10] * 19 + [25] * 2, p95_ms=25)
+        self.assertTrue(any("500 KB p95_ms" in error
+                            for error in check_paired_reports(*groups)))
+
+    def test_absolute_ceiling_in_one_run_cannot_be_hidden(self):
+        groups = self.groups()
+        groups[0][0]["measurements"][1].update(
+            samples_ms=[301] * 21, median_ms=301, p95_ms=301)
+        self.assertTrue(any("CI budget" in error
+                            for error in check_paired_reports(*groups)))
+
+    def test_controls_fail_closed_and_all_runs_match(self):
+        for label in range(3):
+            for field, value in (("syntax_sha256", "b" * 64),
+                                 ("utf16_length", 49_899),
+                                 ("utf8_bytes", 50_041),
+                                 ("median_ms", True)):
+                groups = self.groups()
+                groups[label][2]["measurements"][0][field] = value
+                self.assertTrue(check_paired_reports(*groups))
+            groups = self.groups()
+            groups[label].pop()
+            self.assertTrue(check_paired_reports(*groups))
+
+    def test_slow_historical_baseline_retains_relative_requirement(self):
+        groups = self.groups()
+        for run in groups[1]:
+            run["measurements"][1].update(
+                samples_ms=[386] * 21, median_ms=386, p95_ms=386)
+        self.assertEqual(check_paired_reports(*groups), [])
+        groups[1][0]["measurements"][1]["syntax_sha256"] = "b" * 64
+        self.assertTrue(check_paired_reports(*groups))
+
+    def test_reference_median_sustained_regression(self):
+        groups = self.groups()
+        for run in groups[0][:2]:
+            run["measurements"][1].update(
+                samples_ms=[18] * 21, median_ms=18, p95_ms=18)
+        errors = check_paired_reports(*groups)
+        self.assertTrue(any("reference" in error for error in errors))
+
+    def test_reused_paths_and_symlink_aliases_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            groups = []
+            for label in range(3):
+                paths = []
+                for index in range(3):
+                    path = Path(directory) / f"{label}-{index}.json"
+                    path.write_text(json.dumps(report()))
+                    paths.append(path)
+                groups.append(paths)
+            self.assertEqual(len(read_paired_paths(groups)), 3)
+            groups[1][0].unlink()
+            groups[1][0].symlink_to(groups[0][0])
+            with self.assertRaises(ValueError):
+                read_paired_paths(groups)
 
 
 if __name__ == "__main__":

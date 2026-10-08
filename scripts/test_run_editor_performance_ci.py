@@ -14,7 +14,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_SCRIPT = REPO_ROOT / "scripts" / "run_editor_performance_ci.sh"
 BASELINE_REVISION = "1378bf5e1b9fcaf0ff5e97435a320ef7d726ef42"
-REFERENCE_REVISION = "0dcaea9eeef6d635604c4d8570c9a2af983b0d73"
+REFERENCE_REVISION = "369814141840b6f9ee1f898eae628d35ad4d68ca"
 
 
 def write_executable(path, contents):
@@ -231,8 +231,12 @@ fi
         self.assertEqual([event.split(":")[1] for event in probes], [
             "baseline-standard-500kb",
             "reference-standard-500kb",
-            "mixed-50kb",
             "standard-500kb",
+            "standard-500kb-2",
+            "reference-standard-500kb-2",
+            "reference-standard-500kb-3",
+            "standard-500kb-3",
+            "mixed-50kb",
             "nearby-table-50kb",
         ])
         builds = [event for event in events if event.startswith("build:")]
@@ -255,11 +259,13 @@ fi
             if arguments[0].endswith("/standard-500kb.json")
         )
         self.assertIn("--baseline-report", current_standard)
-        self.assertIn("--reference-report", current_standard)
+        self.assertNotIn("--reference-report", current_standard)
         self.assertTrue(any(argument.endswith("/baseline-standard-500kb.json")
                             for argument in current_standard))
-        self.assertTrue(any(argument.endswith("/reference-standard-500kb.json")
-                            for argument in current_standard))
+        aggregate = next(args for args in checker_arguments
+                         if "--paired-current-report" in args)
+        self.assertEqual(aggregate.count("--paired-current-report"), 3)
+        self.assertEqual(aggregate.count("--paired-reference-report"), 3)
         self.assertNotIn("", current_standard)
         mixed = next(
             arguments for arguments in checker_arguments
@@ -285,8 +291,12 @@ fi
         self.assertEqual([event.split(":")[1] for event in probes], [
             "baseline-standard-500kb",
             "reference-standard-500kb",
-            "mixed-50kb",
             "standard-500kb",
+            "standard-500kb-2",
+            "reference-standard-500kb-2",
+            "reference-standard-500kb-3",
+            "standard-500kb-3",
+            "mixed-50kb",
             "nearby-table-50kb",
         ])
         self.assertIn("Failed performance case: mixed-50kb", result.stderr)
@@ -296,6 +306,17 @@ fi
         self.assertLess(events.index("check:mixed-50kb"),
                         events.index("sim:shutdown"))
         self.assertLess(events.index("sim:shutdown"), events.index("sim:delete"))
+
+    def test_even_attempt_reverses_each_pair(self):
+        result = self._run_script(GITHUB_RUN_ATTEMPT="2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        probes = [event.split(":")[1] for event in self._events()
+                  if event.startswith("probe:")]
+        self.assertEqual(probes[1:7], [
+            "standard-500kb", "reference-standard-500kb",
+            "reference-standard-500kb-2", "standard-500kb-2",
+            "standard-500kb-3", "reference-standard-500kb-3",
+        ])
 
     def test_runner_failure_preserves_later_evidence(self):
         result = self._run_script(ORCH_FAIL_PROBE="standard-500kb")

@@ -3,16 +3,23 @@ name: Editor performance guard
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      diagnostic_only:
+        description: Run an unscored frozen-reference CPU trace on a fresh runner
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: editor-performance-${{ github.ref }}
+  group: editor-performance-${{ github.ref }}-${{ inputs.diagnostic_only && 'diagnostic' || 'guard' }}
   cancel-in-progress: true
 
 jobs:
   editor-performance:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostic_only }}
     runs-on: xcode-27
     timeout-minutes: 45
     steps:
@@ -49,7 +56,8 @@ jobs:
           set -euo pipefail
           swift test -c release --filter NoteHistoryPerformanceTests \
             2>&1 | tee "$RUNNER_TEMP/history-performance-500kb.log"
-      - name: Check baseline catalog and parser on this runner
+      - name: Check baseline catalog on this runner
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
@@ -69,10 +77,8 @@ jobs:
             cd "$baseline_root"
             MEH_CATALOG_BENCHMARK=1 \
               MEH_CATALOG_BENCHMARK_REPORT="$RUNNER_TEMP/catalog-baseline.json" \
-              MEH_FULL_PARSE_BENCHMARK=1 MEH_FULL_PARSE_LABEL=ci-baseline-release \
-              MEH_FULL_PARSE_REPORT="$RUNNER_TEMP/parser-baseline.json" \
               swift test -c release --filter \
-                'NotebookCatalogPerformanceTests/testCatalogStartupAndRecentActivityBenchmark|MarkdownFullParsePerformanceTests/testOptInFullParseTiming'
+                'NotebookCatalogPerformanceTests/testCatalogStartupAndRecentActivityBenchmark'
           ) 2>&1 | tee "$RUNNER_TEMP/catalog-parser-baseline.log"
           PYTHONPATH=scripts python3 - "$RUNNER_TEMP/catalog-baseline.json" <<'PY'
           import json
@@ -88,12 +94,13 @@ jobs:
               sys.exit(f"Baseline must fail a valid heartbeat budget: {errors}")
           print("Known baseline rejected:", *errors, sep="\n")
           PY
-      - name: Measure known-good parser reference on this runner
+      - name: Prepare known-good parser reference
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
           reference_root=$(mktemp -d "$RUNNER_TEMP/editor-reference.XXXXXX")
-          git worktree add --detach "$reference_root" 0dcaea9eeef6d635604c4d8570c9a2af983b0d73
+          git worktree add --detach "$reference_root" 369814141840b6f9ee1f898eae628d35ad4d68ca
           printf 'EDITOR_PERFORMANCE_REFERENCE_ROOT=%s\n' "$reference_root" >> "$GITHUB_ENV"
           cp Tests/NativeEditorTests/MarkdownFullParsePerformanceTests.swift \
             "$reference_root/Tests/NativeEditorTests/MarkdownFullParsePerformanceTests.swift"
@@ -101,13 +108,6 @@ jobs:
           cp -R Tools/EditorQuoteCheck/. "$reference_root/Tools/EditorQuoteCheck/"
           cp scripts/run_editor_performance_check.sh scripts/run_editor_performance_ci.sh \
             scripts/editor_performance_app_cache.py "$reference_root/scripts/"
-          (
-            cd "$reference_root"
-            MEH_FULL_PARSE_BENCHMARK=1 MEH_FULL_PARSE_LABEL=ci-reference-release \
-              MEH_FULL_PARSE_REPORT="$RUNNER_TEMP/parser-reference.json" \
-              swift test -c release --filter \
-                'MarkdownFullParsePerformanceTests/testOptInFullParseTiming'
-          ) 2>&1 | tee "$RUNNER_TEMP/parser-reference.log"
       - name: Guard catalog responsiveness
         shell: bash
         run: |
@@ -121,16 +121,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          MEH_FULL_PARSE_BENCHMARK=1 MEH_FULL_PARSE_LABEL=ci-release \
-            MEH_FULL_PARSE_REPORT="$RUNNER_TEMP/parser-performance.json" \
-            swift test -c release --filter MarkdownFullParsePerformanceTests \
-            2>&1 | tee "$RUNNER_TEMP/parser-performance.log"
-          python3 scripts/check_parser_performance.py "$RUNNER_TEMP/parser-performance.json" \
-            --baseline-report "$RUNNER_TEMP/parser-baseline.json" \
-            --reference-report "$RUNNER_TEMP/parser-reference.json"
+          scripts/run_parser_performance_ci.sh
       - name: Run native editor probes
+        if: ${{ !cancelled() }}
         id: probe
         run: scripts/run_editor_performance_ci.sh
+      - name: Diagnose failed native probe with reference CPU trace
+        if: ${{ !cancelled() && steps.probe.outcome == 'failure' }}
+        timeout-minutes: 5
+        run: scripts/run_editor_performance_diagnostic.sh
       - name: Remove owned baseline worktree
         if: always()
         shell: bash
@@ -162,16 +161,34 @@ jobs:
           name: editor-performance-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ steps.probe.outputs.evidence_root }}
+            ${{ runner.temp }}/editor-performance-diagnostic-*
             ${{ runner.temp }}/catalog-performance.json
             ${{ runner.temp }}/catalog-performance.log
             ${{ runner.temp }}/catalog-baseline.json
             ${{ runner.temp }}/catalog-parser-baseline.log
-            ${{ runner.temp }}/parser-baseline.json
-            ${{ runner.temp }}/parser-reference.json
-            ${{ runner.temp }}/parser-reference.log
-            ${{ runner.temp }}/parser-performance.json
-            ${{ runner.temp }}/parser-performance.log
+            ${{ runner.temp }}/parser-paired-*
             ${{ runner.temp }}/history-performance.log
             ${{ runner.temp }}/history-performance-500kb.log
           if-no-files-found: warn
+          retention-days: 30
+
+  editor-performance-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_only }}
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Record unscored frozen-reference CPU trace
+        id: diagnostic
+        run: scripts/run_editor_performance_fresh_diagnostic.sh
+      - name: Preserve raw diagnostic evidence
+        if: always() && steps.diagnostic.outputs.evidence_root != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: editor-performance-fresh-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.diagnostic.outputs.evidence_root }}
+          if-no-files-found: error
           retention-days: 30

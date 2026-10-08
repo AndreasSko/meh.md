@@ -546,3 +546,118 @@ all workload reports even when one budget fails. Every report records build
 optimization, debug information, and compilation conditions. Prebuilding
 reduces differences in compilation load between controls and current code;
 it does not establish physical-device typing or display latency.
+
+
+## Paired native CI reference
+
+The fixed source reference is `3698141`, containing precise native hints,
+literal selection snapshots, indexed appearance lookup, exact edit
+validation, and disjoint rendering writes. The historical slow baseline
+remains `1378bf5`. Both controls compile with the current probe, iCloud Dev
+conditions, optimized code, and debug information. Production sources in
+control worktrees must exactly match their frozen commits.
+
+After prebuilding all three variants, CI measures the slow baseline once.
+It then launches three independent reference/current 500 KB pairs. Successive
+pairs reverse their order; the initial order also reverses on even-numbered
+run attempts. Each launch starts a fresh fictional notebook. Every JSON and
+log is preserved, including failures. Mixed 50 KB and nearby-table cases run
+after the pairs even when an earlier performance check fails.
+
+Every current and reference run independently satisfies the phase-specific
+absolute latency, source, caret, saved-text, presentation, parse-count, and
+fixture checks. The slow baseline retains its structural checks. The first
+current run must improve warm ordinary edit-to-idle median and p95 by 20%
+against it; synchronous typing keeps its complete-sample comparison. The
+reference comparison uses the median of three run medians, never the
+fastest run. It covers synchronous ordinary typing, deletion, and bold
+opening, typing, and closing, with a ceiling of 120% plus 10 ms. Ordinary
+typing-to-idle median allows 120% plus 10 ms. Bulk insertion remains guarded
+by its existing single-sample absolute ceiling. Warm ordinary edit-to-idle
+median and p95 also allow 120% plus 10 ms against the three reference runs.
+Every independent run still satisfies its absolute phase ceilings.
+
+Three historical matched CI runs had reference bold-typing medians of
+100.66, 71.89, and 58.36 ms, versus current medians of 137.42, 156.00, and
+144.36 ms. The 10 ms synchronous allowance would reject all three regressions
+even after accounting for their different runner speeds. Repeated independent
+launches reduce the effect of one noisy median; they cannot excuse an
+absolute typing, bold, or bulk stall. Missing, malformed, duplicate, or
+mismatched fixture reports fail the comparison.
+
+See the [8 October editing profile](editing-profile-2026-10-08.md) for
+per-commit measurements and Instruments attribution of this reference.
+
+
+The idle allowance is 10 ms after checking the measured selection-context
+improvement: optimized ordinary typing-to-idle median was 69.26 ms versus
+100.93 ms without that improvement. A 20 ms floor would permit 103.11 ms
+and conceal that regression; 10 ms permits 93.11 ms and rejects it. The
+three-run median still tolerates one delayed launch. This calibration uses
+local simulator evidence; exact-head CI must verify the paired guard on
+its runner before delivery.
+
+### Diagnose native runner pauses
+
+Native reports also capture cumulative main-thread user and system CPU for
+both the synchronous edit call and its edit-to-next-idle interval. The probe
+queries Darwin `thread_info` on the main pthread before and after each
+interval. CPU excludes descheduled time and other threads; the idle CPU
+interval includes all main-thread work before that idle checkpoint.
+Separate clock reads add a small amount of instrumentation overhead.
+
+CPU is diagnostic and cannot waive a wall-clock or fidelity failure. Missing
+or malformed CPU data fails reports that declare this
+capture; older archived reports remain readable. Compare CPU with wall time
+to investigate a runner pause before attributing it to editor code or
+adjusting a latency limit. A large wall/CPU difference alone does not identify
+the external source of the wait.
+
+### Remote CI pause diagnostics
+
+A failed native probe step triggers one unscored replay of the frozen
+optimized reference. The diagnostic creates its own disposable simulator
+and requires the already verified app cache. It captures the exact PID
+returned by that simulator's app launch and attempts a noninteractive,
+60-second Time Profiler recording after a 30-second attachment window.
+The report exports before a diagnostic-only 60-second process keep-alive;
+that wait is outside every measured edit and leaves scored runs unchanged.
+
+An outer 240-second watchdog bounds replay setup and report collection;
+the workflow also limits the diagnostic step to five minutes. Cleanup
+stops owned child processes and removes only its simulator. Raw trace,
+unscored timing report, and explicit probe/trace status logs are retained
+separately. Attachment or permission failure is a diagnostic failure and
+does not replace or erase the original scored failure. Remote CI must
+verify tracing capability; no local simulator or UI run is required.
+
+A manual `diagnostic_only=true` dispatch runs the same unscored reference
+trace on a fresh hosted machine. It prebuilds before creating a simulator and
+uses a separate concurrency group, so it cannot cancel the scored guard.
+Raw evidence is uploaded even when attachment fails; the verified probe cache
+is retained for offline symbols. The job is bounded to 15 minutes.
+
+### Cold and warm 500 KB editing
+
+At the user's request, CI treats the first three ordinary characters of a
+freshly opened 500 KB note as a bounded cold window. Their raw wall and CPU
+samples remain in the report. The first character retains its 2,000 ms
+ceiling; the next two each allow 1,000 ms, with a 3,000 ms combined ceiling.
+Current hosted runs used at most 2,238 ms across these three edits.
+
+Every later ordinary character now has a tighter 300 ms ceiling, reduced
+from 500 ms. All three measured current launches stayed below 203 ms there.
+The first opening bold marker at a new middle-note position allows 300 ms;
+the second marker and every subsequent bold edit retain 150 ms synchronous
+limits. The observed first-marker maximum was 182 ms in current and 217 ms
+in the optimized reference. No fixture, parser, source, caret, save, or
+presentation check is skipped; every 50 KB gate remains unchanged.
+
+Paired medians of cold-window maxima and totals allow 120% plus 50 ms against
+the frozen optimized reference. The cold first bold marker allows 120% plus
+20 ms. Warm ordinary median and p95 allow 120% plus 10 ms. The historical
+20% improvement proof uses the same warm samples in current and baseline,
+so a cold spike cannot hide a slower editing session. These allowances
+accept measured cache warm-up while still bounding it and detecting both
+sustained warm regressions and excessive cold work. There is no artificial
+warm-up, retry selection, deferred rendering, or omitted raw timing.

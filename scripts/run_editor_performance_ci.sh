@@ -28,7 +28,7 @@ require_control_sources() {
   }
 }
 require_control_sources "$baseline_root" 1378bf5e1b9fcaf0ff5e97435a320ef7d726ef42 baseline
-require_control_sources "$reference_root" 0dcaea9eeef6d635604c4d8570c9a2af983b0d73 reference
+require_control_sources "$reference_root" 369814141840b6f9ee1f898eae628d35ad4d68ca reference
 app_cache_root="${RUNNER_TEMP:-/tmp}/editor-performance-app-cache-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 inventory="$evidence_root/simulators.json"
 xcrun simctl list --json > "$inventory"
@@ -81,7 +81,7 @@ run_case() {
     printf '%s runner failed with status %s\n' "$label" "$run_status" >&2
     return "$run_status"
   fi
-  if [[ "$control" != current ]]; then
+  if [[ "$control" == baseline ]]; then
     # The control must preserve fidelity/structure; expected slowness is allowed.
     PYTHONPATH="$repo_root/scripts" python3 - "$report" <<'PY' 2>&1 | tee -a "$log"
 import json
@@ -100,9 +100,8 @@ PY
     # Bash 3.2 treats an empty array as unset under nounset.
     local checker_arguments=("$report" --size-kb "$size" --mode "$mode"
       --context "$context" --host notebook --shape "$shape")
-    if [[ "$size" == 500 && "$shape" == standard && "$context" == standard ]]; then
-      checker_arguments+=(--baseline-report "$evidence_root/baseline-standard-500kb.json"
-        --reference-report "$evidence_root/reference-standard-500kb.json")
+    if [[ "$label" == standard-500kb ]]; then
+      checker_arguments+=(--baseline-report "$evidence_root/baseline-standard-500kb.json")
     fi
     python3 "$repo_root/scripts/check_editor_performance.py" \
       "${checker_arguments[@]}" 2>&1 | tee -a "$log" || return "$?"
@@ -130,10 +129,37 @@ record_case() {
   fi
 }
 record_case baseline-standard-500kb 500 livePreview standard standard "$baseline_root" baseline
-record_case reference-standard-500kb 500 livePreview standard standard "$reference_root" reference
+paired_arguments=()
+attempt="${GITHUB_RUN_ATTEMPT:-1}"
+[[ "$attempt" =~ ^[0-9]+$ ]] || { echo "Invalid run attempt" >&2; exit 2; }
+for pair in 1 2 3; do
+  suffix=""
+  [[ "$pair" == 1 ]] || suffix="-$pair"
+  current_label="standard-500kb$suffix"
+  reference_label="reference-standard-500kb$suffix"
+  paired_arguments+=(--paired-current-report "$evidence_root/$current_label.json"
+    --paired-reference-report "$evidence_root/$reference_label.json")
+  # Reverse order within successive pairs and across rerun attempts.
+  if (( (attempt + pair) % 2 == 0 )); then
+    record_case "$reference_label" 500 livePreview standard standard "$reference_root" reference
+    record_case "$current_label" 500 livePreview standard standard
+  else
+    record_case "$current_label" 500 livePreview standard standard
+    record_case "$reference_label" 500 livePreview standard standard "$reference_root" reference
+  fi
+done
+if python3 "$repo_root/scripts/check_editor_performance.py" \
+  "$evidence_root/standard-500kb.json" --size-kb 500 --host notebook \
+  --context standard "${paired_arguments[@]}" \
+  > "$evidence_root/paired-comparison.log" 2>&1; then
+  cat "$evidence_root/paired-comparison.log"
+else
+  cat "$evidence_root/paired-comparison.log"
+  failed_cases+=("paired comparison")
+fi
 record_case mixed-50kb 50 livePreview mixed standard
-record_case standard-500kb 500 livePreview standard standard
 record_case nearby-table-50kb 50 livePreview standard nearby-table
+
 if [[ "${#failed_cases[@]}" != 0 ]]; then
   printf 'Failed performance case: %s\n' "${failed_cases[@]}" >&2
   exit 1

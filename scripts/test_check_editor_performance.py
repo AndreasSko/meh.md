@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from check_editor_performance import COUNTS, check_report
+from check_editor_performance import COUNTS, check_report, check_paired_reports
 
 
 def valid_report(size=500, context="standard", shape="standard"):
@@ -49,9 +49,53 @@ def valid_report(size=500, context="standard", shape="standard"):
     return report
 
 
+def set_metric(report, action, suffix, value):
+    report["measurements"][f"{action}_{suffix}"] = [value] * COUNTS[action]
+    for step in report["steps"]:
+        if step["action"] == action:
+            step[suffix] = value
+
+
+def set_samples(report, action, suffix, samples):
+    report["measurements"][f"{action}_{suffix}"] = samples
+    steps = [step for step in report["steps"] if step["action"] == action]
+    for step, sample in zip(steps, samples):
+        step[suffix] = sample
+
+
 class CheckEditorPerformanceTests(unittest.TestCase):
     def test_accepts_complete_report_within_budget(self):
         self.assertEqual(check_report(valid_report(), 500), [])
+
+    def cpu_report(self):
+        report = valid_report()
+        report["main_thread_cpu_captured"] = True
+        for kind in COUNTS:
+            set_metric(report, kind, "synchronous_main_thread_cpu_ms", 2.0)
+            set_metric(report, kind, "to_idle_main_thread_cpu_ms", 5.0)
+        return report
+
+    def test_additive_cpu_diagnostics_keep_wall_budgets(self):
+        report = self.cpu_report()
+        self.assertEqual(check_report(report, 500), [])
+        set_metric(report, "bulk_insert", "to_idle_ms", 2344)
+        self.assertTrue(any("ceiling" in e for e in check_report(report, 500)))
+
+    def test_cpu_capture_missing_malformed_or_inconsistent_fails_closed(self):
+        for value in (False, None, 0):
+            report = self.cpu_report()
+            report["main_thread_cpu_captured"] = value
+            self.assertTrue(check_report(report, 500))
+        for value in (None, True, -1, float("nan"), float("inf")):
+            report = self.cpu_report()
+            set_metric(report, "typing", "synchronous_main_thread_cpu_ms", value)
+            self.assertTrue(check_report(report, 500))
+        report = self.cpu_report()
+        report["steps"][0]["to_idle_main_thread_cpu_ms"] = 1
+        self.assertTrue(check_report(report, 500))
+        report = self.cpu_report()
+        del report["measurements"]["typing_to_idle_main_thread_cpu_ms"]
+        self.assertTrue(check_report(report, 500))
 
     def test_fails_missing_samples(self):
         report = valid_report()
@@ -178,7 +222,7 @@ class CheckEditorPerformanceTests(unittest.TestCase):
 
     def test_fixed_reference_catches_partial_regression(self):
         baseline, reference, current = valid_report(), valid_report(), valid_report()
-        for report, synchronous, idle in ((baseline, 100, 200), (current, 15, 30)):
+        for report, synchronous, idle in ((baseline, 100, 200), (current, 25, 50)):
             for metric, value in (("synchronous_ms", synchronous), ("to_idle_ms", idle)):
                 report["measurements"]["typing_" + metric] = [value] * COUNTS["typing"]
                 for step in report["steps"]:
@@ -193,6 +237,226 @@ class CheckEditorPerformanceTests(unittest.TestCase):
             broken = copy.deepcopy(reference)
             broken[field] = value
             self.assertTrue(check_report(reference, 500, reference=broken))
+
+    def test_measured_500kb_cold_windows_preserve_raw_samples_and_accept_warm_session(self):
+        for cold in ([778, 624, 177], [1613, 461, 165], [595, 531, 445]):
+            report = valid_report()
+            samples = cold + [203] * 18
+            set_samples(report, "typing", "to_idle_ms", samples)
+            set_samples(report, "middle_bold_open", "synchronous_ms", [217, 119])
+            self.assertEqual(check_report(report, 500), [])
+            self.assertEqual(report["measurements"]["typing_to_idle_ms"], samples)
+
+    def test_cold_extremes_cumulative_work_and_warm_stalls_fail(self):
+        for samples, message in (
+            ([2001, 100, 100] + [20] * 18, "first typing sample"),
+            ([100, 1001, 100] + [20] * 18, "cold second or third"),
+            ([100, 100, 1001] + [20] * 18, "cold second or third"),
+            ([1500, 800, 701] + [20] * 18, "3000 ms cumulative"),
+            ([778, 624, 177, 301] + [20] * 17, "subsequent typing sample exceeds 300"),
+        ):
+            report = valid_report()
+            set_samples(report, "typing", "to_idle_ms", samples)
+            self.assertTrue(any(message in error for error in check_report(report, 500)))
+        report = valid_report()
+        set_samples(report, "typing", "to_idle_ms", [2000, 500, 500] + [300] * 18)
+        self.assertEqual(check_report(report, 500), [])
+        set_samples(report, "middle_bold_open", "synchronous_ms", [301, 150])
+        self.assertTrue(any("first middle bold" in error for error in check_report(report, 500)))
+
+    def test_cold_work_cannot_move_to_later_keystroke_or_bold_marker(self):
+        report = valid_report()
+        set_samples(report, "typing", "to_idle_ms", [778, 624, 177] + [20] * 18)
+        set_samples(report, "middle_bold_open", "synchronous_ms", [217, 119])
+        self.assertEqual(check_report(report, 500), [])
+        set_samples(report, "typing", "to_idle_ms", [778, 20, 177, 624] + [20] * 17)
+        self.assertTrue(any("subsequent typing" in error for error in check_report(report, 500)))
+        report = valid_report()
+        set_samples(report, "middle_bold_open", "synchronous_ms", [119, 217])
+        self.assertTrue(any("middle_bold_open_synchronous_ms p95" in error
+                            for error in check_report(report, 500)))
+        for action in ("middle_bold_typing", "middle_bold_close"):
+            report = valid_report()
+            set_metric(report, action, "synchronous_ms", 151)
+            self.assertTrue(check_report(report, 500))
+
+    def test_50kb_first_three_events_and_bold_opening_keep_existing_limits(self):
+        report = valid_report(50, "mixed")
+        set_samples(report, "typing", "to_idle_ms", [100, 501, 100] + [20] * 18)
+        self.assertTrue(any("subsequent typing sample exceeds 500" in error
+                            for error in check_report(report, 50)))
+        report = valid_report(50, "mixed")
+        set_samples(report, "middle_bold_open", "synchronous_ms", [51, 10])
+        self.assertTrue(any("middle_bold_open_synchronous_ms p95" in error
+                            for error in check_report(report, 50)))
+
+    def test_paired_cold_maximum_total_and_first_bold_are_independent_guards(self):
+        for cold, message in (([700, 200, 100], "cold_typing_max"),
+                              ([600, 400, 300], "cold_typing_total")):
+            current = [valid_report() for _ in range(3)]
+            references = copy.deepcopy(current)
+            for report in references:
+                set_samples(report, "typing", "to_idle_ms", [500, 200, 100] + [20] * 18)
+            for report in current:
+                set_samples(report, "typing", "to_idle_ms", cold + [20] * 18)
+            self.assertTrue(any(message in error for error in
+                                check_paired_reports(current, references)))
+        current = [valid_report() for _ in range(3)]
+        references = copy.deepcopy(current)
+        for report in references:
+            set_samples(report, "middle_bold_open", "synchronous_ms", [100, 80])
+        for report in current:
+            set_samples(report, "middle_bold_open", "synchronous_ms", [150, 30])
+        self.assertTrue(any("cold_middle_bold_open" in error for error in
+                            check_paired_reports(current, references)))
+
+    def test_paired_warm_tail_cannot_hide_behind_matching_whole_run_median(self):
+        current = [valid_report() for _ in range(3)]
+        references = copy.deepcopy(current)
+        for report in references:
+            set_samples(report, "typing", "to_idle_ms", [700, 500, 200] + [100] * 18)
+        for report in current:
+            set_samples(report, "typing", "to_idle_ms", [700, 500, 200] + [100] * 17 + [200])
+        errors = check_paired_reports(current, references)
+        self.assertTrue(any("warm typing_to_idle_ms p95" in error for error in errors))
+        self.assertFalse(any("typing_to_idle_ms median of run medians" in error for error in errors))
+
+    def test_historical_warm_gain_is_required_even_when_cold_tail_improves(self):
+        baseline, current = valid_report(), valid_report()
+        set_metric(baseline, "typing", "synchronous_ms", 100)
+        set_metric(current, "typing", "synchronous_ms", 70)
+        set_samples(baseline, "typing", "to_idle_ms", [1000, 500, 500] + [100] * 18)
+        set_samples(current, "typing", "to_idle_ms", [200, 100, 100] + [70] * 17 + [90])
+        errors = check_report(current, 500, baseline=baseline)
+        self.assertTrue(any("typing_to_idle_ms p95 must improve" in error for error in errors))
+        self.assertFalse(any("typing_to_idle_ms median must improve" in error for error in errors))
+        set_samples(current, "typing", "to_idle_ms", [200, 100, 100] + [70] * 17 + [80])
+        self.assertEqual(check_report(current, 500, baseline=baseline), [])
+        # Cold extremes remain independently rejected despite a warm gain.
+        set_samples(current, "typing", "to_idle_ms", [2001, 100, 100] + [70] * 17 + [80])
+        self.assertTrue(any("first typing sample" in error for error in
+                            check_report(current, 500, baseline=baseline)))
+
+    def test_paired_comparison_requires_three_valid_identical_fixtures(self):
+        current = [valid_report() for _ in range(3)]
+        references = copy.deepcopy(current)
+        self.assertEqual(check_paired_reports(current, references), [])
+        for broken in (None, [], current[:2], current + current[:1]):
+            self.assertTrue(check_paired_reports(broken, references))
+            self.assertTrue(check_paired_reports(current, broken))
+        for field, value in (("fixture_sha256", "b" * 64),
+                             ("saved_text_preserved", False),
+                             ("utf16_length", 499_900)):
+            broken = copy.deepcopy(references)
+            broken[1][field] = value
+            self.assertTrue(check_paired_reports(current, broken))
+        references[0] = None
+        self.assertTrue(check_paired_reports(current, references))
+
+    def test_paired_guard_catches_known_bold_regression(self):
+        current = [valid_report() for _ in range(3)]
+        references = copy.deepcopy(current)
+        for reports, cost in ((current, 144.36), (references, 58.36)):
+            for report in reports:
+                set_metric(report, "middle_bold_typing", "synchronous_ms", cost)
+        errors = check_paired_reports(current, references)
+        self.assertTrue(any("middle_bold_typing_synchronous_ms median of run medians"
+                            in error for error in errors))
+
+    def test_paired_median_tolerates_one_noisy_run_but_checks_every_ceiling(self):
+        current = [valid_report() for _ in range(3)]
+        references = copy.deepcopy(current)
+        set_metric(current[0], "middle_bold_typing", "synchronous_ms", 100)
+        self.assertEqual(check_paired_reports(current, references), [])
+        set_metric(current[0], "middle_bold_typing", "synchronous_ms", 151)
+        self.assertTrue(any("current run 1:" in error and "exceeds" in error
+                            for error in check_paired_reports(current, references)))
+        current = [valid_report() for _ in range(3)]
+        set_metric(current[2], "bulk_insert", "to_idle_ms", 2001)
+        self.assertTrue(any("current run 3:" in error and "bulk_insert" in error
+                            for error in check_paired_reports(current, references)))
+
+    def test_paired_idle_guard_rejects_measured_selection_regression(self):
+        current = [valid_report() for _ in range(3)]
+        references = copy.deepcopy(current)
+        for report in references:
+            set_metric(report, "typing", "to_idle_ms", 69.26)
+        for report in current:
+            set_metric(report, "typing", "to_idle_ms", 100.93)
+        errors = check_paired_reports(current, references)
+        self.assertTrue(any("typing_to_idle_ms median of run medians" in error
+                            for error in errors))
+        # One delayed launch does not override two fast independent launches.
+        for report in current[1:]:
+            set_metric(report, "typing", "to_idle_ms", 69.26)
+        self.assertEqual(check_paired_reports(current, references), [])
+
+    def test_paired_allowances_and_baseline_proof_remain_independent(self):
+        current = [valid_report() for _ in range(3)]
+        references = copy.deepcopy(current)
+        for report in current:
+            for action in ("typing", "deletion", "middle_bold_open",
+                           "middle_bold_typing", "middle_bold_close"):
+                set_metric(report, action, "synchronous_ms", 22)
+            set_metric(report, "typing", "to_idle_ms", 34)
+        self.assertEqual(check_paired_reports(current, references), [])
+        set_metric(current[0], "deletion", "synchronous_ms", 22.01)
+        set_metric(current[1], "deletion", "synchronous_ms", 22.01)
+        self.assertTrue(any("deletion_synchronous_ms" in error
+                            for error in check_paired_reports(current, references)))
+        baseline = valid_report()
+        self.assertTrue(any("at least 20%" in error for error in
+                            check_report(valid_report(), 500, baseline=baseline)))
+
+    def test_cli_paired_reports_fail_closed_for_missing_and_duplicate_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = []
+            for index in range(6):
+                path = root / f"run-{index}.json"
+                path.write_text(json.dumps(valid_report()))
+                paths.append(path)
+            command = [sys.executable,
+                       str(Path(__file__).with_name("check_editor_performance.py")),
+                       str(paths[0]), "--size-kb", "500"]
+            for path in paths[:3]:
+                command += ["--paired-current-report", str(path)]
+            for path in paths[3:]:
+                command += ["--paired-reference-report", str(path)]
+            self.assertEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            duplicate = command.copy()
+            duplicate[-1] = str(paths[0])
+            result = subprocess.run(duplicate, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("distinct report files", result.stderr)
+            paths[-1].unlink()
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("Cannot read performance report", result.stderr)
+
+    def test_cli_paired_context_defaults_match_primary_validation(self):
+        cases = ((50, "mixed", []), (500, "standard", []),
+                 (50, "standard", ["--context", "standard"]))
+        for size, context, options in cases:
+            with self.subTest(size=size, context=context):
+                with tempfile.TemporaryDirectory() as directory:
+                    paths = [Path(directory) / f"run-{i}.json" for i in range(6)]
+                    for path in paths:
+                        path.write_text(json.dumps(valid_report(size, context)))
+                    command = [sys.executable,
+                               str(Path(__file__).with_name("check_editor_performance.py")),
+                               str(paths[0]), "--size-kb", str(size), *options]
+                    for path in paths[:3]:
+                        command += ["--paired-current-report", str(path)]
+                    for path in paths[3:]:
+                        command += ["--paired-reference-report", str(path)]
+                    result = subprocess.run(command, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    wrong = valid_report(size, "standard" if context == "mixed" else "mixed")
+                    paths[-1].write_text(json.dumps(wrong))
+                    result = subprocess.run(command, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(f"context must be {context}", result.stderr)
 
     def test_cli_enforces_fixed_reference(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -21,9 +21,25 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Check native geometry and real keyboard editing
         id: regression
         run: scripts/run_editor_regressions.sh
+      - name: Compare full native suite with main baseline
+        id: native_parity
+        if: ${{ !cancelled() }}
+        timeout-minutes: 12
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_*native_editor_baseline_parity.py'
+          scripts/run_native_editor_baseline_parity.sh
+      - name: Preserve full native parity evidence
+        if: always() && steps.native_parity.outputs.evidence_root != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-editor-parity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.native_parity.outputs.evidence_root }}
+          if-no-files-found: error
+          retention-days: 14
       - name: Preserve regression evidence
         if: always() && steps.regression.outputs.evidence_root != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

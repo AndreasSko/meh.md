@@ -33,6 +33,10 @@ case "$mode" in source|livePreview) ;; *) exit 2 ;; esac
 [[ "$blocks" =~ ^[0-9]+$ ]] && ((blocks >= 1 && blocks <= maximum_size)) || exit 2
 build_only="${EDITOR_PERFORMANCE_BUILD_ONLY:-0}"
 case "$build_only" in 0|1) ;; *) exit 2 ;; esac
+keep_alive="${EDITOR_PERFORMANCE_DIAGNOSTIC_KEEP_ALIVE_SECONDS:-0}"
+[[ "$keep_alive" =~ ^[0-9]+$ ]] && ((keep_alive <= 60)) || {
+  echo "Diagnostic keep-alive must be 0..60 seconds" >&2; exit 2;
+}
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 # Validate the runtime before compiling or replacing the existing test app.
 if [[ "$build_only" != 1 ]]; then
@@ -69,8 +73,10 @@ PY
 fi
 check_root="$(mktemp -d "${TMPDIR:-/tmp}/meh-editor-performance.XXXXXX")"
 probe_launched=0
+keep_alive_pid=""
 bundle_id="de.andreas-sk.meh-md.editor-quote-check"
 cleanup() {
+  [[ -z "$keep_alive_pid" ]] || kill "$keep_alive_pid" >/dev/null 2>&1 || true
   if [[ "$probe_launched" == 1 ]]; then
     xcrun simctl terminate "$device" "$bundle_id" >/dev/null 2>&1 || true
   fi
@@ -149,6 +155,10 @@ $(swift --version)"
     [[ "$status" == 1 ]] || exit "$status"
   fi
 fi
+if [[ "${EDITOR_PERFORMANCE_REQUIRE_CACHED_APP:-0}" == 1 && "$cache_hit" != 1 ]]; then
+  echo "Diagnostic requires an existing verified compiled app" >&2
+  exit 1
+fi
 if [[ "$cache_hit" == 0 ]]; then
   extra_arguments=("$repo_root/Tools/EditorQuoteCheck/EditorQuoteCheck.swift")
   if [[ "$scenario" == large-note ]] || rg -q "import NoteCore" "$check_root/sources"; then
@@ -196,11 +206,17 @@ if [[ "$build_only" == 1 ]]; then
   exit 0
 fi
 
+echo "Waiting for owned simulator boot: $device"
 xcrun simctl bootstatus "$device" -b >/dev/null
+echo "Installing compiled performance probe"
 xcrun simctl install "$device" "$check_app"
+echo "Resolving performance probe container"
 container="$(xcrun simctl get_app_container "$device" "$bundle_id" data)"
 report="$container/Documents/performance.json"
 rm -f "$report"
+echo "Launching performance probe: host=$performance_host, size=$blocks, mode=$mode"
+launch_output="$(
+SIMCTL_CHILD_EDITOR_PERFORMANCE_START_DELAY_SECONDS="${EDITOR_PERFORMANCE_START_DELAY_SECONDS:-0}" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_CONTEXT="${EDITOR_PERFORMANCE_CONTEXT:-standard}" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_SHAPE="${EDITOR_PERFORMANCE_SHAPE:-standard}" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_HOST="$performance_host" \
@@ -210,7 +226,14 @@ SIMCTL_CHILD_EDITOR_PERFORMANCE_SCROLL_ROUNDS="${EDITOR_PERFORMANCE_SCROLL_ROUND
 SIMCTL_CHILD_EDITOR_PERFORMANCE_BLOCKS="$blocks" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_MODE="$mode" \
 xcrun simctl launch --terminate-running-process "$device" "$bundle_id"
+)"
 probe_launched=1
+printf '%s\n' "$launch_output"
+if [[ -n "${EDITOR_PERFORMANCE_LAUNCH_PID_FILE:-}" ]]; then
+  launch_pid="${launch_output##*: }"
+  [[ "$launch_pid" =~ ^[0-9]+$ ]] || { echo "Unexpected probe launch PID" >&2; exit 1; }
+  printf '%s\n' "$launch_pid" > "$EDITOR_PERFORMANCE_LAUNCH_PID_FILE"
+fi
 for ((attempt=0; attempt<360; attempt++)); do
   if [[ -f "$report" ]]; then
     python3 - "$report" "$output" "$revision" "$repo_root" "$device" "${compiler_flags[*]}" <<'PY'
@@ -255,6 +278,12 @@ for name, samples in report["measurements"].items():
           f"max {max(samples):.2f} ms, n={len(samples)}")
 PY
     printf '%s\n' "$output"
+    # Diagnostic-only process lifetime, after every measurement and export.
+    if ((keep_alive > 0)); then
+      sleep "$keep_alive" & keep_alive_pid=$!
+      wait "$keep_alive_pid"
+      keep_alive_pid=""
+    fi
     exit 0
   fi
   sleep 1

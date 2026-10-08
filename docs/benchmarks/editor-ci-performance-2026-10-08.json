@@ -1,0 +1,1092 @@
+{
+  "artifact_directory": "/tmp/meh-editing-profile-20261008/ci-d7-performance/editor-performance-37768611482-1",
+  "checker_summary": [
+    "current run 1: subsequent typing sample over 500 ms",
+    "current run 3: middle-bold-open synchronous p95 181.5 ms over 150 ms; subsequent typing sample over 500 ms",
+    "reference run 1: middle-bold-open synchronous p95 216.6 ms over 150 ms; subsequent typing sample over 500 ms",
+    "reference run 2: subsequent typing sample over 500 ms",
+    "reference run 3: middle-bold-open synchronous p95 169.5 ms over 150 ms",
+    "No first typing sample exceeded 2000 ms; current run 2 passed native gates; both 50 KB controls passed."
+  ],
+  "diagnostic_artifacts": {
+    "probe_log": "/tmp/meh-editing-profile-20261008/ci-d7-performance/editor-performance-37768611482-1/editor-performance-diagnostic-37768611482-1/probe.log",
+    "status_file": "/tmp/meh-editing-profile-20261008/ci-d7-performance/editor-performance-37768611482-1/editor-performance-diagnostic-37768611482-1/status.txt",
+    "trace_captured": false
+  },
+  "exact_native_gate_violations": [
+    {
+      "case": "current run 1",
+      "gate": "subsequent typing sample <= 500 ms",
+      "observation": {
+        "file": "standard-500kb.json",
+        "main_thread_cpu_ms": 614.758,
+        "sample_index": 1,
+        "wall_ms": 623.604
+      }
+    },
+    {
+      "case": "current run 3",
+      "gate": "middle_bold_open_synchronous_ms p95 <= 150 ms",
+      "observation": {
+        "file": "standard-500kb-3.json",
+        "main_thread_cpu_ms": 181.333,
+        "sample_index": 0,
+        "wall_ms": 181.515
+      }
+    },
+    {
+      "case": "current run 3",
+      "gate": "subsequent typing sample <= 500 ms",
+      "observation": {
+        "file": "standard-500kb-3.json",
+        "main_thread_cpu_ms": 505.661,
+        "sample_index": 1,
+        "wall_ms": 531.486
+      }
+    },
+    {
+      "case": "reference run 1",
+      "gate": "middle_bold_open_synchronous_ms p95 <= 150 ms",
+      "observation": {
+        "file": "reference-standard-500kb.json",
+        "main_thread_cpu_ms": 216.362,
+        "sample_index": 0,
+        "wall_ms": 216.624
+      }
+    },
+    {
+      "case": "reference run 1",
+      "gate": "subsequent typing sample <= 500 ms",
+      "observation": {
+        "file": "reference-standard-500kb.json",
+        "main_thread_cpu_ms": 740.306,
+        "sample_index": 2,
+        "wall_ms": 741.204
+      }
+    },
+    {
+      "case": "reference run 2",
+      "gate": "subsequent typing sample <= 500 ms",
+      "observation": {
+        "file": "reference-standard-500kb-2.json",
+        "main_thread_cpu_ms": 566.717,
+        "sample_index": 1,
+        "wall_ms": 571.692
+      }
+    },
+    {
+      "case": "reference run 3",
+      "gate": "middle_bold_open_synchronous_ms p95 <= 150 ms",
+      "observation": {
+        "file": "reference-standard-500kb-3.json",
+        "main_thread_cpu_ms": 169.47,
+        "sample_index": 0,
+        "wall_ms": 169.5
+      }
+    }
+  ],
+  "head_sha": "d7bd3e3780f9d41efd8f30a751d03bb466b3d812",
+  "other_exact_head_ci": {
+    "internal_testflight_run": {
+      "conclusion": "success",
+      "id": 37768611681,
+      "ios_release": "success",
+      "macos_release": "success",
+      "publish": "skipped_for_pull_request"
+    },
+    "regression_run": {
+      "baseline_package_total": 240,
+      "baseline_passed": 236,
+      "comparison_log": "/tmp/meh-editing-profile-20261008/ci-d7-regressions/native-editor-parity-37768611393-1/comparison.log",
+      "conclusion": "success",
+      "current_package_total": 245,
+      "current_passed": 241,
+      "full_native_suite_baseline_parity": "passed",
+      "geometry_and_real_keyboard": "passed",
+      "id": 37768611393,
+      "new_failing_or_skipped_methods": 0,
+      "same_failures": 3,
+      "same_skips": 1,
+      "shared_failed_tests": [
+        "EditorSearchNavigationTests/testNativeFindAndMatchRevealDoNotEditOrFocusEditor()",
+        "MarkdownEditorPositionTests/testCaptureAndRestorePreserveSelectionViewportAndEditorState()",
+        "MarkdownEditorPositionTests/testNavigationPreviewStartsAtSavedAnchorBeforeAsyncAttachment()"
+      ]
+    },
+    "sync_run": {
+      "conclusion": "success",
+      "id": 37768611597
+    }
+  },
+  "paired_metric_medians_and_maxima": {
+    "bulk_insert_to_idle": {
+      "baseline": {
+        "main_thread_cpu_ms": {
+          "max": 1940.475,
+          "median": 1940.475,
+          "n": 1
+        },
+        "wall_ms": {
+          "max": 1960.763,
+          "median": 1960.763,
+          "n": 1
+        }
+      },
+      "current": {
+        "main_thread_cpu_ms": {
+          "max": 1030.245,
+          "median": 899.678,
+          "n": 3
+        },
+        "wall_ms": {
+          "max": 1031.867,
+          "median": 948.236,
+          "n": 3
+        }
+      },
+      "reference": {
+        "main_thread_cpu_ms": {
+          "max": 1100.673,
+          "median": 120.8,
+          "n": 3
+        },
+        "wall_ms": {
+          "max": 1102.531,
+          "median": 120.818,
+          "n": 3
+        }
+      }
+    },
+    "middle_bold_open_synchronous": {
+      "baseline": {
+        "main_thread_cpu_ms": {
+          "max": 141.402,
+          "median": 140.045,
+          "n": 2
+        },
+        "wall_ms": {
+          "max": 146.848,
+          "median": 142.947,
+          "n": 2
+        }
+      },
+      "current": {
+        "main_thread_cpu_ms": {
+          "max": 181.333,
+          "median": 113.291,
+          "n": 6
+        },
+        "wall_ms": {
+          "max": 181.515,
+          "median": 113.681,
+          "n": 6
+        }
+      },
+      "reference": {
+        "main_thread_cpu_ms": {
+          "max": 216.362,
+          "median": 94.178,
+          "n": 6
+        },
+        "wall_ms": {
+          "max": 216.624,
+          "median": 94.781,
+          "n": 6
+        }
+      }
+    },
+    "typing_synchronous": {
+      "baseline": {
+        "main_thread_cpu_ms": {
+          "max": 153.51,
+          "median": 104.96,
+          "n": 21
+        },
+        "wall_ms": {
+          "max": 159.573,
+          "median": 106.079,
+          "n": 21
+        }
+      },
+      "current": {
+        "main_thread_cpu_ms": {
+          "max": 82.809,
+          "median": 39.526,
+          "n": 63
+        },
+        "wall_ms": {
+          "max": 87.811,
+          "median": 40.278,
+          "n": 63
+        }
+      },
+      "reference": {
+        "main_thread_cpu_ms": {
+          "max": 130.663,
+          "median": 44.68,
+          "n": 63
+        },
+        "wall_ms": {
+          "max": 141.216,
+          "median": 45.219,
+          "n": 63
+        }
+      }
+    },
+    "typing_to_idle": {
+      "baseline": {
+        "main_thread_cpu_ms": {
+          "max": 2519.026,
+          "median": 290.696,
+          "n": 21
+        },
+        "wall_ms": {
+          "max": 2676.365,
+          "median": 292.586,
+          "n": 21
+        }
+      },
+      "current": {
+        "main_thread_cpu_ms": {
+          "max": 1507.232,
+          "median": 143.624,
+          "n": 63
+        },
+        "wall_ms": {
+          "max": 1612.854,
+          "median": 143.819,
+          "n": 63
+        }
+      },
+      "reference": {
+        "main_thread_cpu_ms": {
+          "max": 987.311,
+          "median": 166.442,
+          "n": 63
+        },
+        "wall_ms": {
+          "max": 1065.577,
+          "median": 166.897,
+          "n": 63
+        }
+      }
+    }
+  },
+  "performance_run": {
+    "conclusion": "failure",
+    "diagnostic_result": "unscored; interrupted or timed out; Mach IPC server died during simulator app install; no trace",
+    "diagnostic_step_started_utc": "2026-10-08T12:00:41Z",
+    "id": 37768611482,
+    "probe_step_completed_utc": "2026-10-08T12:00:40Z",
+    "probe_step_started_utc": "2026-10-08T11:37:31Z",
+    "url": "https://github.com/AndreasSko/meh.md/actions/runs/37768611482"
+  },
+  "performance_stage_results": {
+    "baseline_catalog": "passed",
+    "catalog_responsiveness": "passed",
+    "diagnostic_trace": "not captured",
+    "history_500kb": "passed",
+    "known_good_parser_reference": "prepared",
+    "large_document_history": "passed",
+    "native_editor_probes": "failed",
+    "unicode_initial_parsing": "passed"
+  },
+  "pull_request": 209,
+  "repository": "AndreasSko/meh.md",
+  "scored_reports": {
+    "baseline": [
+      {
+        "file": "baseline-standard-500kb.json",
+        "identity": {
+          "checkout_commit": "1378bf5e1b9fcaf0ff5e97435a320ef7d726ef42",
+          "checkout_dirty": true,
+          "context": "standard",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "f921d4d14592bd1528c6136fa363693a6fa98e98148fa2644f4f462ec9c7a725",
+          "full_parses_during_edits": 0,
+          "host": "notebook",
+          "incremental_parses_during_edits": 38,
+          "main_thread_cpu_captured": true,
+          "mode": "livePreview",
+          "requested_kb": 500,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "standard",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 500108
+        },
+        "selected_metric_wall_cpu_ms": {
+          "bulk_insert_to_idle": {
+            "main_thread_cpu": {
+              "max": 1940.475,
+              "median": 1940.475,
+              "n": 1
+            },
+            "wall": {
+              "max": 1960.763,
+              "median": 1960.763,
+              "n": 1
+            }
+          },
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu": {
+              "max": 141.402,
+              "median": 140.045,
+              "n": 2
+            },
+            "wall": {
+              "max": 146.848,
+              "median": 142.947,
+              "n": 2
+            }
+          },
+          "typing_synchronous": {
+            "main_thread_cpu": {
+              "max": 153.51,
+              "median": 104.96,
+              "n": 21
+            },
+            "wall": {
+              "max": 159.573,
+              "median": 106.079,
+              "n": 21
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu": {
+              "max": 2519.026,
+              "median": 290.696,
+              "n": 21
+            },
+            "wall": {
+              "max": 2676.365,
+              "median": 292.586,
+              "n": 21
+            }
+          }
+        }
+      }
+    ],
+    "controls": [
+      {
+        "file": "mixed-50kb.json",
+        "identity": {
+          "checkout_commit": "0ee50352d62d980183d749e37607304c6c357292",
+          "checkout_dirty": true,
+          "context": "mixed",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "cbc03a79df5af78e6d0d271f9cdf7c3eb03d166247012ee6b91f48c5b3ecaa20",
+          "full_parses_during_edits": 0,
+          "host": "notebook",
+          "incremental_parses_during_edits": 38,
+          "main_thread_cpu_captured": true,
+          "mode": "livePreview",
+          "requested_kb": 50,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "standard",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 50366
+        },
+        "selected_metric_wall_cpu_ms": {
+          "bulk_insert_to_idle": {
+            "main_thread_cpu": {
+              "max": 119.434,
+              "median": 119.434,
+              "n": 1
+            },
+            "wall": {
+              "max": 151.518,
+              "median": 151.518,
+              "n": 1
+            }
+          },
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu": {
+              "max": 23.243,
+              "median": 16.909,
+              "n": 2
+            },
+            "wall": {
+              "max": 23.24,
+              "median": 16.902,
+              "n": 2
+            }
+          },
+          "typing_synchronous": {
+            "main_thread_cpu": {
+              "max": 25.692,
+              "median": 5.866,
+              "n": 21
+            },
+            "wall": {
+              "max": 27.139,
+              "median": 5.856,
+              "n": 21
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu": {
+              "max": 212.072,
+              "median": 52.626,
+              "n": 21
+            },
+            "wall": {
+              "max": 220.672,
+              "median": 52.659,
+              "n": 21
+            }
+          }
+        }
+      },
+      {
+        "file": "nearby-table-50kb.json",
+        "identity": {
+          "checkout_commit": "0ee50352d62d980183d749e37607304c6c357292",
+          "checkout_dirty": true,
+          "context": "standard",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "cabbc070e65d3db2dae88e8c26d206c4b1a0558d47c9ad95c280c8c5d4ed5dc1",
+          "full_parses_during_edits": 28,
+          "host": "notebook",
+          "incremental_parses_during_edits": 10,
+          "main_thread_cpu_captured": true,
+          "mode": "livePreview",
+          "requested_kb": 50,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "nearby-table",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 50340
+        },
+        "selected_metric_wall_cpu_ms": {
+          "bulk_insert_to_idle": {
+            "main_thread_cpu": {
+              "max": 220.077,
+              "median": 220.077,
+              "n": 1
+            },
+            "wall": {
+              "max": 223.119,
+              "median": 223.119,
+              "n": 1
+            }
+          },
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu": {
+              "max": 33.561,
+              "median": 25.355,
+              "n": 2
+            },
+            "wall": {
+              "max": 33.575,
+              "median": 25.403,
+              "n": 2
+            }
+          },
+          "typing_synchronous": {
+            "main_thread_cpu": {
+              "max": 21.289,
+              "median": 7.394,
+              "n": 21
+            },
+            "wall": {
+              "max": 23.908,
+              "median": 7.382,
+              "n": 21
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu": {
+              "max": 320.881,
+              "median": 135.928,
+              "n": 21
+            },
+            "wall": {
+              "max": 360.56,
+              "median": 136.174,
+              "n": 21
+            }
+          }
+        }
+      }
+    ],
+    "current": [
+      {
+        "file": "standard-500kb.json",
+        "identity": {
+          "checkout_commit": "0ee50352d62d980183d749e37607304c6c357292",
+          "checkout_dirty": true,
+          "context": "standard",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "f921d4d14592bd1528c6136fa363693a6fa98e98148fa2644f4f462ec9c7a725",
+          "full_parses_during_edits": 0,
+          "host": "notebook",
+          "incremental_parses_during_edits": 38,
+          "main_thread_cpu_captured": true,
+          "mode": "livePreview",
+          "requested_kb": 500,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "standard",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 500108
+        },
+        "selected_metric_wall_cpu_ms": {
+          "bulk_insert_to_idle": {
+            "main_thread_cpu": {
+              "max": 1030.245,
+              "median": 1030.245,
+              "n": 1
+            },
+            "wall": {
+              "max": 1031.867,
+              "median": 1031.867,
+              "n": 1
+            }
+          },
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu": {
+              "max": 118.258,
+              "median": 113.291,
+              "n": 2
+            },
+            "wall": {
+              "max": 118.467,
+              "median": 113.681,
+              "n": 2
+            }
+          },
+          "typing_synchronous": {
+            "main_thread_cpu": {
+              "max": 69.848,
+              "median": 48.455,
+              "n": 21
+            },
+            "wall": {
+              "max": 70.514,
+              "median": 48.435,
+              "n": 21
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu": {
+              "max": 762.604,
+              "median": 174.901,
+              "n": 21
+            },
+            "wall": {
+              "max": 777.954,
+              "median": 176.231,
+              "n": 21
+            }
+          }
+        }
+      },
+      {
+        "file": "standard-500kb-2.json",
+        "identity": {
+          "checkout_commit": "0ee50352d62d980183d749e37607304c6c357292",
+          "checkout_dirty": true,
+          "context": "standard",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "f921d4d14592bd1528c6136fa363693a6fa98e98148fa2644f4f462ec9c7a725",
+          "full_parses_during_edits": 0,
+          "host": "notebook",
+          "incremental_parses_during_edits": 38,
+          "main_thread_cpu_captured": true,
+          "mode": "livePreview",
+          "requested_kb": 500,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "standard",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 500108
+        },
+        "selected_metric_wall_cpu_ms": {
+          "bulk_insert_to_idle": {
+            "main_thread_cpu": {
+              "max": 899.678,
+              "median": 899.678,
+              "n": 1
+            },
+            "wall": {
+              "max": 948.236,
+              "median": 948.236,
+              "n": 1
+            }
+          },
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu": {
+              "max": 137.982,
+              "median": 108.627,
+              "n": 2
+            },
+            "wall": {
+              "max": 142.569,
+              "median": 110.921,
+              "n": 2
+            }
+          },
+          "typing_synchronous": {
+            "main_thread_cpu": {
+              "max": 82.809,
+              "median": 40.257,
+              "n": 21
+            },
+            "wall": {
+              "max": 87.811,
+              "median": 42.468,
+              "n": 21
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu": {
+              "max": 1507.232,
+              "median": 143.624,
+              "n": 21
+            },
+            "wall": {
+              "max": 1612.854,
+              "median": 143.819,
+              "n": 21
+            }
+          }
+        }
+      },
+      {
+        "file": "standard-500kb-3.json",
+        "identity": {
+          "checkout_commit": "0ee50352d62d980183d749e37607304c6c357292",
+          "checkout_dirty": true,
+          "context": "standard",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "f921d4d14592bd1528c6136fa363693a6fa98e98148fa2644f4f462ec9c7a725",
+          "full_parses_during_edits": 0,
+          "host": "notebook",
+          "incremental_parses_during_edits": 38,
+          "main_thread_cpu_captured": true,
+          "mode": "livePreview",
+          "requested_kb": 500,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "standard",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 500108
+        },
+        "selected_metric_wall_cpu_ms": {
+          "bulk_insert_to_idle": {
+            "main_thread_cpu": {
+              "max": 162.924,
+              "median": 162.924,
+              "n": 1
+            },
+            "wall": {
+              "max": 163.166,
+              "median": 163.166,
+              "n": 1
+            }
+          },
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu": {
+              "max": 181.333,
+              "median": 127.632,
+              "n": 2
+            },
+            "wall": {
+              "max": 181.515,
+              "median": 127.725,
+              "n": 2
+            }
+          },
+          "typing_synchronous": {
+            "main_thread_cpu": {
+              "max": 45.508,
+              "median": 31.859,
+              "n": 21
+            },
+            "wall": {
+              "max": 57.682,
+              "median": 31.853,
+              "n": 21
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu": {
+              "max": 557.377,
+              "median": 118.396,
+              "n": 21
+            },
+            "wall": {
+              "max": 595.265,
+              "median": 118.623,
+              "n": 21
+            }
+          }
+        }
+      }
+    ],
+    "reference": [
+      {
+        "file": "reference-standard-500kb.json",
+        "identity": {
+          "checkout_commit": "369814141840b6f9ee1f898eae628d35ad4d68ca",
+          "checkout_dirty": true,
+          "context": "standard",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "f921d4d14592bd1528c6136fa363693a6fa98e98148fa2644f4f462ec9c7a725",
+          "full_parses_during_edits": 0,
+          "host": "notebook",
+          "incremental_parses_during_edits": 38,
+          "main_thread_cpu_captured": true,
+          "mode": "livePreview",
+          "requested_kb": 500,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "standard",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 500108
+        },
+        "selected_metric_wall_cpu_ms": {
+          "bulk_insert_to_idle": {
+            "main_thread_cpu": {
+              "max": 113.771,
+              "median": 113.771,
+              "n": 1
+            },
+            "wall": {
+              "max": 113.82,
+              "median": 113.82,
+              "n": 1
+            }
+          },
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu": {
+              "max": 216.362,
+              "median": 151.328,
+              "n": 2
+            },
+            "wall": {
+              "max": 216.624,
+              "median": 151.452,
+              "n": 2
+            }
+          },
+          "typing_synchronous": {
+            "main_thread_cpu": {
+              "max": 68.77,
+              "median": 44.409,
+              "n": 21
+            },
+            "wall": {
+              "max": 114.7,
+              "median": 44.553,
+              "n": 21
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu": {
+              "max": 740.306,
+              "median": 175.831,
+              "n": 21
+            },
+            "wall": {
+              "max": 741.204,
+              "median": 176.161,
+              "n": 21
+            }
+          }
+        }
+      },
+      {
+        "file": "reference-standard-500kb-2.json",
+        "identity": {
+          "checkout_commit": "369814141840b6f9ee1f898eae628d35ad4d68ca",
+          "checkout_dirty": true,
+          "context": "standard",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "f921d4d14592bd1528c6136fa363693a6fa98e98148fa2644f4f462ec9c7a725",
+          "full_parses_during_edits": 0,
+          "host": "notebook",
+          "incremental_parses_during_edits": 38,
+          "main_thread_cpu_captured": true,
+          "mode": "livePreview",
+          "requested_kb": 500,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "standard",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 500108
+        },
+        "selected_metric_wall_cpu_ms": {
+          "bulk_insert_to_idle": {
+            "main_thread_cpu": {
+              "max": 1100.673,
+              "median": 1100.673,
+              "n": 1
+            },
+            "wall": {
+              "max": 1102.531,
+              "median": 1102.531,
+              "n": 1
+            }
+          },
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu": {
+              "max": 99.804,
+              "median": 94.178,
+              "n": 2
+            },
+            "wall": {
+              "max": 100.858,
+              "median": 94.781,
+              "n": 2
+            }
+          },
+          "typing_synchronous": {
+            "main_thread_cpu": {
+              "max": 130.663,
+              "median": 54.425,
+              "n": 21
+            },
+            "wall": {
+              "max": 141.216,
+              "median": 55.135,
+              "n": 21
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu": {
+              "max": 987.311,
+              "median": 211.664,
+              "n": 21
+            },
+            "wall": {
+              "max": 1065.577,
+              "median": 214.876,
+              "n": 21
+            }
+          }
+        }
+      },
+      {
+        "file": "reference-standard-500kb-3.json",
+        "identity": {
+          "checkout_commit": "369814141840b6f9ee1f898eae628d35ad4d68ca",
+          "checkout_dirty": true,
+          "context": "standard",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "f921d4d14592bd1528c6136fa363693a6fa98e98148fa2644f4f462ec9c7a725",
+          "full_parses_during_edits": 0,
+          "host": "notebook",
+          "incremental_parses_during_edits": 38,
+          "main_thread_cpu_captured": true,
+          "mode": "livePreview",
+          "requested_kb": 500,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "standard",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 500108
+        },
+        "selected_metric_wall_cpu_ms": {
+          "bulk_insert_to_idle": {
+            "main_thread_cpu": {
+              "max": 120.8,
+              "median": 120.8,
+              "n": 1
+            },
+            "wall": {
+              "max": 120.818,
+              "median": 120.818,
+              "n": 1
+            }
+          },
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu": {
+              "max": 169.47,
+              "median": 122.27,
+              "n": 2
+            },
+            "wall": {
+              "max": 169.5,
+              "median": 122.29,
+              "n": 2
+            }
+          },
+          "typing_synchronous": {
+            "main_thread_cpu": {
+              "max": 47.494,
+              "median": 37.243,
+              "n": 21
+            },
+            "wall": {
+              "max": 50.593,
+              "median": 37.235,
+              "n": 21
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu": {
+              "max": 488.475,
+              "median": 143.314,
+              "n": 21
+            },
+            "wall": {
+              "max": 507.161,
+              "median": 143.373,
+              "n": 21
+            }
+          }
+        }
+      }
+    ]
+  },
+  "workload_identity": {
+    "baseline_report_source_checkout": "1378bf5e1b9fcaf0ff5e97435a320ef7d726ef42 (reports mark working-tree dirty)",
+    "controls": [
+      {
+        "file": "mixed-50kb.json",
+        "identity": {
+          "checkout_commit": "0ee50352d62d980183d749e37607304c6c357292",
+          "checkout_dirty": true,
+          "context": "mixed",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "cbc03a79df5af78e6d0d271f9cdf7c3eb03d166247012ee6b91f48c5b3ecaa20",
+          "full_parses_during_edits": 0,
+          "host": "notebook",
+          "incremental_parses_during_edits": 38,
+          "mode": "livePreview",
+          "requested_kb": 50,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "standard",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 50366
+        },
+        "metrics": {
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu_ms": {
+              "max": 23.243,
+              "median": 16.909,
+              "n": 2
+            },
+            "wall_ms": {
+              "max": 23.24,
+              "median": 16.902,
+              "n": 2
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu_ms": {
+              "max": 212.072,
+              "median": 52.626,
+              "n": 21
+            },
+            "wall_ms": {
+              "max": 220.672,
+              "median": 52.659,
+              "n": 21
+            }
+          }
+        }
+      },
+      {
+        "file": "nearby-table-50kb.json",
+        "identity": {
+          "checkout_commit": "0ee50352d62d980183d749e37607304c6c357292",
+          "checkout_dirty": true,
+          "context": "standard",
+          "device": "iPhone19,2",
+          "final_presentation_verified": true,
+          "fixture_sha256": "cabbc070e65d3db2dae88e8c26d206c4b1a0558d47c9ad95c280c8c5d4ed5dc1",
+          "full_parses_during_edits": 28,
+          "host": "notebook",
+          "incremental_parses_during_edits": 10,
+          "mode": "livePreview",
+          "requested_kb": 50,
+          "revision": "working-tree",
+          "saved_text_preserved": true,
+          "scenario": "large-note",
+          "shape": "nearby-table",
+          "source_and_selection_preserved": true,
+          "system": "27.0",
+          "utf8_bytes": 50340
+        },
+        "metrics": {
+          "middle_bold_open_synchronous": {
+            "main_thread_cpu_ms": {
+              "max": 33.561,
+              "median": 25.355,
+              "n": 2
+            },
+            "wall_ms": {
+              "max": 33.575,
+              "median": 25.403,
+              "n": 2
+            }
+          },
+          "typing_to_idle": {
+            "main_thread_cpu_ms": {
+              "max": 320.881,
+              "median": 135.928,
+              "n": 21
+            },
+            "wall_ms": {
+              "max": 360.56,
+              "median": 136.174,
+              "n": 21
+            }
+          }
+        }
+      }
+    ],
+    "current_report_source_checkout": "0ee50352d62d980183d749e37607304c6c357292 (reports mark working-tree dirty)",
+    "reference_report_source_checkout": "369814141840b6f9ee1f898eae628d35ad4d68ca (reports mark working-tree dirty)",
+    "standard_500kb_current_and_reference": "host notebook; iPhone19,2; iOS simulator 27.0; livePreview; scenario large-note; requested_kb 500; actual UTF-8 fixture 500108 bytes; context standard; shape standard; same SHA f921d4d14592bd1528c6136fa363693a6fa98e98148fa2644f4f462ec9c7a725; CPU captured; full parses 0, incremental parses 38; final presentation and saved/source/selection preservation verified"
+  },
+  "revised_phase_guard_validation": {
+    "baseline-standard-500kb.json": [],
+    "mixed-50kb.json": [],
+    "nearby-table-50kb.json": [],
+    "reference-standard-500kb-2.json": [],
+    "reference-standard-500kb-3.json": [],
+    "reference-standard-500kb.json": [],
+    "standard-500kb-2.json": [],
+    "standard-500kb-3.json": [],
+    "standard-500kb.json": [],
+    "paired": [],
+    "historical_baseline20%": []
+  },
+  "revised_phase_guard_note": "At user direction, cold cache warming is bounded separately from warm-session editing. Original raw failures above remain recorded; this is rechecking archived reports, not a fresh hosted CI pass."
+}

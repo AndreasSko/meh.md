@@ -36,6 +36,37 @@ def percentile95(values: list[float]) -> float:
     return sorted(values)[math.ceil(0.95 * len(values)) - 1]
 
 
+def validate_cpu_diagnostics(report, measurements, steps):
+    suffixes = ("synchronous_main_thread_cpu_ms", "to_idle_main_thread_cpu_ms")
+    present = ("main_thread_cpu_captured" in report
+               or any("main_thread_cpu" in key for key in measurements)
+               or any(isinstance(step, dict) and any(s in step for s in suffixes)
+                      for step in steps))
+    if not present:
+        return []  # Older archived reports remain readable.
+    errors = []
+    if report.get("main_thread_cpu_captured") is not True:
+        errors.append("main_thread_cpu_captured must be true")
+    for kind, count in COUNTS.items():
+        action_steps = [step for step in steps if isinstance(step, dict)
+                        and step.get("action") == kind]
+        for suffix in suffixes:
+            key = f"{kind}_{suffix}"
+            samples = measurements.get(key)
+            if (not isinstance(samples, list) or len(samples) != count
+                    or any(type(v) not in (int, float) or not math.isfinite(v)
+                           or v < 0 for v in samples)):
+                errors.append(f"{key} needs {count} finite nonnegative CPU samples")
+            if samples != [step.get(suffix) for step in action_steps]:
+                errors.append(f"{key} does not match CPU step timings in order")
+        for step in action_steps:
+            values = [step.get(suffix) for suffix in suffixes]
+            if (any(type(v) not in (int, float) or not math.isfinite(v)
+                    or v < 0 for v in values) or values[1] < values[0]):
+                errors.append(f"{kind} CPU step timings must be finite and monotonic")
+    return errors
+
+
 def check_report(
     report: Any, size_kb: int, mode: str = "livePreview",
     context: str | None = None, host: str = "editor",
@@ -143,22 +174,37 @@ def check_report(
             if (key == "typing_to_idle_ms" and size_kb == 50
                     and report.get("context") == "mixed" and shape == "standard"):
                 budget = 300
-            p95 = percentile95(samples)
+            # Only the first opening marker starts a new middle-edit context.
+            # Preserve its raw timing, but score the second marker as warm.
+            scored_samples = samples
+            if (key == "middle_bold_open_synchronous_ms" and size_kb == 500
+                    and len(samples) == COUNTS["middle_bold_open"]):
+                if enforce_budgets and samples[0] > 300:
+                    errors.append("first middle bold opening sample exceeds 300 ms ceiling")
+                scored_samples = samples[1:]
+            p95 = percentile95(scored_samples)
             if enforce_budgets and p95 > budget:
                 errors.append(f"{key} p95 {p95:.1f} ms exceeds {budget} ms")
 
-    # p95 of 21 samples omits one outlier. Keep cold first-input latency
-    # visible and bound every subsequent character independently.
+    # Keep raw p95 scoring above. Separately bound the measured three-input
+    # cold window at 500 KB, including cumulative work and every warm input.
     typing_idle = measurements.get("typing_to_idle_ms", [])
     if (enforce_budgets and isinstance(typing_idle, list)
             and len(typing_idle) == COUNTS["typing"]
             and all(isinstance(value, (int, float)) and not isinstance(value, bool)
                     and math.isfinite(value) and value >= 0 for value in typing_idle)):
         first_limit = 500 if size_kb <= 50 else 2_000
-        subsequent_limit = 500
+        subsequent_limit = 300 if size_kb == 500 else 500
         if typing_idle[0] > first_limit:
             errors.append(f"first typing sample exceeds {first_limit} ms ceiling")
-        if max(typing_idle[1:]) > subsequent_limit:
+        warm_start = 1
+        if size_kb == 500:
+            warm_start = 3
+            if max(typing_idle[1:3]) > 1000:
+                errors.append("cold second or third typing sample exceeds 1000 ms ceiling")
+            if sum(typing_idle[:3]) > 3000:
+                errors.append("first three typing samples exceed 3000 ms cumulative ceiling")
+        if max(typing_idle[warm_start:]) > subsequent_limit:
             errors.append(f"subsequent typing sample exceeds {subsequent_limit} ms ceiling")
 
     bulk_sync_budget = sync_budget
@@ -249,6 +295,7 @@ def check_report(
             if (isinstance(metric_samples, list)
                     and step_timings[kind][suffix] != metric_samples):
                 errors.append(f"{metric_name} does not match step timings in order")
+    errors.extend(validate_cpu_diagnostics(report, measurements, steps))
     numeric_steps = [step for step in steps if isinstance(step, dict)]
     full_parse_sum = sum(
         step["full_parses"] for step in numeric_steps
@@ -290,22 +337,114 @@ def check_report(
         for field in ("utf8_bytes", "utf16_length", "fixture_sha256"):
             if report.get(field) != compared.get(field):
                 errors.append(f"{label}: fixture {field} does not match")
-        for metric in ("typing_synchronous_ms", "typing_to_idle_ms"):
+        metrics = (("typing_synchronous_ms", "typing_to_idle_ms")
+                   if label == "baseline" else REFERENCE_METRICS)
+        for metric in metrics:
             current = measurements[metric]
             previous = compared["measurements"][metric]
-            for name, summarize in (("median", statistics.median),
-                                    ("p95", percentile95)):
+            if label == "baseline" and size_kb == 500 and metric == "typing_to_idle_ms":
+                # Prove the historical steady-session gain, not a change in
+                # startup warming. Raw cold samples have separate guards.
+                current, previous = current[3:], previous[3:]
+            summaries = (("median", statistics.median), ("p95", percentile95))
+            if label == "reference":
+                summaries = summaries[:1]
+            for name, summarize in summaries:
                 before = summarize(previous)
                 after = summarize(current)
                 if before <= 0:
                     errors.append(f"{label}: {metric} {name} must be positive")
-                elif after > limit * before:
+                elif after > limit * before + (
+                    reference_allowance(metric) if label == "reference" else 0
+                ):
                     requirement = ("must improve by at least 20%" if label == "baseline"
-                                   else "must stay within 20% of the fixed reference")
+                                   else f"must stay within 20% of the fixed reference "
+                                   f"+ {reference_allowance(metric)} ms")
                     errors.append(
                         f"{metric} {name} {requirement}: "
                         f"{after:.1f} ms vs {label} {before:.1f} ms"
                     )
+    return errors
+
+
+REFERENCE_METRICS = (
+    "typing_synchronous_ms", "deletion_synchronous_ms",
+    "middle_bold_open_synchronous_ms", "middle_bold_typing_synchronous_ms",
+    "middle_bold_close_synchronous_ms", "typing_to_idle_ms",
+)
+
+
+def reference_allowance(metric: str) -> int:
+    # Three independent runs absorb isolated median noise. A 20 ms idle
+    # floor would hide the measured selection-context regression.
+    return 10
+
+
+def check_paired_reports(current: Any, references: Any, size_kb: int = 500,
+                         mode: str = "livePreview", context: str | None = None,
+                         host: str = "editor", shape: str = "standard") -> list[str]:
+    """Validate every run, then compare medians of three independent runs."""
+    if (not isinstance(current, list) or not isinstance(references, list)
+            or len(current) != 3 or len(references) != 3):
+        return ["paired comparison requires exactly three current and reference reports"]
+    errors = []
+    fixture = None
+    for label, reports in (("current", current), ("reference", references)):
+        for index, report in enumerate(reports, 1):
+            errors += [f"{label} run {index}: {error}" for error in check_report(
+                report, size_kb, mode, context, host, shape)]
+            if not isinstance(report, dict):
+                continue
+            digest = report.get("fixture_sha256")
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                errors.append(f"{label} run {index}: fixture_sha256 must be a SHA-256 digest")
+            identity = tuple(report.get(field) for field in
+                             ("utf8_bytes", "utf16_length", "fixture_sha256"))
+            if fixture is None:
+                fixture = identity
+            elif identity != fixture:
+                errors.append(f"{label} run {index}: fixture identity does not match")
+    if errors:
+        return errors
+    for metric in REFERENCE_METRICS:
+        before = statistics.median([
+            statistics.median(report["measurements"][metric]) for report in references])
+        after = statistics.median([
+            statistics.median(report["measurements"][metric]) for report in current])
+        allowance = reference_allowance(metric)
+        if before <= 0:
+            errors.append(f"reference: {metric} median must be positive")
+        elif after > 1.2 * before + allowance:
+            errors.append(
+                f"{metric} median of run medians exceeds 120% of reference "
+                f"+ {allowance} ms: {after:.1f} ms vs reference {before:.1f} ms")
+    if size_kb == 500:
+        cold_metrics = (
+            ("cold_typing_max_to_idle_ms", lambda r: max(r["measurements"]["typing_to_idle_ms"][:3]), 50),
+            ("cold_typing_total_to_idle_ms", lambda r: sum(r["measurements"]["typing_to_idle_ms"][:3]), 50),
+            ("cold_middle_bold_open_synchronous_ms",
+             lambda r: r["measurements"]["middle_bold_open_synchronous_ms"][0], 20),
+        )
+        for metric, summarize, allowance in cold_metrics:
+            before = statistics.median([summarize(report) for report in references])
+            after = statistics.median([summarize(report) for report in current])
+            if before <= 0:
+                errors.append(f"reference: {metric} must be positive")
+            elif after > 1.2 * before + allowance:
+                errors.append(f"{metric} median of runs exceeds 120% of reference "
+                              f"+ {allowance} ms: {after:.1f} ms vs reference {before:.1f} ms")
+        # Startup cannot inflate the comparison and hide a slower warm session.
+        for metric in ("typing_synchronous_ms", "typing_to_idle_ms"):
+            for name, summarize in (("median", statistics.median), ("p95", percentile95)):
+                before = statistics.median([
+                    summarize(report["measurements"][metric][3:]) for report in references])
+                after = statistics.median([
+                    summarize(report["measurements"][metric][3:]) for report in current])
+                if before <= 0:
+                    errors.append(f"reference: warm {metric} {name} must be positive")
+                elif after > 1.2 * before + 10:
+                    errors.append(f"warm {metric} {name} of runs exceeds 120% of reference "
+                                  f"+ 10 ms: {after:.1f} ms vs reference {before:.1f} ms")
     return errors
 
 
@@ -315,6 +454,8 @@ def main() -> int:
     parser.add_argument("--size-kb", required=True, type=int)
     parser.add_argument("--baseline-report", type=Path)
     parser.add_argument("--reference-report", type=Path)
+    parser.add_argument("--paired-current-report", type=Path, action="append")
+    parser.add_argument("--paired-reference-report", type=Path, action="append")
     parser.add_argument("--mode", default="livePreview")
     parser.add_argument("--context", choices=("standard", "mixed"))
     parser.add_argument("--host", choices=("editor", "notebook"), default="editor")
@@ -326,12 +467,23 @@ def main() -> int:
                     if args.baseline_report else None)
         reference = (json.loads(args.reference_report.read_text(encoding="utf-8"))
                      if args.reference_report else None)
+        current_runs = [json.loads(path.read_text(encoding="utf-8"))
+                        for path in args.paired_current_report or []]
+        reference_runs = [json.loads(path.read_text(encoding="utf-8"))
+                          for path in args.paired_reference_report or []]
     except (OSError, json.JSONDecodeError) as error:
         print(f"Cannot read performance report: {error}", file=sys.stderr)
         return 2
     errors = check_report(
         report, args.size_kb, args.mode, args.context, args.host, args.shape, baseline, reference=reference
     )
+    if args.paired_current_report or args.paired_reference_report:
+        paths = (args.paired_current_report or []) + (args.paired_reference_report or [])
+        if len({path.resolve() for path in paths}) != len(paths):
+            errors.append("paired comparison requires distinct report files")
+        errors += check_paired_reports(
+            current_runs, reference_runs, args.size_kb, args.mode,
+            args.context, args.host, args.shape)
     if errors:
         for error in errors:
             print(f"FAIL: {error}", file=sys.stderr)

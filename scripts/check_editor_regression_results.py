@@ -12,7 +12,24 @@ NATIVE_CLASSES = {
     "MarkdownParagraphGapTests": 9,
     "MarkdownHeadingGeometryTests": 1,
     "MarkdownRenderingAttributeTests": 1,
+    "MarkdownRenderingIndexTests": 3,
     "NativeEditorIntegrationTests": 12,
+    "MarkdownNativeTextChangeTests": 8,
+    "MarkdownSelectionSnapshotTests": 1,
+}
+NATIVE_REQUIRED_METHODS = {
+    "MarkdownRenderingIndexTests/testSelectionReusesSyntaxIndexAndEverySyntaxChangeInvalidatesIt()",
+    "MarkdownRenderingIndexTests/testParsedRenderingAndConcealmentMatchLegacyForEveryCharacter()",
+    "MarkdownRenderingIndexTests/testNestedAndBoundaryCodeSpansPreserveExactLegacyPredicate()",
+    "MarkdownNativeTextChangeTests/testMarkedReplacementUsesStaleRevisionMergeFallback()",
+    "MarkdownNativeTextChangeTests/testNativeInsertSurvivesSyntaxPreparation()",
+    "MarkdownNativeTextChangeTests/testAttributeFixingKeepsExactMiddleInsertionIntent()",
+    "MarkdownNativeTextChangeTests/testBatchedPureInsertionsAndDeletionsKeepBaselineCoordinates()",
+    "MarkdownNativeTextChangeTests/testMixedReplacementsFallBackAndStorageReplacementResetsIntent()",
+    "MarkdownNativeTextChangeTests/testNativeCommitAcknowledgesIntentAndRetainsFailedBatchForRetry()",
+    "MarkdownNativeTextChangeTests/testCancelledNativeBatchDoesNotContaminateNextCommit()",
+    "MarkdownNativeTextChangeTests/testExternalBufferReplacementResetsNativeIntent()",
+    "MarkdownSelectionSnapshotTests/testSelectionReportsLiteralCurrentSnapshotWithoutRebuildingIt()",
 }
 UI_METHODS = {
     "EditorScrollTypingUITests/testSourceReopeningKeyboardNearEndRevealsCaret()",
@@ -30,6 +47,8 @@ UI_METHODS = {
 
 
 def check(phase, summary, tests):
+    if phase not in ("native", "ui"):
+        raise ValueError(f"unexpected phase: {phase}")
     expected = sum(NATIVE_CLASSES.values()) if phase == "native" else len(UI_METHODS)
     counts = {
         "passedTests": expected,
@@ -65,6 +84,10 @@ def check(phase, summary, tests):
         classes = collections.Counter(case.split("/")[0] for case in cases)
         if classes != NATIVE_CLASSES:
             raise ValueError(f"native: unexpected class counts: {dict(classes)}")
+        required_classes = {case.split("/")[0] for case in NATIVE_REQUIRED_METHODS}
+        selected = {case for case in cases if case.split("/")[0] in required_classes}
+        if selected != NATIVE_REQUIRED_METHODS:
+            raise ValueError(f"native: unexpected edit invariant tests: {sorted(selected)}")
     elif set(cases) != UI_METHODS:
         raise ValueError(f"ui: unexpected test selection: {sorted(cases)}")
 
