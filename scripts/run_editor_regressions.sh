@@ -183,4 +183,6 @@ run_phase ui xcodebuild test -project "$repo_root/meh.md.xcodeproj" \
   -only-testing:meh.mdUITests/EditorScrollTypingUITests/testLivePreviewListReturnAtEndKeepsCaretStable \
   -only-testing:meh.mdUITests/EditorScrollTypingUITests/testLivePreviewTypingOnEmptyEndLineKeepsCaretStable \
   -only-testing:meh.mdUITests/EditorLongNoteTapUITests/testTapNearEndReplacesPreviousEOFSelection \
+  -only-testing:meh.mdUITests/NoteHistoryUITests \
+  -only-testing:meh.mdUITests/LargeNoteHistoryUITests \
   -parallel-testing-enabled NO -resultBundlePath "$evidence_root/ui.xcresult"

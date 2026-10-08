@@ -22,6 +22,10 @@ UI_METHODS = {
     "EditorScrollTypingUITests/testLivePreviewListReturnAtEndKeepsCaretStable()",
     "EditorScrollTypingUITests/testLivePreviewTypingOnEmptyEndLineKeepsCaretStable()",
     "EditorLongNoteTapUITests/testTapNearEndReplacesPreviousEOFSelection()",
+    "NoteHistoryUITests/testBrowsingKeepsCurrentTextAndOffersBothRestorePaths()",
+    "NoteHistoryUITests/testRestoreAsNewNoteKeepsOriginalCurrentText()",
+    "LargeNoteHistoryUITests/testLargeHistoryLoadsBrowsesAndReopens()",
+    "LargeNoteHistoryUITests/testClosingLargeHistoryKeepsEditorAvailable()",
 }
 
 

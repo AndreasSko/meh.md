@@ -22,6 +22,33 @@ jobs:
           fetch-depth: 0
       - name: Check report gate
         run: python3 -m unittest discover -s scripts -p 'test_*performance*.py'
+      - name: Guard large-document History in Swift
+        env:
+          MEH_HISTORY_BENCHMARK_EDITS: "600"
+          MEH_HISTORY_BENCHMARK_LINES: "1800"
+          MEH_HISTORY_INDEX_BUDGET_SECONDS: "20"
+          MEH_HISTORY_INDEX_REGRESSION_FACTOR: "1.35"
+          MEH_HISTORY_FIRST_READY_BUDGET_SECONDS: "1"
+          MEH_HISTORY_REOPEN_BUDGET_SECONDS: "0.05"
+          MEH_HISTORY_PREVIEW_BUDGET_SECONDS: "0.25"
+        run: |
+          set -euo pipefail
+          swift test -c release \
+            --filter 'NoteHistory(Tests|ReaderTests|PerformanceTests)' \
+            2>&1 | tee "$RUNNER_TEMP/history-performance.log"
+      - name: Guard 500 KB History in Swift
+        env:
+          MEH_HISTORY_BENCHMARK_EDITS: "600"
+          MEH_HISTORY_BENCHMARK_LINES: "7460"
+          MEH_HISTORY_INDEX_BUDGET_SECONDS: "60"
+          MEH_HISTORY_INDEX_REGRESSION_FACTOR: "1.35"
+          MEH_HISTORY_FIRST_READY_BUDGET_SECONDS: "3"
+          MEH_HISTORY_REOPEN_BUDGET_SECONDS: "0.05"
+          MEH_HISTORY_PREVIEW_BUDGET_SECONDS: "0.25"
+        run: |
+          set -euo pipefail
+          swift test -c release --filter NoteHistoryPerformanceTests \
+            2>&1 | tee "$RUNNER_TEMP/history-performance-500kb.log"
       - name: Check baseline catalog and parser on this runner
         shell: bash
         run: |
@@ -144,5 +171,7 @@ jobs:
             ${{ runner.temp }}/parser-reference.log
             ${{ runner.temp }}/parser-performance.json
             ${{ runner.temp }}/parser-performance.log
+            ${{ runner.temp }}/history-performance.log
+            ${{ runner.temp }}/history-performance-500kb.log
           if-no-files-found: warn
           retention-days: 30

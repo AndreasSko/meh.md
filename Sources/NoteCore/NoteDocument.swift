@@ -31,6 +31,7 @@ final class NoteDocument {
     private var historyCache: (
         heads: Set<String>,
         versions: [NoteHistoryVersion],
+        isComplete: Bool,
         frontiers: [String: Set<ChangeHash>]
     )?
 
@@ -91,14 +92,36 @@ final class NoteDocument {
         document.getHistory().count
     }
 
-    /// Past text states in causal order. The current text is represented by
-    /// the live session, so it is omitted even if metadata followed its edit.
+    /// Past text states in causal order. The chunkable builder publishes
+    /// finalized versions without blocking callers on the complete index.
     func historyVersions() throws -> [NoteHistoryVersion] {
-        if let historyCache, historyCache.heads == heads {
+        if let historyCache, historyCache.heads == heads,
+           historyCache.isComplete {
             return historyCache.versions
         }
+        let builder = try makeHistoryBuilder()
+        while !builder.isComplete {
+            try builder.advance(batchSize: 128)
+        }
+        installHistoryIndex(builder)
+        return builder.versions
+    }
 
-        struct Candidate {
+    func makeHistoryBuilder() throws -> HistoryBuilder {
+        try HistoryBuilder(source: self)
+    }
+
+    func installHistoryIndex(_ builder: HistoryBuilder) {
+        historyCache = (
+            heads, builder.versions, builder.isComplete, builder.frontiers
+        )
+    }
+
+    /// Only the unresolved last text state is mutable. A subsequent body
+    /// change proves the previous state historical and fixes its typing-run
+    /// boundary, so published prefix versions never change identity.
+    final class HistoryBuilder {
+        private struct Candidate {
             var frontier: Set<ChangeHash>
             var date: Date?
             let actor: ActorId
@@ -107,106 +130,121 @@ final class NoteDocument {
             let isRestore: Bool
         }
 
-        var frontier = Set<ChangeHash>()
-        var candidates: [Candidate] = []
-        var previousModifiedAt: Date?
+        private let source: NoteDocument
+        private let history: [ChangeHash]
+        private let bodyObject: ObjId
+        private var position = 0
+        private var frontier = Set<ChangeHash>()
+        private var pending: Candidate?
+        private var candidateCount = 0
+        private var previousModifiedAt: Date?
+        private(set) var versions: [NoteHistoryVersion] = []
+        private(set) var frontiers: [String: Set<ChangeHash>] = [:]
 
-        // getHistory is causal, not chronological. Each prefix has its own
-        // frontier; a concurrent change removes only its actual dependencies.
-        for hash in document.getHistory() {
-            try Task.checkCancellation()
-            guard let change = document.change(hash: hash) else { continue }
-            let previousFrontier = frontier
-            frontier.subtract(change.deps)
-            frontier.insert(hash)
+        var isComplete: Bool { position == history.count }
+        var processedChangeCount: Int { position }
 
-            // Difference reports visible text patches without returning the
-            // historical body to the caller. The browser loads selected text
-            // only when that version is opened.
-            let bodyPatches = document.difference(
-                from: previousFrontier, to: frontier
-            ).filter { patchChangesBody($0) }
-            let textChanged = !bodyPatches.isEmpty
-            let modifiedAt = try historicalModifiedAt(at: frontier)
-
-            if textChanged {
-                candidates.append(Candidate(
-                    frontier: frontier,
-                    date: nil,
-                    actor: change.actorId,
-                    isTypingEdit: bodyPatches.count <= 2
-                        && bodyPatches.allSatisfy(isSingleCharacterEdit),
-                    startsNewRun: bodyPatches.contains { patch in
-                        if case let .SpliceText(_, _, value, _) =
-                            patch.action {
-                            return value == "\n"
-                        }
-                        return false
-                    },
-                    isRestore: change.message == Self.restoreChangeMessage
-                ))
-            } else if !candidates.isEmpty {
-                // Metadata writes belong to the same visible text state.
-                candidates[candidates.count - 1].frontier = frontier
-            }
-
-            if textChanged,
-               modifiedAt != previousModifiedAt,
-               let modifiedAt,
-               !candidates.isEmpty,
-               candidates[candidates.count - 1].date == nil {
-                // Prefer the note's content date when it identifies this
-                // edit, including imported creation dates.
-                candidates[candidates.count - 1].date = modifiedAt
-            } else if textChanged,
-                      !candidates.isEmpty,
-                      candidates[candidates.count - 1].date == nil,
-                      change.timestamp.timeIntervalSince1970 != 0 {
-                // The content date is monotonic and can stay unchanged for
-                // rapid edits or a clock correction. Automerge still records
-                // when it committed each text change.
-                candidates[candidates.count - 1].date = change.timestamp
-            }
-            previousModifiedAt = modifiedAt
+        init(source: NoteDocument) throws {
+            self.source = source
+            history = source.document.getHistory()
+            // ObjId bytes include a document-local actor-index hint. A merge
+            // can change that hint, so resolve the body in this document
+            // rather than compare patches to a pre-merge identifier.
+            guard case let .Object(object, .Text)? = try source.document.get(
+                obj: .ROOT, key: NoteDocument.textKey
+            ) else { throw NoteDocumentError.invalidText }
+            bodyObject = object
         }
 
-        var versions: [NoteHistoryVersion] = []
-        var frontiers: [String: Set<ChangeHash>] = [:]
-        func isSameTypingRun(
-            _ previous: Candidate,
-            _ next: Candidate,
-            nextIndex: Int
-        ) -> Bool {
-            guard nextIndex > 1,
-                  previous.isTypingEdit, next.isTypingEdit,
-                  !next.startsNewRun,
-                  !previous.isRestore, !next.isRestore,
-                  previous.actor == next.actor,
-                  let earlier = previous.date,
-                  let later = next.date else { return false }
-            let gap = later.timeIntervalSince(earlier)
-            return gap >= 0 && gap <= Self.typingRunMaximumGap
+        func advance(batchSize: Int) throws {
+            let end = position + min(
+                max(1, batchSize), history.count - position
+            )
+            while position < end {
+                try Task.checkCancellation()
+                let hash = history[position]
+                position += 1
+                guard let change = source.document.change(hash: hash) else {
+                    continue
+                }
+                let previousFrontier = frontier
+                frontier.subtract(change.deps)
+                frontier.insert(hash)
+                let bodyPatches = source.document.difference(
+                    from: previousFrontier, to: frontier
+                ).filter {
+                    source.patchChangesBody(
+                        $0, bodyObject: bodyObject
+                    )
+                }
+                let textChanged = !bodyPatches.isEmpty
+                let modifiedAt = try source.historyModifiedAt(at: frontier)
+
+                if textChanged {
+                    let date: Date?
+                    if modifiedAt != previousModifiedAt, let modifiedAt {
+                        date = modifiedAt
+                    } else if change.timestamp.timeIntervalSince1970 != 0 {
+                        date = change.timestamp
+                    } else {
+                        date = nil
+                    }
+                    let next = Candidate(
+                        frontier: frontier,
+                        date: date,
+                        actor: change.actorId,
+                        isTypingEdit: bodyPatches.count <= 2
+                            && bodyPatches.allSatisfy(
+                                source.isSingleCharacterEdit
+                            ),
+                        startsNewRun: bodyPatches.contains { patch in
+                            if case let .SpliceText(_, _, value, _) =
+                                patch.action {
+                                return value == "\n"
+                            }
+                            return false
+                        },
+                        isRestore: change.message ==
+                            NoteDocument.restoreChangeMessage
+                    )
+                    if let previous = pending {
+                        publish(previous, followedBy: next)
+                    }
+                    pending = next
+                    candidateCount += 1
+                } else if pending != nil {
+                    pending?.frontier = frontier
+                }
+                previousModifiedAt = modifiedAt
+            }
         }
-        // Candidate after the final historical version is live Current.
-        // A run of single-character edits has one overview stop at its final
-        // state. All underlying causal states stay in the detail list.
-        for index in candidates.indices.dropLast() {
-            let candidate = candidates[index]
-            let id = candidate.frontier.map(\.debugDescription)
+
+        private func publish(
+            _ previous: Candidate, followedBy next: Candidate
+        ) {
+            let sameRun: Bool
+            if candidateCount > 1,
+               previous.isTypingEdit, next.isTypingEdit,
+               !next.startsNewRun,
+               !previous.isRestore, !next.isRestore,
+               previous.actor == next.actor,
+               let earlier = previous.date, let later = next.date {
+                let gap = later.timeIntervalSince(earlier)
+                sameRun = gap >= 0 && gap <=
+                    NoteDocument.typingRunMaximumGap
+            } else {
+                sameRun = false
+            }
+            let id = previous.frontier.map(\.debugDescription)
                 .sorted().joined(separator: ",")
             versions.append(NoteHistoryVersion(
                 id: id,
                 ordinal: versions.count + 1,
-                date: candidate.date,
-                isOverviewStop: !isSameTypingRun(
-                    candidates[index], candidates[index + 1],
-                    nextIndex: index + 1
-                )
+                date: previous.date,
+                isOverviewStop: !sameRun
             ))
-            frontiers[id] = candidate.frontier
+            frontiers[id] = previous.frontier
         }
-        historyCache = (heads, versions, frontiers)
-        return versions
     }
 
     private func isSingleCharacterEdit(_ patch: Patch) -> Bool {
@@ -220,7 +258,10 @@ final class NoteDocument {
         }
     }
 
-    private func patchChangesBody(_ patch: Patch) -> Bool {
+    private func patchChangesBody(
+        _ patch: Patch, bodyObject: ObjId?
+    ) -> Bool {
+        guard let textObject = bodyObject else { return false }
         switch patch.action {
         case let .SpliceText(obj, _, _, _),
              let .Insert(obj, _, _):
@@ -236,6 +277,16 @@ final class NoteDocument {
         case .Increment, .DeleteMap, .Marks:
             return false
         }
+    }
+
+    /// Frozen readers only preview published frontiers, never rescan history.
+    func indexedHistoricalText(
+        for version: NoteHistoryVersion
+    ) throws -> String {
+        guard let frontier = historyCache?.frontiers[version.id] else {
+            throw NoteHistoryError.versionUnavailable
+        }
+        return try document.textAt(obj: textObject, heads: frontier)
     }
 
     func historicalText(for version: NoteHistoryVersion) throws -> String {
@@ -267,7 +318,15 @@ final class NoteDocument {
         _ version: NoteHistoryVersion,
         at modificationDate: Date = Date()
     ) throws {
-        let restoredText = try historicalText(for: version)
+        try restoreHistoricalText(
+            historicalText(for: version), at: modificationDate
+        )
+    }
+
+    func restoreHistoricalText(
+        _ restoredText: String,
+        at modificationDate: Date = Date()
+    ) throws {
         guard !restoredText.utf8.elementsEqual((try text).utf8) else { return }
         // Commit the restore as one marked change so it remains a boundary
         // even when only one character differs.
@@ -278,7 +337,7 @@ final class NoteDocument {
         )
     }
 
-    private func historicalModifiedAt(
+    private func historyModifiedAt(
         at frontier: Set<ChangeHash>
     ) throws -> Date? {
         let values = try document.getAllAt(

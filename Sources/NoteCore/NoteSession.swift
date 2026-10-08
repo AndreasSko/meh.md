@@ -69,6 +69,9 @@ public final class NoteSession {
     @ObservationIgnored private let storage: any NoteStorage
     @ObservationIgnored private let saveScheduling: NoteSaveSchedulingPolicy
     @ObservationIgnored private var document: NoteDocument?
+    @ObservationIgnored private var cachedHistoryReader: (
+        heads: Set<String>, reader: NoteHistoryReader
+    )?
     @ObservationIgnored private var editorIdentity = Data()
     @ObservationIgnored private var cachedSnapshot: (
         revision: Data, snapshot: NoteSnapshot
@@ -117,6 +120,7 @@ public final class NoteSession {
         }
         status = .loading
         document = nil
+        cachedHistoryReader = nil
         editorRevision = nil
         cachedSnapshot = nil
         persistedHeads = nil
@@ -176,6 +180,7 @@ public final class NoteSession {
             saveTask == nil, delayedSaveTask == nil
         else { return }
         document = nil
+        cachedHistoryReader = nil
         editorRevision = nil
         cachedSnapshot = nil
         persistedHeads = nil
@@ -211,22 +216,30 @@ public final class NoteSession {
         return try document.historyVersions()
     }
 
-    /// Build the full index from a frozen snapshot away from the UI actor.
-    /// The live session can continue receiving edits while History loads.
-    public func loadHistoryVersions() async throws -> [NoteHistoryVersion] {
+    /// Reuse one frozen reader while the live note's revision is unchanged.
+    /// The reader owns indexing and previews away from the UI actor.
+    public func makeHistoryReader() throws -> NoteHistoryReader {
         guard isEditingEnabled, let document else {
             throw SyncError.localSaveRequired
         }
+        let heads = document.heads
+        if let cachedHistoryReader, cachedHistoryReader.heads == heads {
+            return cachedHistoryReader.reader
+        }
         let snapshot = currentSnapshot ?? document.snapshot()
-        let task = Task.detached(priority: .userInitiated) {
-            let historical = try NoteDocument(snapshot: snapshot)
-            return try historical.historyVersions()
+        let reader = NoteHistoryReader(snapshot: snapshot)
+        cachedHistoryReader = (heads, reader)
+        return reader
+    }
+
+    /// Compatibility query for callers that need the complete version list.
+    public func loadHistoryVersions() async throws -> [NoteHistoryVersion] {
+        let reader = try makeHistoryReader()
+        for try await update in await reader.updates() {
+            try Task.checkCancellation()
+            if update.isComplete { return update.versions }
         }
-        return try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
-        }
+        throw CancellationError()
     }
 
     public func historicalText(
@@ -251,8 +264,28 @@ public final class NoteSession {
         guard document.heads == expectedHeads else {
             throw NoteHistoryError.currentChanged
         }
-        try document.restoreHistoryVersion(version)
-        text = try document.text
+        let reader = try makeHistoryReader()
+        let restoredText: String
+        do {
+            restoredText = try await reader.historicalText(for: version)
+        } catch NoteHistoryError.versionUnavailable {
+            // Legacy callers may obtain a version through the synchronous
+            // query. Finish that reader's index before requesting its text.
+            for try await update in await reader.updates() {
+                try Task.checkCancellation()
+                if update.isComplete { break }
+            }
+            restoredText = try await reader.historicalText(for: version)
+        }
+        try Task.checkCancellation()
+        // Reading a frozen preview suspends. A new edit, merge, recovery or
+        // reset must be checked against the live document after that await.
+        guard isEditingEnabled, let current = self.document,
+              current.heads == expectedHeads else {
+            throw NoteHistoryError.currentChanged
+        }
+        try current.restoreHistoricalText(restoredText)
+        text = try current.text
         queueSave(immediately: true)
         try await flush()
     }
@@ -415,6 +448,7 @@ public final class NoteSession {
         persistedHeads: Set<String>?
     ) throws {
         self.document = document
+        cachedHistoryReader = nil
         editorIdentity = Data(UUID().uuidString.utf8)
         editorRevision = editorIdentity + document.editorHeads
         cachedSnapshot = nil
@@ -426,6 +460,12 @@ public final class NoteSession {
         guard !isEditingSuspended else { return }
         if let document, !isPermanentlyDeleted {
             editorRevision = editorIdentity + document.editorHeads
+            if let cachedHistoryReader,
+               cachedHistoryReader.heads != document.heads {
+                // An open browser retains its own frozen reader. The session
+                // only keeps a reusable reader for its current live revision.
+                self.cachedHistoryReader = nil
+            }
         }
         guard !isPermanentlyDeleted,
             let document,

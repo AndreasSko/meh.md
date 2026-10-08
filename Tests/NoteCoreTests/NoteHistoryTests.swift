@@ -22,6 +22,8 @@ final class NoteHistoryTests: XCTestCase {
         let reopened = try NoteDocument(snapshot: saved)
 
         let versions = try reopened.historyVersions()
+        XCTAssertEqual(versions, try NoteHistoryLegacyOracle(
+            snapshot: reopened.snapshot()).historyVersions())
 
         XCTAssertEqual(versions.count, 2)
         XCTAssertEqual(versions.map(\.ordinal), [1, 2])
@@ -51,6 +53,8 @@ final class NoteHistoryTests: XCTestCase {
         let reopened = try NoteDocument(snapshot: left.snapshot())
 
         let versions = try reopened.historyVersions()
+        XCTAssertEqual(versions, try NoteHistoryLegacyOracle(
+            snapshot: reopened.snapshot()).historyVersions())
         let texts = try versions.map(reopened.historicalText(for:))
 
         XCTAssertEqual(try reopened.text, "ONE TWO")
@@ -79,6 +83,8 @@ final class NoteHistoryTests: XCTestCase {
         )
 
         let versions = try note.historyVersions()
+        XCTAssertEqual(versions, try NoteHistoryLegacyOracle(
+            snapshot: note.snapshot()).historyVersions())
 
         XCTAssertEqual(versions.count, 2)
         XCTAssertNotNil(versions[0].date)
@@ -167,6 +173,8 @@ final class NoteHistoryTests: XCTestCase {
         }
 
         let versions = try note.historyVersions()
+        XCTAssertEqual(versions, try NoteHistoryLegacyOracle(
+            snapshot: note.snapshot()).historyVersions())
         let overview = versions.enumerated().compactMap {
             $0.element.isOverviewStop ? $0.offset : nil
         } + [versions.count] // Synthetic Current stop.
@@ -198,6 +206,8 @@ final class NoteHistoryTests: XCTestCase {
         }
 
         let versions = try note.historyVersions()
+        XCTAssertEqual(versions, try NoteHistoryLegacyOracle(
+            snapshot: note.snapshot()).historyVersions())
         let overview = versions.enumerated().compactMap {
             $0.element.isOverviewStop ? $0.offset : nil
         } + [versions.count]
@@ -227,6 +237,8 @@ final class NoteHistoryTests: XCTestCase {
         }
 
         let versions = try note.historyVersions()
+        XCTAssertEqual(versions, try NoteHistoryLegacyOracle(
+            snapshot: note.snapshot()).historyVersions())
         let overview = versions.enumerated().compactMap {
             $0.element.isOverviewStop ? $0.offset : nil
         } + [versions.count]
@@ -274,6 +286,8 @@ final class NoteHistoryTests: XCTestCase {
         _ = note.snapshot()
 
         let versions = try note.historyVersions()
+        XCTAssertEqual(versions, try NoteHistoryLegacyOracle(
+            snapshot: note.snapshot()).historyVersions())
 
         XCTAssertEqual(versions.map(\.isOverviewStop), [true, false, true])
         XCTAssertEqual(try note.historicalText(for: versions[2]), "Abc")
@@ -303,6 +317,8 @@ final class NoteHistoryTests: XCTestCase {
         _ = note.snapshot()
 
         let versions = try note.historyVersions()
+        XCTAssertEqual(versions, try NoteHistoryLegacyOracle(
+            snapshot: note.snapshot()).historyVersions())
         XCTAssertEqual(versions.map(\.isOverviewStop), [true, false, true])
         XCTAssertEqual(try note.historicalText(for: versions[2]), "Abc")
     }
@@ -320,6 +336,8 @@ final class NoteHistoryTests: XCTestCase {
         let changed = try NoteDocument(serializedData: raw.save())
 
         let versions = try changed.historyVersions()
+        XCTAssertEqual(versions, try NoteHistoryLegacyOracle(
+            snapshot: changed.snapshot()).historyVersions())
 
         XCTAssertEqual(versions.count, 1)
         XCTAssertEqual(try changed.historicalText(for: versions[0]), "first")

@@ -5,32 +5,40 @@ import SwiftUI
 @Observable
 final class NoteHistoryBrowserState {
     let noteID: UUID
-    let versions: [NoteHistoryVersion]
-    let overviewNavigationStops: [Int]
-    let overviewStops: [Int]
+    private(set) var versions: [NoteHistoryVersion]
+    private(set) var overviewNavigationStops: [Int]
+    private(set) var overviewStops: [Int]
     let expectedHeads: Set<String>
     let originalPosition: MarkdownEditorPosition?
     let currentText: String
+    let reader: NoteHistoryReader
     let navigation = MarkdownEditorNavigation()
     private(set) var selectedIndex: Int
     private(set) var text: String
+    private(set) var isLoadingIndex = true
+    private(set) var isLoadingPreview = false
+    @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var selectionGeneration = 0
 
     init(
         noteID: UUID,
         versions: [NoteHistoryVersion],
         expectedHeads: Set<String>,
         originalPosition: MarkdownEditorPosition?,
-        text: String
+        text: String,
+        reader: NoteHistoryReader
     ) {
         self.noteID = noteID
         self.versions = versions
-        overviewNavigationStops = versions.indices.filter {
+        let navigationStops = versions.indices.filter {
             versions[$0].isOverviewStop
         } + [versions.count]
-        overviewStops = Self.makeOverviewStops(from: overviewNavigationStops)
+        overviewNavigationStops = navigationStops
+        overviewStops = Self.makeOverviewStops(from: navigationStops)
         self.expectedHeads = expectedHeads
         self.originalPosition = originalPosition
         currentText = text
+        self.reader = reader
         selectedIndex = versions.count
         self.text = text
     }
@@ -40,12 +48,61 @@ final class NoteHistoryBrowserState {
     }
     var isViewingCurrent: Bool { selectedIndex == versions.count }
 
-    func select(_ index: Int, in session: NoteSession) throws {
+    func apply(_ update: NoteHistoryIndexUpdate) {
+        let viewingCurrent = isViewingCurrent
+        versions = update.versions
+        overviewNavigationStops = versions.indices.filter {
+            versions[$0].isOverviewStop
+        } + [versions.count]
+        overviewStops = Self.makeOverviewStops(from: overviewNavigationStops)
+        if viewingCurrent { selectedIndex = versions.count }
+        isLoadingIndex = !update.isComplete
+    }
+
+    func cancel() {
+        selectionGeneration += 1
+        previewTask?.cancel()
+        previewTask = nil
+    }
+
+    func select(_ index: Int, onError: @escaping (Error) -> Void) {
         guard (0...versions.count).contains(index), index != selectedIndex else { return }
+        cancel()
+        let generation = selectionGeneration
         let previousPosition = navigation.capturePosition?()
-        let nextText = index == versions.count
-            ? currentText : try session.historicalText(for: versions[index])
         selectedIndex = index
+        if isViewingCurrent {
+            isLoadingPreview = false
+            installText(currentText, position: previousPosition, generation: generation)
+            return
+        }
+        let version = versions[index]
+        isLoadingPreview = true
+        previewTask = Task { @MainActor [weak self, reader] in
+            do {
+                let nextText = try await reader.historicalText(for: version)
+                try Task.checkCancellation()
+                guard let self, selectionGeneration == generation else { return }
+                installText(nextText, position: previousPosition, generation: generation)
+                isLoadingPreview = false
+                previewTask = nil
+            } catch is CancellationError {
+                // A newer selection or closing History owns the screen now.
+            } catch {
+                guard let self, selectionGeneration == generation else { return }
+                selectedIndex = versions.count
+                text = currentText
+                isLoadingPreview = false
+                previewTask = nil
+                onError(error)
+            }
+        }
+    }
+
+    private func installText(
+        _ nextText: String, position previousPosition: MarkdownEditorPosition?,
+        generation: Int
+    ) {
         text = nextText
         if let previousPosition {
             let length = (nextText as NSString).length
@@ -56,7 +113,7 @@ final class NoteHistoryBrowserState {
             )
             Task { @MainActor [weak self] in
                 await Task.yield()
-                guard self?.selectedIndex == index else { return }
+                guard self?.selectionGeneration == generation else { return }
                 self?.navigation.restorePosition?(position)
             }
         }
@@ -104,17 +161,28 @@ struct NoteHistoryBrowserView: View {
                 mode: mode
             )
             .accessibilityIdentifier("note-history-preview")
+            .overlay {
+                if state.isLoadingPreview {
+                    ProgressView("Loading version…")
+                        .padding(12)
+                        .background(.regularMaterial, in: .rect(cornerRadius: 12))
+                        .accessibilityIdentifier("note-history-preview-loading")
+                }
+            }
             // Fill the area behind the floating controls. The safe-area
             // inset still keeps the last lines reachable above them.
             .ignoresSafeArea(.container, edges: .bottom)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             NoteHistoryTimeline(
+                isLoading: state.isLoadingIndex,
                 versions: state.versions,
                 overviewNavigationStops: state.overviewNavigationStops,
                 overviewStops: state.overviewStops,
                 selectedIndex: state.selectedIndex,
-                select: select
+                select: { index in
+                    state.select(index ?? state.versions.count, onError: onError)
+                }
             )
         }
         .toolbar {
@@ -124,7 +192,7 @@ struct NoteHistoryBrowserView: View {
             }
             ToolbarItem {
                 Button("Restore…") { showingRestoreChoices = true }
-                    .disabled(state.isViewingCurrent)
+                    .disabled(state.isViewingCurrent || state.isLoadingPreview)
                     .accessibilityIdentifier("note-history-restore")
             }
         }
@@ -160,10 +228,6 @@ struct NoteHistoryBrowserView: View {
         }
     }
 
-    private func select(_ index: Int) {
-        do { try state.select(index, in: session) }
-        catch { onError(error) }
-    }
 }
 
 private struct NoteHistoryHeading: View {
@@ -183,6 +247,7 @@ private struct NoteHistoryHeading: View {
                     )
                 )))
                 .foregroundStyle(.primary)
+                .accessibilityIdentifier("note-history-title")
             Label(
                 isCurrent ? "Current version" : "Viewing an older version",
                 systemImage: "clock.arrow.circlepath"
@@ -205,11 +270,12 @@ private struct NoteHistoryTimeline: View {
         var indices: [Int]
     }
 
+    let isLoading: Bool
     let versions: [NoteHistoryVersion]
     let overviewNavigationStops: [Int]
     let overviewStops: [Int]
     let selectedIndex: Int
-    let select: (Int) -> Void
+    let select: (Int?) -> Void
     @State private var showingDetail = false
     @State private var detailRange: ClosedRange<Int>?
 
@@ -240,6 +306,11 @@ private struct NoteHistoryTimeline: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if isLoading {
+                ProgressView("Loading versions…")
+                    .font(.caption)
+                    .accessibilityIdentifier("note-history-index-loading")
+            }
             HStack(spacing: 12) {
                 Button { step(backward: true) } label: {
                     Image(systemName: "chevron.left")
@@ -257,7 +328,7 @@ private struct NoteHistoryTimeline: View {
                             get: { Double(sliderIndex) },
                             set: { value in
                                 let offset = min(max(Int(value.rounded()), 0), stops.count - 1)
-                                select(stops[offset])
+                                requestSelection(stops[offset])
                             }
                         ),
                         in: 0...Double(stops.count - 1),
@@ -294,7 +365,7 @@ private struct NoteHistoryTimeline: View {
                     ForEach(menuGroups) { group in
                         Section(groupTitle(for: group)) {
                             ForEach(group.indices, id: \.self) { index in
-                                Button { select(index) } label: {
+                                Button { requestSelection(index) } label: {
                                     Label(
                                         menuRowLabel(at: index),
                                         systemImage: "number"
@@ -305,7 +376,7 @@ private struct NoteHistoryTimeline: View {
                         }
                     }
                     if stops.contains(versions.count) {
-                        Button("Current version") { select(versions.count) }
+                        Button("Current version") { select(nil) }
                     }
                 } label: {
                     Label(menuTriggerLabel(at: selectedIndex), systemImage: "calendar")
@@ -328,6 +399,13 @@ private struct NoteHistoryTimeline: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity)
+        .onChange(of: versions.count) { _, _ in
+            if showingDetail { detailRange = range(around: selectedIndex) }
+        }
+    }
+
+    private func requestSelection(_ index: Int) {
+        select(versions.indices.contains(index) ? index : nil)
     }
 
     private func step(backward: Bool) {
@@ -336,7 +414,7 @@ private struct NoteHistoryTimeline: View {
             if detailRange?.contains(index) != true {
                 detailRange = range(around: index)
             }
-            select(index)
+            requestSelection(index)
         } else {
             let offset: Int
             if backward {
@@ -350,7 +428,7 @@ private struct NoteHistoryTimeline: View {
                     $0 > selectedIndex
                 } ?? overviewNavigationStops.count - 1
             }
-            select(overviewNavigationStops[offset])
+            requestSelection(overviewNavigationStops[offset])
         }
     }
 
