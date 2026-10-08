@@ -265,6 +265,15 @@ struct NotebookView: View {
         #endif
     }
 
+    private var selectionCountInBottomToolbar: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .pad
+            && horizontalSizeClass == .regular
+        #else
+        false
+        #endif
+    }
+
     private var notebookSidebar: some View {
             ZStack {
                 libraryBrowser
@@ -311,11 +320,17 @@ struct NotebookView: View {
                     }
                     if showsSelectionControls && !search.isPresented {
                         ToolbarItem(placement: .cancellationAction) { selectAllButton }
-                        ToolbarItem(placement: .principal) { selectionCount }
+                        if !selectionCountInBottomToolbar {
+                            ToolbarItem(placement: .principal) { selectionCount }
+                        }
                         ToolbarItem(placement: .confirmationAction) { selectionDone }
                         #if os(iOS)
                         ToolbarItem(placement: .bottomBar) { moveSelectedButton }
                         ToolbarSpacer(.flexible, placement: .bottomBar)
+                        if selectionCountInBottomToolbar {
+                            ToolbarItem(placement: .bottomBar) { selectionCount }
+                            ToolbarSpacer(.flexible, placement: .bottomBar)
+                        }
                         ToolbarItem(placement: .bottomBar) { trashSelectedButton }
                         #else
                         ToolbarItemGroup {

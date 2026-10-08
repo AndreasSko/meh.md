@@ -1,0 +1,148 @@
+name: Complete test coverage
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ui:
+    name: All UI tests (${{ matrix.platform }})
+    runs-on: xcode-27
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [iphone, ipad, macos]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Run every applicable UI test
+        shell: bash
+        run: |
+          python3 scripts/run_ui_test_coverage.py \
+            --platform '${{ matrix.platform }}' \
+            --output-dir "$RUNNER_TEMP/ui-coverage-${{ matrix.platform }}"
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-coverage-${{ matrix.platform }}
+          path: ${{ runner.temp }}/ui-coverage-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload coverage proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-coverage-ui-${{ matrix.platform }}
+          path: ${{ runner.temp }}/ui-coverage-${{ matrix.platform }}/coverage-report.json
+          if-no-files-found: error
+
+  package:
+    name: Every package test and synthetic benchmark
+    runs-on: xcode-27
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Run all package tests with loopback and benchmark fixtures
+        id: package
+        run: scripts/run_notebook_sync_validation.sh --complete
+      - name: Preserve package evidence
+        if: always() && steps.package.outputs.evidence_root != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package-coverage-evidence
+          path: ${{ steps.package.outputs.evidence_root }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload package coverage proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-coverage-package-macos
+          path: ${{ steps.package.outputs.evidence_root }}/coverage-report.json
+          if-no-files-found: error
+
+  native:
+    name: Every UIKit native editor test
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Run complete native suite in the iOS test host
+        id: native
+        run: python3 scripts/run_native_test_coverage.py
+      - name: Preserve native evidence
+        if: always() && steps.native.outputs.evidence_root != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-coverage-evidence
+          path: ${{ steps.native.outputs.evidence_root }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload native coverage proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-coverage-native-iphone
+          path: ${{ steps.native.outputs.evidence_root }}/coverage-report.json
+          if-no-files-found: error
+
+  python:
+    name: Every Python tool test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Run all Python tests and reject omitted files
+        run: |
+          mkdir -p "$RUNNER_TEMP/python-coverage"
+          python3 scripts/run_python_test_coverage.py \
+            "$RUNNER_TEMP/python-coverage/coverage-report.json"
+      - name: Upload Python coverage proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-coverage-python
+          path: ${{ runner.temp }}/python-coverage/coverage-report.json
+          if-no-files-found: error
+
+  coverage:
+    name: All feasible tests
+    if: always()
+    needs: [ui, package, native, python]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require successful execution of every matrix job
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          jobs = json.loads(os.environ["RESULTS"])
+          failed = {name: job["result"] for name, job in jobs.items()
+                    if job["result"] != "success"}
+          if failed:
+              raise SystemExit(f"Incomplete test matrix: {failed}")
+          PYTHON
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: test-coverage-*
+          path: coverage-proofs
+      - name: Verify every source test has passing execution evidence
+        run: python3 scripts/check_ci_test_coverage.py --reports coverage-proofs

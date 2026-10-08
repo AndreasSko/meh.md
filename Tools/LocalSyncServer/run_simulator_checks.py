@@ -92,6 +92,7 @@ def run() -> None:
             command = [
                 "xcodebuild", "test-without-building", "-xctestrun", str(test_run),
                 "-destination", f"id={device}", "-parallel-testing-enabled", "NO",
+                "-collect-test-diagnostics", "never",
                 f"-only-testing:meh.mdUITests/LocalSyncUITests/{method}",
                 "-resultBundlePath", str(output / (name + ".xcresult")),
             ]

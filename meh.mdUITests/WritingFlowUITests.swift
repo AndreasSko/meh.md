@@ -10,11 +10,11 @@ final class WritingFlowUITests: XCTestCase {
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
 
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.notebookNewItemButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         activate(newNote)
 
-        let titleField = app.textFields["title-field"]
+        let titleField = app.notebookTitleField
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         assertKeyboardFocus(on: titleField)
         let generatedTitle = try XCTUnwrap(titleField.value as? String)
@@ -38,7 +38,7 @@ final class WritingFlowUITests: XCTestCase {
 
         // Create another note while the body editor still owns keyboard focus.
         activate(newNote)
-        let nextTitle = app.textFields["title-field"]
+        let nextTitle = app.notebookTitleField
         XCTAssertTrue(nextTitle.waitForExistence(timeout: 10))
         assertKeyboardFocus(on: nextTitle)
         let nextGeneratedTitle = try XCTUnwrap(nextTitle.value as? String)
@@ -53,7 +53,7 @@ final class WritingFlowUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "")
 
         activate(newNote)
-        let thirdTitle = app.textFields["title-field"]
+        let thirdTitle = app.notebookTitleField
         XCTAssertTrue(thirdTitle.waitForExistence(timeout: 10))
         assertKeyboardFocus(on: thirdTitle)
         let thirdGeneratedTitle = try XCTUnwrap(thirdTitle.value as? String)
@@ -74,10 +74,10 @@ final class WritingFlowUITests: XCTestCase {
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
 
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.notebookNewItemButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         activate(newNote)
-        let titleField = app.textFields["title-field"]
+        let titleField = app.notebookTitleField
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         assertKeyboardFocus(on: titleField)
         let title = "Fictional rename regression"
@@ -120,10 +120,10 @@ final class WritingFlowUITests: XCTestCase {
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
 
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.notebookNewItemButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         activate(newNote)
-        let titleField = app.textFields["title-field"]
+        let titleField = app.notebookTitleField
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         let titleFocused = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "hasKeyboardFocus == true"),
@@ -204,10 +204,10 @@ final class WritingFlowUITests: XCTestCase {
         #endif
         capture(app, name: "Wrapped title and fictional note")
 
-        let nextNote = app.buttons["notebook-new-item"].firstMatch
+        let nextNote = app.notebookNewItemButton
         XCTAssertTrue(nextNote.waitForExistence(timeout: 5))
         activate(nextNote)
-        let nextTitleField = app.textFields["title-field"]
+        let nextTitleField = app.notebookTitleField
         XCTAssertTrue(nextTitleField.waitForExistence(timeout: 5))
         let retainedDateTitle = try XCTUnwrap(nextTitleField.value as? String)
         XCTAssertFalse(retainedDateTitle.isEmpty)
@@ -232,7 +232,7 @@ final class WritingFlowUITests: XCTestCase {
         XCTAssertEqual(title.label, retainedDateTitle)
         #if os(macOS)
         activate(title)
-        let tabTitleField = app.textFields["title-field"]
+        let tabTitleField = app.notebookTitleField
         XCTAssertTrue(tabTitleField.waitForExistence(timeout: 5))
         tabTitleField.typeKey(.tab, modifierFlags: [])
         let bodyFocusedAfterTab = XCTNSPredicateExpectation(
@@ -248,19 +248,21 @@ final class WritingFlowUITests: XCTestCase {
     }
 
     func testSyncStatusLivesInCloudDetailsWhileWriting() throws {
-        guard let endpoint = ProcessInfo.processInfo.environment["MEH_WAVE1_SYNC_URL"] else {
+        guard let endpoint = ProcessInfo.processInfo.ciLoopbackURL
+            ?? ProcessInfo.processInfo.environment["MEH_WAVE1_SYNC_URL"] else {
             throw XCTSkip("Requires the disposable loopback sync service")
         }
         continueAfterFailure = false
         let app = XCUIApplication()
+        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
         app.launchEnvironment["MEH_SYNC_URL"] = endpoint
         app.launchEnvironment["MEH_SYNC_WORKSPACE"] = "writing-ui-" + UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launch()
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.notebookNewItemButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 20))
         activate(newNote)
-        let titleField = app.textFields["title-field"]
+        let titleField = app.notebookTitleField
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         #if os(macOS)
         titleField.typeKey(.return, modifierFlags: [])

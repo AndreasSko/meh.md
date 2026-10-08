@@ -387,8 +387,11 @@ final class EditorSearchNavigationTests: XCTestCase {
             navigation: navigation
         )
         let host = UIHostingController(rootView: editor)
-        host.loadViewIfNeeded()
-        host.view.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 600))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        window.layoutIfNeeded()
         host.view.layoutIfNeeded()
         let textView = try XCTUnwrap(findTextView(in: host.view))
         let undoManager = try XCTUnwrap(textView.undoManager)

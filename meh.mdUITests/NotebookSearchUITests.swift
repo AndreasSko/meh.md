@@ -34,7 +34,7 @@ final class NotebookSearchUITests: XCTestCase {
             search.placeholderValue == "Search all notes"
                 || search.label == "Search all notes"
         )
-        search.tap()
+        activate(search)
         search.typeText(marker)
         XCTAssertFalse(app.staticTexts["Preparing search…"].exists)
 
@@ -99,8 +99,15 @@ final class NotebookSearchUITests: XCTestCase {
             .matching(identifier: "notebook-find").firstMatch
         XCTAssertTrue(find.waitForExistence(timeout: 10))
         activate(find)
+        #if os(macOS)
+        // The global search remains in the toolbar while AppKit opens Find.
+        let findField = app.searchFields.matching(
+            NSPredicate(format: "placeholderValue == %@", "Find")
+        ).firstMatch
+        #else
         let findField = app.searchFields.firstMatch.exists
             ? app.searchFields.firstMatch : app.textFields.firstMatch
+        #endif
         XCTAssertTrue(
             findField.waitForExistence(timeout: 5),
             "Expected the native Find field"
@@ -214,12 +221,26 @@ final class NotebookSearchUITests: XCTestCase {
     private func createNote(
         in app: XCUIApplication, title: String, body: String
     ) {
+        #if os(macOS)
+        let control = app.descendants(matching: .any)
+            .matching(identifier: "notebook-new-item").firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let newNote = control.buttons.firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 5))
+        #else
         let newNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        #endif
         activate(newNote)
+        #if os(macOS)
+        let titleField = app.descendants(matching: .any)
+            .matching(identifier: "title-field").firstMatch
+        #else
         let titleField = app.textFields["title-field"]
+        #endif
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
 #if os(macOS)
+        titleField.click()
         titleField.typeKey("a", modifierFlags: .command)
         titleField.typeText(title)
         titleField.typeKey(.return, modifierFlags: [])

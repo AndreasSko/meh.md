@@ -10,12 +10,26 @@ final class SidebarControlsUITests: XCTestCase {
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
 
+        #if os(macOS)
+        let control = app.descendants(matching: .any)
+            .matching(identifier: "notebook-new-item").firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let newNote = control.buttons.firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 5))
+        #else
         let newNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        #endif
         activate(newNote)
+        #if os(macOS)
+        let titleField = app.descendants(matching: .any)
+            .matching(identifier: "title-field").firstMatch
+        #else
         let titleField = app.textFields["title-field"]
+        #endif
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         #if os(macOS)
+        titleField.click()
         titleField.typeKey(.return, modifierFlags: [])
         #else
         titleField.typeText("\n")
@@ -48,12 +62,16 @@ final class SidebarControlsUITests: XCTestCase {
         capture(app, name: "Dedicated empty Trash")
         app.closeTrash()
 
+        #if os(macOS)
+        let originalNote = app.notebookMacFileRow(named: originalTitle)
+        #else
         let originalNote = app.buttons.matching(
             NSPredicate(
                 format: "identifier BEGINSWITH %@ AND label == %@",
                 "notebook-sidebar-note-", originalTitle
             )
         ).firstMatch
+        #endif
         XCTAssertTrue(originalNote.waitForExistence(timeout: 5))
         activate(originalNote)
         XCTAssertTrue(editor.waitForExistence(timeout: 5))

@@ -112,6 +112,7 @@ final class NotebookOrderingUITests: XCTestCase {
         let field = app.textFields["Name"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         #if os(macOS)
+        field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeText("Folder \(suffix)")
         field.typeKey(.return, modifierFlags: [])
@@ -136,7 +137,7 @@ final class NotebookOrderingUITests: XCTestCase {
         let selectAll = app.descendants(matching: .any)["notebook-select-all"]
         XCTAssertTrue(selectAll.waitForExistence(timeout: 5))
         XCTAssertEqual(selectAll.label, "Select All")
-        XCTAssertFalse(app.buttons["notebook-new-item"].exists)
+        XCTAssertFalse(newNoteControl(in: app).exists)
         capture(app, name: "Native browser selection toolbar")
 
         activate(selectAll)
@@ -213,7 +214,7 @@ final class NotebookOrderingUITests: XCTestCase {
         XCTAssertTrue(bravo.exists)
         finishSelection(in: app)
         XCTAssertTrue(appMenu(in: app).waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["notebook-new-item"].waitForExistence(timeout: 5))
+        XCTAssertTrue(newNoteControl(in: app).waitForExistence(timeout: 5))
         XCTAssertFalse(selectAll.exists)
 
         enterSelectionMode(in: app)
@@ -332,14 +333,34 @@ final class NotebookOrderingUITests: XCTestCase {
         }
     }
 
+    private func newNoteControl(in app: XCUIApplication) -> XCUIElement {
+        #if os(macOS)
+        app.descendants(matching: .any)
+            .matching(identifier: "notebook-new-item").firstMatch
+        #else
+        app.buttons["notebook-new-item"].firstMatch
+        #endif
+    }
+
     private func createNote(
         named title: String,
         in app: XCUIApplication
     ) throws -> XCUIElement {
-        let newNote = app.buttons["notebook-new-item"].firstMatch
-        XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        let control = newNoteControl(in: app)
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        #if os(macOS)
+        let newNote = control.buttons.firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 5))
+        #else
+        let newNote = control
+        #endif
         activate(newNote)
+        #if os(macOS)
+        let field = app.descendants(matching: .any)
+            .matching(identifier: "title-field").firstMatch
+        #else
         let field = app.textFields["title-field"]
+        #endif
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         #if os(macOS)
         field.typeKey("a", modifierFlags: .command)
@@ -361,6 +382,9 @@ final class NotebookOrderingUITests: XCTestCase {
         kind: RowKind,
         in app: XCUIApplication
     ) -> XCUIElement {
+        #if os(macOS)
+        return app.notebookMacFileRow(named: name, identifierPrefix: kind.prefix)
+        #else
         let title = app.staticTexts.matching(
             NSPredicate(
                 format: "identifier BEGINSWITH %@ AND label == %@",
@@ -372,6 +396,7 @@ final class NotebookOrderingUITests: XCTestCase {
             of: "notebook-sidebar-title-", with: ""
         )
         return app.descendants(matching: .any)[kind.prefix + id]
+        #endif
     }
 
     private func title(

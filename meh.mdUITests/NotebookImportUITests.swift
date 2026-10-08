@@ -18,6 +18,7 @@ final class NotebookImportUITests: XCTestCase {
                 && (1...65_535).contains(port),
             "Use the opt-in Tools/Import simulator runner."
         )
+        Self.prepareLocalFilesProvider()
         fixtureName = fixture
         app = XCUIApplication()
         app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
@@ -113,6 +114,35 @@ final class NotebookImportUITests: XCTestCase {
         capture("import-settings")
     }
 
+    nonisolated private static func prepareLocalFilesProvider() {
+        // The first Files launch initializes the native provider on a fresh
+        // simulator. Wait for its real UI before testing the app's picker.
+        let files = XCUIApplication(bundleIdentifier: "com.apple.DocumentsApp")
+        files.launch()
+        defer { files.terminate() }
+        let browse = files.buttons.matching(NSPredicate(
+            format: "label IN %@", ["Browse", "Durchsuchen"]
+        )).firstMatch
+        XCTAssertTrue(browse.waitForExistence(timeout: 30))
+        browse.tap()
+        let local = files.cells.matching(NSPredicate(
+            format: "identifier IN %@",
+            ["DOC.sidebar.item.On My iPhone", "DOC.sidebar.item.Auf meinem iPhone"]
+        )).firstMatch
+        let container = files.cells.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "meh.md,"
+        )).firstMatch
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in local.exists || container.exists },
+            object: files
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 30), .completed)
+        if !container.exists {
+            local.tap()
+        }
+        XCTAssertTrue(container.waitForExistence(timeout: 30))
+    }
+
     private func openPicker(folder: Bool) {
         app.buttons["notebook-import"].tap()
         let choice = app.buttons[folder ? "Import Folder…" : "Import Files…"]
@@ -128,11 +158,14 @@ final class NotebookImportUITests: XCTestCase {
             format: "identifier IN %@",
             ["DOC.sidebar.item.On My iPhone", "DOC.sidebar.item.Auf meinem iPhone"]
         )).firstMatch
-        XCTAssertTrue(local.waitForExistence(timeout: 5))
-        local.tap()
         let container = app.cells.matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "meh.md,"
         )).firstMatch
+        // With a single local provider, Browse may open On My iPhone directly.
+        if !container.exists {
+            XCTAssertTrue(local.waitForExistence(timeout: 5))
+            local.tap()
+        }
         XCTAssertTrue(container.waitForExistence(timeout: 5))
         container.tap()
         let fixture = sourceCell(fixtureName)

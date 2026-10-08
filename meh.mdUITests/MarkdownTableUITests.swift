@@ -208,13 +208,11 @@ final class MarkdownTableUITests: XCTestCase {
         let action = app.buttons[title].firstMatch
         if action.exists { return action }
         let menu = app.buttons["editor-table-menu"].firstMatch
-        let nativeMenu = app.collectionViews.allElementsBoundByIndex.first {
-            $0.identifier != "editor-keyboard-toolbar" && $0.frame.width > 100
-                && $0.buttons.count > 0
-        }
-        if nativeMenu != nil {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-        }
+        // A regular iPad sidebar is also a collection view. Only dismiss an
+        // actual Table action menu; tapping the document would change its cell.
+        let nativeMenuIsOpen = titles.values.contains { app.buttons[$0].exists }
+            || ["Row", "Column", "Column Alignment"].contains { app.buttons[$0].exists }
+        if nativeMenuIsOpen { menu.tap() }
         let toolbar = app.collectionViews["editor-keyboard-toolbar"]
         XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
         for _ in 0..<4 where !menu.isHittable { toolbar.swipeRight() }

@@ -429,7 +429,8 @@ final class RecentsExpansionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
         app.launchEnvironment["MEH_SYNC_URL"] =
-            ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
+            ProcessInfo.processInfo.ciLoopbackURL
+            ?? ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
             ?? "http://127.0.0.1:9874"
         app.launchEnvironment["MEH_SYNC_WORKSPACE"] = workspace
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"

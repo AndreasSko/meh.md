@@ -9,11 +9,12 @@ final class MacRecentsUITests: XCTestCase {
         let recents = app.buttons["notebook-recents-toggle"]
         XCTAssertTrue(recents.waitForExistence(timeout: 15))
         if recents.value as? String == "Collapsed" { recents.click() }
-        let rows = recentButtons(app)
+        var rows = recentButtons(app)
         XCTAssertEqual(rows.count, 5)
         let newest = rows.firstMatch
         newest.click()
         let newestFrame = newest.frame
+        let newestIdentifier = newest.identifier
         XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 10))
         let files = app.buttons["notebook-tree-toggle"]
         if files.value as? String == "Collapsed" { files.click() }
@@ -26,6 +27,8 @@ final class MacRecentsUITests: XCTestCase {
         let more = app.buttons["notebook-recents-more"]
         XCTAssertTrue(more.waitForExistence(timeout: 5))
         more.click()
+        rows = recentButtons(app)
+        let expandedNewest = rows.matching(identifier: newestIdentifier).firstMatch
         let collapse = app.buttons["notebook-recents-collapse"]
         XCTAssertTrue(collapse.waitForExistence(timeout: 5))
         XCTAssertTrue(collapse.isHittable)
@@ -33,10 +36,10 @@ final class MacRecentsUITests: XCTestCase {
                                  app.windows.firstMatch.frame.maxY - 8)
         let steadyRow = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
-                abs(newest.frame.minX - newestFrame.minX) <= 1
-                    && abs(newest.frame.minY - newestFrame.minY) <= 1
-                    && abs(newest.frame.width - newestFrame.width) <= 1
-            }, object: newest
+                abs(expandedNewest.frame.minX - newestFrame.minX) <= 1
+                    && abs(expandedNewest.frame.minY - newestFrame.minY) <= 1
+                    && abs(expandedNewest.frame.width - newestFrame.width) <= 1
+            }, object: expandedNewest
         )
         XCTAssertEqual(XCTWaiter.wait(for: [steadyRow], timeout: 5), .completed)
         XCTAssertFalse(files.isHittable)
@@ -59,6 +62,7 @@ final class MacRecentsUITests: XCTestCase {
         app.typeKey("r", modifierFlags: [.command, .shift])
         XCTAssertTrue(more.isHittable)
         more.click()
+        rows = recentButtons(app)
         let older = rows.matching(NSPredicate(
             format: "label CONTAINS %@", "Moonrise"
         )).firstMatch
@@ -76,6 +80,7 @@ final class MacRecentsUITests: XCTestCase {
         XCTAssertTrue(files.isHittable)
         XCTAssertEqual(files.frame.minY, filesFrame.minY, accuracy: 2)
         more.click()
+        rows = recentButtons(app)
         rows.firstMatch.rightClick()
         let pin = app.menuItems["Pin in Recents"]
         let unpin = app.menuItems["Unpin from Recents"]
@@ -102,7 +107,8 @@ final class MacRecentsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
         app.launchEnvironment["MEH_SYNC_URL"] =
-            ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
+            ProcessInfo.processInfo.ciLoopbackURL
+            ?? ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
             ?? "http://127.0.0.1:9874"
         app.launchEnvironment["MEH_SYNC_WORKSPACE"] = reuse ?? "mac-recents-" + UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
@@ -113,14 +119,18 @@ final class MacRecentsUITests: XCTestCase {
                          "Reading list", "Garden plans", "Weekend ideas", "Meteor shower",
                          "Sketchbook", "Travel notes", "Observatory log", "Aurora watch"]
             for (index, name) in names.enumerated() {
-                let newNote = app.buttons["notebook-new-item"].firstMatch
-                XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+                let control = app.descendants(matching: .any)
+                    .matching(identifier: "notebook-new-item").firstMatch
+                XCTAssertTrue(control.waitForExistence(timeout: 15))
+                let newNote = control.buttons.firstMatch
+                XCTAssertTrue(newNote.waitForExistence(timeout: 5))
                 let enabled = XCTNSPredicateExpectation(
                     predicate: NSPredicate(format: "enabled == true"), object: newNote
                 )
                 XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 15), .completed)
                 newNote.click()
-                let title = app.textFields["title-field"]
+                let title = app.descendants(matching: .any)
+                    .matching(identifier: "title-field").firstMatch
                 XCTAssertTrue(title.waitForExistence(timeout: 10))
                 title.click()
                 title.typeKey("a", modifierFlags: .command)
@@ -137,7 +147,7 @@ final class MacRecentsUITests: XCTestCase {
     }
 
     private func recentButtons(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.buttons.matching(NSPredicate(
+        app.notebookVisibleMacSidebar.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND NOT identifier BEGINSWITH %@ "
                 + "AND NOT identifier BEGINSWITH %@",
             "notebook-recent-", "notebook-recent-pin-", "notebook-recent-swipe-"

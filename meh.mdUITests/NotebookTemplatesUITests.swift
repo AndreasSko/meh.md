@@ -148,10 +148,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         let sourceID = itemID(named: "Meeting", in: app)
         markTemplate(sourceID, named: "Meeting", in: app)
 
-        app.buttons["notebook-app-menu"].tap()
-        capture(app, "after-creation-menu")
-        app.buttons["notebook-settings"].tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        openSettings(app)
         capture(app, "after-settings")
         app.buttons["notebook-templates-settings"].tap()
         let sourceOptions = app.buttons["notebook-template-options-" + sourceID]
@@ -427,15 +424,24 @@ final class NotebookTemplatesUITests: XCTestCase {
     }
 
     private func showFiles(_ app: XCUIApplication) {
-        if !app.buttons["notebook-app-menu"].isHittable {
-            app.navigationBars.buttons.firstMatch.tap()
-        }
+        app.revealNotebookSidebar(timeout: 5)
         XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(timeout: 5))
     }
 
+    private func openSettings(_ app: XCUIApplication) {
+        let settings = app.buttons["notebook-settings"]
+        if !settings.isHittable {
+            app.buttons["notebook-app-menu"].tap()
+        }
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.isHittable)
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+    }
+
     private func openTemplatesSettings(_ app: XCUIApplication) {
-        app.buttons["notebook-app-menu"].tap()
-        app.buttons["notebook-settings"].tap()
+        openSettings(app)
+        XCTAssertTrue(app.buttons["notebook-templates-settings"].waitForExistence(timeout: 5))
         app.buttons["notebook-templates-settings"].tap()
     }
 

@@ -15,6 +15,9 @@ and the evidence collected along the way.
 
 ## Build and validate
 
+- [Complete CI coverage](ci-test-coverage.md): platform matrix, explicit
+  exclusions, passing test evidence, and the GitHub API audit.
+
 - [Development builds](development-builds.md): Local, development-cloud, and
   production-cloud schemes.
 - [CloudKit setup](cloudkit-sync-setup.md): signing and container setup.
