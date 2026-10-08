@@ -1,3 +1,4 @@
+import Darwin
 import NoteCore
 import SwiftUI
 import UIKit
@@ -19,6 +20,11 @@ enum LargeNotePerformanceProbe {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let environment = ProcessInfo.processInfo.environment
+            // Optional profiler attachment window, outside all measured work.
+            if let delay = Double(environment["EDITOR_PERFORMANCE_START_DELAY_SECONDS"] ?? ""),
+               (0...60).contains(delay) {
+                try await Task.sleep(for: .seconds(delay))
+            }
             let kilobytes = Int(environment["EDITOR_PERFORMANCE_BLOCKS"] ?? "500") ?? 500
             let mode = MarkdownEditorMode(
                 rawValue: environment["EDITOR_PERFORMANCE_MODE"] ?? "livePreview"
@@ -137,16 +143,26 @@ enum LargeNotePerformanceProbe {
                 let savedHeads = session.persistedSnapshot?.heads
                 let signpost = OSSignpostID(log: log)
                 os_signpost(.begin, log: log, name: "Large note edit", signpostID: signpost)
+                let cpuStart = try mainThreadCPUMilliseconds()
                 let start = CACurrentMediaTime()
                 if deleting { editor.deleteBackward() } else { editor.insertText(replacement) }
                 let synchronousMS = milliseconds(since: start)
+                let synchronousCPU = try mainThreadCPUMilliseconds() - cpuStart
                 await nextIdle()
                 let idleMS = milliseconds(since: start)
+                let idleCPU = try mainThreadCPUMilliseconds() - cpuStart
+                guard synchronousCPU >= 0, idleCPU >= synchronousCPU else {
+                    throw ProbeError.failed("Main-thread CPU clock moved backwards")
+                }
                 os_signpost(.end, log: log, name: "Large note edit", signpostID: signpost)
                 measurements["\(kind)_synchronous_ms", default: []].append(synchronousMS)
                 measurements["\(kind)_to_idle_ms", default: []].append(idleMS)
+                measurements["\(kind)_synchronous_main_thread_cpu_ms", default: []].append(synchronousCPU)
+                measurements["\(kind)_to_idle_main_thread_cpu_ms", default: []].append(idleCPU)
                 steps.append(["action": kind, "synchronous_ms": synchronousMS,
                               "to_idle_ms": idleMS,
+                              "synchronous_main_thread_cpu_ms": synchronousCPU,
+                              "to_idle_main_thread_cpu_ms": idleCPU,
                               "save_completed_during_edit": savedHeads != session.persistedSnapshot?.heads,
                               "presentation_current_at_idle": cache.currentPresentation != nil,
                               "full_parses": cache.parseCount - fullParses,
@@ -239,6 +255,8 @@ enum LargeNotePerformanceProbe {
                 "multiline_bold_fonts_verified": true,
                 "full_parses_during_edits": cache.parseCount - initialFullParses,
                 "incremental_parses_during_edits": cache.incrementalParseCount - initialIncrementalParses,
+                "main_thread_cpu_captured": true,
+                "main_thread_cpu_note": "Darwin thread_info cumulative main-thread user + system CPU. Idle interval includes all main-thread work until next run-loop idle, excluding suspended time and other-thread work. Separate clock reads add small instrumentation overhead; CPU is diagnostic and wall-clock budgets remain authoritative.",
                 "measurements": measurements, "steps": steps,
                 "measurement_note": host == "notebook"
                     ? "Native edit call and next main-run-loop idle. Includes the real NotebookView, NoteSession, local catalog, and edit callbacks; no CloudKit. Not physical-display latency. Autosave wait includes debounce."
@@ -258,6 +276,29 @@ enum LargeNotePerformanceProbe {
             )
             try data.write(to: directory.appending(path: "performance.json"), options: .atomic)
         } catch { NSLog("Large-note report failed: %@", String(describing: error)) }
+    }
+
+    /// The probe and edit continuations are main-actor isolated. Query the
+    /// main pthread directly so CPU deltas remain comparable across awaits.
+    private static func mainThreadCPUMilliseconds() throws -> Double {
+        guard Thread.isMainThread else {
+            throw ProbeError.failed("CPU capture must run on the main thread")
+        }
+        var info = thread_basic_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<integer_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                thread_info(pthread_mach_thread_np(pthread_self()),
+                            thread_flavor_t(THREAD_BASIC_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else {
+            throw ProbeError.failed("Main-thread CPU capture failed: Darwin error \(result)")
+        }
+        return (Double(info.user_time.seconds) + Double(info.system_time.seconds)) * 1_000
+            + (Double(info.user_time.microseconds) + Double(info.system_time.microseconds)) / 1_000
     }
 
     private static func fixture(minimumBytes: Int) -> String {

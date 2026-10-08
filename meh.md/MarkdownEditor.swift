@@ -1101,8 +1101,9 @@ struct MarkdownEditor: NSViewRepresentable {
         }
 
         private func reportLinkSelection(in textView: NSTextView) {
-            guard !textView.hasMarkedText() else { return }
-            let text = textView.string
+            guard !textView.hasMarkedText(), let storage = textView.textStorage else { return }
+            let text = MarkdownPresentation.syntaxCache(for: textView)
+                .textSnapshot(in: storage)
             let selection = textView.selectedRange()
             let editing = textView.window?.firstResponder === textView
             let navigation = parent.navigation
@@ -2737,7 +2738,8 @@ struct MarkdownEditor: UIViewRepresentable {
 
         private func reportLinkSelection(in textView: UITextView) {
             guard textView.markedTextRange == nil else { return }
-            let text = textView.text ?? ""
+            let text = MarkdownPresentation.syntaxCache(for: textView)
+                .textSnapshot(in: textView.textStorage)
             let selection = textView.selectedRange
             let editing = textView.isFirstResponder
             let navigation = parent.navigation

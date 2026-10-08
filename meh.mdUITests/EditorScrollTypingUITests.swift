@@ -278,7 +278,12 @@ final class EditorScrollTypingUITests: XCTestCase {
     ) throws {
         // This fictional note has no links or other blue content. Detect
         // UIKit's blinking caret in actual pixels, without layout queries.
-        for _ in 0..<4 {
+        // Accessibility queries can make each attempt take about two seconds.
+        // Stagger the intervals so every sample cannot hit the caret's hidden
+        // blink phase, as observed in the CI recording.
+        let delays: [TimeInterval] = [0.17, 0.43, 0.71, 0.29, 0.59]
+        var failedSamples: [(XCUIScreenshot, CGRect)] = []
+        for attempt in 0...delays.count {
             let screenshot = app.screenshot()
             let image = try XCTUnwrap(UIImage(data: screenshot.pngRepresentation)?.cgImage)
             let width = image.width, height = image.height
@@ -317,7 +322,19 @@ final class EditorScrollTypingUITests: XCTestCase {
                 }
             }
             if CGFloat(lastRow - firstRow) >= scale * 6 { return }
-            Thread.sleep(forTimeInterval: 0.3)
+            failedSamples.append((screenshot, CGRect(
+                x: 0, y: CGFloat(top) / scale, width: CGFloat(width) / scale,
+                height: CGFloat(bottom - top) / scale
+            )))
+            if attempt < delays.count {
+                Thread.sleep(forTimeInterval: delays[attempt])
+            }
+        }
+        for (index, sample) in failedSamples.enumerated() {
+            let attachment = XCTAttachment(screenshot: sample.0)
+            attachment.name = "Caret sample \(index + 1), visible \(sample.1)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
         }
         capture(app, name: "Focused caret missing above keyboard")
         XCTFail("The caret must be visible when the keyboard opens and typing begins")

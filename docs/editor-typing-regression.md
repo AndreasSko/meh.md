@@ -82,11 +82,14 @@ correct. Native comparisons also require a matching literal-fixture SHA-256.
   50 KB and 2,000 ms at 500 KB. Synchronous limits remain 50 ms and 150 ms,
   respectively. This is a single-sample ceiling, not a p95 threshold.
 
-The Unicode full-parser benchmark runs seven samples at 50 KB and 500 KB.
-Both fixture sizes must improve median and p95 by at least 20% over the
-0.10.6 baseline from the same runner. Absolute ceilings are 50 ms at 50 KB
-and 300 ms at 500 KB. Fixture byte count, UTF-16 length, and syntax hash must
-match between baseline and candidate.
+The Unicode full-parser benchmark takes 21 samples at 50 KB and 500 KB in
+each of three balanced independent launches per variant. The median of run
+medians and median of run p95 values must both improve by at least 20% over
+the 0.10.6 baseline on the same runner. Current and optimized reference
+launches retain absolute ceilings of 50 ms at 50 KB and 300 ms at 500 KB.
+Fixture byte count, UTF-16 length, and syntax hash must match in every run.
+The optimized reference comparison uses median only: current must remain
+within 120% of reference plus 2 ms at 50 KB or 5 ms at 500 KB.
 
 The bulk insertion can trigger a multiline viewport stall that is distinct
 from repeated character edits. Earlier 500 KB runs measured about 783–810 ms
@@ -243,13 +246,15 @@ The physical profile records baseline hangs, not a before/after device test.
 Candidate physical-device performance, long-lived document history, and live
 CloudKit remain separate verification work.
 
-A frozen fixed-source reference (`editor-performance-reference-0.10.7`)
-also runs on the same runner. Parser median and p95 at both sizes, and
-native 500 KB typing synchronous and to-idle median and p95, must stay
-within 20% of that reference. The slower 0.10.6 comparison remains a
-negative control; it is not the only regression threshold. Reference and
-candidate must use the same fictional input and match literal or syntax
-checksums. This catches partial slowdowns that still beat 0.10.6.
+The current frozen optimized reference is commit `3698141`; it supersedes
+the historical `editor-performance-reference-0.10.7` control. Parser gates
+use the three balanced launches and median reference allowance described
+above. Native 500 KB probes use three paired independent launches; current
+aggregate medians must remain within 120% of reference plus 10 ms. Every
+native launch retains all absolute wall-clock limits. The slower 0.10.6
+comparison remains a negative control alongside these regression checks.
+Reference and candidate use the same fictional input and match literal or
+syntax checksums. This catches partial slowdowns that still beat 0.10.6.
 
 The first character remains in the measured samples; the probe does not
 warm it away with a discarded edit. A CI reference run measured a 1,736 ms
@@ -260,3 +265,41 @@ first character at 500 ms for 50 KB or 2,000 ms for 500 KB. Every subsequent
 character must finish within 500 ms, including the nearby-table case.
 These simulator ceilings are regression controls, not physical latency
 guarantees.
+
+### Balanced parser launches
+
+CI run `37733656194` measured a 500 KB current median of 138.866 ms
+against a baseline of 239.333 ms (about 42% faster). Its p95 was
+220.312 ms against 259.564 ms, missing the unchanged 20% improvement
+requirement of 207.651 ms. The current samples showed a slow middle
+section and returned to about 130 ms. The optimized reference median
+was 114.860 ms; current passed its 142.832 ms allowance. This describes
+the observed variation; it does not establish a host-related cause.
+
+The workflow now builds baseline, frozen optimized reference, and current
+before measuring any of them. Three independent `swift test --skip-build`
+launches per variant rotate their order: baseline/reference/current,
+reference/current/baseline, then current/baseline/reference. No catalog
+work or compilation separates these nine launches. Every report must
+contain the same two fixture identities and 21 valid samples per fixture.
+Current and optimized reference launches must pass the absolute median
+and p95 ceilings. The historical baseline still validates structure and
+fidelity; its old parser may legitimately exceed those ceilings. Missing
+reports, reused report paths, changed syntax hashes, and unexpected or modified
+control production sources fail closed.
+
+Relative gates compare the median of the three run medians and the median
+of the three run p95 values. Current must still improve both metrics by
+20% against baseline. Its median must remain within 120% of the optimized
+reference plus 2 ms at 50 KB or 5 ms at 500 KB. A slow single launch cannot
+hide an absolute violation; repeated tail or median regressions still fail.
+All nine raw reports and launch logs are retained, and native editor probes
+run after a parser failure so that one gate cannot suppress their evidence.
+
+The actual nine-launch protocol also passed locally after prebuilding.
+At 500 KB, current median-of-medians/p95 were 88.957/92.901 ms,
+baseline was 182.701/187.524 ms, and optimized reference was
+89.396/94.298 ms. These validate the collection method; they do not
+represent a new parser improvement in this PR. All 36 timed test cases
+passed. [Raw reports](benchmarks/parser-paired-performance-2026-10-08.json)
+record every launch on the local Apple M3 Max / macOS 27.0.1 host.

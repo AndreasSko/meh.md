@@ -53,7 +53,7 @@ final class MarkdownFullParsePerformanceTests: XCTestCase {
             let fingerprint = SHA256.hash(data: Data(String(reflecting: expected).utf8))
                 .map { String(format: "%02x", $0) }.joined()
             var samples: [Double] = []
-            for _ in 0..<7 {
+            for _ in 0..<21 {
                 let start = ContinuousClock.now
                 let result = MarkdownSyntax.parse(text)
                 let elapsed = start.duration(to: .now)
@@ -64,7 +64,7 @@ final class MarkdownFullParsePerformanceTests: XCTestCase {
             }
             let sorted = samples.sorted()
             rows.append(["utf8_bytes": text.utf8.count, "utf16_length": text.utf16.count,
-                         "median_ms": sorted[3], "p95_ms": sorted[6], "samples_ms": samples,
+                         "median_ms": sorted[10], "p95_ms": sorted[19], "samples_ms": samples,
                          "syntax_sha256": fingerprint])
         }
         let report: [String: Any] = ["label": environment["MEH_FULL_PARSE_LABEL"] ?? "unspecified",

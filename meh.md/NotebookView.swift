@@ -3292,8 +3292,8 @@ struct NotebookView: View {
         }
         navigation.selectionChanged = { [weak navigation] text, range, editing in
             guard navigation === editorNavigation, editing, !busy, historyBrowser == nil,
-                  session?.isEditingEnabled == true,
-                  text == session?.text, linkInsertion == nil else {
+                  let session, session.isEditingEnabled,
+                  text.utf8.elementsEqual(session.text.utf8), linkInsertion == nil else {
                 dismissEditorCompletion()
                 navigation?.hasLinkCompletion = false
                 return

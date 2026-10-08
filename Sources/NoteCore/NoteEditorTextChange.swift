@@ -17,10 +17,22 @@ public struct NoteEditorTextChange: Sendable, Equatable {
         let scalarRange = try AutomergeTextIndex.unicodeScalarRange(
             forUTF16Range: range, in: source
         )
-        let reconstructed = (source as NSString).replacingCharacters(
-            in: range, with: replacement
-        )
-        guard reconstructed.utf8.elementsEqual(text.utf8) else { return nil }
+        // Compare literal code units without reconstructing a Foundation
+        // string and transcoding its entire foreign UTF-8 view. Scalar-boundary
+        // validation above also permits edits inside a composed grapheme.
+        var sourceUnits = source.utf16.makeIterator()
+        var resultUnits = text.utf16.makeIterator()
+        for _ in 0..<range.location {
+            guard sourceUnits.next() == resultUnits.next() else { return nil }
+        }
+        for _ in 0..<range.length { _ = sourceUnits.next() }
+        for unit in replacement.utf16 {
+            guard resultUnits.next() == unit else { return nil }
+        }
+        while let unit = sourceUnits.next() {
+            guard resultUnits.next() == unit else { return nil }
+        }
+        guard resultUnits.next() == nil else { return nil }
         return scalarRange
     }
 }

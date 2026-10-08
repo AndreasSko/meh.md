@@ -14,7 +14,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CI_SCRIPT = REPO_ROOT / "scripts" / "run_editor_performance_ci.sh"
 BASELINE_REVISION = "1378bf5e1b9fcaf0ff5e97435a320ef7d726ef42"
-REFERENCE_REVISION = "0dcaea9eeef6d635604c4d8570c9a2af983b0d73"
+REFERENCE_REVISION = "369814141840b6f9ee1f898eae628d35ad4d68ca"
 
 
 def write_executable(path, contents):
@@ -71,8 +71,14 @@ class EditorPerformanceCIOrchestrationTests(unittest.TestCase):
     def _write_harness(self, root):
         write_executable(root / "scripts" / "run_editor_performance_check.sh", r'''#!/bin/bash
 set -euo pipefail
+if [[ "${EDITOR_PERFORMANCE_BUILD_ONLY:-0}" == 1 ]]; then
+  printf 'build:%s\n' "$(cd "$(dirname "$0")/.." && pwd)" >> "$ORCH_EVENT_LOG"
+  [[ "${ORCH_FAIL_BUILD:-}" != "$(basename "$(cd "$(dirname "$0")/.." && pwd)")" ]] || exit 3
+  exit 0
+fi
 label="$(basename "$5" .json)"
 printf 'probe:%s:%s\n' "$label" "$(cd "$(dirname "$0")/.." && pwd)" >> "$ORCH_EVENT_LOG"
+[[ "${ORCH_FAIL_PROBE:-}" != "$label" ]] || exit 4
 python3 - "$5" "$4" <<'PY'
 import json
 import os
@@ -225,10 +231,18 @@ fi
         self.assertEqual([event.split(":")[1] for event in probes], [
             "baseline-standard-500kb",
             "reference-standard-500kb",
-            "mixed-50kb",
             "standard-500kb",
+            "standard-500kb-2",
+            "reference-standard-500kb-2",
+            "reference-standard-500kb-3",
+            "standard-500kb-3",
+            "mixed-50kb",
             "nearby-table-50kb",
         ])
+        builds = [event for event in events if event.startswith("build:")]
+        self.assertEqual(builds, [f"build:{root}" for root in
+                                  (self.baseline, self.reference, self.candidate)])
+        self.assertLess(events.index(builds[-1]), events.index(probes[0]))
         self.assertEqual(events.count("sim:shutdown"), 1)
         self.assertEqual(events.count("sim:delete"), 1)
         self.assertLess(events.index(probes[-1]), events.index("sim:shutdown"))
@@ -245,11 +259,13 @@ fi
             if arguments[0].endswith("/standard-500kb.json")
         )
         self.assertIn("--baseline-report", current_standard)
-        self.assertIn("--reference-report", current_standard)
+        self.assertNotIn("--reference-report", current_standard)
         self.assertTrue(any(argument.endswith("/baseline-standard-500kb.json")
                             for argument in current_standard))
-        self.assertTrue(any(argument.endswith("/reference-standard-500kb.json")
-                            for argument in current_standard))
+        aggregate = next(args for args in checker_arguments
+                         if "--paired-current-report" in args)
+        self.assertEqual(aggregate.count("--paired-current-report"), 3)
+        self.assertEqual(aggregate.count("--paired-reference-report"), 3)
         self.assertNotIn("", current_standard)
         mixed = next(
             arguments for arguments in checker_arguments
@@ -267,7 +283,7 @@ fi
             f"evidence_root={self.runner_temp}/editor-performance-evidence-"
         ))
 
-    def test_checker_failure_stops_later_cases_and_cleans_up_once(self):
+    def test_checker_failure_collects_later_cases_and_cleans_up_once(self):
         result = self._run_script(ORCH_FAIL_LABEL="mixed-50kb")
         self.assertNotEqual(result.returncode, 0)
         events = self._events()
@@ -275,17 +291,47 @@ fi
         self.assertEqual([event.split(":")[1] for event in probes], [
             "baseline-standard-500kb",
             "reference-standard-500kb",
+            "standard-500kb",
+            "standard-500kb-2",
+            "reference-standard-500kb-2",
+            "reference-standard-500kb-3",
+            "standard-500kb-3",
             "mixed-50kb",
+            "nearby-table-50kb",
         ])
-        self.assertFalse(any("probe:standard-500kb:" in event for event in events))
-        self.assertFalse(any("probe:nearby-table-50kb:" in event
-                             for event in events))
+        self.assertIn("Failed performance case: mixed-50kb", result.stderr)
         self.assertEqual(events.count("sim:shutdown"), 1)
         self.assertEqual(events.count("sim:delete"), 1)
         self.assertLess(events.index(probes[-1]), events.index("sim:shutdown"))
         self.assertLess(events.index("check:mixed-50kb"),
                         events.index("sim:shutdown"))
         self.assertLess(events.index("sim:shutdown"), events.index("sim:delete"))
+
+    def test_even_attempt_reverses_each_pair(self):
+        result = self._run_script(GITHUB_RUN_ATTEMPT="2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        probes = [event.split(":")[1] for event in self._events()
+                  if event.startswith("probe:")]
+        self.assertEqual(probes[1:7], [
+            "standard-500kb", "reference-standard-500kb",
+            "reference-standard-500kb-2", "standard-500kb-2",
+            "standard-500kb-3", "reference-standard-500kb-3",
+        ])
+
+    def test_runner_failure_preserves_later_evidence(self):
+        result = self._run_script(ORCH_FAIL_PROBE="standard-500kb")
+        self.assertNotEqual(result.returncode, 0)
+        events = self._events()
+        self.assertIn("check:nearby-table-50kb", events)
+        self.assertIn("standard-500kb (status 4)", result.stderr)
+        self.assertEqual(events.count("sim:delete"), 1)
+
+    def test_failed_prebuild_never_starts_measurement(self):
+        result = self._run_script(ORCH_FAIL_BUILD="reference")
+        self.assertNotEqual(result.returncode, 0)
+        events = self._events()
+        self.assertFalse(any(event.startswith("probe:") for event in events))
+        self.assertEqual(events.count("sim:delete"), 1)
 
 
 if __name__ == "__main__":

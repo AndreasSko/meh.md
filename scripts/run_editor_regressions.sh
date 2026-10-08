@@ -54,6 +54,9 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+python3 -m unittest discover -s "$repo_root/scripts" \
+  -p test_check_editor_regression_results.py
+
 xcodebuild -version | tee "$evidence_root/toolchain.txt"
 grep -Eq '^Xcode 27([. ]|$)' "$evidence_root/toolchain.txt"
 git -C "$repo_root" rev-parse HEAD > "$evidence_root/checkout.txt"
@@ -170,7 +173,10 @@ run_phase native xcodebuild test-without-building -xctestrun "$native_run" \
   -only-testing:NativeEditorTests/MarkdownParagraphGapTests \
   -only-testing:NativeEditorTests/MarkdownHeadingGeometryTests \
   -only-testing:NativeEditorTests/MarkdownRenderingAttributeTests \
+  -only-testing:NativeEditorTests/MarkdownRenderingIndexTests \
   -only-testing:NativeEditorTests/NativeEditorIntegrationTests \
+  -only-testing:NativeEditorTests/MarkdownNativeTextChangeTests \
+  -only-testing:NativeEditorTests/MarkdownSelectionSnapshotTests \
   -parallel-testing-enabled NO -resultBundlePath "$evidence_root/native.xcresult"
 
 run_phase ui xcodebuild test -project "$repo_root/meh.md.xcodeproj" \

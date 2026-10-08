@@ -31,8 +31,15 @@ blocks="${4:-$default_size}"
 output="${5:-/tmp/meh-editor-performance.json}"
 case "$mode" in source|livePreview) ;; *) exit 2 ;; esac
 [[ "$blocks" =~ ^[0-9]+$ ]] && ((blocks >= 1 && blocks <= maximum_size)) || exit 2
+build_only="${EDITOR_PERFORMANCE_BUILD_ONLY:-0}"
+case "$build_only" in 0|1) ;; *) exit 2 ;; esac
+keep_alive="${EDITOR_PERFORMANCE_DIAGNOSTIC_KEEP_ALIVE_SECONDS:-0}"
+[[ "$keep_alive" =~ ^[0-9]+$ ]] && ((keep_alive <= 60)) || {
+  echo "Diagnostic keep-alive must be 0..60 seconds" >&2; exit 2;
+}
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 # Validate the runtime before compiling or replacing the existing test app.
+if [[ "$build_only" != 1 ]]; then
 xcrun simctl list --json | python3 -c '
 import json
 import sys
@@ -53,7 +60,9 @@ if tuple(map(int, runtime["version"].split("."))) < (27, 0):
 if not runtime.get("isAvailable") or not device.get("isAvailable"):
     sys.exit("Selected simulator is unavailable")
 ' "$device"
+fi
 # A failed build or launch must not leave a previous result at this run's path.
+if [[ "$build_only" != 1 ]]; then
 python3 - "$output" <<'PY'
 import sys
 from pathlib import Path
@@ -61,10 +70,13 @@ output = Path(sys.argv[1])
 output.unlink(missing_ok=True)
 output.with_name(output.stem + "-fixture.md").unlink(missing_ok=True)
 PY
+fi
 check_root="$(mktemp -d "${TMPDIR:-/tmp}/meh-editor-performance.XXXXXX")"
 probe_launched=0
+keep_alive_pid=""
 bundle_id="de.andreas-sk.meh-md.editor-quote-check"
 cleanup() {
+  [[ -z "$keep_alive_pid" ]] || kill "$keep_alive_pid" >/dev/null 2>&1 || true
   if [[ "$probe_launched" == 1 ]]; then
     xcrun simctl terminate "$device" "$bundle_id" >/dev/null 2>&1 || true
   fi
@@ -117,6 +129,14 @@ sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 target="$(uname -m)-apple-ios27.0-simulator"
 app_cache="${EDITOR_PERFORMANCE_APP_CACHE:-}"
 cache_helper="$repo_root/scripts/editor_performance_app_cache.py"
+compiler_flags=(-O -g -parse-as-library -swift-version 6
+  -default-isolation MainActor -D ICLOUD_ENABLED -D ICLOUD_DEV)
+if [[ "$scenario" == large-note ]]; then
+  compiler_flags+=(-D LARGE_NOTE_PERFORMANCE)
+  if [[ "$performance_host" == notebook ]]; then
+    compiler_flags+=(-D NOTEBOOK_PERFORMANCE_HOST -D DEBUG -D SYNC_LAB)
+  fi
+fi
 cache_key=""
 cache_hit=0
 if [[ -n "$app_cache" ]]; then
@@ -124,7 +144,8 @@ if [[ -n "$app_cache" ]]; then
 $(swift --version)"
   key_arguments=(key --repo "$repo_root" --sources "$check_root/sources"
     --compiler "$compiler_version" --sdk "$sdk" --target "$target"
-    --scenario "$scenario" --host "$performance_host")
+    --scenario "$scenario" --host "$performance_host"
+    --flags "${compiler_flags[*]}")
   cache_key="$(python3 "$cache_helper" "${key_arguments[@]}")"
   if python3 "$cache_helper" lookup --cache "$app_cache" --key "$cache_key" --app "$check_app"; then
     cache_hit=1
@@ -133,6 +154,10 @@ $(swift --version)"
     status=$?
     [[ "$status" == 1 ]] || exit "$status"
   fi
+fi
+if [[ "${EDITOR_PERFORMANCE_REQUIRE_CACHED_APP:-0}" == 1 && "$cache_hit" != 1 ]]; then
+  echo "Diagnostic requires an existing verified compiled app" >&2
+  exit 1
 fi
 if [[ "$cache_hit" == 0 ]]; then
   extra_arguments=("$repo_root/Tools/EditorQuoteCheck/EditorQuoteCheck.swift")
@@ -149,20 +174,16 @@ if [[ "$cache_hit" == 0 ]]; then
       "$products/AutomergeUniffi.o" "$products/AutomergeUtilities.o")
   fi
   if [[ "$scenario" == large-note ]]; then
-    extra_arguments+=(-D LARGE_NOTE_PERFORMANCE
+    extra_arguments+=(
       "$repo_root/Tools/EditorQuoteCheck/LargeNotePerformanceProbe.swift"
       "$repo_root/Tools/EditorQuoteCheck/NotebookPerformanceHost.swift")
-    if [[ "$performance_host" == notebook ]]; then
-      extra_arguments+=(-D NOTEBOOK_PERFORMANCE_HOST -D DEBUG
-        -D ICLOUD_ENABLED -D ICLOUD_DEV -D SYNC_LAB)
-    else
+    if [[ "$performance_host" != notebook ]]; then
       extra_arguments+=("$repo_root/meh.md/NotebookNoteEditor.swift")
     fi
   fi
   CLANG_MODULE_CACHE_PATH="$check_root/module-cache" \
   SWIFT_MODULE_CACHE_PATH="$check_root/module-cache" \
-  xcrun swiftc -O -parse-as-library -swift-version 6 \
-    -default-isolation MainActor \
+  xcrun swiftc "${compiler_flags[@]}" \
     -sdk "$sdk" \
     -target "$target" \
     "$check_root"/sources/*.swift \
@@ -180,11 +201,22 @@ if [[ "$cache_hit" == 0 ]]; then
   fi
 fi
 
+if [[ "$build_only" == 1 ]]; then
+  echo "Performance probe build complete: $cache_key"
+  exit 0
+fi
+
+echo "Waiting for owned simulator boot: $device"
 xcrun simctl bootstatus "$device" -b >/dev/null
+echo "Installing compiled performance probe"
 xcrun simctl install "$device" "$check_app"
+echo "Resolving performance probe container"
 container="$(xcrun simctl get_app_container "$device" "$bundle_id" data)"
 report="$container/Documents/performance.json"
 rm -f "$report"
+echo "Launching performance probe: host=$performance_host, size=$blocks, mode=$mode"
+launch_output="$(
+SIMCTL_CHILD_EDITOR_PERFORMANCE_START_DELAY_SECONDS="${EDITOR_PERFORMANCE_START_DELAY_SECONDS:-0}" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_CONTEXT="${EDITOR_PERFORMANCE_CONTEXT:-standard}" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_SHAPE="${EDITOR_PERFORMANCE_SHAPE:-standard}" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_HOST="$performance_host" \
@@ -194,10 +226,17 @@ SIMCTL_CHILD_EDITOR_PERFORMANCE_SCROLL_ROUNDS="${EDITOR_PERFORMANCE_SCROLL_ROUND
 SIMCTL_CHILD_EDITOR_PERFORMANCE_BLOCKS="$blocks" \
 SIMCTL_CHILD_EDITOR_PERFORMANCE_MODE="$mode" \
 xcrun simctl launch --terminate-running-process "$device" "$bundle_id"
+)"
 probe_launched=1
+printf '%s\n' "$launch_output"
+if [[ -n "${EDITOR_PERFORMANCE_LAUNCH_PID_FILE:-}" ]]; then
+  launch_pid="${launch_output##*: }"
+  [[ "$launch_pid" =~ ^[0-9]+$ ]] || { echo "Unexpected probe launch PID" >&2; exit 1; }
+  printf '%s\n' "$launch_pid" > "$EDITOR_PERFORMANCE_LAUNCH_PID_FILE"
+fi
 for ((attempt=0; attempt<360; attempt++)); do
   if [[ -f "$report" ]]; then
-    python3 - "$report" "$output" "$revision" "$repo_root" "$device" <<'PY'
+    python3 - "$report" "$output" "$revision" "$repo_root" "$device" "${compiler_flags[*]}" <<'PY'
 import hashlib
 import json
 import shutil
@@ -208,6 +247,12 @@ from pathlib import Path
 report = json.loads(Path(sys.argv[1]).read_text())
 report["revision"] = sys.argv[3]
 report["compiler_optimization"] = "-O"
+report["compiler_debug_info"] = "-g"
+compiler_flags = sys.argv[6].split()
+report["compilation_conditions"] = [
+    compiler_flags[index + 1] for index, flag in enumerate(compiler_flags)
+    if flag == "-D"
+]
 report["checkout_commit"] = subprocess.check_output(
     ["git", "-C", sys.argv[4], "rev-parse", "HEAD"], text=True).strip()
 report["checkout_dirty"] = bool(subprocess.check_output(
@@ -233,6 +278,12 @@ for name, samples in report["measurements"].items():
           f"max {max(samples):.2f} ms, n={len(samples)}")
 PY
     printf '%s\n' "$output"
+    # Diagnostic-only process lifetime, after every measurement and export.
+    if ((keep_alive > 0)); then
+      sleep "$keep_alive" & keep_alive_pid=$!
+      wait "$keep_alive_pid"
+      keep_alive_pid=""
+    fi
     exit 0
   fi
   sleep 1

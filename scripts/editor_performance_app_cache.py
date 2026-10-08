@@ -29,7 +29,7 @@ def digest_files(files):
     return digest.hexdigest()
 
 
-def cache_key(repo, sources, compiler, sdk, target, scenario, host):
+def cache_key(repo, sources, compiler, sdk, target, scenario, host, flags=""):
     patterns = ("Sources/**/*.swift", "meh.md/*.swift", "Tools/EditorQuoteCheck/*.swift",
                 "Tools/EditorQuoteCheck/Info.plist", "Package.swift", "Package.resolved",
                 "scripts/run_editor_performance*.sh", "scripts/editor_performance_app_cache.py")
@@ -38,7 +38,7 @@ def cache_key(repo, sources, compiler, sdk, target, scenario, host):
     # Historical editor comparisons compile selected files from another ref.
     files += [("compiled-sources/" + path.name, path) for path in sources.glob("*.swift")]
     content = digest_files(files)
-    config = json.dumps([content, compiler, sdk, target, scenario, host], separators=(",", ":"))
+    config = json.dumps([content, compiler, sdk, target, scenario, host, flags], separators=(",", ":"))
     return hashlib.sha256(config.encode()).hexdigest()
 
 
@@ -92,7 +92,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     key_parser = commands.add_parser("key")
-    for name in ("repo", "sources", "compiler", "sdk", "target", "scenario", "host"):
+    for name in ("repo", "sources", "compiler", "sdk", "target", "scenario", "host", "flags"):
         key_parser.add_argument("--" + name, required=True)
     for name in ("lookup", "store"):
         command = commands.add_parser(name)
@@ -102,7 +102,7 @@ def main():
     arguments = parser.parse_args()
     if arguments.command == "key":
         print(cache_key(Path(arguments.repo), Path(arguments.sources), arguments.compiler,
-                        arguments.sdk, arguments.target, arguments.scenario, arguments.host))
+                        arguments.sdk, arguments.target, arguments.scenario, arguments.host, arguments.flags))
     else:
         if not re.fullmatch(r"[0-9a-f]{64}", arguments.key):
             parser.error("cache key must contain 64 lowercase hexadecimal digits")

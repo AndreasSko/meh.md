@@ -116,6 +116,36 @@ final class MarkdownNativeTextChangeTests: XCTestCase {
         XCTAssertNil(cache.nativeTextChange(in: storage))
     }
 
+    func testAttributeFixingKeepsExactMiddleInsertionIntent() {
+        let storage = ExpandingAttributeTextStorage()
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0),
+                                  with: "First 🪐 paragraph\nTail")
+        let cache = MarkdownSyntaxCache()
+        _ = cache.textSnapshot(in: storage)
+        let processedRange = NativeProcessedRangeCapture()
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification,
+            object: storage, queue: nil
+        ) { notification in
+            processedRange.value = (notification.object as? NSTextStorage)?.editedRange
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        storage.expandsAttributes = true
+        storage.replaceCharacters(in: NSRange(location: 6, length: 0), with: "bright ")
+        XCTAssertEqual(processedRange.value, NSRange(location: 0, length: storage.length))
+        XCTAssertEqual(cache.nativeTextChange(in: storage),
+                       NoteEditorTextChange(range: NSRange(location: 6, length: 0),
+                                            replacement: "bright "))
+        cache.acknowledgeNativeText()
+        storage.addAttribute(NSAttributedString.Key("testOnly"), value: 1,
+                             range: NSRange(location: 0, length: storage.length))
+        XCTAssertNil(cache.nativeTextChange(in: storage))
+        storage.replaceCharacters(in: NSRange(location: 6, length: 7), with: "")
+        XCTAssertEqual(cache.nativeTextChange(in: storage),
+                       NoteEditorTextChange(range: NSRange(location: 6, length: 7),
+                                            replacement: ""))
+    }
+
     func testBatchedPureInsertionsAndDeletionsKeepBaselineCoordinates() {
         let (view, storage) = fixture("abcd")
         let cache = view.markdownSyntaxCache
@@ -343,4 +373,42 @@ private actor NativeHintStorage: NoteStorage {
     func recover(_ recovery: NoteRecovery) async throws -> NoteSnapshot {
         recovery.previous
     }
+}
+
+/// Models attribute fixing that expands the did-process range after the
+/// will-process notification has exposed the actual character edit.
+private final class ExpandingAttributeTextStorage: NSTextStorage {
+    private let backing = NSMutableAttributedString(string: "")
+    var expandsAttributes = false
+
+    override var string: String { backing.string }
+
+    override func attributes(at location: Int,
+                             effectiveRange range: NSRangePointer?)
+        -> [NSAttributedString.Key: Any] {
+        backing.attributes(at: location, effectiveRange: range)
+    }
+
+    override func replaceCharacters(in range: NSRange, with text: String) {
+        backing.replaceCharacters(in: range, with: text)
+        edited(.editedCharacters, range: range,
+               changeInLength: text.utf16.count - range.length)
+    }
+
+    override func setAttributes(_ attributes: [NSAttributedString.Key: Any]?,
+                                range: NSRange) {
+        backing.setAttributes(attributes, range: range)
+        edited(.editedAttributes, range: range, changeInLength: 0)
+    }
+
+    override func fixAttributes(in range: NSRange) {
+        guard expandsAttributes, length > 0 else { return }
+        setAttributes([NSAttributedString.Key("expandedForTest"): 1],
+                      range: NSRange(location: 0, length: length))
+    }
+}
+
+// The notification runs synchronously on the test's main thread.
+private final class NativeProcessedRangeCapture: @unchecked Sendable {
+    var value: NSRange?
 }

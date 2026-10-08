@@ -5,12 +5,67 @@ import XCTest
 
 @MainActor
 final class NoteEditorTextChangeTests: XCTestCase {
+    func testValidationReadsFoundationResultWithoutNormalizing() throws {
+        let prefix = String(repeating: "Fictional 🪐 café. ", count: 100)
+        let source = prefix + "tail"
+        let change = NoteEditorTextChange(
+            range: NSRange(location: prefix.utf16.count, length: 4),
+            replacement: "e\u{0301} 🌕"
+        )
+        let result = NSString(string: prefix + "e\u{0301} 🌕") as String
+        let scalarRange = try XCTUnwrap(change.validatedScalarRange(
+            in: source, resultingIn: result
+        ))
+        XCTAssertEqual(scalarRange.start, UInt64(prefix.unicodeScalars.count))
+        XCTAssertEqual(scalarRange.length, 4)
+        XCTAssertNil(try change.validatedScalarRange(
+            in: source, resultingIn: NSString(string: prefix + "é 🌕") as String
+        ))
+        let wrongHint = NoteEditorTextChange(range: change.range, replacement: "é 🌕")
+        XCTAssertNil(try wrongHint.validatedScalarRange(in: source, resultingIn: result))
+        XCTAssertNil(try change.validatedScalarRange(in: source, resultingIn: result + "!"))
+        XCTAssertNil(try change.validatedScalarRange(in: source, resultingIn: prefix))
+    }
+
+    func testValidationRetainsLiteralPrefixAndSuffix() throws {
+        let change = NoteEditorTextChange(
+            range: NSRange(location: 2, length: 1), replacement: "!"
+        )
+        let source = "e\u{0301}x e\u{0301}"
+        XCTAssertNotNil(try change.validatedScalarRange(
+            in: source, resultingIn: "e\u{0301}! e\u{0301}"
+        ))
+        XCTAssertNil(try change.validatedScalarRange(
+            in: source, resultingIn: "é! e\u{0301}"
+        ))
+        XCTAssertNil(try change.validatedScalarRange(
+            in: source, resultingIn: "e\u{0301}! é"
+        ))
+    }
+
+    func testValidationAllowsScalarEditsInsideGraphemeButRejectsSplitSurrogate() throws {
+        let source = "e\u{0301} 🪐"
+        let change = NoteEditorTextChange(
+            range: NSRange(location: 1, length: 1), replacement: "\u{0300}"
+        )
+        let scalarRange = try XCTUnwrap(change.validatedScalarRange(
+            in: source, resultingIn: "e\u{0300} 🪐"
+        ))
+        XCTAssertEqual(scalarRange.start, 1)
+        XCTAssertEqual(scalarRange.length, 1)
+        XCTAssertThrowsError(try NoteEditorTextChange(
+            range: NSRange(location: 4, length: 0), replacement: "!"
+        ).validatedScalarRange(in: source, resultingIn: source + "!"))
+    }
+
     func testUnicodeInsertionDeletionAndReplacementRoundTrip() async throws {
         for (source, target, replacement) in [
             ("café e\u{0301} 🪐 tail", "🪐", "moon 🌕"),
             ("café e\u{0301} 🪐 tail", "e\u{0301}", ""),
             ("First\nsecond", "\n", "\n\nNew paragraph\n"),
             ("café e\u{0301} 🪐 tail", "tail", "tail!"),
+            ("café e\u{0301} 🪐 tail", "tail", "sail"),
+            ("café e\u{0301} 🪐 tail", "\u{0301}", "\u{0300}"),
             ("", "", "🪐 e\u{0301}"),
         ] {
             let range = target.isEmpty ? NSRange(location: 0, length: 0)

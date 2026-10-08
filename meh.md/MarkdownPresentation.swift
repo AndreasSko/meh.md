@@ -1264,46 +1264,22 @@ enum MarkdownPresentation {
         )
 
         #if os(iOS)
-        // Appearance must reset without editing native layout attributes.
-        if let textRange = textRange(
-            for: fragmentRange,
-            documentStart: documentStart,
-            contentManager: contentManager
-        ) {
-            layoutManager.addRenderingAttribute(
-                .foregroundColor, value: primaryTextColor, for: textRange
-            )
-        }
+        let baseAttributes: [NSAttributedString.Key: Any] = [.foregroundColor: primaryTextColor]
+        #else
+        let baseAttributes: [NSAttributedString.Key: Any] = [:]
         #endif
         var appliedCount = 0
-        presentation.forEachSpan(intersecting: fragmentRange) { span in
-            let intersection = NSIntersectionRange(span.range, fragmentRange)
-            guard intersection.length > 0 else { return }
-            let attributes = renderingAttributes(
-                for: span,
-                in: presentation.result
-            )
-            guard !attributes.isEmpty,
-                  let textRange = textRange(
-                    for: intersection,
-                    documentStart: documentStart,
-                      contentManager: contentManager
-                  ) else { return }
-            layoutManager.setRenderingAttributes(attributes, for: textRange)
-            appliedCount += 1
-        }
-        presentation.forEachHiddenRange(intersecting: fragmentRange) { range in
-            let intersection = NSIntersectionRange(range, fragmentRange)
-            guard intersection.length > 0,
-                  let textRange = textRange(
-                      for: intersection,
-                      documentStart: documentStart,
-                      contentManager: contentManager
-                  ) else { return }
-            layoutManager.setRenderingAttributes(
-                [.foregroundColor: PlatformColor.clear],
-                for: textRange
-            )
+        for command in presentation.renderingCommands(in: fragmentRange,
+                                                       baseAttributes: baseAttributes) {
+            guard let textRange = textRange(for: command.range,
+                documentStart: documentStart, contentManager: contentManager) else { continue }
+            if command.replacesAttributes {
+                layoutManager.setRenderingAttributes(command.attributes, for: textRange)
+            } else {
+                for (key, value) in command.attributes {
+                    layoutManager.addRenderingAttribute(key, value: value, for: textRange)
+                }
+            }
             appliedCount += 1
         }
         return appliedCount
@@ -2172,16 +2148,199 @@ struct MarkdownDecorationPlan {
 }
 
 struct MarkdownRenderingPresentation {
+    struct RenderingCommand {
+        var range: NSRange
+        let replacesAttributes: Bool
+        let attributes: [NSAttributedString.Key: Any]
+    }
+
+    /// Sweep only the indexed spans intersecting this fragment. Later setters
+    /// replace earlier dictionaries; untouched ranges retain add-only behavior.
+    func renderingCommands(in target: NSRange,
+                           baseAttributes: [NSAttributedString.Key: Any]) -> [RenderingCommand] {
+        guard target.length > 0 else { return [] }
+        struct Event {
+            let offset: Int
+            let index: Int
+            let begins: Bool
+        }
+        var events: [Event] = []
+        var setters: [[NSAttributedString.Key: Any]] = []
+        func append(_ range: NSRange, attributes: [NSAttributedString.Key: Any]) {
+            let clipped = NSIntersectionRange(range, target)
+            guard clipped.length > 0 else { return }
+            let index = setters.count
+            setters.append(attributes)
+            events.append(Event(offset: clipped.location, index: index, begins: true))
+            events.append(Event(offset: NSMaxRange(clipped), index: index, begins: false))
+        }
+        forEachRenderingSpan(intersecting: target) { span, attributes in
+            append(span.range, attributes: attributes)
+        }
+        forEachHiddenRange(intersecting: target) {
+            append($0, attributes: hiddenRenderingAttributes)
+        }
+        events.sort { $0.offset < $1.offset }
+        var active = Array(repeating: false, count: setters.count)
+        var heap: [Int] = []
+        func insert(_ index: Int) {
+            heap.append(index)
+            var child = heap.count - 1
+            while child > 0 {
+                let parent = (child - 1) / 2
+                guard heap[parent] < heap[child] else { break }
+                heap.swapAt(parent, child)
+                child = parent
+            }
+        }
+        func winner() -> Int? {
+            while let first = heap.first, !active[first] {
+                let last = heap.removeLast()
+                if heap.isEmpty { continue }
+                heap[0] = last
+                var parent = 0
+                while 2 * parent + 1 < heap.count {
+                    var child = 2 * parent + 1
+                    if child + 1 < heap.count, heap[child + 1] > heap[child] { child += 1 }
+                    guard heap[parent] < heap[child] else { break }
+                    heap.swapAt(parent, child)
+                    parent = child
+                }
+            }
+            return heap.first
+        }
+        var commands: [RenderingCommand] = []
+        func emit(from start: Int, to end: Int) {
+            guard end > start else { return }
+            let index = winner()
+            let attributes = index.map { setters[$0] } ?? baseAttributes
+            guard !attributes.isEmpty else { return }
+            let replaces = index != nil
+            if let previous = commands.last,
+               NSMaxRange(previous.range) == start,
+               previous.replacesAttributes == replaces,
+               previous.attributes.count == attributes.count,
+               attributes.allSatisfy({ key, value in
+                   guard let lhs = value as? NSObject,
+                         let rhs = previous.attributes[key] as? NSObject else { return false }
+                   return lhs.isEqual(rhs)
+               }) {
+                commands[commands.count - 1].range.length += end - start
+            } else {
+                commands.append(RenderingCommand(range: NSRange(location: start, length: end - start),
+                    replacesAttributes: replaces, attributes: attributes))
+            }
+        }
+        var cursor = target.location
+        var eventIndex = 0
+        while eventIndex < events.count {
+            let offset = events[eventIndex].offset
+            emit(from: cursor, to: offset)
+            while eventIndex < events.count, events[eventIndex].offset == offset {
+                let event = events[eventIndex]
+                active[event.index] = event.begins
+                if event.begins { insert(event.index) }
+                eventIndex += 1
+            }
+            cursor = offset
+        }
+        emit(from: cursor, to: NSMaxRange(target))
+        return commands
+    }
+
     let result: MarkdownSyntaxResult
     let previewRanges: MarkdownLivePreviewRanges
     let hiddenRanges: [NSRange]
-    private let spanRanges: [NSRange]
-    private let spanPrefixMaximumEnds: [Int]
+    let hiddenRenderingAttributes: [NSAttributedString.Key: Any] = [
+        .foregroundColor: PlatformColor.clear,
+    ]
     private let hiddenPrefixMaximumEnds: [Int]
+    private let renderingIndex: SyntaxIndex
+
+    /// Palette values remain dynamic platform colors, never resolved CGColors.
+    /// Only spans that paint appearance participate in the rendering lookup.
+    fileprivate final class SyntaxIndex {
+        let spanRanges: [NSRange]
+        let spanPrefixMaximumEnds: [Int]
+        let spanIndices: [Int]
+        let ranges: [NSRange]
+        let prefixMaximumEnds: [Int]
+        let codeBlockStarts: [Int]
+        let attributes: [[NSAttributedString.Key: Any]]
+
+        init(result: MarkdownSyntaxResult) {
+            spanRanges = result.spans.map(\.range)
+            spanPrefixMaximumEnds = MarkdownRenderingPresentation.prefixMaximumEnds(spanRanges)
+            spanIndices = result.spans.indices.filter {
+                Self.attributeIndex(for: result.spans[$0].role) != nil
+            }
+            ranges = spanIndices.map { result.spans[$0].range }
+            prefixMaximumEnds = MarkdownRenderingPresentation.prefixMaximumEnds(ranges)
+            // Full and incremental parsers keep code-block paragraphs in source
+            // order. Build once, instead of scanning all paragraphs per glyph.
+            codeBlockStarts = result.paragraphRuns.compactMap {
+                $0.kind == .codeBlock ? $0.range.location : nil
+            }
+            var fenced = MarkdownPresentation.renderingAttributes(for: .code)
+            fenced.removeValue(forKey: .backgroundColor)
+            attributes = [
+                MarkdownPresentation.renderingAttributes(for: .code), fenced,
+                MarkdownPresentation.renderingAttributes(for: .highlight),
+                MarkdownPresentation.renderingAttributes(for: .strikethrough),
+                MarkdownPresentation.renderingAttributes(for: .link),
+                MarkdownPresentation.renderingAttributes(for: .listMarker),
+                MarkdownPresentation.renderingAttributes(for: .blockquote),
+                MarkdownPresentation.renderingAttributes(for: .blockquoteMarker),
+            ]
+        }
+
+        static func attributeIndex(for role: MarkdownStyleRole) -> Int? {
+            switch role {
+            case .code: 0
+            case .highlight: 2
+            case .strikethrough: 3
+            case .link: 4
+            case .listMarker, .taskMarker: 5
+            case .blockquote: 6
+            case .blockquoteMarker: 7
+            case .heading, .strong, .emphasis: nil
+            }
+        }
+
+        func attributes(for span: MarkdownStyleSpan) -> [NSAttributedString.Key: Any] {
+            guard var index = Self.attributeIndex(for: span.role) else { return [:] }
+            if span.role == .code {
+                var low = 0
+                var high = codeBlockStarts.count
+                while low < high {
+                    let middle = low + (high - low) / 2
+                    if codeBlockStarts[middle] < span.range.location {
+                        low = middle + 1
+                    } else {
+                        high = middle
+                    }
+                }
+                if low < codeBlockStarts.count,
+                   NSLocationInRange(codeBlockStarts[low], span.range) {
+                    index = 1
+                }
+            }
+            return attributes[index]
+        }
+    }
 
     init(
         result: MarkdownSyntaxResult,
         previewRanges: MarkdownLivePreviewRanges
+    ) {
+        self.init(result: result, previewRanges: previewRanges,
+                  syntaxIndex: SyntaxIndex(result: result))
+    }
+
+    fileprivate init(
+        result: MarkdownSyntaxResult,
+        previewRanges: MarkdownLivePreviewRanges,
+        syntaxIndex: SyntaxIndex
     ) {
         self.result = result
         self.previewRanges = previewRanges
@@ -2193,9 +2352,8 @@ struct MarkdownRenderingPresentation {
             }
             return left.location < right.location
         }
-        spanRanges = result.spans.map(\.range)
-        spanPrefixMaximumEnds = Self.prefixMaximumEnds(spanRanges)
         hiddenPrefixMaximumEnds = Self.prefixMaximumEnds(hiddenRanges)
+        renderingIndex = syntaxIndex
     }
 
     init(result: MarkdownSyntaxResult, hiddenRanges: [NSRange]) {
@@ -2210,9 +2368,24 @@ struct MarkdownRenderingPresentation {
             }
             return left.location < right.location
         }
-        spanRanges = result.spans.map(\.range)
-        spanPrefixMaximumEnds = Self.prefixMaximumEnds(spanRanges)
         hiddenPrefixMaximumEnds = Self.prefixMaximumEnds(self.hiddenRanges)
+        renderingIndex = SyntaxIndex(result: result)
+    }
+
+    func forEachRenderingSpan(
+        intersecting target: NSRange,
+        _ body: (MarkdownStyleSpan, [NSAttributedString.Key: Any]) -> Void
+    ) {
+        for index in candidateIndices(
+            ranges: renderingIndex.ranges,
+            prefixMaximumEnds: renderingIndex.prefixMaximumEnds,
+            target: target
+        ) {
+            let span = result.spans[renderingIndex.spanIndices[index]]
+            if NSIntersectionRange(span.range, target).length > 0 {
+                body(span, renderingIndex.attributes(for: span))
+            }
+        }
     }
 
     func forEachSpan(
@@ -2220,8 +2393,8 @@ struct MarkdownRenderingPresentation {
         _ body: (MarkdownStyleSpan) -> Void
     ) {
         for index in candidateIndices(
-            ranges: spanRanges,
-            prefixMaximumEnds: spanPrefixMaximumEnds,
+            ranges: renderingIndex.spanRanges,
+            prefixMaximumEnds: renderingIndex.spanPrefixMaximumEnds,
             target: target
         ) {
             let span = result.spans[index]
@@ -2233,8 +2406,8 @@ struct MarkdownRenderingPresentation {
 
     func spanCandidateIndices(intersecting target: NSRange) -> Range<Int> {
         candidateIndices(
-            ranges: spanRanges,
-            prefixMaximumEnds: spanPrefixMaximumEnds,
+            ranges: renderingIndex.spanRanges,
+            prefixMaximumEnds: renderingIndex.spanPrefixMaximumEnds,
             target: target
         )
     }
@@ -2417,6 +2590,10 @@ final class MarkdownSyntaxCache: NSObject {
     private var cachedPreviewSnapshot: MarkdownLivePreviewSnapshot?
     private var cachedPreviewRanges: MarkdownLivePreviewRanges?
     private var cachedRenderingPresentation: MarkdownRenderingPresentation?
+    // Installing syntax, rather than selection equality or a whole-result
+    // comparison, owns this editor-local immutable index's lifetime.
+    private var renderingSyntaxIndex: MarkdownRenderingPresentation.SyntaxIndex?
+    private(set) var renderingSyntaxIndexBuildCount = 0
     private weak var observedTextStorage: NSTextStorage?
     private var presentationIsCurrent = false
     private var cachedDecorationPlan: MarkdownDecorationPlan?
@@ -2433,6 +2610,7 @@ final class MarkdownSyntaxCache: NSObject {
     // Toolbar and presentation preparation may consume characterEdit before
     // the model commit. Native edit intent survives until acknowledgement.
     private var nativeCharacterEdit: CharacterEdit?
+    private var processingNativeCharacterEdit: CharacterEdit?
 
     func nativeTextChange(in storage: NSTextStorage) -> NoteEditorTextChange? {
         guard observedTextStorage === storage, let edit = nativeCharacterEdit else { return nil }
@@ -2450,6 +2628,7 @@ final class MarkdownSyntaxCache: NSObject {
 
     func acknowledgeNativeText() {
         nativeCharacterEdit = nil
+        processingNativeCharacterEdit = nil
     }
     private var cachedCharacterRevision: UInt64 = 0
     // nil means that the complete layout must be refreshed.
@@ -2615,6 +2794,7 @@ final class MarkdownSyntaxCache: NSObject {
         cachedPreviewSnapshot = nil
         cachedPreviewRanges = nil
         cachedRenderingPresentation = nil
+        renderingSyntaxIndex = nil
         presentationIsCurrent = false
         cachedDecorationPlan = nil
         cachedGroupLefts.removeAll(keepingCapacity: true)
@@ -2665,9 +2845,18 @@ final class MarkdownSyntaxCache: NSObject {
             cachedPreviewRanges = previewRanges
         }
         presentationIsCurrent = true
+        let syntaxIndex: MarkdownRenderingPresentation.SyntaxIndex
+        if let renderingSyntaxIndex {
+            syntaxIndex = renderingSyntaxIndex
+        } else {
+            syntaxIndex = MarkdownRenderingPresentation.SyntaxIndex(result: result)
+            renderingSyntaxIndex = syntaxIndex
+            renderingSyntaxIndexBuildCount += 1
+        }
         let presentation = MarkdownRenderingPresentation(
             result: result,
-            previewRanges: previewRanges
+            previewRanges: previewRanges,
+            syntaxIndex: syntaxIndex
         )
         cachedRenderingPresentation = presentation
         return presentation
@@ -2681,14 +2870,27 @@ final class MarkdownSyntaxCache: NSObject {
                 name: NSTextStorage.didProcessEditingNotification,
                 object: observedTextStorage
             )
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSTextStorage.willProcessEditingNotification,
+                object: observedTextStorage
+            )
         }
         observedTextStorage = textStorage
+        renderingSyntaxIndex = nil
         nativeCharacterEdit = nil
+        processingNativeCharacterEdit = nil
         characterRevision &+= 1
         characterEdit = nil
         storageSnapshot = nil
         snapshotRevision = nil
         parsedStorageRevision = nil
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(cachedTextStorageWillProcessEditing(_:)),
+            name: NSTextStorage.willProcessEditingNotification,
+            object: textStorage
+        )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(cachedTextStorageDidProcessEditing(_:)),
@@ -2697,29 +2899,46 @@ final class MarkdownSyntaxCache: NSObject {
         )
     }
 
+    @objc private func cachedTextStorageWillProcessEditing(
+        _ notification: Notification
+    ) {
+        guard let storage = notification.object as? NSTextStorage else { return }
+        // Attribute fixing can widen the processed range to a whole paragraph.
+        // Preserve the earlier character range for the validated model hint.
+        processingNativeCharacterEdit = storage.editedMask.contains(.editedCharacters)
+            ? CharacterEdit(range: storage.editedRange, delta: storage.changeInLength)
+            : nil
+    }
+
     @objc private func cachedTextStorageDidProcessEditing(
         _ notification: Notification
     ) {
         guard let textStorage = notification.object as? NSTextStorage else { return }
+        let nativeEdit = processingNativeCharacterEdit
+        processingNativeCharacterEdit = nil
         guard textStorage.editedMask.contains(.editedCharacters) else {
             if !isApplyingLayoutAttributes { dirtyLayoutRange = nil }
             return
         }
         presentationIsCurrent = false
         cachedRenderingPresentation = nil
+        renderingSyntaxIndex = nil
         characterRevision &+= 1
         let range = textStorage.editedRange
         let delta = textStorage.changeInLength
+        let nativeRange = nativeEdit?.range ?? range
+        let nativeDelta = nativeEdit?.delta ?? delta
         if let pending = nativeCharacterEdit {
-            let replaced = NSRange(location: range.location, length: range.length - delta)
+            let replaced = NSRange(location: nativeRange.location,
+                                   length: nativeRange.length - nativeDelta)
             let start = min(pending.range.location, replaced.location)
             let end = max(NSMaxRange(pending.range), NSMaxRange(replaced))
             nativeCharacterEdit = CharacterEdit(
-                range: NSRange(location: start, length: end - start + delta),
-                delta: pending.delta + delta
+                range: NSRange(location: start, length: end - start + nativeDelta),
+                delta: pending.delta + nativeDelta
             )
         } else {
-            nativeCharacterEdit = CharacterEdit(range: range, delta: delta)
+            nativeCharacterEdit = CharacterEdit(range: nativeRange, delta: nativeDelta)
         }
         if let pending = characterEdit {
             // Both ranges below use coordinates immediately before this edit.
