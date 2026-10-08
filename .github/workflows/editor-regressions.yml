@@ -1,34 +1,40 @@
-name: iPhone editor regressions
-
+name: Reviewed input and fixture verification
 on:
-  pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: editor-regressions-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  editor-regressions:
+  native:
     runs-on: xcode-27
-    # Native checks, 11 UI tests and Xcode result export can exceed an hour.
-    # App performance ceilings are enforced separately in Swift.
-    timeout-minutes: 75
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Check native geometry and real keyboard editing
-        id: regression
-        run: scripts/run_editor_regressions.sh
-      - name: Preserve regression evidence
-        if: always() && steps.regression.outputs.evidence_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - run: python3 scripts/run_native_test_coverage.py
+        id: native
+      - name: Preserve all native results
+        if: always() && steps.native.outputs.evidence_root != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: editor-regressions-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.regression.outputs.evidence_root }}
+          name: delta-probe-native
+          path: ${{ steps.native.outputs.evidence_root }}
+          if-no-files-found: error
+  verification:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 scripts/hosted_ui_delta_probe.py
+        env:
+          PROBE_PLATFORM: ipad
+      - name: Preserve exact outcomes
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: delta-probe-ipad
+          path: ${{ runner.temp }}/delta-probe-ipad
           if-no-files-found: error
           retention-days: 14
