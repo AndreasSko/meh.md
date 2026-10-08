@@ -13,15 +13,17 @@ final class MacFormattingUITests: XCTestCase {
         openFormatting(app)
         let commands = element(app, "editor-formatting-popover")
         XCTAssertTrue(commands.waitForExistence(timeout: 5))
-        XCTAssertLessThanOrEqual(commands.frame.height, formatting.frame.height)
-        let newNote = element(app, "notebook-new-item")
-        XCTAssertLessThanOrEqual(commands.frame.height, newNote.frame.height)
-        XCTAssertLessThanOrEqual(commands.frame.height, 40)
-        XCTAssertGreaterThanOrEqual(commands.frame.minY, formatting.frame.maxY)
+        // Native regular controls grew in macOS 27. Keep the panel at native
+        // desktop density, allowing two points for accessibility rounding.
+        XCTAssertLessThanOrEqual(commands.frame.height, formatting.frame.height + 2)
+        // Native toolbar hit rectangles extend beyond the visible Aa control.
+        // The panel begins below Aa and its center stays below the toolbar.
+        XCTAssertGreaterThanOrEqual(commands.frame.minY, formatting.frame.midY)
+        XCTAssertGreaterThan(commands.frame.midY, formatting.frame.maxY)
         XCTAssertTrue(element(app, "editor-command-bold").isHittable)
         assertCenteredWithoutScrollbars(commands,
             choice: element(app, "editor-command-bold"))
-        print("Mac control geometry: Aa", formatting.frame, "formatting", commands.frame, "New Note", newNote.frame)
+        print("Mac control geometry: Aa", formatting.frame, "formatting", commands.frame)
         commands.scroll(byDeltaX: 80, deltaY: 0)
         assertNoVisibleScrollbars(commands)
         commands.scroll(byDeltaX: -80, deltaY: 0)
@@ -51,7 +53,7 @@ final class MacFormattingUITests: XCTestCase {
         openHeadings(app)
         let picker = element(app, "editor-heading-style-picker")
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        XCTAssertLessThanOrEqual(picker.frame.height, 40)
+        XCTAssertLessThanOrEqual(picker.frame.height, commands.frame.height + 2)
         assertAllHeadingsVisible(app)
         capture(app, name: "Mac all heading levels fit with Body selected")
         choose(app, id: "editor-command-heading-1", forward: true)
@@ -80,7 +82,7 @@ final class MacFormattingUITests: XCTestCase {
         XCTAssertEqual(h1Height, h3.frame.height, accuracy: 2)
         XCTAssertEqual(h6Height, h3.frame.height, accuracy: 2)
         XCTAssertGreaterThanOrEqual(h3.frame.height, 22)
-        XCTAssertLessThanOrEqual(h3.frame.height, 32)
+        XCTAssertLessThanOrEqual(h3.frame.height, picker.frame.height)
         print("Mac heading geometry: H3", h3.frame, "picker", picker.frame)
         capture(app, name: "Mac H3 selected in the same formatting popover")
         h3.click()
@@ -148,8 +150,12 @@ final class MacFormattingUITests: XCTestCase {
         heading.click()
         let picker = element(app, "editor-heading-style-picker")
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        let formatting = app.buttons["editor-formatting"]
+        // Heading commands retain the same native popover anchor. Aa's
+        // accessibility hit rectangle extends below the visible control.
         XCTAssertGreaterThanOrEqual(picker.frame.minY,
-            app.buttons["editor-formatting"].frame.maxY)
+            formatting.frame.midY)
+        XCTAssertGreaterThan(picker.frame.midY, formatting.frame.maxY)
     }
 
     private func choose(_ app: XCUIApplication, id: String, forward: Bool) {

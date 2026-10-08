@@ -76,15 +76,16 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
             return
         }
         // Resolve by stable identity: an index-bound query changes after reordering.
-        let neighbour = app.buttons[initialNeighbour.identifier].firstMatch
+        let neighbour = toolbar.buttons[initialNeighbour.identifier].firstMatch
         func moveTable(before: Bool) {
-            let origin = app.coordinate(withNormalizedOffset: .zero)
-            let start = origin.withOffset(CGVector(dx: menu.frame.midX, dy: menu.frame.midY))
-            let end = origin.withOffset(CGVector(
-                dx: before ? neighbour.frame.minX - 6 : neighbour.frame.maxX + 6,
-                dy: neighbour.frame.midY
-            ))
-            start.press(forDuration: 0.8, thenDragTo: end)
+            let center = CGVector(dx: 0.5, dy: 0.5)
+            let start = menu.coordinate(withNormalizedOffset: center)
+            let end = neighbour.coordinate(withNormalizedOffset: center)
+                .withOffset(CGVector(dx: before ? -18 : 18, dy: 0))
+            // Give UIKit time to lift the cell and accept a one-cell insertion.
+            // Match the native toolbar drag used by the keyboard-order tests.
+            start.press(forDuration: 1.2, thenDragTo: end,
+                        withVelocity: .slow, thenHoldForDuration: 0.6)
             // A drop may scroll the collection and temporarily remove its AX cell.
             _ = toolbarButton("editor-table-menu", in: app)
             let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -186,14 +187,16 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
     }
 
     func testNativeUndoRestoresSourceAndActiveCell() {
-        let (app, editor) = launchFixture()
+        let (app, editor) = launchFixture(nativeInputDiagnostics: true)
         let cellEditor = activateFirstBodyCell(in: app)
         cellEditor.typeText("!")
         XCTAssertTrue(waitForSource(editor) {
             $0 != self.source && $0.replacingOccurrences(of: "!", with: "") == self.source
         })
         // UIKit's native keyboard command uses the shared note undo manager.
-        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(cellEditor.isHittable)
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        cellEditor.typeKey("z", modifierFlags: .command)
         XCTAssertTrue(waitForSource(editor) { $0 == self.source },
                       "Source after native undo: \(editor.value ?? "nil")")
         XCTAssertTrue(waitForSource(cellEditor) { $0 == "**Coastal walk**" })
@@ -205,7 +208,9 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
         XCTAssertTrue(waitForSource(editor) { $0 != self.source })
         switchToSource(in: app)
         XCTAssertTrue(cellEditor.waitForNonExistence(timeout: 5))
-        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(editor.isHittable)
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        editor.typeKey("z", modifierFlags: .command)
         XCTAssertTrue(waitForSource(editor) { $0 == self.source })
         app.buttons["notebook-note-actions"].tap()
         app.buttons["Live Preview"].tap()
@@ -318,13 +323,17 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
 
     private func launchFixture(
         contentSizeCategory: String? = nil,
-        fixtureSource: String? = nil
+        fixtureSource: String? = nil,
+        nativeInputDiagnostics: Bool = false
     ) -> (XCUIApplication, XCUIElement) {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = "rendered-table-ui-\(UUID().uuidString)"
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        if nativeInputDiagnostics {
+            app.launchEnvironment["MEH_NATIVE_INPUT_DIAGNOSTICS"] = "1"
+        }
         // Keep fixture captures independent of a previous persisted toolbar drag.
         app.launchArguments += [
             "-editor.keyboardToolbar.commands",
@@ -374,9 +383,9 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
             let visible = bodyCell.frame.intersection(sourceEditor.frame)
             XCTAssertGreaterThan(visible.width, 20)
             XCTAssertGreaterThan(visible.height, 20)
-            app.coordinate(withNormalizedOffset: .zero).withOffset(
-                CGVector(dx: visible.midX, dy: visible.midY)
-            ).tap()
+            app.coordinate(atScreenPoint: CGPoint(
+                x: visible.midX, y: visible.midY
+            )).tap()
         }
         let editor = app.textViews["markdown.table.cell.editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
@@ -437,9 +446,10 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
         else {
             // UIKit presents this confirmation as a popover on iOS 27.
             // Its native cancellation is a tap on the surrounding backdrop.
-            let point = app.coordinate(withNormalizedOffset: .zero).withOffset(
-                CGVector(dx: app.frame.midX, dy: max(app.frame.minY + 20, prompt.frame.minY - 30))
-            )
+            let point = app.coordinate(atScreenPoint: CGPoint(
+                x: app.frame.midX,
+                y: max(app.frame.minY + 20, prompt.frame.minY - 30)
+            ))
             point.tap()
         }
         XCTAssertTrue(prompt.waitForNonExistence(timeout: 5))
@@ -459,12 +469,11 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
                 height: keyboardTop - app.frame.minY
             ))
             for upward in [true, true, true, true, false, false, false, false] {
-                let origin = app.coordinate(withNormalizedOffset: .zero)
-                let start = origin.withOffset(CGVector(
-                    dx: visible.midX, dy: upward ? visible.maxY - 30 : visible.minY + 30
+                let start = app.coordinate(atScreenPoint: CGPoint(
+                    x: visible.midX, y: upward ? visible.maxY - 30 : visible.minY + 30
                 ))
-                let end = origin.withOffset(CGVector(
-                    dx: visible.midX, dy: upward ? visible.minY + 30 : visible.maxY - 30
+                let end = app.coordinate(atScreenPoint: CGPoint(
+                    x: visible.midX, y: upward ? visible.minY + 30 : visible.maxY - 30
                 ))
                 start.press(forDuration: 0.05, thenDragTo: end)
                 if button.exists { return button }

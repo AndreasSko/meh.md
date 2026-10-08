@@ -51,6 +51,12 @@ struct NotebookTitleField: View {
                 guard isEnabled, isReady,
                       let request = focusRequest, request.noteID == noteID,
                       request.token != handledFocusToken else { return }
+#if DEBUG && os(iOS)
+                if ProcessInfo.processInfo.environment["MEH_NATIVE_INPUT_DIAGNOSTICS"] == "1" {
+                    NSLog("[MEHNativeInput] title.focusIntent focused=%@ selectsAll=%@ documentUTF16=%ld",
+                          String(isFocused), String(request.selectsAll), text.utf16.count)
+                }
+#endif
                 let wasFocused = isFocused
                 isFocused = true
                 if request.selectsAll {
@@ -105,8 +111,53 @@ private final class NotebookTitleReadinessView: UIView {
     private var waitingForTransition = false
     private var attachmentGeneration = 0
 
+#if DEBUG
+    private func updateInputDiagnostics() {
+        NotificationCenter.default.removeObserver(self)
+        guard window != nil,
+              ProcessInfo.processInfo.environment["MEH_NATIVE_INPUT_DIAGNOSTICS"] == "1"
+        else { return }
+        for name in [UITextField.textDidBeginEditingNotification,
+                     UITextField.textDidChangeNotification, UITextField.textDidEndEditingNotification,
+                     UITextView.textDidBeginEditingNotification,
+                     UITextView.textDidChangeNotification, UITextView.textDidEndEditingNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(traceInput(_:)),
+                                                   name: name, object: nil)
+        }
+    }
+
+    @objc private func traceInput(_ notification: Notification) {
+        guard let view = notification.object as? UIView, view.window === window,
+              let input = view as? UITextInput else { return }
+        func responder(in view: UIView) -> UIView? {
+            if view.isFirstResponder { return view }
+            for child in view.subviews {
+                if let active = responder(in: child) { return active }
+            }
+            return nil
+        }
+        let active = window.flatMap { responder(in: $0) }
+        func offsets(_ range: UITextRange?) -> String {
+            guard let range else { return "none" }
+            return "\(input.offset(from: input.beginningOfDocument, to: range.start)):"
+                + "\(input.offset(from: range.start, to: range.end))"
+        }
+        NSLog("[MEHNativeInput] title.%@ field=%@ responder=%@ focused=%@ selection=%@ marked=%@ documentUTF16=%ld",
+              notification.name.rawValue, String(describing: type(of: view)),
+              active.map { String(describing: type(of: $0)) } ?? "none",
+              String(view.isFirstResponder), offsets(input.selectedTextRange),
+              offsets(input.markedTextRange),
+              input.offset(from: input.beginningOfDocument, to: input.endOfDocument))
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+#endif
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
+#if DEBUG
+        updateInputDiagnostics()
+#endif
         attachmentGeneration &+= 1
         waitingForTransition = false
         checkReadiness()

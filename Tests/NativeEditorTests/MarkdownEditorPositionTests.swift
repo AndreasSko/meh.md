@@ -38,10 +38,14 @@ final class MarkdownEditorPositionTests: XCTestCase {
         setSelection(selected, in: textView)
         scrollSelectionToVisible(in: textView)
         layout(mounted)
-        #if os(macOS)
-        // AppKit can finish a programmatic TextKit 2 viewport layout on the
-        // next main-queue turn. Capture the settled viewport a user sees.
+        // Native TextKit viewport layout can finish on the next main-queue
+        // turn on either platform. Capture the settled viewport a user sees.
         await flushMainQueue()
+        layout(mounted)
+        #if os(iOS)
+        // A reading viewport is independent of first-responder selection
+        // reveal. Establish it directly without focusing the editor.
+        setVerticalScrollOffset(600, in: textView)
         layout(mounted)
         #endif
         let originalOffset = verticalScrollOffset(in: textView)
@@ -427,6 +431,7 @@ private extension MarkdownEditorPositionTests {
         let window = UIWindow(frame: CGRect(origin: .zero, size: size))
         window.rootViewController = host
         window.makeKeyAndVisible()
+        window.layoutIfNeeded()
         host.view.setNeedsLayout()
         host.view.layoutIfNeeded()
         return MountedEditor(
@@ -458,6 +463,10 @@ private extension MarkdownEditorPositionTests {
     }
 
     func scrollSelectionToVisible(in textView: UITextView) {
+        if let manager = textView.textLayoutManager {
+            manager.ensureLayout(for: manager.documentRange)
+        }
+        textView.layoutIfNeeded()
         textView.scrollRangeToVisible(textView.selectedRange)
     }
 

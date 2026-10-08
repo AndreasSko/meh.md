@@ -34,7 +34,7 @@ final class NotebookSearchUITests: XCTestCase {
             search.placeholderValue == "Search all notes"
                 || search.label == "Search all notes"
         )
-        search.tap()
+        activate(search)
         search.typeText(marker)
         XCTAssertFalse(app.staticTexts["Preparing search…"].exists)
 
@@ -99,25 +99,84 @@ final class NotebookSearchUITests: XCTestCase {
             .matching(identifier: "notebook-find").firstMatch
         XCTAssertTrue(find.waitForExistence(timeout: 10))
         activate(find)
+        #if os(macOS)
+        // The global search remains in the toolbar while AppKit opens Find.
+        let findField = app.searchFields.matching(
+            NSPredicate(format: "placeholderValue == %@", "Find")
+        ).firstMatch
+        #else
         let findField = app.searchFields.firstMatch.exists
             ? app.searchFields.firstMatch : app.textFields.firstMatch
+        #endif
         XCTAssertTrue(
             findField.waitForExistence(timeout: 5),
             "Expected the native Find field"
         )
         findField.typeText("lantern")
+        #if os(macOS)
+        findField.typeKey(.return, modifierFlags: [])
+        #endif
         capture(app, name: "Native Find in a fictional note")
 #if os(macOS)
-        let matchIndicator = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH[c] %@", "3 matches")
-        ).firstMatch
+        // AppKit's nonincremental Find bar has no occurrence-count label.
+        // Verify its real selection ranges, including the exact wrap boundary.
+        let editor = app.textViews["markdown-editor"]
+        let source = try XCTUnwrap(editor.value as? String)
+        let text = source as NSString
+        var matches: [NSRange] = []
+        var remainder = NSRange(location: 0, length: text.length)
+        while remainder.length > 0 {
+            let match = text.range(of: "lantern", range: remainder)
+            if match.location == NSNotFound { break }
+            matches.append(match)
+            remainder = NSRange(location: NSMaxRange(match),
+                                length: text.length - NSMaxRange(match))
+        }
+        XCTAssertEqual(matches.count, 3)
+        guard matches.count == 3 else { return }
+        let next = app.buttons["find next"]
+        let previous = app.buttons["find previous"]
+        let done = app.windows.firstMatch.buttons["Done"]
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        XCTAssertTrue(previous.exists)
+        XCTAssertTrue(done.exists)
+        done.click()
+        // Closing Find keeps its selected match. Replacing that match proves
+        // the exact native range without requiring separate AX permissions.
+        let paths: [(nextCount: Int, backwards: Bool, matchIndex: Int)] = [
+            (0, false, 0), (1, false, 1), (2, false, 2),
+            (3, false, 0), (0, true, 2),
+        ]
+        for (index, path) in paths.enumerated() {
+            XCTAssertFalse(findField.exists)
+            editor.typeKey(.upArrow, modifierFlags: .command)
+            app.typeKey("f", modifierFlags: .command)
+            XCTAssertTrue(findField.waitForExistence(timeout: 5))
+            findField.typeKey("a", modifierFlags: .command)
+            findField.typeText("lantern")
+            findField.typeKey(.return, modifierFlags: [])
+            for _ in 0..<path.nextCount { next.click() }
+            if path.backwards { previous.click() }
+            done.click()
+            XCTAssertFalse(findField.exists)
+            let marker = "FictionalFindSelection\(index)"
+            let expected = text.replacingCharacters(in: matches[path.matchIndex],
+                                                   with: marker)
+            editor.typeText(marker)
+            assertNativeFindSource(expected, editor: editor,
+                                   message: "Native Find selected range \(matches[path.matchIndex])")
+            editor.typeKey("z", modifierFlags: .command)
+            assertNativeFindSource(source, editor: editor,
+                                   message: "Undo must restore every original source byte")
+        }
+        capture(app, name: "Native Find traverses exactly three occurrences")
 #else
         let matchIndicator = app.staticTexts["1 of 3"]
-#endif
         XCTAssertTrue(
             matchIndicator.waitForExistence(timeout: 5),
             "Expected native Find to report the matching occurrence"
         )
+#endif
 #if os(iOS)
         let next = app.buttons["find.nextButton"]
         let previous = app.buttons["find.previousButton"]
@@ -178,6 +237,21 @@ final class NotebookSearchUITests: XCTestCase {
     }
 
 #if os(macOS)
+    private func assertNativeFindSource(
+        _ expected: String, editor: XCUIElement, message: String
+    ) {
+        let matches = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                guard let actual = editor.value as? String else { return false }
+                return Array(actual.utf8) == Array(expected.utf8)
+            }, object: editor
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [matches], timeout: 5), .completed,
+                       message)
+        XCTAssertEqual(Array((editor.value as? String ?? "").utf8),
+                       Array(expected.utf8), message)
+    }
+
     func testQuickOpenShortcutSearchesAndOpensNote() throws {
         continueAfterFailure = false
         let app = makeApp()
@@ -214,12 +288,26 @@ final class NotebookSearchUITests: XCTestCase {
     private func createNote(
         in app: XCUIApplication, title: String, body: String
     ) {
+        #if os(macOS)
+        let control = app.descendants(matching: .any)
+            .matching(identifier: "notebook-new-item").firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let newNote = control.buttons.firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 5))
+        #else
         let newNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        #endif
         activate(newNote)
+        #if os(macOS)
+        let titleField = app.descendants(matching: .any)
+            .matching(identifier: "title-field").firstMatch
+        #else
         let titleField = app.textFields["title-field"]
+        #endif
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
 #if os(macOS)
+        titleField.click()
         titleField.typeKey("a", modifierFlags: .command)
         titleField.typeText(title)
         titleField.typeKey(.return, modifierFlags: [])
