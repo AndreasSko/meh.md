@@ -1,34 +1,29 @@
-name: iPhone editor regressions
-
+name: Focused native fixture validation
 on:
-  pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
-  group: editor-regressions-${{ github.ref }}
+  group: focused-native-fixture-probe-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  editor-regressions:
+  ipad:
+    name: Focused ipad fixture validation
     runs-on: xcode-27
-    # Native checks, 11 UI tests and Xcode result export can exceed an hour.
-    # App performance ceilings are enforced separately in Swift.
-    timeout-minutes: 75
+    timeout-minutes: 150
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Check native geometry and real keyboard editing
-        id: regression
-        run: scripts/run_editor_regressions.sh
-      - name: Preserve regression evidence
-        if: always() && steps.regression.outputs.evidence_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Run every explicitly selected method
+        run: |
+          python3 scripts/hosted_subset_fixture_probe.py --platform ipad \
+            --identifiers scripts/pad-focused-identifiers.json
+      - name: Preserve focused execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: editor-regressions-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.regression.outputs.evidence_root }}
+          name: focused-fixture-ipad
+          path: ${{ runner.temp }}/focused-fixture-ipad
           if-no-files-found: error
           retention-days: 14

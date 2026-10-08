@@ -1,0 +1,14 @@
+[
+  "meh.mdUITests/EditorKeyboardUITests/testHeadingPickerRetainsSourceTypingAndToolbarReordering",
+  "meh.mdUITests/MarkdownRenderedTableEditingUITests/testNativeUndoRestoresSourceAndActiveCell",
+  "meh.mdUITests/NotebookLinksUITests/testWikiNavigationBacklinksAndCompletion",
+  "meh.mdUITests/NotebookOrderingUITests/testBatchTrashRestoresFromTrashAndPreservesNoteSource",
+  "meh.mdUITests/NotebookTrashUITests/testTrashMenuHitAreaAndBatchActions",
+  "meh.mdUITests/RecentsExpansionUITests/testExpandedRecentsSurvivesNoteNavigationUntilClosed",
+  "meh.mdUITests/RecentsExpansionUITests/testGrabberPullCancelsOpensClosesAndOpensNote",
+  "meh.mdUITests/RecentsExpansionUITests/testSwipeTrashRequiresTapAndRestoresCompactAndExpanded",
+  "meh.mdUITests/RecentsExpansionUITests/testTapExpansionScrollPinAndRestoreFiles",
+  "meh.mdUITests/SidebarControlsUITests/testEmptyTrashClosesBackToSelectedNote",
+  "meh.mdUITests/SidebarControlsUITests/testEmptyTrashRequiresConfirmation",
+  "meh.mdUITests/WritingFlowUITests/testSyncStatusLivesInCloudDetailsWhileWriting"
+]
