@@ -21,7 +21,10 @@ final class LargeNoteHistoryUITests: XCTestCase {
         let heading = app.descendants(matching: .any)
             .matching(identifier: "note-history-title").firstMatch
         XCTAssertTrue(heading.exists)
-        let navigationBar = app.navigationBars.firstMatch
+        // iPad also has a sidebar navigation bar. Compare with History's bar.
+        let navigationBar = app.navigationBars.containing(
+            .button, identifier: "note-history-done"
+        ).firstMatch
         XCTAssertTrue(navigationBar.exists)
         XCTAssertGreaterThanOrEqual(heading.frame.minY, navigationBar.frame.maxY)
         let loading = app.descendants(matching: .any)

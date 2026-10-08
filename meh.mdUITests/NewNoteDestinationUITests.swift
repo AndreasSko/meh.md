@@ -39,9 +39,13 @@ final class NewNoteDestinationUITests: XCTestCase {
         let noteName = title.value as? String ?? ""
         XCTAssertFalse(noteName.isEmpty)
         title.typeText("\n")
-        let back = app.navigationBars.buttons.firstMatch
-        XCTAssertTrue(back.waitForExistence(timeout: 5))
-        back.tap()
+        // Regular iPad keeps Files visible beside the note.
+        if !app.buttons["notebook-tree-toggle"].isHittable {
+            let back = app.navigationBars.buttons.firstMatch
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
+        }
+        XCTAssertTrue(app.buttons["notebook-tree-toggle"].isHittable)
 
         let note = app.staticTexts.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@",

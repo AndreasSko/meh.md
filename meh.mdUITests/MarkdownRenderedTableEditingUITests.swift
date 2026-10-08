@@ -76,15 +76,16 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
             return
         }
         // Resolve by stable identity: an index-bound query changes after reordering.
-        let neighbour = app.buttons[initialNeighbour.identifier].firstMatch
+        let neighbour = toolbar.buttons[initialNeighbour.identifier].firstMatch
         func moveTable(before: Bool) {
-            let origin = app.coordinate(withNormalizedOffset: .zero)
-            let start = origin.withOffset(CGVector(dx: menu.frame.midX, dy: menu.frame.midY))
-            let end = origin.withOffset(CGVector(
-                dx: before ? neighbour.frame.minX - 6 : neighbour.frame.maxX + 6,
-                dy: neighbour.frame.midY
-            ))
-            start.press(forDuration: 0.8, thenDragTo: end)
+            let center = CGVector(dx: 0.5, dy: 0.5)
+            let start = menu.coordinate(withNormalizedOffset: center)
+            let end = neighbour.coordinate(withNormalizedOffset: center)
+                .withOffset(CGVector(dx: before ? -18 : 18, dy: 0))
+            // Give UIKit time to lift the cell and accept a one-cell insertion.
+            // Match the native toolbar drag used by the keyboard-order tests.
+            start.press(forDuration: 1.2, thenDragTo: end,
+                        withVelocity: .slow, thenHoldForDuration: 0.6)
             // A drop may scroll the collection and temporarily remove its AX cell.
             _ = toolbarButton("editor-table-menu", in: app)
             let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in

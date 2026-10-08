@@ -42,8 +42,14 @@ final class FolderNavigationUITests: XCTestCase {
         menu.tap()
         app.buttons["notebook-select-items"].tap()
         title.tap()
-        XCTAssertTrue(app.buttons["1 selected"].waitForExistence(timeout: 5))
+        let selectionCount = app.buttons["notebook-selection-count"]
+        XCTAssertTrue(selectionCount.waitForExistence(timeout: 5))
+        XCTAssertEqual(selectionCount.label, "1 selected")
         XCTAssertEqual(disclosure.value as? String, "Collapsed")
+        let selected = XCTAttachment(screenshot: app.screenshot())
+        selected.name = "Selected collapsed folder count"
+        selected.lifetime = .keepAlways
+        add(selected)
     }
 }
 #endif

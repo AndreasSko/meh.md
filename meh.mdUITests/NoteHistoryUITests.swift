@@ -143,11 +143,18 @@ final class NoteHistoryUITests: XCTestCase {
         let restore = app.buttons["note-history-restore"]
         XCTAssertTrue(restore.exists)
         activate(restore)
-        XCTAssertTrue(app.buttons["Restore This Note…"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Restore as New Note"].exists)
-        activate(app.buttons["Restore This Note…"])
-        XCTAssertTrue(app.buttons["Restore This Note"].waitForExistence(timeout: 5))
-        activate(app.buttons["Cancel"].firstMatch)
+        #if os(macOS)
+        // Native confirmation sheets mirror their actions in the Touch Bar.
+        // Target the visible sheet rather than those duplicate controls.
+        let restoreActions = app.sheets.buttons
+        #else
+        let restoreActions = app.buttons
+        #endif
+        XCTAssertTrue(restoreActions["Restore This Note…"].waitForExistence(timeout: 5))
+        XCTAssertTrue(restoreActions["Restore as New Note"].exists)
+        activate(restoreActions["Restore This Note…"])
+        XCTAssertTrue(restoreActions["Restore This Note"].waitForExistence(timeout: 5))
+        activate(restoreActions["Cancel"].firstMatch)
 
         activate(app.buttons["note-history-done"])
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
@@ -209,8 +216,7 @@ final class NoteHistoryUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["note-title"].label, "Recovery Sketch (Restored)")
         XCTAssertEqual(editor.value as? String, firstBody)
-        let back = app.navigationBars.buttons.firstMatch
-        activate(back)
+        revealFiles(in: app)
         let original = app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@"
                 + " AND NOT label CONTAINS[c] %@",
@@ -257,10 +263,22 @@ final class NoteHistoryUITests: XCTestCase {
     }
 
     private func createNote(in app: XCUIApplication, title: String, body: String) {
+        #if os(macOS)
+        let newNoteControl = app.descendants(matching: .any)
+            .matching(identifier: "notebook-new-item").firstMatch
+        XCTAssertTrue(newNoteControl.waitForExistence(timeout: 15))
+        let newNote = newNoteControl.buttons.firstMatch
+        #else
         let newNote = app.buttons["notebook-new-item"].firstMatch
+        #endif
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         activate(newNote)
+        #if os(macOS)
+        let titleField = app.descendants(matching: .any)
+            .matching(identifier: "title-field").firstMatch
+        #else
         let titleField = app.textFields["title-field"]
+        #endif
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         replaceTitle(in: titleField, app: app, with: title)
         let titleEntered = XCTNSPredicateExpectation(
@@ -283,6 +301,7 @@ final class NoteHistoryUITests: XCTestCase {
         in field: XCUIElement, app: XCUIApplication, with title: String
     ) {
         #if os(macOS)
+        field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeText(title)
         #else
@@ -316,11 +335,21 @@ final class NoteHistoryUITests: XCTestCase {
         }
     }
 
+    #if os(iOS)
+    private func revealFiles(in app: XCUIApplication) {
+        let tree = app.buttons["notebook-tree-toggle"]
+        if !tree.isHittable {
+            let back = app.navigationBars.buttons.firstMatch
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            activate(back)
+        }
+        XCTAssertTrue(tree.isHittable)
+    }
+    #endif
+
     private func reopenCurrentNote(in app: XCUIApplication, expectedText: String) {
         #if os(iOS)
-        let back = app.navigationBars.buttons.firstMatch
-        XCTAssertTrue(back.waitForExistence(timeout: 5))
-        activate(back)
+        revealFiles(in: app)
         let recent = app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "notebook-recent-"
         )).firstMatch

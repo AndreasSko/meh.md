@@ -1,4 +1,8 @@
 import XCTest
+#if os(macOS)
+import AppKit
+import ApplicationServices
+#endif
 
 final class NotebookSearchUITests: XCTestCase {
     func testGlobalSearchFindsAndOpensBodyMatch() throws {
@@ -34,7 +38,7 @@ final class NotebookSearchUITests: XCTestCase {
             search.placeholderValue == "Search all notes"
                 || search.label == "Search all notes"
         )
-        search.tap()
+        activate(search)
         search.typeText(marker)
         XCTAssertFalse(app.staticTexts["Preparing search…"].exists)
 
@@ -99,25 +103,65 @@ final class NotebookSearchUITests: XCTestCase {
             .matching(identifier: "notebook-find").firstMatch
         XCTAssertTrue(find.waitForExistence(timeout: 10))
         activate(find)
+        #if os(macOS)
+        // The global search remains in the toolbar while AppKit opens Find.
+        let findField = app.searchFields.matching(
+            NSPredicate(format: "placeholderValue == %@", "Find")
+        ).firstMatch
+        #else
         let findField = app.searchFields.firstMatch.exists
             ? app.searchFields.firstMatch : app.textFields.firstMatch
+        #endif
         XCTAssertTrue(
             findField.waitForExistence(timeout: 5),
             "Expected the native Find field"
         )
         findField.typeText("lantern")
+        #if os(macOS)
+        findField.typeKey(.return, modifierFlags: [])
+        #endif
         capture(app, name: "Native Find in a fictional note")
 #if os(macOS)
-        let matchIndicator = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH[c] %@", "3 matches")
-        ).firstMatch
+        // AppKit's nonincremental Find bar has no occurrence-count label.
+        // Verify its real selection ranges, including the exact wrap boundary.
+        let editor = app.textViews["markdown-editor"]
+        let source = try XCTUnwrap(editor.value as? String)
+        let text = source as NSString
+        var matches: [NSRange] = []
+        var remainder = NSRange(location: 0, length: text.length)
+        while remainder.length > 0 {
+            let match = text.range(of: "lantern", range: remainder)
+            if match.location == NSNotFound { break }
+            matches.append(match)
+            remainder = NSRange(location: NSMaxRange(match),
+                                length: text.length - NSMaxRange(match))
+        }
+        XCTAssertEqual(matches.count, 3)
+        guard matches.count == 3 else { return }
+        assertNativeFindSelection(matches[0])
+        let next = app.buttons["find next"]
+        let previous = app.buttons["find previous"]
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        XCTAssertTrue(previous.exists)
+        next.click()
+        assertNativeFindSelection(matches[1])
+        next.click()
+        assertNativeFindSelection(matches[2])
+        next.click()
+        assertNativeFindSelection(matches[0])
+        previous.click()
+        assertNativeFindSelection(matches[2])
+        XCTAssertEqual(Array(try XCTUnwrap(editor.value as? String).utf8),
+                       Array(source.utf8),
+                       "Native Find navigation must preserve every source byte")
+        capture(app, name: "Native Find traverses exactly three occurrences")
 #else
         let matchIndicator = app.staticTexts["1 of 3"]
-#endif
         XCTAssertTrue(
             matchIndicator.waitForExistence(timeout: 5),
             "Expected native Find to report the matching occurrence"
         )
+#endif
 #if os(iOS)
         let next = app.buttons["find.nextButton"]
         let previous = app.buttons["find.previousButton"]
@@ -178,6 +222,60 @@ final class NotebookSearchUITests: XCTestCase {
     }
 
 #if os(macOS)
+    private func assertNativeFindSelection(_ expected: NSRange) {
+        var diagnostic = "No accessibility selection read yet"
+        let selected = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                let result = self.nativeFindSelection()
+                diagnostic = result.diagnostic
+                return result.range == expected
+            }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed,
+                       "Expected native Find range \(expected); \(diagnostic)")
+    }
+
+    private func nativeFindSelection() -> (range: NSRange?, diagnostic: String) {
+        guard let application = NSWorkspace.shared.frontmostApplication,
+              application.bundleIdentifier == "de.andreas-sk.meh-md"
+                || application.bundleIdentifier == "de.andreas-sk.meh-md.icloud-dev"
+        else { return (nil, "The notebook application is not frontmost") }
+        let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
+        var lastError: AXError = .success
+        func editor(in element: AXUIElement, depth: Int = 0) -> AXUIElement? {
+            guard depth < 24 else { return nil }
+            var identifier: CFTypeRef?
+            AXUIElementCopyAttributeValue(element, kAXIdentifierAttribute as CFString,
+                                          &identifier)
+            if identifier as? String == "markdown-editor" { return element }
+            var children: CFTypeRef?
+            let error = AXUIElementCopyAttributeValue(
+                element, kAXChildrenAttribute as CFString, &children
+            )
+            if error != .success { lastError = error }
+            for child in children as? [AXUIElement] ?? [] {
+                if let found = editor(in: child, depth: depth + 1) { return found }
+            }
+            return nil
+        }
+        guard let textView = editor(in: applicationElement) else {
+            return (nil, "No native editor AX element; AX error \(lastError.rawValue)")
+        }
+        var value: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(
+            textView, kAXSelectedTextRangeAttribute as CFString, &value
+        )
+        guard error == .success, let value, CFGetTypeID(value) == AXValueGetTypeID()
+        else { return (nil, "Selected range AX error \(error.rawValue)") }
+        let rangeValue = value as! AXValue
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(rangeValue, .cfRange, &range) else {
+            return (nil, "Native selected range has an unexpected AX value type")
+        }
+        let selection = NSRange(location: range.location, length: range.length)
+        return (selection, "Actual native Find range \(selection)")
+    }
+
     func testQuickOpenShortcutSearchesAndOpensNote() throws {
         continueAfterFailure = false
         let app = makeApp()
@@ -214,12 +312,26 @@ final class NotebookSearchUITests: XCTestCase {
     private func createNote(
         in app: XCUIApplication, title: String, body: String
     ) {
+        #if os(macOS)
+        let control = app.descendants(matching: .any)
+            .matching(identifier: "notebook-new-item").firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let newNote = control.buttons.firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 5))
+        #else
         let newNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        #endif
         activate(newNote)
+        #if os(macOS)
+        let titleField = app.descendants(matching: .any)
+            .matching(identifier: "title-field").firstMatch
+        #else
         let titleField = app.textFields["title-field"]
+        #endif
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
 #if os(macOS)
+        titleField.click()
         titleField.typeKey("a", modifierFlags: .command)
         titleField.typeText(title)
         titleField.typeKey(.return, modifierFlags: [])
