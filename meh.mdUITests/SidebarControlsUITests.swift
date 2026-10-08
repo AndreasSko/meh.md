@@ -1,4 +1,7 @@
 import XCTest
+#if os(iOS)
+import UIKit
+#endif
 
 final class SidebarControlsUITests: XCTestCase {
     func testEmptyTrashClosesBackToSelectedNote() throws {
@@ -10,12 +13,26 @@ final class SidebarControlsUITests: XCTestCase {
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
 
+        #if os(macOS)
+        let control = app.descendants(matching: .any)
+            .matching(identifier: "notebook-new-item").firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 15))
+        let newNote = control.buttons.firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 5))
+        #else
         let newNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        #endif
         activate(newNote)
+        #if os(macOS)
+        let titleField = app.descendants(matching: .any)
+            .matching(identifier: "title-field").firstMatch
+        #else
         let titleField = app.textFields["title-field"]
+        #endif
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         #if os(macOS)
+        titleField.click()
         titleField.typeKey(.return, modifierFlags: [])
         #else
         titleField.typeText("\n")
@@ -35,12 +52,21 @@ final class SidebarControlsUITests: XCTestCase {
 
         let settings = app.buttons["notebook-settings"]
         let trash = app.buttons["notebook-trash-toggle"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        XCTAssertTrue(trash.waitForExistence(timeout: 5))
-        XCTAssertLessThanOrEqual(settings.frame.width, 60)
-        XCTAssertLessThanOrEqual(trash.frame.width, 60)
-        XCTAssertEqual(settings.frame.midY, trash.frame.midY, accuracy: 4)
-        XCTAssertLessThan(settings.frame.midX, trash.frame.midX)
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            let more = app.buttons["notebook-app-menu"]
+            XCTAssertTrue(more.waitForExistence(timeout: 5))
+            XCTAssertTrue(more.isHittable)
+            XCTAssertTrue(more.isEnabled)
+            XCTAssertEqual(more.label, "Browser Actions")
+            XCTAssertLessThanOrEqual(more.frame.width, 60)
+            XCTAssertLessThanOrEqual(more.frame.height, 60)
+        } else {
+            assertDedicatedFooter(settings: settings, trash: trash)
+        }
+        #else
+        assertDedicatedFooter(settings: settings, trash: trash)
+        #endif
 
         app.openTrash()
         XCTAssertTrue(app.buttons["notebook-trash-close"].waitForExistence(timeout: 5))
@@ -48,12 +74,14 @@ final class SidebarControlsUITests: XCTestCase {
         capture(app, name: "Dedicated empty Trash")
         app.closeTrash()
 
-        let originalNote = app.buttons.matching(
-            NSPredicate(
-                format: "identifier BEGINSWITH %@ AND label == %@",
-                "notebook-sidebar-note-", originalTitle
-            )
-        ).firstMatch
+        #if os(macOS)
+        let originalNote = app.notebookMacFileRow(named: originalTitle)
+        #else
+        let originalNote = app.staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@",
+            "notebook-sidebar-title-", originalTitle
+        )).firstMatch
+        #endif
         XCTAssertTrue(originalNote.waitForExistence(timeout: 5))
         activate(originalNote)
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
@@ -103,12 +131,18 @@ final class SidebarControlsUITests: XCTestCase {
         let noteTitle = title.label
         showSidebar(app)
 
-        let note = app.buttons.matching(
-            NSPredicate(
-                format: "identifier BEGINSWITH %@ AND label == %@",
-                "notebook-sidebar-note-", noteTitle
-            )
-        ).firstMatch
+        let noteLabel = app.staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@",
+            "notebook-sidebar-title-", noteTitle
+        )).firstMatch
+        XCTAssertTrue(noteLabel.waitForExistence(timeout: 5))
+        let noteID = noteLabel.identifier.replacingOccurrences(
+            of: "notebook-sidebar-title-", with: ""
+        )
+        // Library rows are native collection containers; Trash rows can be
+        // buttons. Stable identity keeps the same deletion checks across both.
+        let note = app.descendants(matching: .any)
+            .matching(identifier: "notebook-sidebar-note-" + noteID).firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 5))
         note.swipeLeft(velocity: .slow)
         let trashAction = app.buttons["notebook-swipe-trash"]
@@ -147,15 +181,29 @@ final class SidebarControlsUITests: XCTestCase {
     }
     #endif
 
+    private func assertDedicatedFooter(settings: XCUIElement, trash: XCUIElement) {
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(trash.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(settings.frame.width, 60)
+        XCTAssertLessThanOrEqual(trash.frame.width, 60)
+        XCTAssertEqual(settings.frame.midY, trash.frame.midY, accuracy: 4)
+        XCTAssertLessThan(settings.frame.midX, trash.frame.midX)
+    }
+
     private func showSidebar(_ app: XCUIApplication) {
         #if os(iOS)
-        if !app.buttons["notebook-trash-toggle"].isHittable {
-            app.navigationBars.buttons.firstMatch.tap()
+        let control = UIDevice.current.userInterfaceIdiom == .phone
+            ? app.buttons["notebook-app-menu"] : app.buttons["notebook-trash-toggle"]
+        if !control.isHittable {
+            let back = app.navigationBars.buttons.firstMatch
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
         }
+        XCTAssertTrue(control.waitForExistence(timeout: 5))
+        XCTAssertTrue(control.isHittable)
+        #else
+        XCTAssertTrue(app.buttons["notebook-trash-toggle"].waitForExistence(timeout: 5))
         #endif
-        XCTAssertTrue(
-            app.buttons["notebook-trash-toggle"].waitForExistence(timeout: 5)
-        )
     }
 
     private func activate(_ element: XCUIElement) {

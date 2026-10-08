@@ -724,6 +724,14 @@ final class MarkdownTextView: NSTextView {
 
     override func accessibilityChildren() -> [Any]? {
         var children = super.accessibilityChildren() ?? []
+        // NSTextView does not automatically expose its embedded title host.
+        // Flatten ignored hosting views while retaining SwiftUI's native roles.
+        if let markdownTitleHost {
+            for child in NSAccessibility.unignoredChildren(from: [markdownTitleHost])
+                where !children.contains(where: { ($0 as AnyObject) === (child as AnyObject) }) {
+                children.append(child)
+            }
+        }
         for overlay in markdownTableScrollOverlays where !children.contains(where: {
             ($0 as AnyObject) === overlay
         }) {

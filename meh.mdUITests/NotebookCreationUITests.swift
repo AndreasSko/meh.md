@@ -11,6 +11,7 @@ final class NotebookCreationUITests: XCTestCase {
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] =
             "pointer-gap-\(UUID().uuidString)"
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        app.launchEnvironment["MEH_NATIVE_INPUT_DIAGNOSTICS"] = "1"
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
         for text in ["Orbit Alpha", "Orbit Beta"] {
@@ -95,6 +96,8 @@ final class NotebookCreationUITests: XCTestCase {
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "source"]
+        let originalOrientation = XCUIDevice.shared.orientation
+        defer { XCUIDevice.shared.orientation = originalOrientation }
         if UIDevice.current.userInterfaceIdiom == .pad {
             XCUIDevice.shared.orientation = .landscapeLeft
         }
@@ -122,7 +125,16 @@ final class NotebookCreationUITests: XCTestCase {
         let newNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(search.exists)
         XCTAssertTrue(newNote.exists)
-        let floatingControlsTop = min(search.frame.minY, newNote.frame.minY)
+        let floatingControlsTop: CGFloat
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            let settings = app.buttons["notebook-settings"]
+            let trash = app.buttons["notebook-trash-toggle"]
+            XCTAssertTrue(settings.isHittable)
+            XCTAssertTrue(trash.isHittable)
+            floatingControlsTop = min(settings.frame.minY, trash.frame.minY)
+        } else {
+            floatingControlsTop = min(search.frame.minY, newNote.frame.minY)
+        }
         XCTAssertLessThan(last.frame.maxY, floatingControlsTop - 16,
                           "Files can scroll beyond the last row above controls")
         last.press(forDuration: 1)
@@ -187,17 +199,15 @@ final class NotebookCreationUITests: XCTestCase {
     private func replaceTitle(
         in field: XCUIElement, app: XCUIApplication, with title: String
     ) {
-        let old = field.value as? String ?? ""
         field.tap()
-        field.press(forDuration: 1.2)
-        let selectAll = app.menuItems["Select All"]
-        if selectAll.waitForExistence(timeout: 2) {
-            selectAll.tap()
-            field.typeText(title)
-        } else {
-            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue,
-                                 count: old.count) + title)
-        }
+        // Select using the native editing command rather than leaving an iOS
+        // long-press menu open when a macOS menu-item query cannot find it.
+        app.typeKey("a", modifierFlags: .command)
+        field.typeText(title)
+        let completed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", title), object: field
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 5), .completed)
         XCTAssertEqual(field.value as? String, title)
     }
 

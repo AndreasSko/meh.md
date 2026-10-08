@@ -1,4 +1,9 @@
 import XCTest
+import Vision
+import ImageIO
+#if os(iOS)
+import UIKit
+#endif
 
 final class NotebookLinksUITests: XCTestCase {
     func testWikiNavigationBacklinksAndCompletion() throws {
@@ -24,11 +29,19 @@ final class NotebookLinksUITests: XCTestCase {
 
         // Reopen from Files to establish passive reading rather than depending
         // on the swipe distance needed to dismiss a short note's keyboard.
-        activate(app.buttons["notebook-note-actions"])
-        activate(app.buttons["notebook-show-in-files"])
-        let meetingRow = app.staticTexts.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND label == %@",
-            "notebook-sidebar-title-", "Fictional Meeting"
+        let actions = app.descendants(matching: .any)
+            .matching(identifier: "notebook-note-actions").firstMatch
+        activate(actions)
+        activate(app.descendants(matching: .any)
+            .matching(identifier: "notebook-show-in-files").firstMatch)
+        #if os(macOS)
+        let fileTitles = app.notebookVisibleMacSidebar.staticTexts
+        #else
+        let fileTitles = app.staticTexts
+        #endif
+        let meetingRow = fileTitles.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND (label == %@ OR value == %@)",
+            "notebook-sidebar-title-", "Fictional Meeting", "Fictional Meeting"
         )).firstMatch
         XCTAssertTrue(meetingRow.waitForExistence(timeout: 5))
         activate(meetingRow)
@@ -49,7 +62,7 @@ final class NotebookLinksUITests: XCTestCase {
 
         // The short fixture places its link near the beginning of the editor.
         capture(app, name: "Fictional meeting in passive reading mode")
-        followFixtureLink(in: app)
+        try followFixtureLink(in: app)
         assertTitle("Fictional Project", in: app)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
         capture(app, name: "Rendered wiki link opened without editing focus")
@@ -58,13 +71,13 @@ final class NotebookLinksUITests: XCTestCase {
         goBack(from: app, returningTo: "Fictional Meeting")
         assertTitle("Fictional Meeting", in: app)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
-        followFixtureLink(in: app)
+        try followFixtureLink(in: app)
         assertTitle("Fictional Project", in: app)
 
-        let actions = app.buttons["notebook-note-actions"]
         XCTAssertTrue(actions.waitForExistence(timeout: 10))
         activate(actions)
-        let backlinksAction = app.buttons["notebook-backlinks"]
+        let backlinksAction = app.descendants(matching: .any)
+            .matching(identifier: "notebook-backlinks").firstMatch
         XCTAssertTrue(backlinksAction.waitForExistence(timeout: 5))
         activate(backlinksAction)
         let backlink = app.buttons.matching(
@@ -83,10 +96,13 @@ final class NotebookLinksUITests: XCTestCase {
         // incoming links must not briefly show the previous target's result.
         activate(actions)
         activate(backlinksAction)
-        let noLinks = app.staticTexts["No linked notes"]
+        let backlinksList = app.descendants(matching: .any)
+            .matching(identifier: "notebook-backlinks-list").firstMatch
+        XCTAssertTrue(backlinksList.waitForExistence(timeout: 10))
+        let noLinks = backlinksList.staticTexts["No linked notes"]
         XCTAssertTrue(noLinks.waitForExistence(timeout: 10))
         XCTAssertFalse(backlink.exists)
-        XCTAssertFalse(app.staticTexts.containing(NSPredicate(
+        XCTAssertFalse(backlinksList.staticTexts.containing(NSPredicate(
             format: "label CONTAINS %@", "the project"
         )).firstMatch.exists)
         capture(app, name: "No linked notes for a fictional meeting")
@@ -104,7 +120,14 @@ final class NotebookLinksUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(suggestion.waitForExistence(timeout: 10))
         XCTAssertTrue(suggestion.label.contains("Fictional Project"))
+        #if os(macOS)
+        let focusedEditor = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: editor
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [focusedEditor], timeout: 5), .completed)
+        #else
         XCTAssertTrue(app.keyboards.firstMatch.exists)
+        #endif
         XCTAssertTrue(suggestion.isHittable)
         XCTAssertGreaterThanOrEqual(
             suggestion.frame.height, 44,
@@ -124,6 +147,8 @@ final class NotebookLinksUITests: XCTestCase {
 
 #if os(iOS)
     func testCompactBackTransitionKeepsNoteContent() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone,
+                          "Requires iPhone compact navigation")
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -157,13 +182,13 @@ final class NotebookLinksUITests: XCTestCase {
         let originalTitleY = app.buttons["note-title"].frame.minY
         capture(app, name: "Meeting position before following a link")
 
-        followFixtureLink(in: app)
+        try followFixtureLink(in: app)
         assertTitle("Fictional Project", in: app)
         goBack(from: app, returningTo: "Fictional Meeting")
         assertTitle("Fictional Meeting", in: app)
         capture(app, name: "Meeting after native Back")
 
-        followFixtureLink(in: app)
+        try followFixtureLink(in: app)
         assertTitle("Fictional Project", in: app)
         swipeBackFromLeadingEdge(in: app, slowly: true)
         assertTitle("Fictional Meeting", in: app)
@@ -176,6 +201,8 @@ final class NotebookLinksUITests: XCTestCase {
     }
 
     func testCompactBackAfterBacklinkKeepsScrolledAnchor() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone,
+                          "Requires iPhone compact navigation")
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -261,6 +288,8 @@ final class NotebookLinksUITests: XCTestCase {
     }
 
     func testCompactScrolledLinkOpeningKeepsVisitPosition() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone,
+                          "Requires iPhone compact navigation")
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -336,17 +365,7 @@ final class NotebookLinksUITests: XCTestCase {
         capture(app, name: "Long source at midpoint backlink destination")
         let sourceTitleY = sourceTitle.frame.minY
 
-        let midpointLink = app.links["OPEN PROJECT FROM MIDPOINT"]
-        if midpointLink.exists && midpointLink.isHittable {
-            midpointLink.tap()
-        } else {
-            // The captured screenshot places the link center at y≈478pt in
-            // the 874pt app viewport; use app coordinates because the editor's
-            // accessibility frame excludes part of that viewport.
-            app.coordinate(
-                withNormalizedOffset: CGVector(dx: 0.2, dy: 0.547)
-            ).tap()
-        }
+        try followFixtureLink(in: app, alias: "OPEN PROJECT FROM MIDPOINT")
         assertTitle("Fictional Project", in: app)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
         capture(app, name: "Project opened from the scrolled source link")
@@ -360,6 +379,8 @@ final class NotebookLinksUITests: XCTestCase {
     }
 
     func testCompactBackReturnsToFilesAndManualSelectionResetsLinkChain() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone,
+                          "Requires iPhone compact navigation")
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -401,7 +422,7 @@ final class NotebookLinksUITests: XCTestCase {
             "Relaunching the preview should leave the editor passive"
         )
 
-        followFixtureLink(in: app)
+        try followFixtureLink(in: app)
         assertTitle("Fictional Project", in: app)
         XCTAssertFalse(app.buttons["note-link-forward"].exists)
         goBack(from: app, returningTo: "Fictional Meeting")
@@ -423,6 +444,8 @@ final class NotebookLinksUITests: XCTestCase {
     }
 
     func testCompactInlineRenameResetsLinkedNoteBackRoute() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone,
+                          "Requires iPhone compact navigation")
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -454,7 +477,7 @@ final class NotebookLinksUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [keyboardHidden], timeout: 5), .completed)
 
-        followFixtureLink(in: app)
+        try followFixtureLink(in: app)
         assertTitle("Fictional Project", in: app)
         activate(app.buttons["notebook-note-actions"])
         activate(app.buttons["notebook-show-in-files"])
@@ -490,10 +513,10 @@ final class NotebookLinksUITests: XCTestCase {
     private func createNote(
         in app: XCUIApplication, title: String, body: String
     ) {
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.notebookNewItemButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         activate(newNote)
-        let titleField = app.textFields["title-field"]
+        let titleField = app.notebookTitleField
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
 #if os(iOS)
         titleField.tap()
@@ -514,6 +537,7 @@ final class NotebookLinksUITests: XCTestCase {
         XCTAssertEqual(titleField.value as? String, title)
         titleField.typeText("\n")
 #else
+        titleField.click()
         titleField.typeKey("a", modifierFlags: .command)
         titleField.typeText(title)
         titleField.typeKey(.return, modifierFlags: [])
@@ -536,30 +560,120 @@ final class NotebookLinksUITests: XCTestCase {
     private func goBack(
         from app: XCUIApplication, returningTo expectedTitle: String
     ) {
-#if os(macOS)
-        let back = app.buttons["note-link-back"]
-#else
-        let back = app.navigationBars.buttons.matching(
-            NSPredicate(
-                format: "label == %@ OR label CONTAINS[c] %@"
-                    + " OR label == %@",
-                expectedTitle, "Back", "meh.md"
-            )
-        ).firstMatch
-#endif
-        XCTAssertTrue(
-            back.waitForExistence(timeout: 10),
-            "Expected Back navigation returning to \(expectedTitle)"
-        )
-        activate(back)
+        app.returnFromNotebookLink(to: expectedTitle)
     }
 
-    private func followFixtureLink(in app: XCUIApplication) {
-        let title = app.buttons["note-title"]
-        let linkPoint = title.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.25, dy: 1)
-        ).withOffset(CGVector(dx: 0, dy: 26))
-        linkPoint.tap()
+    private func followFixtureLink(
+        in app: XCUIApplication, alias: String = "the project"
+    ) throws {
+        let link = app.links[alias]
+        if link.exists && link.isHittable {
+            activate(link)
+            return
+        }
+        // Locate the rendered alias rather than assuming a font or viewport.
+#if os(macOS)
+        // macOS applications have no finite screen frame. Use the same window
+        // for both the capture and the recognized text's coordinate space.
+        let captureElement = app.windows.firstMatch
+#else
+        // Capture the exact native viewport used for the tap. The UI runner's
+        // display bounds and raw screen bitmap can have different orientations.
+        let captureElement = app.textViews["markdown-editor"]
+#endif
+        let captured = captureElement.screenshot()
+        let screenshot = captured.image
+#if os(macOS)
+        let image = try XCTUnwrap(screenshot.cgImage(
+            forProposedRect: nil, context: nil, hints: nil
+        ))
+#else
+        let image = try XCTUnwrap(screenshot.cgImage)
+        let orientation: CGImagePropertyOrientation
+        switch screenshot.imageOrientation {
+        case .up: orientation = .up
+        case .down: orientation = .down
+        case .left: orientation = .left
+        case .right: orientation = .right
+        case .upMirrored: orientation = .upMirrored
+        case .downMirrored: orientation = .downMirrored
+        case .leftMirrored: orientation = .leftMirrored
+        case .rightMirrored: orientation = .rightMirrored
+        @unknown default:
+            throw NSError(domain: "NotebookLinkOCR", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Unsupported screenshot orientation"
+            ])
+        }
+        let rotatesAxes = [.left, .right, .leftMirrored, .rightMirrored]
+            .contains(orientation)
+        let width = rotatesAxes ? image.height : image.width
+        let height = rotatesAxes ? image.width : image.height
+        let geometry = "raw=\(image.width)x\(image.height) oriented=\(width)x\(height)"
+            + " orientation=\(orientation.rawValue) editor=\(captureElement.frame)"
+        let inputAttachment = XCTAttachment(screenshot: captured)
+        inputAttachment.name = "Rendered link OCR input"
+        inputAttachment.lifetime = .keepAlways
+        add(inputAttachment)
+        let geometryAttachment = XCTAttachment(string: geometry)
+        geometryAttachment.name = "Rendered link OCR geometry"
+        geometryAttachment.lifetime = .keepAlways
+        add(geometryAttachment)
+        XCTAssertEqual(Double(width) / Double(height),
+                       Double(captureElement.frame.width) / Double(captureElement.frame.height),
+                       accuracy: 0.001,
+                       "Oriented OCR input must match its native editor viewport")
+#endif
+        let request = VNRecognizeTextRequest()
+#if os(macOS)
+        // Revision 3's detector still requests ANE models on virtual Macs,
+        // even after assigning CPU stages. The legacy engine supports this
+        // English fixture and recognizes its actual on-screen alias.
+        request.revision = VNRecognizeTextRequestRevision2
+        request.recognitionLevel = .fast
+#else
+        request.recognitionLevel = .accurate
+#endif
+        request.recognitionLanguages = ["en-US"]
+#if os(macOS)
+        // The deprecated usesCPUOnly flag does not constrain every stage
+        // on hosted Macs. Explicitly choose a supported CPU for each stage.
+        for (stage, devices) in try request.supportedComputeStageDevices {
+            let cpu = try XCTUnwrap(devices.first { device in
+                if case .cpu = device { return true }
+                return false
+            }, "Expected a CPU backend for text recognition stage \(stage)")
+            request.setComputeDevice(cpu, for: stage)
+        }
+#endif
+#if os(macOS)
+        try VNImageRequestHandler(cgImage: image).perform([request])
+#else
+        try VNImageRequestHandler(cgImage: image, orientation: orientation)
+            .perform([request])
+#endif
+        let editorFrame = app.textViews["markdown-editor"].frame
+        let screen = captureElement.frame
+        let matches = try (request.results ?? []).compactMap { observation -> CGRect? in
+            guard let candidate = observation.topCandidates(1).first,
+                  let range = candidate.string.range(of: alias),
+                  let rectangle = try candidate.boundingBox(for: range)
+            else { return nil }
+            let box = rectangle.boundingBox
+            let center = CGPoint(x: screen.minX + box.midX * screen.width,
+                                 y: screen.minY + (1 - box.midY) * screen.height)
+            return editorFrame.contains(center) ? box : nil
+        }
+        XCTAssertEqual(matches.count, 1, "Expected one visible \(alias) link alias in the editor")
+        let box = try XCTUnwrap(matches.first)
+#if os(macOS)
+        captureElement.coordinate(withNormalizedOffset: CGVector(
+            dx: box.midX, dy: 1 - box.midY
+        )).click()
+#else
+        captureElement.coordinate(withNormalizedOffset: CGVector(
+            dx: box.midX, dy: 1 - box.midY
+        )).tap()
+#endif
     }
 
 #if os(iOS)

@@ -127,6 +127,7 @@ struct NotebookBacklinksView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            .accessibilityIdentifier("notebook-backlinks-list")
             .navigationTitle("Linked from")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

@@ -146,6 +146,35 @@ final class MarkdownTableCellEditorController: NSObject {
     }
     var sourceUndoManager: UndoManager? { owner?.undoManager }
 
+    /// Opt-in state-only evidence for hosted native input diagnostics.
+    /// Never records note text or changes the responder/undo state.
+    func traceNativeInput(_ event: String) {
+#if DEBUG && !os(macOS)
+        guard ProcessInfo.processInfo.environment["MEH_NATIVE_INPUT_DIAGNOSTICS"] == "1"
+        else { return }
+        func firstResponder(in view: UIView) -> UIView? {
+            if view.isFirstResponder { return view }
+            for child in view.subviews {
+                if let responder = firstResponder(in: child) { return responder }
+            }
+            return nil
+        }
+        let responder = editor.window.flatMap { firstResponder(in: $0) }
+        let responderType = responder.map { String(describing: type(of: $0)) } ?? "none"
+        let undo = sourceUndoManager
+        NSLog("[MEHNativeInput] %@ responder=%@ cellFocused=%@ ownerFocused=%@ attached=%@ active=%@ editable=%@ marked=%@ composing=%@ updating=%@ canUndo=%@ canRedo=%@ registering=%@ grouping=%ld selection=%@ cellUTF16=%ld sourceUTF16=%ld",
+              event, responderType, String(editor.isFirstResponder),
+              String(owner?.isFirstResponder == true), String(editor.window != nil),
+              String(isActive), String(owner?.isEditable == true),
+              String(editor.markedTextRange != nil), String(editor.composing),
+              String(updating), String(undo?.canUndo == true),
+              String(undo?.canRedo == true), String(undo?.isUndoRegistrationEnabled == true),
+              undo?.groupingLevel ?? -1, NSStringFromRange(editor.selectedRange),
+              (editor.text as NSString).length,
+              ((owner?.markdownCellSource ?? "") as NSString).length)
+#endif
+    }
+
     private var localText: String {
 #if os(macOS)
         editor.string
@@ -324,6 +353,8 @@ final class MarkdownTableCellEditorController: NSObject {
     }
 
     func replaceLocal(range: NSRange, replacement: String) {
+        traceNativeInput("replaceLocal.begin")
+        defer { traceNativeInput("replaceLocal.end") }
         guard !updating, !hasMarkedText, let owner, owner.isEditable, let target else { return }
         let cell = localText as NSString
         guard range.location >= 0, NSMaxRange(range) <= cell.length else { return }
@@ -358,6 +389,8 @@ final class MarkdownTableCellEditorController: NSObject {
     }
 
     func undoCellChange(redo: Bool = false) {
+        traceNativeInput(redo ? "redoCellChange.begin" : "undoCellChange.begin")
+        defer { traceNativeInput(redo ? "redoCellChange.end" : "undoCellChange.end") }
         guard let owner, owner.isEditable, !hasMarkedText,
               let undo = sourceUndoManager,
               redo ? undo.canRedo : undo.canUndo else { return }
@@ -703,6 +736,7 @@ final class MarkdownTableNativeCellEditor: UITextView, UIAccessibilityContainerD
     }
 
     override var keyCommands: [UIKeyCommand]? {
+        controller?.traceNativeInput("keyCommands.requested")
         guard controller?.hasMarkedText != true else { return super.keyCommands }
         let commands: [(String, UIKeyModifierFlags, Selector)] = [
             ("\t", [], #selector(nextCell(_:))), ("\t", .shift, #selector(previousCell(_:))),
@@ -735,7 +769,10 @@ final class MarkdownTableNativeCellEditor: UITextView, UIAccessibilityContainerD
     }
 
     @objc private func nextRow(_ sender: UIKeyCommand) { controller?.nextRow() }
-    @objc private func undoCell(_ sender: UIKeyCommand) { controller?.undoCellChange() }
+    @objc private func undoCell(_ sender: UIKeyCommand) {
+        controller?.traceNativeInput("undoCell.commandInvoked")
+        controller?.undoCellChange()
+    }
     @objc private func redoCell(_ sender: UIKeyCommand) { controller?.undoCellChange(redo: true) }
     @objc private func nextCell(_ sender: UIKeyCommand) { _ = controller?.perform(.tableNextCell) }
     @objc private func previousCell(_ sender: UIKeyCommand) { _ = controller?.perform(.tablePreviousCell) }

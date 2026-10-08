@@ -236,7 +236,8 @@ private final class Runner {
             result = "FAIL:\n" + failures.joined(separator: "\n") + "\n"
         }
         let resultURL = URL(
-            fileURLWithPath: "/tmp/meh-editor-caret-check-result.txt"
+            fileURLWithPath: ProcessInfo.processInfo.environment["MEH_CARET_RESULT_PATH"]
+                ?? "/tmp/meh-editor-caret-check-result.txt"
         )
         try? result.write(to: resultURL, atomically: true, encoding: .utf8)
         FileHandle.standardOutput.write(Data(result.utf8))

@@ -12,7 +12,9 @@ final class NotebookMacMenuUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(
-            app.buttons["notebook-new-item"].firstMatch.waitForExistence(timeout: 15)
+            app.descendants(matching: .any)
+                .matching(identifier: "notebook-new-item").firstMatch
+                .waitForExistence(timeout: 15)
         )
         let fileMenu = app.menuBars.menuBarItems["File"]
         XCTAssertTrue(fileMenu.waitForExistence(timeout: 5))
@@ -21,9 +23,11 @@ final class NotebookMacMenuUITests: XCTestCase {
         XCTAssertTrue(newNoteItem.waitForExistence(timeout: 5))
         XCTAssertTrue(newNoteItem.isEnabled)
         newNoteItem.click()
-        let titleField = app.textFields["title-field"]
+        let titleField = app.descendants(matching: .any)
+            .matching(identifier: "title-field").firstMatch
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         let title = "Fictional Mac menu note " + UUID().uuidString.prefix(8)
+        titleField.click()
         titleField.typeKey("a", modifierFlags: .command)
         titleField.typeText(title)
         titleField.typeKey(.return, modifierFlags: [])
@@ -40,7 +44,9 @@ final class NotebookMacMenuUITests: XCTestCase {
         let noteCount = sidebarNoteCount(in: app)
         XCTAssertEqual(noteCount, 1)
 
-        let appMenu = app.menuBars.menuBarItems["meh.md"]
+        // The application menu uses the build's display name, including Dev.
+        let devMenu = app.menuBars.menuBarItems["meh.md iCloud Dev"]
+        let appMenu = devMenu.exists ? devMenu : app.menuBars.menuBarItems["meh.md"]
         XCTAssertTrue(appMenu.waitForExistence(timeout: 5))
         appMenu.click()
         let settingsItem = app.menuItems["Settings…"]

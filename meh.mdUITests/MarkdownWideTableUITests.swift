@@ -30,13 +30,21 @@ final class MarkdownWideTableUITests: XCTestCase {
         This fictional trip continues after the table.
 
         A second paragraph makes vertical scrolling easy to check.
-        """
+        """ + (1...40).map {
+            "\n\nFictional journey entry \($0): the path continues past gardens and hills."
+        }.joined()
         editor.typeText(source)
         XCTAssertEqual(editor.value as? String, source)
         editor.swipeDown()
 
         let noteTitle = app.buttons["note-title"]
         XCTAssertTrue(noteTitle.waitForExistence(timeout: 5))
+        // Typing the overflowing fixture leaves the caret at its end. Reach
+        // the rendered header before testing a horizontal table gesture.
+        for _ in 0..<12 where noteTitle.frame.minY < editor.frame.minY {
+            editor.swipeDown()
+        }
+        XCTAssertTrue(noteTitle.isHittable)
         let titleY = noteTitle.frame.minY
         capture(app, name: "Wide table at its left edge")
 
