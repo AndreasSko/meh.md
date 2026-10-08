@@ -1,6 +1,55 @@
 import SwiftUI
 import Observation
 import NoteCore
+import CryptoKit
+
+/// Fictional notebooks keep editor preferences through relaunch, without
+/// carrying another UI scenario's font, mode, or toolbar order forward.
+enum NotebookEditorPreferences {
+    nonisolated static var store: UserDefaults {
+        store(for: ProcessInfo.processInfo.environment)
+    }
+
+    nonisolated static func store(for environment: [String: String]) -> UserDefaults {
+        guard let name = suiteName(for: environment),
+              let defaults = UserDefaults(suiteName: name) else { return .standard }
+        return defaults
+    }
+
+    nonisolated static func suiteName(for environment: [String: String]) -> String? {
+        #if DEBUG && (!ICLOUD_ENABLED || ICLOUD_DEV) && !NOTEBOOK_PERFORMANCE_HOST
+        func validID(_ value: String?) -> String? {
+            guard let value,
+                  value.range(of: "^[A-Za-z0-9_-]{1,64}$",
+                              options: .regularExpression) != nil else { return nil }
+            return value
+        }
+
+        let scope: String
+        if environment["MEH_SYNC_TEST_TRANSPORT"] == "loopback" {
+            guard let endpoint = environment["MEH_SYNC_URL"],
+                  let url = URL(string: endpoint), url.scheme == "http",
+                  ["127.0.0.1", "localhost", "::1"].contains(url.host ?? ""),
+                  let workspace = validID(environment["MEH_SYNC_WORKSPACE"])
+            else { return nil }
+            scope = "loopback#\(url.absoluteString)#\(workspace)"
+        } else {
+            guard environment["MEH_NOTEBOOK_PREVIEW"] == "1",
+                  environment["MEH_SYNC_URL"] == nil,
+                  environment["MEH_SYNC_CLOUDKIT"] != "1",
+                  let run = validID(environment["MEH_NOTEBOOK_PREVIEW_RUN"])
+            else { return nil }
+            scope = "preview#\(run)"
+        }
+        let digest = SHA256.hash(data: Data(scope.utf8)).map {
+            String(format: "%02x", $0)
+        }.joined()
+        return "meh.md.editor-fixture.\(digest)"
+        #else
+        return nil
+        #endif
+    }
+}
 
 #if os(iOS)
 import UIKit
@@ -1105,6 +1154,22 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         private var needsReloadAfterDrag = false
         private var dragItemFrames: [(index: Int, frame: CGRect)] = []
 
+        private func traceToolbarDrag(
+            _ event: String, in view: UICollectionView,
+            location: CGPoint, detail: String
+        ) {
+#if DEBUG
+            guard ProcessInfo.processInfo.environment["MEH_NATIVE_INPUT_DIAGNOSTICS"] == "1"
+            else { return }
+            NSLog("[MEHNativeInput] toolbar.%@ location=%@ windowPoint=%@ bounds=%@ windowBounds=%@ offset=%@ detail=%@",
+                  event, NSStringFromCGPoint(location),
+                  NSStringFromCGPoint(view.convert(location, to: nil)),
+                  NSStringFromCGRect(view.bounds),
+                  NSStringFromCGRect(view.window?.bounds ?? .zero),
+                  NSStringFromCGPoint(view.contentOffset), detail)
+#endif
+        }
+
         init(
             navigation: MarkdownEditorNavigation,
             performTableCommand: @escaping (TableCommandDefinition) -> Void
@@ -1341,6 +1406,9 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             itemsForBeginning session: UIDragSession, at indexPath: IndexPath
         ) -> [UIDragItem] {
             let definition = commands[indexPath.item]
+            traceToolbarDrag("itemsForBeginning", in: collectionView,
+                             location: session.location(in: collectionView),
+                             detail: "source=\(indexPath.item) command=\(definition.id)")
             // Native insertion previews temporarily shift cells during a drag.
             // Retain their original geometry for a stable drop decision.
             let content = CGRect(origin: .zero, size: collectionView.contentSize)
@@ -1389,10 +1457,19 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             dropSessionDidUpdate session: UIDropSession,
             withDestinationIndexPath destinationIndexPath: IndexPath?
         ) -> UICollectionViewDropProposal {
+            traceToolbarDrag("dropSessionDidUpdate", in: collectionView,
+                             location: session.location(in: collectionView),
+                             detail: "local=\(session.localDragSession != nil) items=\(session.items.count) destination=\(String(describing: destinationIndexPath))")
             guard let id = session.localDragSession?.items.first?.localObject as? String,
                   commands.contains(where: { $0.id == id }) else {
+                traceToolbarDrag("proposal", in: collectionView,
+                                 location: session.location(in: collectionView),
+                                 detail: "operation=forbidden")
                 return UICollectionViewDropProposal(operation: .forbidden)
             }
+            traceToolbarDrag("proposal", in: collectionView,
+                             location: session.location(in: collectionView),
+                             detail: "operation=move command=\(id)")
             return UICollectionViewDropProposal(
                 operation: .move, intent: .insertAtDestinationIndexPath
             )
@@ -1402,11 +1479,16 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             _ collectionView: UICollectionView,
             performDropWith coordinator: UICollectionViewDropCoordinator
         ) {
+            traceToolbarDrag("performDrop.begin", in: collectionView,
+                             location: coordinator.session.location(in: collectionView),
+                             detail: "items=\(coordinator.items.count)")
             guard let item = coordinator.items.first,
                   let id = item.dragItem.localObject as? String,
                   let source = commands.firstIndex(where: { $0.id == id })
             else { return }
             let location = coordinator.session.location(in: collectionView)
+            traceToolbarDrag("performDrop", in: collectionView, location: location,
+                             detail: "source=\(source) destination=\(String(describing: coordinator.destinationIndexPath))")
             let nearest = dragItemFrames.filter { $0.index != source }.min {
                 abs($0.frame.midX - location.x) < abs($1.frame.midX - location.x)
             }
@@ -1419,6 +1501,8 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             let targetPosition = insertion > source ? insertion - 1 : insertion
             let destination = min(max(targetPosition, 0), commands.count - 1)
             let target = destination
+            traceToolbarDrag("resolvedDrop", in: collectionView, location: location,
+                             detail: "source=\(source) target=\(target) capturedFrames=\(dragItemFrames.count)")
             if source != target {
                 let command = commands.remove(at: source)
                 commands.insert(command, at: target)
@@ -1438,6 +1522,9 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         func collectionView(
             _ collectionView: UICollectionView, dragSessionDidEnd session: UIDragSession
         ) {
+            traceToolbarDrag("dragSessionDidEnd", in: collectionView,
+                             location: session.location(in: collectionView),
+                             detail: "reload=\(needsReloadAfterDrag)")
             dragItemFrames = []
             guard needsReloadAfterDrag else { return }
             needsReloadAfterDrag = false
@@ -1462,12 +1549,12 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         }
 
         private func saveOrder() {
-            UserDefaults.standard.set(commands.map(\.id), forKey: Self.orderDefaultsKey)
+            NotebookEditorPreferences.store.set(commands.map(\.id), forKey: Self.orderDefaultsKey)
         }
 
         private static func savedCommands() -> [KeyboardCommandDefinition] {
             let ids = KeyboardCommandDefinition.all.map(\.id)
-            let saved = UserDefaults.standard.stringArray(forKey: orderDefaultsKey) ?? []
+            let saved = NotebookEditorPreferences.store.stringArray(forKey: orderDefaultsKey) ?? []
             var retained: [String] = []
             for id in saved where ids.contains(id) && !retained.contains(id) {
                 retained.append(id)

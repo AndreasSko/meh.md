@@ -148,10 +148,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         let sourceID = itemID(named: "Meeting", in: app)
         markTemplate(sourceID, named: "Meeting", in: app)
 
-        app.buttons["notebook-app-menu"].tap()
-        capture(app, "after-creation-menu")
-        app.buttons["notebook-settings"].tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        openSettings(app)
         capture(app, "after-settings")
         app.buttons["notebook-templates-settings"].tap()
         let sourceOptions = app.buttons["notebook-template-options-" + sourceID]
@@ -316,15 +313,30 @@ final class NotebookTemplatesUITests: XCTestCase {
 
     private func openAppIconMenu(_ springboard: XCUIApplication) {
         XCUIDevice.shared.press(.home)
+        let switcher = springboard.otherElements["AppSwitcherContentView"]
+        // A Home press can first reveal the switcher. Its app-card icon has
+        // the same label as the Home icon, but offers no app shortcuts.
+        if switcher.waitForExistence(timeout: 1) {
+            XCUIDevice.shared.press(.home)
+        }
+        let home = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: switcher
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [home], timeout: 5), .completed,
+                       "Expected Home before opening app-icon shortcuts")
         let icon = springboard.icons.matching(NSPredicate(
             format: "label == %@ OR label == %@", "meh.md", "meh.md iCloud Dev"
         )).firstMatch
+        // An installed app may occupy the next Home page. Page only after
+        // confirming that this gesture cannot swipe an App Switcher card.
         if !icon.waitForExistence(timeout: 3) || !icon.isHittable {
             springboard.swipeLeft()
         }
         XCTAssertTrue(icon.waitForExistence(timeout: 5))
         XCTAssertTrue(icon.isHittable)
         icon.press(forDuration: 1)
+        XCTAssertTrue(springboard.buttons["New Note"].waitForExistence(timeout: 5),
+                      "Expected the app's native Home shortcut menu")
     }
 
     private func commitBlankNote(in app: XCUIApplication) {
@@ -427,15 +439,24 @@ final class NotebookTemplatesUITests: XCTestCase {
     }
 
     private func showFiles(_ app: XCUIApplication) {
-        if !app.buttons["notebook-app-menu"].isHittable {
-            app.navigationBars.buttons.firstMatch.tap()
-        }
+        app.revealNotebookSidebar(timeout: 5)
         XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(timeout: 5))
     }
 
+    private func openSettings(_ app: XCUIApplication) {
+        let settings = app.buttons["notebook-settings"]
+        if !settings.isHittable {
+            app.buttons["notebook-app-menu"].tap()
+        }
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.isHittable)
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+    }
+
     private func openTemplatesSettings(_ app: XCUIApplication) {
-        app.buttons["notebook-app-menu"].tap()
-        app.buttons["notebook-settings"].tap()
+        openSettings(app)
+        XCTAssertTrue(app.buttons["notebook-templates-settings"].waitForExistence(timeout: 5))
         app.buttons["notebook-templates-settings"].tap()
     }
 
