@@ -6,6 +6,14 @@ final class NotePersistenceUITests: XCTestCase {
     override func setUpWithError() throws {
         app = XCUIApplication()
         continueAfterFailure = false
+        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
+        app.launchEnvironment["MEH_SYNC_URL"] =
+            ProcessInfo.processInfo.ciLoopbackURL
+            ?? ProcessInfo.processInfo.environment["MEH_SYNC_TEST_URL"]
+            ?? "http://127.0.0.1:8765"
+        app.launchEnvironment["MEH_SYNC_WORKSPACE"] =
+            "persistence-ui-" + UUID().uuidString
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
     }
 
     func testTypedTextSurvivesRelaunch() throws {
@@ -24,7 +32,11 @@ final class NotePersistenceUITests: XCTestCase {
         """
         let expected = original + addition
 
+        #if os(macOS)
+        editor.click()
+        #else
         editor.tap()
+        #endif
         editor.typeKey(.downArrow, modifierFlags: .command)
         editor.typeText(addition)
 

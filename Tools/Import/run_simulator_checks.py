@@ -131,6 +131,7 @@ def run() -> None:
                         "xcodebuild", "test-without-building", "-xctestrun", str(test_run),
                         "-destination", f"id={args.simulator}",
                         "-parallel-testing-enabled", "NO",
+                        "-collect-test-diagnostics", "never",
                         "-only-testing:meh.mdUITests/NotebookImportUITests",
                         "-resultBundlePath", str(result),
                     ], stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)

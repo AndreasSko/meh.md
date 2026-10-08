@@ -9,9 +9,7 @@ final class RecentsExpansionUITests: XCTestCase {
         continueAfterFailure = false
         let app = try makeFixture()
         if UIDevice.current.userInterfaceIdiom == .pad {
-            // Retained fixtures need the same keyboard-present viewport as
-            // the freshly typed fixture for the browser scroll assertion.
-            app.textViews["markdown-editor"].tap()
+            try addOverflowingFilesFixture(app)
         }
         let showAll = app.buttons["notebook-recents-show-all"]
         XCTAssertTrue(showAll.waitForExistence(timeout: 10))
@@ -36,8 +34,8 @@ final class RecentsExpansionUITests: XCTestCase {
         XCTAssertLessThan(files.frame.minY, filesFrame.minY - 15)
         XCTAssertFalse(app.buttons["notebook-recents-close"].isHittable)
         if UIDevice.current.userInterfaceIdiom == .pad {
-            // The browser AX frame extends behind the keyboard. Start the
-            // return pan on visible Files content rather than that frame.
+            // Start the return pan on visible Files content rather than
+            // the collection frame, which includes offscreen content.
             let start = files.coordinate(
                 withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
             )
@@ -79,6 +77,47 @@ final class RecentsExpansionUITests: XCTestCase {
         XCTAssertEqual(files.frame.minY, restoredFilesFrame.minY, accuracy: 2)
         XCTAssertEqual(recentButtons(app).count, 5)
         capture(app, name: "Recents closed with Files restored")
+    }
+
+    private func addOverflowingFilesFixture(_ app: XCUIApplication) throws {
+        // Empty folders never enter Recents. Make Files overflow even on a
+        // tall iPad while preserving the twelve note identities and order.
+        func createFolder(_ index: Int) throws -> XCUIElement {
+            let menu = app.buttons["notebook-app-menu"]
+            XCTAssertTrue(menu.waitForExistence(timeout: 10))
+            XCTAssertTrue(menu.isHittable)
+            menu.tap()
+            app.buttons["New Folder"].tap()
+            let field = app.textFields["Name"]
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            let name = "Fictional scroll folder \(index)"
+            field.typeText(name + "\n")
+            let title = app.staticTexts.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label == %@",
+                "notebook-sidebar-title-", name
+            )).firstMatch
+            XCTAssertTrue(title.waitForExistence(timeout: 5))
+            let id = title.identifier.replacingOccurrences(
+                of: "notebook-sidebar-title-", with: ""
+            )
+            return app.descendants(matching: .any)
+                .matching(identifier: "notebook-sidebar-folder-" + id).firstMatch
+        }
+        let first = try createFolder(1)
+        XCTAssertGreaterThan(first.frame.height, 0)
+        let count = Int(ceil(app.frame.height / max(first.frame.height, 1))) + 1
+        XCTAssertLessThanOrEqual(count, 64, "Expected native folder row geometry")
+        guard count <= 64 else { return }
+        for index in 2...count { _ = try createFolder(index) }
+        app.terminate()
+        app.launch()
+        showSidebar(app)
+        let more = app.buttons["notebook-recents-show-all"]
+        for _ in 0..<12 where !more.isHittable {
+            app.collectionViews.firstMatch.swipeDown(velocity: .slow)
+        }
+        XCTAssertTrue(more.isHittable)
+        XCTAssertEqual(recentButtons(app).count, 5)
     }
 
     private func pinFirstVisibleRecent(_ app: XCUIApplication) throws {
@@ -278,9 +317,8 @@ final class RecentsExpansionUITests: XCTestCase {
             let end = target.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow,
                         thenHoldForDuration: 0.2)
-            let trashAction = app.buttons.matching(NSPredicate(
-                format: "label == %@ OR label == %@", "Trash", "Move to Trash"
-            )).firstMatch
+            // iPad also exposes the persistent sidebar Trash button.
+            let trashAction = app.buttons["Move to Trash"]
             XCTAssertTrue(trashAction.waitForExistence(timeout: 5))
             XCTAssertTrue(target.exists, "A full swipe must preserve the note")
             capture(app, name: expanded ? "Expanded Recents Trash swipe" : "Compact Recents Trash swipe")
@@ -421,6 +459,10 @@ final class RecentsExpansionUITests: XCTestCase {
             editor.typeText("A fictional field note about " + name.lowercased()
                             + ". Entry " + String(index + 1) + ".")
         }
+        // Reopen the persisted fixture in passive reading. The keyboard from
+        // the last typed note otherwise clips the iPad Recents footer.
+        app.terminate()
+        app.launch()
         showSidebar(app)
         return app
     }
@@ -429,7 +471,8 @@ final class RecentsExpansionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
         app.launchEnvironment["MEH_SYNC_URL"] =
-            ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
+            ProcessInfo.processInfo.ciLoopbackURL
+            ?? ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
             ?? "http://127.0.0.1:9874"
         app.launchEnvironment["MEH_SYNC_WORKSPACE"] = workspace
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"

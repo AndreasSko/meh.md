@@ -10,7 +10,7 @@ final class RecentNotesUITests: XCTestCase {
         app.launch()
         var titles: [String] = []
         for index in 0..<6 {
-            let newNote = app.buttons["notebook-new-item"].firstMatch
+            let newNote = app.notebookNewItemButton
             XCTAssertTrue(newNote.waitForExistence(timeout: 15))
             waitUntilEnabled(newNote)
             activate(newNote)
@@ -117,18 +117,26 @@ final class RecentNotesUITests: XCTestCase {
         XCTAssertEqual(disclosure.value as? String, "Collapsed")
         XCTAssertFalse(note.exists)
 
+        // Observe the brief reveal highlight first. Waiting separately for
+        // the row and disclosure can consume its three-second display window.
+        let noteID = recent.identifier.replacingOccurrences(
+            of: "notebook-recent-", with: ""
+        )
+        let revealedNote = app.descendants(matching: .any)
+            .matching(identifier: "notebook-sidebar-note-" + noteID).firstMatch
+        let highlighted = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND value == %@",
+                                   "Revealed in Files"),
+            object: revealedNote
+        )
         recent.tap()
         XCTAssertTrue(waitUntilHittable(editor))
         app.buttons["notebook-note-actions"].tap()
         app.buttons["Show in Files"].tap()
-        XCTAssertEqual(disclosure.value as? String, "Expanded")
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
-        let highlighted = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "Revealed in Files"),
-            object: note
-        )
         XCTAssertEqual(XCTWaiter.wait(for: [highlighted], timeout: 5), .completed)
         capture(app, name: "Revealed fictional note highlighted in Files")
+        XCTAssertEqual(disclosure.value as? String, "Expanded")
+        XCTAssertTrue(revealedNote.waitForExistence(timeout: 5))
     }
 
     func testIPhoneLeadingSwipePinsAndUnpinsWithoutOpeningRecent() throws {
@@ -246,7 +254,7 @@ final class RecentNotesUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.notebookNewItemButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         waitUntilEnabled(newNote)
         newNote.tap()
@@ -284,7 +292,7 @@ final class RecentNotesUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.notebookNewItemButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         waitUntilEnabled(newNote)
         newNote.tap()
@@ -346,8 +354,10 @@ final class RecentNotesUITests: XCTestCase {
     func testCaretRestoresAcrossNoteSwitchAndRelaunch() throws {
         continueAfterFailure = false
         let app = makeApp()
+        // Restore the same macOS scene whose note and caret were saved.
+        app.launchArguments += ["-NSQuitAlwaysKeepsWindows", "YES"]
         app.launch()
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.notebookNewItemButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         waitUntilEnabled(newNote)
         newNote.click()
@@ -372,13 +382,18 @@ final class RecentNotesUITests: XCTestCase {
         // A normal quit captures the current caret without selecting a note.
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
-        app.launch()
-        XCTAssertTrue(editor.waitForExistence(timeout: 15))
-        XCTAssertEqual(app.buttons["note-title"].label, originalTitle)
-        app.typeKey(.tab, modifierFlags: [])
-        editor.typeText("little ")
-        XCTAssertEqual(editor.value as? String, "Moon bright little star")
-        capture(app, name: "Caret restored in the last fictional note")
+        // Resolve the relaunched process instead of retaining the old AX tree.
+        let relaunchedApp = XCUIApplication()
+        relaunchedApp.launchEnvironment = app.launchEnvironment
+        relaunchedApp.launchArguments = app.launchArguments
+        relaunchedApp.launch()
+        let restoredEditor = relaunchedApp.textViews["markdown-editor"]
+        XCTAssertTrue(restoredEditor.waitForExistence(timeout: 15))
+        XCTAssertEqual(relaunchedApp.buttons["note-title"].label, originalTitle)
+        relaunchedApp.typeKey(.tab, modifierFlags: [])
+        restoredEditor.typeText("little ")
+        XCTAssertEqual(restoredEditor.value as? String, "Moon bright little star")
+        capture(relaunchedApp, name: "Caret restored in the last fictional note")
     }
     #endif
 
@@ -387,7 +402,8 @@ final class RecentNotesUITests: XCTestCase {
         #if ICLOUD_ENABLED
         app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
         app.launchEnvironment["MEH_SYNC_URL"] =
-            ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
+            ProcessInfo.processInfo.ciLoopbackURL
+            ?? ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
             ?? "http://127.0.0.1:9874"
         app.launchEnvironment["MEH_SYNC_WORKSPACE"] = "recents-pin-" + UUID().uuidString
         #else
@@ -400,7 +416,12 @@ final class RecentNotesUITests: XCTestCase {
     }
 
     private func recentButtons(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.buttons.matching(NSPredicate(
+        #if os(macOS)
+        let visibleButtons = app.notebookVisibleMacSidebar.buttons
+        #else
+        let visibleButtons = app.buttons
+        #endif
+        return visibleButtons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND NOT identifier BEGINSWITH %@ "
                 + "AND NOT identifier BEGINSWITH %@",
             "notebook-recent-", "notebook-recent-pin-", "notebook-recent-swipe-"
@@ -408,7 +429,7 @@ final class RecentNotesUITests: XCTestCase {
     }
 
     private func createRecentNote(in app: XCUIApplication, source: String) {
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.notebookNewItemButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         waitUntilEnabled(newNote)
         activate(newNote)
@@ -454,7 +475,7 @@ final class RecentNotesUITests: XCTestCase {
     }
 
     private func commitDefaultTitle(in app: XCUIApplication) {
-        let titleField = app.textFields["title-field"]
+        let titleField = app.notebookTitleField
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
         activate(titleField)
         #if os(macOS)

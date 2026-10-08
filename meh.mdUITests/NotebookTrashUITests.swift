@@ -41,10 +41,10 @@ final class NotebookTrashUITests: XCTestCase {
         app.buttons["notebook-select-items"].tap()
         folderTitle.tap()
         app.buttons["notebook-trash-selected"].tap()
-        app.buttons["notebook-app-menu"].tap()
-        app.buttons["notebook-trash-toggle"].tap()
+        openTrash(app)
 
-        let folderRow = app.collectionViews["notebook-trash-view"]
+        let folderRow = app.descendants(matching: .any)
+            .matching(identifier: "notebook-trash-view").firstMatch
             .descendants(matching: .any)
             .matching(identifier: "notebook-sidebar-folder-" + folderID).firstMatch
         XCTAssertTrue(folderRow.waitForExistence(timeout: 5))
@@ -78,14 +78,16 @@ final class NotebookTrashUITests: XCTestCase {
         app.launch()
 
         let ids = (0..<5).map { _ in createNote(in: app) }
+        // Restore passive reading so the iPad keyboard cannot cover the
+        // selection toolbar's Trash action.
+        app.terminate()
+        app.launch()
+        app.revealNotebookSidebar(timeout: 10)
         app.buttons["notebook-app-menu"].tap()
         app.buttons["notebook-select-items"].tap()
         for id in ids { title(id, in: app).tap() }
         app.buttons["notebook-trash-selected"].tap()
-        app.buttons["notebook-app-menu"].tap()
-        let openTrash = app.buttons["notebook-trash-toggle"]
-        XCTAssertTrue(openTrash.waitForExistence(timeout: 5))
-        openTrash.tap()
+        openTrash(app)
 
         let menu = app.buttons["notebook-trash-actions-" + ids[0]]
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
@@ -179,8 +181,15 @@ final class NotebookTrashUITests: XCTestCase {
         app.staticTexts["notebook-sidebar-title-" + id]
     }
 
+    private func openTrash(_ app: XCUIApplication) {
+        let done = app.buttons["notebook-selection-done"]
+        if done.exists { done.tap() }
+        app.openTrash(timeout: 5)
+    }
+
     private func trashRow(_ id: String, in app: XCUIApplication) -> XCUIElement {
-        app.collectionViews["notebook-trash-view"]
+        app.descendants(matching: .any)
+            .matching(identifier: "notebook-trash-view").firstMatch
             .descendants(matching: .any)
             .matching(identifier: "notebook-sidebar-note-" + id).firstMatch
     }
