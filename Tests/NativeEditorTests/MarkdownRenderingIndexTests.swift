@@ -150,5 +150,47 @@ final class MarkdownRenderingIndexTests: XCTestCase {
         }, file: file, line: line)
         XCTAssertEqual(presentation.hiddenRenderingAttributes[.foregroundColor]
                        as? PlatformColor, PlatformColor.clear, file: file, line: line)
+        // Begin with unrelated attributes: base adds must retain them, while
+        // role and hidden setters must replace the complete dictionary.
+        let bases: [[NSAttributedString.Key: Any]] = [
+            [:], [.foregroundColor: PlatformColor.systemBlue],
+        ]
+        for base in bases {
+            let initial: [NSAttributedString.Key: Any] = [
+                .backgroundColor: PlatformColor.systemYellow, .underlineStyle: 1,
+            ]
+            let legacy = NSMutableAttributedString(
+                string: String(repeating: "x", count: NSMaxRange(target)), attributes: initial)
+            legacy.addAttributes(base, range: target)
+            presentation.forEachSpan(intersecting: target) { span in
+                let attributes = MarkdownPresentation.renderingAttributes(
+                    for: span, in: presentation.result)
+                if !attributes.isEmpty {
+                    legacy.setAttributes(attributes,
+                        range: NSIntersectionRange(span.range, target))
+                }
+            }
+            presentation.forEachHiddenRange(intersecting: target) {
+                legacy.setAttributes(presentation.hiddenRenderingAttributes,
+                    range: NSIntersectionRange($0, target))
+            }
+            let actual = NSMutableAttributedString(
+                string: legacy.string, attributes: initial)
+            let commands = presentation.renderingCommands(in: target, baseAttributes: base)
+            var previousEnd = target.location
+            for command in commands {
+                XCTAssertGreaterThan(command.range.length, 0, file: file, line: line)
+                XCTAssertGreaterThanOrEqual(command.range.location, previousEnd,
+                                            file: file, line: line)
+                previousEnd = NSMaxRange(command.range)
+                XCTAssertLessThanOrEqual(previousEnd, NSMaxRange(target), file: file, line: line)
+                if command.replacesAttributes {
+                    actual.setAttributes(command.attributes, range: command.range)
+                } else {
+                    actual.addAttributes(command.attributes, range: command.range)
+                }
+            }
+            XCTAssertTrue(actual.isEqual(to: legacy), file: file, line: line)
+        }
     }
 }

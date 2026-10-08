@@ -1264,42 +1264,22 @@ enum MarkdownPresentation {
         )
 
         #if os(iOS)
-        // Appearance must reset without editing native layout attributes.
-        if let textRange = textRange(
-            for: fragmentRange,
-            documentStart: documentStart,
-            contentManager: contentManager
-        ) {
-            layoutManager.addRenderingAttribute(
-                .foregroundColor, value: primaryTextColor, for: textRange
-            )
-        }
+        let baseAttributes: [NSAttributedString.Key: Any] = [.foregroundColor: primaryTextColor]
+        #else
+        let baseAttributes: [NSAttributedString.Key: Any] = [:]
         #endif
         var appliedCount = 0
-        presentation.forEachRenderingSpan(intersecting: fragmentRange) { span, attributes in
-            let intersection = NSIntersectionRange(span.range, fragmentRange)
-            guard intersection.length > 0 else { return }
-            guard !attributes.isEmpty,
-                  let textRange = textRange(
-                    for: intersection,
-                    documentStart: documentStart,
-                      contentManager: contentManager
-                  ) else { return }
-            layoutManager.setRenderingAttributes(attributes, for: textRange)
-            appliedCount += 1
-        }
-        presentation.forEachHiddenRange(intersecting: fragmentRange) { range in
-            let intersection = NSIntersectionRange(range, fragmentRange)
-            guard intersection.length > 0,
-                  let textRange = textRange(
-                      for: intersection,
-                      documentStart: documentStart,
-                      contentManager: contentManager
-                  ) else { return }
-            layoutManager.setRenderingAttributes(
-                presentation.hiddenRenderingAttributes,
-                for: textRange
-            )
+        for command in presentation.renderingCommands(in: fragmentRange,
+                                                       baseAttributes: baseAttributes) {
+            guard let textRange = textRange(for: command.range,
+                documentStart: documentStart, contentManager: contentManager) else { continue }
+            if command.replacesAttributes {
+                layoutManager.setRenderingAttributes(command.attributes, for: textRange)
+            } else {
+                for (key, value) in command.attributes {
+                    layoutManager.addRenderingAttribute(key, value: value, for: textRange)
+                }
+            }
             appliedCount += 1
         }
         return appliedCount
@@ -2168,6 +2148,106 @@ struct MarkdownDecorationPlan {
 }
 
 struct MarkdownRenderingPresentation {
+    struct RenderingCommand {
+        var range: NSRange
+        let replacesAttributes: Bool
+        let attributes: [NSAttributedString.Key: Any]
+    }
+
+    /// Sweep only the indexed spans intersecting this fragment. Later setters
+    /// replace earlier dictionaries; untouched ranges retain add-only behavior.
+    func renderingCommands(in target: NSRange,
+                           baseAttributes: [NSAttributedString.Key: Any]) -> [RenderingCommand] {
+        guard target.length > 0 else { return [] }
+        struct Event {
+            let offset: Int
+            let index: Int
+            let begins: Bool
+        }
+        var events: [Event] = []
+        var setters: [[NSAttributedString.Key: Any]] = []
+        func append(_ range: NSRange, attributes: [NSAttributedString.Key: Any]) {
+            let clipped = NSIntersectionRange(range, target)
+            guard clipped.length > 0 else { return }
+            let index = setters.count
+            setters.append(attributes)
+            events.append(Event(offset: clipped.location, index: index, begins: true))
+            events.append(Event(offset: NSMaxRange(clipped), index: index, begins: false))
+        }
+        forEachRenderingSpan(intersecting: target) { span, attributes in
+            append(span.range, attributes: attributes)
+        }
+        forEachHiddenRange(intersecting: target) {
+            append($0, attributes: hiddenRenderingAttributes)
+        }
+        events.sort { $0.offset < $1.offset }
+        var active = Array(repeating: false, count: setters.count)
+        var heap: [Int] = []
+        func insert(_ index: Int) {
+            heap.append(index)
+            var child = heap.count - 1
+            while child > 0 {
+                let parent = (child - 1) / 2
+                guard heap[parent] < heap[child] else { break }
+                heap.swapAt(parent, child)
+                child = parent
+            }
+        }
+        func winner() -> Int? {
+            while let first = heap.first, !active[first] {
+                let last = heap.removeLast()
+                if heap.isEmpty { continue }
+                heap[0] = last
+                var parent = 0
+                while 2 * parent + 1 < heap.count {
+                    var child = 2 * parent + 1
+                    if child + 1 < heap.count, heap[child + 1] > heap[child] { child += 1 }
+                    guard heap[parent] < heap[child] else { break }
+                    heap.swapAt(parent, child)
+                    parent = child
+                }
+            }
+            return heap.first
+        }
+        var commands: [RenderingCommand] = []
+        func emit(from start: Int, to end: Int) {
+            guard end > start else { return }
+            let index = winner()
+            let attributes = index.map { setters[$0] } ?? baseAttributes
+            guard !attributes.isEmpty else { return }
+            let replaces = index != nil
+            if let previous = commands.last,
+               NSMaxRange(previous.range) == start,
+               previous.replacesAttributes == replaces,
+               previous.attributes.count == attributes.count,
+               attributes.allSatisfy({ key, value in
+                   guard let lhs = value as? NSObject,
+                         let rhs = previous.attributes[key] as? NSObject else { return false }
+                   return lhs.isEqual(rhs)
+               }) {
+                commands[commands.count - 1].range.length += end - start
+            } else {
+                commands.append(RenderingCommand(range: NSRange(location: start, length: end - start),
+                    replacesAttributes: replaces, attributes: attributes))
+            }
+        }
+        var cursor = target.location
+        var eventIndex = 0
+        while eventIndex < events.count {
+            let offset = events[eventIndex].offset
+            emit(from: cursor, to: offset)
+            while eventIndex < events.count, events[eventIndex].offset == offset {
+                let event = events[eventIndex]
+                active[event.index] = event.begins
+                if event.begins { insert(event.index) }
+                eventIndex += 1
+            }
+            cursor = offset
+        }
+        emit(from: cursor, to: NSMaxRange(target))
+        return commands
+    }
+
     let result: MarkdownSyntaxResult
     let previewRanges: MarkdownLivePreviewRanges
     let hiddenRanges: [NSRange]
