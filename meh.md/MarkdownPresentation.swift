@@ -2433,6 +2433,7 @@ final class MarkdownSyntaxCache: NSObject {
     // Toolbar and presentation preparation may consume characterEdit before
     // the model commit. Native edit intent survives until acknowledgement.
     private var nativeCharacterEdit: CharacterEdit?
+    private var processingNativeCharacterEdit: CharacterEdit?
 
     func nativeTextChange(in storage: NSTextStorage) -> NoteEditorTextChange? {
         guard observedTextStorage === storage, let edit = nativeCharacterEdit else { return nil }
@@ -2450,6 +2451,7 @@ final class MarkdownSyntaxCache: NSObject {
 
     func acknowledgeNativeText() {
         nativeCharacterEdit = nil
+        processingNativeCharacterEdit = nil
     }
     private var cachedCharacterRevision: UInt64 = 0
     // nil means that the complete layout must be refreshed.
@@ -2681,14 +2683,26 @@ final class MarkdownSyntaxCache: NSObject {
                 name: NSTextStorage.didProcessEditingNotification,
                 object: observedTextStorage
             )
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSTextStorage.willProcessEditingNotification,
+                object: observedTextStorage
+            )
         }
         observedTextStorage = textStorage
         nativeCharacterEdit = nil
+        processingNativeCharacterEdit = nil
         characterRevision &+= 1
         characterEdit = nil
         storageSnapshot = nil
         snapshotRevision = nil
         parsedStorageRevision = nil
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(cachedTextStorageWillProcessEditing(_:)),
+            name: NSTextStorage.willProcessEditingNotification,
+            object: textStorage
+        )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(cachedTextStorageDidProcessEditing(_:)),
@@ -2697,10 +2711,23 @@ final class MarkdownSyntaxCache: NSObject {
         )
     }
 
+    @objc private func cachedTextStorageWillProcessEditing(
+        _ notification: Notification
+    ) {
+        guard let storage = notification.object as? NSTextStorage else { return }
+        // Attribute fixing can widen the processed range to a whole paragraph.
+        // Preserve the earlier character range for the validated model hint.
+        processingNativeCharacterEdit = storage.editedMask.contains(.editedCharacters)
+            ? CharacterEdit(range: storage.editedRange, delta: storage.changeInLength)
+            : nil
+    }
+
     @objc private func cachedTextStorageDidProcessEditing(
         _ notification: Notification
     ) {
         guard let textStorage = notification.object as? NSTextStorage else { return }
+        let nativeEdit = processingNativeCharacterEdit
+        processingNativeCharacterEdit = nil
         guard textStorage.editedMask.contains(.editedCharacters) else {
             if !isApplyingLayoutAttributes { dirtyLayoutRange = nil }
             return
@@ -2710,16 +2737,19 @@ final class MarkdownSyntaxCache: NSObject {
         characterRevision &+= 1
         let range = textStorage.editedRange
         let delta = textStorage.changeInLength
+        let nativeRange = nativeEdit?.range ?? range
+        let nativeDelta = nativeEdit?.delta ?? delta
         if let pending = nativeCharacterEdit {
-            let replaced = NSRange(location: range.location, length: range.length - delta)
+            let replaced = NSRange(location: nativeRange.location,
+                                   length: nativeRange.length - nativeDelta)
             let start = min(pending.range.location, replaced.location)
             let end = max(NSMaxRange(pending.range), NSMaxRange(replaced))
             nativeCharacterEdit = CharacterEdit(
-                range: NSRange(location: start, length: end - start + delta),
-                delta: pending.delta + delta
+                range: NSRange(location: start, length: end - start + nativeDelta),
+                delta: pending.delta + nativeDelta
             )
         } else {
-            nativeCharacterEdit = CharacterEdit(range: range, delta: delta)
+            nativeCharacterEdit = CharacterEdit(range: nativeRange, delta: nativeDelta)
         }
         if let pending = characterEdit {
             // Both ranges below use coordinates immediately before this edit.
