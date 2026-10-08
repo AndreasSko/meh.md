@@ -316,7 +316,10 @@ public final class NoteSession {
            let scalarRange = try? change.validatedScalarRange(
                in: text, resultingIn: replacement
            ) {
-            guard !text.utf8.elementsEqual(replacement.utf8) else {
+            // A validated length-changing replacement cannot be a no-op.
+            // Avoid comparing the whole note again for ordinary typing.
+            if change.range.length == change.replacement.utf16.count,
+               text.utf8.elementsEqual(replacement.utf8) {
                 return editorIdentity + heads
             }
             try document.applyValidatedEditorChange(
