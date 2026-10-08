@@ -13,6 +13,35 @@ import UIKit
 
 @MainActor
 final class MarkdownNativeTextChangeTests: XCTestCase {
+#if os(macOS)
+    func testExplicitHeadingCommitsAndUsesOneNativeUndoStep() throws {
+        var model = "Before\nMoon 🪐\nAfter"
+        let original = model
+        let editor = MarkdownEditor(text: Binding(get: { model }, set: { model = $0 }))
+        let coordinator = editor.makeCoordinator()
+        let (view, _) = fixture(model)
+        view.allowsUndo = true
+        let tearDown = attachForNativeEditing(view, coordinator: coordinator)
+        defer { tearDown() }
+        coordinator.observeUndoAndRedo(for: view)
+        view.setSelectedRange((model as NSString).range(of: "Moon 🪐"))
+        let undo = try XCTUnwrap(view.undoManager)
+        undo.removeAllActions()
+
+        XCTAssertTrue(view.performMarkdownCommand(.heading3))
+        XCTAssertEqual(model, "Before\n### Moon 🪐\nAfter")
+        XCTAssertEqual((view.string as NSString).substring(with: view.selectedRange()), "Moon 🪐")
+        XCTAssertTrue(undo.canUndo)
+        XCTAssertFalse(view.performMarkdownCommand(.heading3))
+        undo.undo()
+        XCTAssertEqual(view.string, original)
+        XCTAssertEqual(model, original)
+        XCTAssertFalse(undo.canUndo, "The idempotent choice must add no undo step")
+        undo.redo()
+        XCTAssertEqual(model, "Before\n### Moon 🪐\nAfter")
+    }
+#endif
+
     func testMarkedReplacementUsesStaleRevisionMergeFallback() async throws {
         let original = try NoteDocument(text: "hello")
         let storage = NativeHintStorage(original.snapshot())

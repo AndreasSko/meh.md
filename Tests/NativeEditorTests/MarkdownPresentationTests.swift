@@ -10,6 +10,30 @@ import UIKit
 
 @MainActor
 final class MarkdownPresentationTests: XCTestCase {
+    func testHeadingPreviewsUseBodyFontAfterFormattingChanges() async {
+        let view = MarkdownTextView(usingTextLayoutManager: true)
+#if os(macOS)
+        view.string = "# Observatory plans"
+        view.setSelectedRange(NSRange(location: 4, length: 0))
+#else
+        view.text = "# Observatory plans"
+        view.selectedRange = NSRange(location: 4, length: 0)
+#endif
+        let state = MarkdownHeadingCommandState()
+        for size in [17.0, 28.0] {
+            MarkdownPresentation.configure(view, fontSize: size, mode: .livePreview)
+            state.scheduleRefresh(from: view)
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+            XCTAssertEqual(state.level, 1)
+            XCTAssertEqual(state.bodyFont.pointSize, size)
+            XCTAssertEqual(MarkdownPresentation.headingFont(
+                level: 1, bodyFont: state.bodyFont
+            ).pointSize, size * 2)
+        }
+    }
+
     func testTableMenuUsesIncrementalStoragePathBeforePresentation() {
         let initial = String(repeating: "A **bright** star and a [map](sky.md).\n\n", count: 2_000)
             + "End of sample."

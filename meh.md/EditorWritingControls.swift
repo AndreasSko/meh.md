@@ -4,6 +4,8 @@ import NoteCore
 
 #if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
 #endif
 
 struct EditorModeControl: View {
@@ -78,6 +80,7 @@ final class EditorSnippetMenuState {
 
 private struct EditorSnippetMenu: View {
     let navigation: MarkdownEditorNavigation
+    var didCommit: (() -> Void)?
 
     var body: some View {
         Menu {
@@ -87,7 +90,10 @@ private struct EditorSnippetMenu: View {
             } else {
                 EditorSnippetMenuContent(
                     entries: navigation.snippetMenu.entries,
-                    insert: { navigation.insertSnippet?($0) }
+                    insert: {
+                        navigation.insertSnippet?($0)
+                        didCommit?()
+                    }
                 )
             }
         } label: {
@@ -121,16 +127,20 @@ private struct EditorSnippetMenuContent: View {
 struct EditorWritingControls: View {
     let navigation: MarkdownEditorNavigation
     let isEnabled: Bool
+    @State private var headingPickerPresented = false
+    @State private var pendingHeadingCommand: MarkdownEditingCommand?
 
     var body: some View {
+        #if os(macOS)
+        EditorMacWritingControls(navigation: navigation, isEnabled: isEnabled)
+        #else
         Menu {
             commandButton("Bold", systemImage: "bold", command: .bold)
             commandButton("Italic", systemImage: "italic", command: .italic)
             commandButton("Link", systemImage: "link", command: .link)
-            commandButton(
-                "Heading", systemImage: "textformat.size.larger",
-                command: .heading
-            )
+            Button("Heading") { headingPickerPresented = true }
+                .disabled(!navigation.headingCommands.isEnabled)
+                .accessibilityIdentifier("editor-command-heading")
             commandButton(
                 "Inline Code", systemImage: "chevron.left.forwardslash.chevron.right",
                 command: .inlineCode
@@ -172,6 +182,26 @@ struct EditorWritingControls: View {
         }
         .disabled(!isEnabled)
         .accessibilityIdentifier("editor-formatting")
+        .popover(isPresented: $headingPickerPresented) {
+            EditorHeadingStylePicker(
+                state: navigation.headingCommands
+            ) { command in
+                pendingHeadingCommand = command
+                headingPickerPresented = false
+            }
+#if os(iOS)
+            .presentationCompactAdaptation(.popover)
+#endif
+            .onDisappear {
+                if let command = pendingHeadingCommand {
+                    pendingHeadingCommand = nil
+                    navigation.performCommand?(command)
+                } else {
+                    navigation.focusEditor?()
+                }
+            }
+        }
+        #endif
     }
 
     private func commandButton(
@@ -188,6 +218,155 @@ struct EditorWritingControls: View {
     }
 }
 
+#if os(macOS)
+/// Keep Mac controls at regular desktop density, with a little row padding.
+@MainActor
+private enum EditorMacFormattingMetrics {
+    static let itemHeight: CGFloat = {
+        let button = NSButton(title: "H1", target: nil, action: nil)
+        button.bezelStyle = .rounded
+        button.controlSize = .regular
+        return ceil(button.intrinsicContentSize.height) + 4
+    }()
+    static var rowHeight: CGFloat { itemHeight + 8 }
+    static var labelHeight: CGFloat { itemHeight - 8 }
+}
+
+private struct EditorMacWritingControls: View {
+    let navigation: MarkdownEditorNavigation
+    let isEnabled: Bool
+    @State private var isPresented = false
+    @State private var pendingCommand: MarkdownEditingCommand?
+
+    var body: some View {
+        Button { isPresented.toggle() } label: {
+            Label("Formatting", systemImage: "textformat")
+                .labelStyle(.iconOnly)
+        }
+        .help("Formatting")
+        .disabled(!isEnabled)
+        .accessibilityIdentifier("editor-formatting")
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            EditorMacFormattingPopover(navigation: navigation) { command in
+                // Apply after dismissal using the editor's retained selection.
+                pendingCommand = command
+                isPresented = false
+            } didCommit: {
+                isPresented = false
+            }
+            .onDisappear {
+                let command = pendingCommand
+                pendingCommand = nil
+                if let command { navigation.performCommand?(command) }
+                navigation.focusEditor?()
+            }
+        }
+    }
+}
+
+/// Related controls share one native popover instead of cascading panels.
+private struct EditorMacFormattingPopover: View {
+    let navigation: MarkdownEditorNavigation
+    let select: (MarkdownEditingCommand) -> Void
+    let didCommit: () -> Void
+    @State private var showsHeadings = false
+
+    var body: some View {
+        Group {
+            if showsHeadings {
+                HStack(spacing: 0) {
+                    Button { showsHeadings = false } label: {
+                        Label("Back to Formatting", systemImage: "chevron.backward")
+                            .labelStyle(.iconOnly)
+                            .frame(width: 40, height: EditorMacFormattingMetrics.itemHeight)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Back to Formatting")
+                    .accessibilityIdentifier("editor-formatting-back")
+                    EditorHeadingStylePicker(
+                        state: navigation.headingCommands,
+                        selectionPositionX: 140, select: select
+                    )
+                }
+                .padding(.horizontal, 4)
+            } else {
+                EditorMacFormattingRow(
+                    navigation: navigation, select: select, didCommit: didCommit,
+                    showHeadings: { showsHeadings = true }
+                )
+            }
+        }
+        .frame(width: 368, height: EditorMacFormattingMetrics.rowHeight)
+        .controlSize(.regular)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("editor-formatting-popover")
+    }
+}
+
+private struct EditorMacFormattingRow: View {
+    let navigation: MarkdownEditorNavigation
+    let select: (MarkdownEditingCommand) -> Void
+    let didCommit: () -> Void
+    let showHeadings: () -> Void
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 4) {
+                ForEach(KeyboardCommandDefinition.all) { definition in
+                    EditorMacFormattingChoice(
+                        definition: definition, navigation: navigation,
+                        select: select, didCommit: didCommit,
+                        showHeadings: showHeadings
+                    )
+                    .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
+                }
+            }
+            .padding(4)
+        }
+        .scrollIndicators(.hidden)
+        .accessibilityIdentifier("editor-formatting-commands")
+    }
+}
+
+private struct EditorMacFormattingChoice: View {
+    let definition: KeyboardCommandDefinition
+    let navigation: MarkdownEditorNavigation
+    let select: (MarkdownEditingCommand) -> Void
+    let didCommit: () -> Void
+    let showHeadings: () -> Void
+
+    var body: some View {
+        Group {
+            if definition.command == .heading {
+                Button(action: showHeadings) {
+                    Text(verbatim: "H").font(.system(size: 16))
+                        .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
+                }
+                .disabled(!navigation.headingCommands.isEnabled)
+                .accessibilityIdentifier("editor-command-heading")
+            } else if definition.command == .insertTable {
+                EditorTableMenu(navigation: navigation, didCommit: didCommit)
+                    .menuIndicator(.hidden)
+            } else if let command = definition.command {
+                Button { select(command) } label: {
+                    Image(systemName: definition.image)
+                        .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
+                }
+                .accessibilityIdentifier(command.accessibilityIdentifier)
+            } else {
+                EditorSnippetMenu(navigation: navigation, didCommit: didCommit)
+                    .menuIndicator(.hidden)
+            }
+        }
+        .font(.system(size: 16))
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .help(Text(definition.title))
+        .accessibilityLabel(Text(definition.title))
+    }
+}
+#endif
+
 private extension MarkdownEditingCommand {
     var accessibilityIdentifier: String {
         switch self {
@@ -199,6 +378,13 @@ private extension MarkdownEditingCommand {
         case .strikethrough: "editor-command-strikethrough"
         case .highlight: "editor-command-highlight"
         case .heading: "editor-command-heading"
+        case .body: "editor-command-body"
+        case .heading1: "editor-command-heading-1"
+        case .heading2: "editor-command-heading-2"
+        case .heading3: "editor-command-heading-3"
+        case .heading4: "editor-command-heading-4"
+        case .heading5: "editor-command-heading-5"
+        case .heading6: "editor-command-heading-6"
         case .link: "editor-command-link"
         case .inlineCode: "editor-command-inline-code"
         case .codeBlock: "editor-command-code-block"
@@ -216,6 +402,244 @@ private extension MarkdownEditingCommand {
         case .tableAlignRight: "editor-command-table-align-right"
         case .tableNextCell: "editor-command-table-next-cell"
         case .tablePreviousCell: "editor-command-table-previous-cell"
+        }
+    }
+}
+
+private struct HeadingCommandDefinition: Identifiable {
+    let title: LocalizedStringResource
+    let accessibilityTitle: LocalizedStringResource
+    let command: MarkdownEditingCommand
+    var id: MarkdownEditingCommand { command }
+
+    func previewFont(
+        bodyFont: PlatformFont, interfacePointSize: CGFloat
+    ) -> PlatformFont {
+        let level = command.headingLevel ?? 0
+        let font = level > 0
+            ? MarkdownPresentation.headingFont(level: level, bodyFont: bodyFont)
+            : bodyFont
+        // Hint at the hierarchy without copying large document headings into
+        // a compact control. Interface text size owns accessibility scaling.
+        let previewPointSize: CGFloat
+        #if os(iOS)
+        switch level {
+        case 1: previewPointSize = 22
+        case 2: previewPointSize = 20
+        case 3: previewPointSize = 18
+        case 4: previewPointSize = 16
+        case 5: previewPointSize = 15
+        case 6: previewPointSize = 14
+        default: previewPointSize = 17
+        }
+        #else
+        switch level {
+        case 1: previewPointSize = 17
+        case 2: previewPointSize = 16
+        case 3: previewPointSize = 15
+        case 4: previewPointSize = 14
+        case 5: previewPointSize = 13
+        case 6: previewPointSize = 12
+        default: previewPointSize = NSFont.systemFontSize
+        }
+        #endif
+        let size = interfacePointSize * previewPointSize / 17
+        #if os(iOS)
+        return font.withSize(size)
+        #else
+        return PlatformFont(descriptor: font.fontDescriptor, size: size)
+            ?? .systemFont(ofSize: size)
+        #endif
+    }
+
+    static let all: [Self] = [
+        .init(title: "Body", accessibilityTitle: "Body", command: .body),
+        .init(title: "H1", accessibilityTitle: "Heading 1", command: .heading1),
+        .init(title: "H2", accessibilityTitle: "Heading 2", command: .heading2),
+        .init(title: "H3", accessibilityTitle: "Heading 3", command: .heading3),
+        .init(title: "H4", accessibilityTitle: "Heading 4", command: .heading4),
+        .init(title: "H5", accessibilityTitle: "Heading 5", command: .heading5),
+        .init(title: "H6", accessibilityTitle: "Heading 6", command: .heading6),
+    ]
+}
+
+/// Short heading previews inside the platform's native popover.
+private struct EditorHeadingStylePicker: View {
+    let state: MarkdownHeadingCommandState
+    @ScaledMetric(relativeTo: .body) private var interfacePointSize: CGFloat = 17
+    var width: CGFloat = 320
+    var selectionPositionX: CGFloat = 160
+    let select: (MarkdownEditingCommand) -> Void
+
+    private var controlHeight: CGFloat {
+        #if os(iOS)
+        let font = HeadingCommandDefinition.all[1].previewFont(
+            bodyFont: state.bodyFont, interfacePointSize: interfacePointSize
+        )
+        return max(44, ceil(font.lineHeight + 8))
+        #else
+        return EditorMacFormattingMetrics.itemHeight
+        #endif
+    }
+
+    var body: some View {
+        ScrollViewReader { scroll in
+            ScrollView(.horizontal) {
+                HStack(spacing: 4) {
+                    ForEach(HeadingCommandDefinition.all) { definition in
+                        EditorHeadingHorizontalChoice(
+                            definition: definition,
+                            font: definition.previewFont(
+                                bodyFont: state.bodyFont,
+                                interfacePointSize: interfacePointSize
+                            ),
+                            selected: state.level == definition.command.headingLevel
+                        ) { select(definition.command) }
+                        .frame(width: choiceWidth(definition), height: controlHeight)
+                        .id(definition.id)
+                    }
+                }
+                .padding(4)
+            }
+            .onChange(of: state.level, initial: true) { _, level in
+                if let definition = HeadingCommandDefinition.all.first(where: {
+                    $0.command.headingLevel == level
+                }) {
+                    let itemWidth = choiceWidth(definition)
+                    // Align near the source button, letting native scrolling
+                    // clamp at either end instead of inserting empty space.
+                    let anchorX = (selectionPositionX - itemWidth / 2)
+                        / max(1, width - itemWidth)
+                    scroll.scrollTo(definition.id, anchor: UnitPoint(
+                        x: min(1, max(0, anchorX)), y: 0.5
+                    ))
+                }
+            }
+        }
+        .disabled(!state.isEnabled)
+        .frame(width: width, height: controlHeight + 8)
+        .accessibilityIdentifier("editor-heading-style-picker")
+    }
+
+    private func choiceWidth(_ definition: HeadingCommandDefinition) -> CGFloat {
+        let title = String(localized: definition.title) as NSString
+        return max(64, ceil(title.size(withAttributes: [
+            .font: definition.previewFont(
+                bodyFont: state.bodyFont, interfacePointSize: interfacePointSize
+            )
+        ]).width + 16))
+    }
+}
+
+private struct EditorHeadingHorizontalChoice: View {
+    let definition: HeadingCommandDefinition
+    let font: PlatformFont
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        #if os(iOS)
+        EditorHeadingNativeButton(
+            title: String(localized: definition.title),
+            accessibilityTitle: String(localized: definition.accessibilityTitle),
+            identifier: definition.command.accessibilityIdentifier,
+            font: font,
+            selected: selected, action: action
+        )
+        #else
+        Toggle(isOn: Binding(get: { selected }, set: { _ in action() })) {
+            Text(definition.title)
+                .font(Font(font))
+                .lineLimit(1)
+                .frame(maxWidth: .infinity,
+                       minHeight: EditorMacFormattingMetrics.labelHeight)
+        }
+        .toggleStyle(.button)
+        .controlSize(.regular)
+        .accessibilityLabel(Text(definition.accessibilityTitle))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier(definition.command.accessibilityIdentifier)
+        #endif
+    }
+}
+
+#if os(iOS)
+/// Use the system's button fill and pressed appearance for selection.
+private struct EditorHeadingNativeButton: UIViewRepresentable {
+    @Environment(\.isEnabled) private var isEnabled
+    let title: String
+    let accessibilityTitle: String
+    let identifier: String
+    let font: UIFont
+    let selected: Bool
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(action: action) }
+
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .system)
+        button.isPointerInteractionEnabled = true
+        button.addTarget(context.coordinator, action: #selector(Coordinator.choose),
+                         for: .touchUpInside)
+        return button
+    }
+
+    func updateUIView(_ button: UIButton, context: Context) {
+        context.coordinator.action = action
+        var configuration: UIButton.Configuration = selected ? .filled() : .plain()
+        configuration.title = title
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+            var attributes = $0
+            attributes.font = font
+            return attributes
+        }
+        configuration.contentInsets = NSDirectionalEdgeInsets(
+            top: 4, leading: 8, bottom: 4, trailing: 8
+        )
+        configuration.cornerStyle = .capsule
+        if !selected { configuration.baseForegroundColor = .label }
+        button.configuration = configuration
+        button.isSelected = selected
+        button.isEnabled = isEnabled
+        button.accessibilityLabel = accessibilityTitle
+        button.accessibilityIdentifier = identifier
+    }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func choose() { action() }
+    }
+}
+#endif
+
+/// Keep selection-driven menu updates out of the document's SwiftUI body.
+@Observable
+@MainActor
+final class MarkdownHeadingCommandState {
+    var level: Int?
+    var isEnabled = false
+    var bodyFont = PlatformFont.systemFont(ofSize: 17)
+    @ObservationIgnored private var refreshPending = false
+
+    func scheduleRefresh(from textView: MarkdownTextView) {
+        guard !refreshPending else { return }
+        refreshPending = true
+        DispatchQueue.main.async { [weak self, weak textView] in
+            guard let self else { return }
+            self.refreshPending = false
+            self.isEnabled = textView?.headingCommandsEnabled == true
+            // A native text view can report the heading font at its caret.
+            // Preview sizes must always start from the editor's body font.
+            if let font = textView?.markdownSyntaxCache.appliedBodyFont ?? textView?.font,
+               !self.bodyFont.isEqual(font) {
+                self.bodyFont = font
+            }
+            self.level = textView.map {
+                MarkdownEditingRules.headingLevel(
+                    text: $0.commandSource, selection: $0.commandSelection
+                )
+            } ?? nil
         }
     }
 }
@@ -266,6 +690,20 @@ extension MarkdownTextView {
         guard let textStorage else { return markdownSyntaxCache.result(for: commandSource) }
 #endif
         return markdownSyntaxCache.preparedSyntax(in: textStorage)
+    }
+
+    var headingCommandsEnabled: Bool {
+#if os(macOS)
+        guard isEditable, !hasMarkedText() else { return false }
+#else
+        guard isEditable, markedTextRange == nil else { return false }
+#endif
+        guard !markdownCellController.isActive,
+              !markdownCellController.hasMarkedText else { return false }
+        return MarkdownEditingRules.headingCommandsAvailable(
+            text: commandSource, selection: commandSelection,
+            syntax: preparedCommandSyntax
+        )
     }
 
     var availableTableCommands: Set<MarkdownEditingCommand> {
@@ -400,6 +838,7 @@ private struct TableDeletionConfirmation: ViewModifier {
 
 private struct EditorTableMenu: View {
     let navigation: MarkdownEditorNavigation
+    var didCommit: (() -> Void)?
     @State private var pendingDeletion: PendingTableDeletion?
 
     var body: some View {
@@ -412,11 +851,15 @@ private struct EditorTableMenu: View {
                             if item.isDestructive {
                                 if let action = navigation.prepareCommand?(item.command) {
                                     pendingDeletion = PendingTableDeletion(
-                                        command: item.command, action: action
+                                        command: item.command, action: {
+                                            action()
+                                            didCommit?()
+                                        }
                                     )
                                 }
                             } else {
                                 navigation.performCommand?(item.command)
+                                didCommit?()
                             }
                         } label: {
                             Label {
@@ -443,7 +886,6 @@ private struct EditorTableMenu: View {
     }
 }
 
-#if os(iOS)
 private struct KeyboardCommandDefinition: Identifiable {
     let id: String
     let title: LocalizedStringResource
@@ -457,14 +899,14 @@ private struct KeyboardCommandDefinition: Identifiable {
               command: .taskList),
         .init(id: "insertTable", title: "Insert Table", image: "tablecells",
               command: .insertTable),
+        .init(id: "heading", title: "Heading", image: "h.square",
+              command: .heading),
         .init(id: "snippets", title: "Insert Snippet", image: "text.badge.plus",
               command: nil),
         .init(id: "indent", title: "Indent", image: "increase.indent",
               command: .indent),
         .init(id: "outdent", title: "Outdent", image: "decrease.indent",
               command: .outdent),
-        .init(id: "heading", title: "Heading", image: "textformat.size.larger",
-              command: .heading),
         .init(id: "link", title: "Link", image: "link", command: .link),
         .init(id: "strikethrough", title: "Strikethrough",
               image: "strikethrough", command: .strikethrough),
@@ -480,6 +922,7 @@ private struct KeyboardCommandDefinition: Identifiable {
     ]
 }
 
+#if os(iOS)
 private nonisolated struct SymbolDragPreviewShape: Shape {
     let systemName: String
 
@@ -596,7 +1039,7 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         let layout = UICollectionViewFlowLayout()
         layout.scrollDirection = .horizontal
         layout.itemSize = CGSize(width: 44, height: 44)
-        layout.minimumLineSpacing = 12
+        layout.minimumLineSpacing = 10
         layout.minimumInteritemSpacing = 12
         layout.sectionInset = UIEdgeInsets(top: 3, left: 12, bottom: 3, right: 12)
 
@@ -635,7 +1078,7 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
 
     final class Coordinator: NSObject, UICollectionViewDataSource,
                              UICollectionViewDelegateFlowLayout, UICollectionViewDragDelegate,
-                             UICollectionViewDropDelegate {
+                             UICollectionViewDropDelegate, UIPopoverPresentationControllerDelegate {
         private static let orderDefaultsKey = "editor.keyboardToolbar.commands"
         weak var collectionView: UICollectionView?
         private var navigation: MarkdownEditorNavigation
@@ -707,8 +1150,10 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
                     : (definition.command != .insertTable
                         || availableTableCommands.contains(.insertTable)
                         || availableTableCommands.contains(.tableNextCell)),
-                action: { [weak self] in
-                    if let command = definition.command {
+                action: { [weak self, weak cell] in
+                    if definition.command == .heading, let cell {
+                        self?.presentHeadingPicker(from: cell)
+                    } else if let command = definition.command {
                         self?.navigation.performCommand?(command)
                     }
                 },
@@ -727,6 +1172,9 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
                 cell.configureMenu(makeSnippetMenu(), image: "text.badge.plus",
                                    title: String(localized: "Insert Snippet"),
                                    identifier: "editor-snippet-menu")
+            }
+            if definition.command == .heading {
+                cell.configureHeadingPicker()
             }
             return cell
         }
@@ -760,6 +1208,70 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             }
             return UIMenu(title: entry.name, image: UIImage(systemName: "folder"),
                           children: entry.children.map(makeSnippetEntry))
+        }
+
+        private func presentHeadingPicker(from cell: KeyboardToolbarCell) {
+            var responder: UIResponder? = navigation.editorPresentationView
+            while responder != nil, !(responder is UIViewController) {
+                responder = responder?.next
+            }
+            guard let presenter = responder as? UIViewController,
+                  presenter.presentedViewController == nil else { return }
+            let navigation = self.navigation
+            let sourceRect = cell.convert(cell.bounds, to: presenter.view)
+            let safeBounds = presenter.view.bounds.inset(by: presenter.view.safeAreaInsets)
+            let width = min(320, max(180, safeBounds.width - 32))
+            let originX = min(
+                max(sourceRect.midX - width / 2, safeBounds.minX + 16),
+                safeBounds.maxX - 16 - width
+            )
+            let positionX = sourceRect.midX - originX
+            let picker = UIHostingController(rootView: EditorHeadingStylePicker(
+                state: navigation.headingCommands, width: width,
+                selectionPositionX: positionX, select: { _ in }
+            ))
+            // UIKit may forward presentation to an ancestor of the editor's
+            // nearest controller. Dismiss the actual presented controller.
+            picker.rootView = EditorHeadingStylePicker(
+                state: navigation.headingCommands, width: width,
+                selectionPositionX: positionX,
+                select: { [weak picker] command in
+                    picker?.dismiss(animated: true) {
+                        navigation.performCommand?(command)
+                    }
+                }
+            )
+            picker.view.accessibilityIdentifier = "editor-heading-popover"
+            picker.modalPresentationStyle = .popover
+            let previewFont = HeadingCommandDefinition.all[1].previewFont(
+                bodyFont: navigation.headingCommands.bodyFont,
+                interfacePointSize: UIFont.preferredFont(forTextStyle: .body).pointSize
+            )
+            picker.preferredContentSize = CGSize(
+                width: width, height: max(44, ceil(previewFont.lineHeight + 8)) + 8
+            )
+            guard let popover = picker.popoverPresentationController else { return }
+            popover.sourceView = presenter.view
+            popover.sourceRect = sourceRect
+            popover.permittedArrowDirections = [.up, .down]
+            popover.popoverLayoutMargins = UIEdgeInsets(
+                top: 8, left: 16, bottom: 8, right: 16
+            )
+            popover.delegate = self
+            presenter.present(picker, animated: true)
+        }
+
+        func adaptivePresentationStyle(
+            for controller: UIPresentationController,
+            traitCollection: UITraitCollection
+        ) -> UIModalPresentationStyle {
+            // A small formatting picker remains beside its toolbar control,
+            // preserving the document and keyboard even on compact layouts.
+            .none
+        }
+
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+            navigation.focusEditor?()
         }
 
         private func makeTableMenu() -> UIMenu {
@@ -847,7 +1359,7 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             let definition = commands[indexPath.item]
             let parameters = UIDragPreviewParameters()
             parameters.backgroundColor = .clear
-            if definition.command == .insertTable {
+            if definition.command == .insertTable || definition.command == .heading {
                 guard let cell = collectionView?.cellForItem(at: indexPath) else { return nil }
                 parameters.visiblePath = UIBezierPath(roundedRect: cell.bounds, cornerRadius: 8)
                 return parameters
@@ -1035,6 +1547,21 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
         button.accessibilityIdentifier = identifier
     }
 
+    func configureHeadingPicker() {
+        var configuration = UIButton.Configuration.plain()
+        configuration.title = "H"
+        configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
+            var attributes = $0
+            attributes.font = .systemFont(ofSize: 18, weight: .semibold)
+            return attributes
+        }
+        configuration.contentInsets = .zero
+        configuration.baseForegroundColor = .label
+        button.setImage(nil, for: .normal)
+        button.configuration = configuration
+        button.isContextMenuInteractionEnabled = false
+    }
+
     @objc private func activate() {
         if button.menu != nil {
             button.openMenu()
@@ -1068,7 +1595,9 @@ private final class KeyboardToolbarButton: UIButton {
 extension MarkdownTextView {
     func installMarkdownKeyboardToolbar(navigation: MarkdownEditorNavigation?) {
         let commands = navigation ?? MarkdownEditorNavigation()
+        commands.editorPresentationView = self
         if navigation == nil {
+            commands.focusEditor = { [weak self] in _ = self?.becomeFirstResponder() }
             commands.performCommand = { [weak self] command in
                 _ = self?.performMarkdownCommand(command)
             }

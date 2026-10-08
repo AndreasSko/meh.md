@@ -23,11 +23,13 @@ final class MarkdownPreparedSyntaxTests: XCTestCase {
             XCTAssertEqual(cache.preparedSyntax(in: storage), initial)
             _ = view.availableTableCommands
             _ = view.currentTableAlignment
+            _ = view.headingCommandsEnabled
         }
         storage.addAttribute(.kern, value: 2, range: NSRange(location: 0, length: 1))
         XCTAssertEqual(cache.preparedSyntax(in: storage), initial)
         _ = view.availableTableCommands
         _ = view.currentTableAlignment
+        _ = view.headingCommandsEnabled
         XCTAssertEqual(cache.parseCount, parses)
         XCTAssertEqual(cache.snapshotCount, snapshots)
         XCTAssertEqual(cache.incrementalParseCount, incremental)

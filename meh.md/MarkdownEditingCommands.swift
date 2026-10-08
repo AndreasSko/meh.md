@@ -9,6 +9,13 @@ enum MarkdownEditingCommand: CaseIterable, Hashable {
     case strikethrough
     case highlight
     case heading
+    case body
+    case heading1
+    case heading2
+    case heading3
+    case heading4
+    case heading5
+    case heading6
     case link
     case inlineCode
     case codeBlock
@@ -32,6 +39,21 @@ struct MarkdownEditingChange: Equatable {
     let range: NSRange
     let replacement: String
     let selection: NSRange
+}
+
+extension MarkdownEditingCommand {
+    var headingLevel: Int? {
+        switch self {
+        case .body: 0
+        case .heading1: 1
+        case .heading2: 2
+        case .heading3: 3
+        case .heading4: 4
+        case .heading5: 5
+        case .heading6: 6
+        default: nil
+        }
+    }
 }
 
 enum MarkdownEditingRules {
@@ -95,6 +117,12 @@ enum MarkdownEditingRules {
             )
         case .heading:
             return headingChange(in: source, selection: selection)
+        case .body, .heading1, .heading2, .heading3,
+             .heading4, .heading5, .heading6:
+            return headingChange(
+                in: source, selection: selection,
+                level: command.headingLevel, syntaxResult: syntaxResult
+            )
         case .link:
             return linkChange(in: source, selection: selection)
         case .inlineCode:
@@ -284,9 +312,19 @@ enum MarkdownEditingRules {
 
     private static func headingChange(
         in source: NSString,
-        selection: NSRange
+        selection: NSRange,
+        level: Int? = nil,
+        syntaxResult: MarkdownSyntaxResult? = nil
     ) -> MarkdownEditingChange? {
-        guard !isInCode(selection, source: source) else { return nil }
+        guard !isInCode(selection, source: source, syntaxResult: syntaxResult)
+        else { return nil }
+        if level != nil {
+            let tables = (syntaxResult ?? MarkdownSyntax.parse(source as String)).tables
+            guard !tables.contains(where: {
+                NSLocationInRange(selection.location, $0.range)
+                    || NSIntersectionRange(selection, $0.range).length > 0
+            }) else { return nil }
+        }
         let affected = affectedLines(for: selection, in: source)
         let candidates = lines(in: affected, source: source).compactMap { line in
             headingCandidate(
@@ -296,14 +334,39 @@ enum MarkdownEditingRules {
             )
         }
         guard !candidates.isEmpty else { return nil }
-        let removeHeading = candidates.allSatisfy { $0.level == 2 }
-        let edits = candidates.map { candidate in
-            if removeHeading {
-                return SourceEdit(range: candidate.markerRange, replacement: "")
-            }
-            return SourceEdit(range: candidate.markerRange, replacement: "## ")
+        // The shortcut keeps its H2 toggle; menu choices set an explicit style.
+        let target = level ?? (candidates.allSatisfy { $0.level == 2 } ? 0 : 2)
+        let edits = candidates.compactMap { candidate -> SourceEdit? in
+            guard (candidate.level ?? 0) != target else { return nil }
+            let marker = target == 0 ? "" : String(repeating: "#", count: target) + " "
+            return SourceEdit(range: candidate.markerRange, replacement: marker)
         }
+        guard !edits.isEmpty else { return nil }
         return applying(edits, to: affected, selection: selection, source: source)
+    }
+
+    /// Zero means Body; nil means the selected paragraphs have mixed styles.
+    static func headingLevel(text: String, selection: NSRange) -> Int? {
+        let source = text as NSString
+        let selection = safeSelection(selection, in: source)
+        let affected = affectedLines(for: selection, in: source)
+        let levels = lines(in: affected, source: source).compactMap {
+            headingCandidate(in: $0, source: source, allowEmpty: selection.length == 0)
+                .map { $0.level ?? 0 }
+        }
+        guard let first = levels.first, levels.allSatisfy({ $0 == first })
+        else { return nil }
+        return first
+    }
+
+    static func headingCommandsAvailable(
+        text: String, selection: NSRange, syntax: MarkdownSyntaxResult
+    ) -> Bool {
+        !isInCode(selection, source: text as NSString, syntaxResult: syntax)
+            && !syntax.tables.contains(where: {
+                NSLocationInRange(selection.location, $0.range)
+                    || NSIntersectionRange(selection, $0.range).length > 0
+            })
     }
 
     private static func pairedInlineChange(
@@ -1316,8 +1379,11 @@ private extension MarkdownEditingRules {
         return nil
     }
 
-    static func isInCode(_ selection: NSRange, source: NSString) -> Bool {
-        let spans = MarkdownSyntax.spans(in: source as String).filter {
+    static func isInCode(
+        _ selection: NSRange, source: NSString,
+        syntaxResult: MarkdownSyntaxResult? = nil
+    ) -> Bool {
+        let spans = (syntaxResult?.spans ?? MarkdownSyntax.spans(in: source as String)).filter {
             $0.role == .code
         }
         if selection.length == 0 {
