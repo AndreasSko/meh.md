@@ -1,8 +1,14 @@
 import XCTest
+#if os(macOS)
+import AppKit
+#endif
 
 /// Exercises native mouse/touch drags against isolated fictional notebooks.
 /// Run this suite on macOS, an iPhone simulator and an iPad simulator.
+@MainActor
 final class NotebookDragUITests: XCTestCase {
+    private var ownedPreviewRuns = Set<String>()
+
     func testSortDragResortAndRelaunchPreserveOrderAndSource() throws {
         let app = launchNotebook()
         let charlie = createNote("Charlie", in: app)
@@ -394,6 +400,9 @@ final class NotebookDragUITests: XCTestCase {
     func testLongListDragAutoscrollsAndPersists() throws {
         let app = launchNotebook(fixture: true)
         let first = row(named: "01 Field observation", prefix: "notebook-sidebar-note-", in: app)
+        // Cache identity while the source is realized. iOS virtualizes it
+        // when the placement inspection scrolls back to the beginning.
+        let sourceTitleID = "notebook-sidebar-title-" + itemID(first)
         let scrollWitness = row(named: "02 Field observation", prefix: "notebook-sidebar-note-", in: app)
         #if os(macOS)
         activate(title(of: first, in: app))
@@ -448,35 +457,29 @@ final class NotebookDragUITests: XCTestCase {
         #else
         start.press(forDuration: 0.6, thenDragTo: edge, withVelocity: .slow, thenHoldForDuration: 3)
         #endif
+        #if os(macOS)
+        capture(app, "Long list immediately after edge release")
+        let sourceID = first.identifier
+        let witnessID = scrollWitness.identifier
+        let viewport = list.frame
+        #endif
         let scrolled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             #if os(macOS)
-            let frame = scrollWitness.frame
-            if scrollWitness.exists, !frame.isEmpty, frame.minY.isFinite,
+            guard let observation = self.macBrowserObservation(in: app, viewport: viewport)
+            else { return false }
+            if let frame = observation.titles[witnessID]?.frame,
                frame.minY < witnessStartY - minimumScroll {
                 return true
             }
-            // AppKit keeps offscreen AX rows with zero/infinite frames.
-            // A later unchanged row at the viewport top independently proves
-            // at least three rows of scrolling, excluding the moved source.
-            let visible = self.visibleNoteIDs(in: list, app: app)
-                .filter { $0 != first.identifier }
-            guard let top = visible.first else { return false }
-            let titleID = top.replacingOccurrences(
-                of: "notebook-sidebar-note-", with: "notebook-sidebar-title-"
-            )
-            let title = app.staticTexts[titleID]
-            let name = title.value as? String ?? title.label
             // The fixture contains 01...48 in their original order. 01 is
             // the moved source; an unchanged 05 or later at the top proves
             // scrolling at least three rows beyond the original witness 02,
             // even when it has passed every initially visible row.
-            guard let ordinal = Int(name.prefix(2)), (5...48).contains(ordinal),
-                  name == String(format: "%02d Field observation", ordinal)
+            guard let top = observation.visible.first(where: { $0.id != sourceID }),
+                  let ordinal = Int(top.name.prefix(2)), (5...48).contains(ordinal),
+                  top.name == String(format: "%02d Field observation", ordinal)
             else { return false }
-            let witnessVisible = scrollWitness.exists && scrollWitness.isHittable
-                && !frame.isEmpty && frame.minY.isFinite
-                && list.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
-            return !witnessVisible
+            return !observation.visible.contains(where: { $0.id == witnessID })
             #else
             return !scrollWitness.exists
                 || scrollWitness.frame.minY < witnessStartY - minimumScroll
@@ -488,9 +491,20 @@ final class NotebookDragUITests: XCTestCase {
         #if os(macOS)
         assertSelection([first], in: app)
         #endif
+        // Record the placement produced by this actual held-edge gesture.
+        // Its destination depends on the viewport, so use the native Move
+        // sheet's current location and immediate sibling IDs as oracles.
+        let droppedParent = currentParentPath(sourceTitleID: sourceTitleID, in: app)
+        let droppedOrder = try edgeDropNeighbors(sourceTitleID: sourceTitleID, parent: droppedParent, in: app)
         app.terminate()
         app.launch()
         showSidebar(app)
+        let relaunchedParent = currentParentPath(sourceTitleID: sourceTitleID, in: app)
+        XCTAssertEqual(relaunchedParent, droppedParent,
+                       "Relaunch must preserve the edge drop's exact parent path")
+        XCTAssertEqual(try edgeDropNeighbors(sourceTitleID: sourceTitleID, parent: relaunchedParent, in: app),
+                       droppedOrder,
+                       "Relaunch must preserve the edge drop's immediate sibling identities and order")
         scrollBrowserToStart(in: app)
         let second = row(named: "02 Field observation", prefix: "notebook-sidebar-note-", in: app)
         let third = row(named: "03 Field observation", prefix: "notebook-sidebar-note-", in: app)
@@ -573,11 +587,175 @@ final class NotebookDragUITests: XCTestCase {
         capture(app, "Batch drag preserves literal note sources")
     }
 
+    private func currentParentPath(
+        sourceTitleID: String, in app: XCUIApplication
+    ) -> String {
+        let environment = app.launchEnvironment
+        guard let run = environment["MEH_NOTEBOOK_PREVIEW_RUN"],
+              ownedPreviewRuns.contains(run), UUID(uuidString: run) != nil,
+              environment["MEH_NOTEBOOK_PREVIEW"] == "1",
+              environment["MEH_NOTEBOOK_DRAG_FIXTURE"] == "long-list",
+              environment["MEH_SYNC_CLOUDKIT"] == "0",
+              environment["MEH_SYNC_AUTOMATIC"] == "0" else {
+            XCTFail("Placement inspection requires this test's UUID-owned fixture")
+            return ""
+        }
+        scrollBrowserToStart(in: app)
+        scrollDown(until: app.staticTexts[sourceTitleID], in: app)
+        let sourceRowID = sourceTitleID.replacingOccurrences(
+            of: "notebook-sidebar-title-", with: "notebook-sidebar-note-"
+        )
+        let source = app.descendants(matching: .any)[sourceRowID]
+        XCTAssertTrue(source.exists,
+                      "The cached source identity must resolve after native scrolling")
+        openContextMenu(on: source, in: app)
+        activate(menuAction("Move…", in: app))
+        let location = app.descendants(matching: .any)
+            .matching(identifier: "notebook-move-path").firstMatch
+        XCTAssertTrue(location.waitForExistence(timeout: 5))
+        // The production sheet initializes this path from the selected note's
+        // parent placement. Cancel without choosing or submitting a move.
+        let allowedPaths = [
+            "Notebook", "Notebook / Journeys", "Notebook / Journeys / Weekend"
+        ]
+        // SwiftUI Label may expose the path on its combined element or its
+        // text child, depending on the platform's native accessibility bridge.
+        let labels = [location.label, location.value as? String ?? ""]
+            + location.staticTexts.allElementsBoundByIndex.flatMap {
+                [$0.label, $0.value as? String ?? ""]
+            }
+        let path = labels.first(where: { allowedPaths.contains($0) }) ?? ""
+        XCTAssertFalse(path.isEmpty,
+                       "The edge drop must have a real fictional fixture parent")
+        activate(app.buttons["notebook-cancel-move"])
+        XCTAssertTrue(location.waitForNonExistence(timeout: 5))
+        return path
+    }
+
+    private struct EdgeDropNeighbors: Equatable {
+        let previousID: String?
+        let sourceID: String
+        let nextID: String?
+    }
+
+    private func edgeDropNeighbors(
+        sourceTitleID: String, parent: String, in app: XCUIApplication
+    ) throws -> EdgeDropNeighbors {
+        let environment = app.launchEnvironment
+        let run = try XCTUnwrap(environment["MEH_NOTEBOOK_PREVIEW_RUN"])
+        XCTAssertTrue(ownedPreviewRuns.contains(run))
+        XCTAssertNotNil(UUID(uuidString: run))
+        XCTAssertEqual(environment["MEH_NOTEBOOK_PREVIEW"], "1")
+        XCTAssertEqual(environment["MEH_NOTEBOOK_DRAG_FIXTURE"], "long-list")
+        XCTAssertEqual(environment["MEH_SYNC_CLOUDKIT"], "0")
+        XCTAssertEqual(environment["MEH_SYNC_AUTOMATIC"], "0")
+
+        // The fixture has exactly one movable source. All other parents and
+        // their original order are fixed. Filter by that known membership,
+        // rather than treating arbitrary neighboring tree rows as siblings.
+        let sourceName = "01 Field observation"
+        let siblingNames: Set<String>
+        switch parent {
+        case "Notebook":
+            siblingNames = Set((2...48).map {
+                String(format: "%02d Field observation", $0)
+            } + ["Journeys", sourceName])
+        case "Notebook / Journeys":
+            siblingNames = ["Weekend", sourceName]
+        case "Notebook / Journeys / Weekend":
+            siblingNames = ["Island", sourceName]
+        default:
+            XCTFail("Unexpected edge-drop parent")
+            return EdgeDropNeighbors(previousID: nil, sourceID: "", nextID: nil)
+        }
+        #if os(macOS)
+        let viewport = macSidebar(in: app).frame
+        #else
+        let viewport = app.collectionViews.firstMatch.frame
+        #endif
+        var pending: [any XCUIElementSnapshot] = [try app.snapshot()]
+        var rowIDs = Set<String>()
+        var visibleTop = viewport.minY
+        var siblings: [(id: String, name: String, frame: CGRect)] = []
+        while let element = pending.popLast() {
+            pending.append(contentsOf: element.children)
+            if element.identifier.hasPrefix("notebook-sidebar-note-")
+                || element.identifier.hasPrefix("notebook-sidebar-folder-") {
+                rowIDs.insert(element.identifier)
+            }
+            if element.identifier == "notebook-tree-toggle", !element.frame.isEmpty {
+                visibleTop = max(visibleTop, element.frame.maxY)
+            }
+            let frame = element.frame
+            guard element.elementType == .staticText,
+                  element.identifier.hasPrefix("notebook-sidebar-title-"),
+                  !frame.isEmpty,
+                  frame.minX.isFinite, frame.minY.isFinite,
+                  frame.maxX.isFinite, frame.maxY.isFinite else { continue }
+            let name = (element.value as? String)
+                .flatMap { $0.isEmpty ? nil : $0 } ?? element.label
+            if siblingNames.contains(name) {
+                siblings.append((element.identifier, name, element.frame))
+            }
+        }
+        // Match the browser observation's viewport rules: detached titles,
+        // offscreen virtualized cells and rows behind the Files header cannot
+        // serve as neighbor witnesses. Missing visible witnesses fail closed.
+        siblings = siblings.filter {
+            let suffix = $0.id.replacingOccurrences(of: "notebook-sidebar-title-", with: "")
+            let hasRow = rowIDs.contains("notebook-sidebar-note-" + suffix)
+                || rowIDs.contains("notebook-sidebar-folder-" + suffix)
+            return hasRow && $0.frame.midY >= visibleTop
+                && viewport.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY))
+        }
+        XCTAssertEqual(Set(siblings.map(\.id)).count, siblings.count,
+                       "A reused native row must not produce duplicate visible title witnesses")
+        siblings.sort { $0.frame.minY < $1.frame.minY }
+        let sourceID = sourceTitleID
+        let index = try XCTUnwrap(siblings.firstIndex(where: { $0.id == sourceID }),
+                                 "The native placement snapshot must contain the stable source ID")
+        let previous = index > 0 ? siblings[index - 1] : nil
+        let next = index + 1 < siblings.count ? siblings[index + 1] : nil
+        if parent == "Notebook" {
+            // 02 and Journeys are the fixed first/last root siblings. Any
+            // missing neighbor must be a proven boundary, not virtualization.
+            XCTAssertTrue(previous != nil || next?.name == "02 Field observation",
+                          "An interior root drop needs its immediate preceding sibling")
+            XCTAssertTrue(next != nil || previous?.name == "Journeys",
+                          "An interior root drop needs its immediate following sibling")
+            XCTAssertNotNil(previous,
+                            "The edge gesture must move 01 away from its original first position")
+            if let previous, let next {
+                let originalPeers = (2...48).map {
+                    String(format: "%02d Field observation", $0)
+                } + ["Journeys"]
+                let previousIndex = try XCTUnwrap(originalPeers.firstIndex(of: previous.name))
+                let nextIndex = try XCTUnwrap(originalPeers.firstIndex(of: next.name))
+                XCTAssertEqual(nextIndex, previousIndex + 1,
+                               "Neighbor witnesses must be adjacent original peers, with no virtualized gap")
+            }
+        } else {
+            XCTAssertEqual(Set(siblings.map(\.name)), siblingNames,
+                           "A folder placement must expose its complete two-item sibling order")
+        }
+        let placement = EdgeDropNeighbors(previousID: previous?.id,
+                                          sourceID: sourceID, nextID: next?.id)
+        let attachment = XCTAttachment(string:
+            "parent=\(parent) previous=\(placement.previousID ?? "none") "
+                + "source=\(sourceID) next=\(placement.nextID ?? "none")")
+        attachment.name = "Native edge-drop parent and immediate siblings"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        return placement
+    }
+
     private func launchNotebook(fixture: Bool = false, nestedFixture: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
+        let previewRun = UUID().uuidString
+        ownedPreviewRuns.insert(previewRun)
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = previewRun
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchEnvironment["MEH_SYNC_CLOUDKIT"] = "0"
         XCTAssertFalse(fixture && nestedFixture)
@@ -636,7 +814,20 @@ final class NotebookDragUITests: XCTestCase {
         activate(menuAction("New Folder", in: app))
         let field = app.textFields["Name"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
+        #if os(macOS)
+        let selected = app.staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND isSelected == YES",
+            "notebook-sidebar-title-"
+        ))
+        XCTAssertLessThanOrEqual(selected.count, 1,
+                                 "Naming a new folder must not select unrelated files")
+        // Use the focus and default-name selection supplied by the app,
+        // as ordinary typing does when New Folder opens its inline field.
+        app.typeText(name)
+        app.typeKey(.return, modifierFlags: [])
+        #else
         replace(field, with: name)
+        #endif
         if let parent { expand(parent, in: app) }
         if let rootSortBeforeLookup {
             #if os(macOS)
@@ -776,9 +967,7 @@ final class NotebookDragUITests: XCTestCase {
         // AX can report a partially visible row as hittable while its chosen
         // midpoint is covered by the pinned Files header. Reveal the whole
         // source using ordinary scrolling before clicking or holding it.
-        let list = app.scrollViews.allElementsBoundByIndex.first {
-            $0.frame.minX < app.windows.firstMatch.frame.midX && $0.frame.height > 100
-        } ?? app.scrollViews.firstMatch
+        let list = macSidebar(in: app)
         for _ in 0..<8 {
             let frame = source.frame
             let viewport = list.frame
@@ -786,10 +975,50 @@ final class NotebookDragUITests: XCTestCase {
             let top = max(viewport.minY, header.maxY)
             if !frame.isEmpty, frame.minY >= top, frame.maxY <= viewport.maxY,
                source.isHittable { return }
-            list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                .scroll(byDeltaX: 0, deltaY: frame.minY < top ? 300 : -300)
+            scrollMacBrowser(list, by: frame.minY < top ? 300 : -300, in: app)
         }
         XCTFail("The drag source must be fully visible after bounded scrolling")
+    }
+
+    private func macSidebar(in app: XCUIApplication) -> XCUIElement {
+        app.scrollViews.allElementsBoundByIndex.first {
+            $0.frame.minX < app.windows.firstMatch.frame.midX && $0.frame.height > 100
+        } ?? app.scrollViews.firstMatch
+    }
+
+    private func scrollMacBrowser(
+        _ list: XCUIElement, by delta: Int32, in app: XCUIApplication
+    ) {
+        list.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5))
+            .scroll(byDeltaX: 0, deltaY: CGFloat(delta))
+    }
+
+    private func focusMacSidebarForNavigation(in app: XCUIApplication) {
+        // Native Home/Page Down scrolling follows the first responder.
+        // This preparation precedes the deliberate source/batch selection.
+        let environment = app.launchEnvironment
+        guard let run = environment["MEH_NOTEBOOK_PREVIEW_RUN"],
+              ownedPreviewRuns.contains(run),
+              environment["MEH_NOTEBOOK_PREVIEW"] == "1",
+              environment["MEH_SYNC_CLOUDKIT"] == "0",
+              environment["MEH_SYNC_AUTOMATIC"] == "0" else {
+            XCTFail("Sidebar navigation requires this test's preview notebook")
+            return
+        }
+        app.activate()
+        let viewport = macSidebar(in: app).frame
+        guard let observation = macBrowserObservation(in: app, viewport: viewport),
+              let visible = observation.visible.first(where: {
+                  $0.frame.minY >= observation.visibleTop + 2
+                      && $0.frame.maxY <= viewport.maxY - 48
+              }) else {
+            XCTFail("Native sidebar navigation needs a visible fictional note")
+            return
+        }
+        let titleID = visible.id.replacingOccurrences(
+            of: "notebook-sidebar-note-", with: "notebook-sidebar-title-"
+        )
+        activate(app.staticTexts[titleID])
     }
     #endif
 
@@ -818,16 +1047,43 @@ final class NotebookDragUITests: XCTestCase {
     }
 
     private func chooseSort(_ name: String, in app: XCUIApplication) {
+        #if os(macOS)
+        capture(app, "Before native Files sort menu opens")
+        #endif
         activate(appMenu(in: app))
         #if os(macOS)
+        capture(app, "Native Files sort menu after opening")
+        let diagnostic = XCTAttachment(string:
+            "appState=\(app.state.rawValue) "
+                + "windowEnabled=\(app.windows.firstMatch.isEnabled) "
+                + "buttonEnabled=\(appMenu(in: app).isEnabled) "
+                + "buttonFrame=\(appMenu(in: app).frame) "
+                + "sortIDExists=\(app.menuItems["notebook-sort-root"].exists) "
+                + "sortLabelExists=\(app.menuItems["Sort Files Once"].exists) "
+                + "newFolderExists=\(app.menuItems["New Folder"].exists)")
+        diagnostic.name = "Native Files sort menu availability"
+        diagnostic.lifetime = .keepAlways
+        add(diagnostic)
         let submenu = app.menuItems["notebook-sort-root"]
         XCTAssertTrue(submenu.waitForExistence(timeout: 5))
         submenu.hover()
         let option = menuAction(name, in: app)
         // Native AX menu clicks can repeat their own hover after finding a
         // submenu item. Use its current visible coordinates for one click.
-        XCTAssertTrue(option.isHittable)
-        option.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        let visible = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard option.exists else { return false }
+            let frame = option.frame
+            return !frame.isEmpty && frame.minX.isFinite && frame.minY.isFinite
+                && frame.maxX.isFinite && frame.maxY.isFinite
+        }, object: option)
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed,
+                       "The native sort submenu item must become visible")
+        let frame = option.frame
+        let window = app.windows.firstMatch
+        let origin = window.frame.origin
+        window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: frame.midX - origin.x, dy: frame.midY - origin.y
+        )).click()
         XCTAssertTrue(option.waitForNonExistence(timeout: 5),
                       "Choosing a sort order must dismiss the native menu")
         #else
@@ -867,24 +1123,84 @@ final class NotebookDragUITests: XCTestCase {
         #endif
     }
 
+    #if os(macOS)
+    private struct MacNoteTitle {
+        let id: String
+        let name: String
+        let frame: CGRect
+    }
+
+    private struct MacBrowserObservation {
+        let visibleTop: CGFloat
+        let titles: [String: MacNoteTitle]
+        let visible: [MacNoteTitle]
+    }
+
+    private func macBrowserObservation(
+        in app: XCUIApplication, viewport: CGRect
+    ) -> MacBrowserObservation? {
+        // Resolve native virtualized rows once. Indexed live queries can
+        // resolve different reused rows, and exceed a short predicate wait.
+        guard let root = try? app.snapshot() else { return nil }
+        return macBrowserObservation(snapshot: root, viewport: viewport)
+    }
+
+    private func macBrowserObservation(
+        snapshot root: any XCUIElementSnapshot, viewport: CGRect
+    ) -> MacBrowserObservation {
+        var pending: [any XCUIElementSnapshot] = [root]
+        var noteIDs = Set<String>()
+        var titles: [String: MacNoteTitle] = [:]
+        var visibleTop = viewport.minY
+        while let element = pending.popLast() {
+            pending.append(contentsOf: element.children)
+            let id = element.identifier
+            if id.hasPrefix("notebook-sidebar-note-") {
+                noteIDs.insert(id)
+            }
+            if id == "notebook-tree-toggle", !element.frame.isEmpty {
+                visibleTop = max(visibleTop, element.frame.maxY)
+            }
+            guard element.elementType == .staticText,
+                  id.hasPrefix("notebook-sidebar-title-") else { continue }
+            let frame = element.frame
+            guard !frame.isEmpty, frame.minX.isFinite, frame.minY.isFinite,
+                  frame.maxX.isFinite, frame.maxY.isFinite else { continue }
+            let noteID = id.replacingOccurrences(
+                of: "notebook-sidebar-title-", with: "notebook-sidebar-note-"
+            )
+            let value = element.value as? String
+            let name = value.flatMap { $0.isEmpty ? nil : $0 } ?? element.label
+            titles[noteID] = MacNoteTitle(id: noteID, name: name, frame: frame)
+        }
+        let visible = titles.values.filter {
+            noteIDs.contains($0.id) && $0.frame.midY >= visibleTop
+                && viewport.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY))
+        }.sorted { $0.frame.minY < $1.frame.minY }
+        return MacBrowserObservation(
+            visibleTop: visibleTop, titles: titles, visible: visible
+        )
+    }
+    #endif
+
     private func visibleNoteIDs(in list: XCUIElement, app: XCUIApplication) -> [String] {
         let viewport = list.frame
+        #if os(macOS)
+        return macBrowserObservation(in: app, viewport: viewport)?.visible.map(\.id) ?? []
+        #else
         return app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "notebook-sidebar-note-"
         )).allElementsBoundByIndex.filter {
             !$0.frame.isEmpty && viewport.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY))
         }.sorted { $0.frame.minY < $1.frame.minY }.map { $0.identifier }
+        #endif
     }
 
     private func scrollToTop(until target: XCUIElement, in app: XCUIApplication) {
         for _ in 0..<8 {
             if target.exists, target.isHittable { return }
             #if os(macOS)
-            let list = app.scrollViews.allElementsBoundByIndex.first {
-                $0.frame.minX < app.windows.firstMatch.frame.midX && $0.frame.height > 100
-            } ?? app.scrollViews.firstMatch
-            list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                .scroll(byDeltaX: 0, deltaY: 600)
+            scrollMacBrowser(macSidebar(in: app), by: 600, in: app)
             #else
             app.collectionViews.firstMatch.swipeDown(velocity: .slow)
             #endif
@@ -895,27 +1211,40 @@ final class NotebookDragUITests: XCTestCase {
     private func scrollBrowserToStart(in app: XCUIApplication) {
         // A relaunch can restore its scroll offset. Reach the real beginning
         // before comparing root order, including notes virtualized offscreen.
+        #if os(macOS)
+        focusMacSidebarForNavigation(in: app)
+        app.typeKey(.home, modifierFlags: [])
+        #else
         for _ in 0..<8 {
-            #if os(macOS)
-            app.scrollViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                .scroll(byDeltaX: 0, deltaY: 600)
-            #else
             app.collectionViews.firstMatch.swipeDown(velocity: .fast)
-            #endif
         }
+        #endif
     }
 
     private func scrollDown(until target: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<8 {
-            if target.exists, target.isHittable { return }
+        #if os(macOS)
+        focusMacSidebarForNavigation(in: app)
+        #endif
+        func isRevealed() -> Bool {
+            guard target.exists, target.isHittable else { return false }
             #if os(macOS)
-            app.scrollViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                .scroll(byDeltaX: 0, deltaY: -600)
+            return true
+            #else
+            // UIKit can hit a sliver of a clipped cell. A placement witness
+            // needs the entire title inside the list, including its midpoint.
+            let frame = target.frame
+            return !frame.isEmpty && app.collectionViews.firstMatch.frame.contains(frame)
+            #endif
+        }
+        for _ in 0..<8 {
+            if isRevealed() { return }
+            #if os(macOS)
+            app.typeKey(.pageDown, modifierFlags: [])
             #else
             app.collectionViews.firstMatch.swipeUp(velocity: .slow)
             #endif
         }
-        XCTAssertTrue(target.exists, "Expected the moved source after bounded scrolling")
+        XCTAssertTrue(isRevealed(), "Expected a fully revealed source after bounded scrolling")
     }
 
     private func activate(_ element: XCUIElement) {
@@ -927,12 +1256,41 @@ final class NotebookDragUITests: XCTestCase {
     }
 
     private func assertOrder(_ rows: [XCUIElement], in app: XCUIApplication) {
+        #if os(macOS)
+        // Native List can recycle an AX row between live frame queries.
+        // Resolve exact note/folder identities in one coherent snapshot,
+        // without spending the predicate's deadline on repeated lookups.
+        let expectedIDs = rows.map { $0.identifier }
+        let expected = Set(expectedIDs)
+        XCTAssertEqual(expected.count, rows.count)
+        var observed: [String: CGRect] = [:]
+        let order = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let root = try? app.snapshot() else { return false }
+            var pending: [any XCUIElementSnapshot] = [root]
+            var frames: [String: CGRect] = [:]
+            while let element = pending.popLast() {
+                pending.append(contentsOf: element.children)
+                guard expected.contains(element.identifier) else { continue }
+                let frame = element.frame
+                guard !frame.isEmpty, frame.minX.isFinite, frame.minY.isFinite,
+                      frame.maxX.isFinite, frame.maxY.isFinite else { continue }
+                frames[element.identifier] = frame
+            }
+            observed = frames
+            let positions = expectedIDs.compactMap { frames[$0]?.minY }
+            guard positions.count == expectedIDs.count else { return false }
+            return zip(positions, positions.dropFirst()).allSatisfy { $0.0 < $0.1 }
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [order], timeout: 5), .completed,
+                       "Expected row order \(expectedIDs); snapshot frames \(observed)")
+        #else
         let order = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             guard rows.allSatisfy({ $0.exists && !$0.frame.isEmpty }) else { return false }
             let positions = rows.map { $0.frame.minY }
             return zip(positions, positions.dropFirst()).allSatisfy { $0.0 < $0.1 }
         }, object: app)
         XCTAssertEqual(XCTWaiter.wait(for: [order], timeout: 5), .completed)
+        #endif
     }
 
     private func assertSelection(_ rows: [XCUIElement], in app: XCUIApplication) {

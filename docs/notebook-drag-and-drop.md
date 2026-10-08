@@ -20,12 +20,28 @@ recognizer starts the native dragging session and captures the actual row
 preview. Ordinary clicks fail recognition below the drag threshold, so
 AppKit delivers the original events for plain, Command, and Shift selection.
 Control-clicks, disclosure buttons, and inline fields keep native tracking.
+Starting an inline rename also keeps the Mac row's SwiftUI structure stable.
+Its drag-source modifier is a no-op because AppKit owns source tracking;
+switching between identical view branches would unnecessarily replace the
+row content just as the native field receives focus. Revealing that field
+does not require a Mac timing delay.
+The inline field binds its own `TextSelection` to select the default name.
+It does not send Select All through the responder chain, where the browser
+could still own focus and select every file while the field is mounting.
+A native attachment probe reveals the mounted field through its scroll
+ancestors before its local focus request runs. Readiness callbacks belong
+to that attachment generation, so a recycled row cannot receive an old one.
 
 The same list's primary-button selection pans must wait for the source
 recognizer to fail. Mac traces showed those pans beginning before the source
 crossed its five-point drag threshold and canceling it. Autoscroll stops when
 the pointer leaves the destination. AppKit constrains its clip bounds, so
 native content insets remain part of the scrolling limits.
+
+Reopening a moved note restores its reading position with the same native
+clip constraint. A zero minimum would discard the toolbar's negative top
+origin and move a short note's title into the toolbar. Native editor checks
+cover top, middle, bottom, and short-note capture into a fresh editor.
 
 Mac source tracking follows Apple's TN3212 on adopting gesture recognizers.
 SwiftUI source tracking in the full native list allowed selection to extend
@@ -92,6 +108,19 @@ preview notebook per test. It exercises actual mouse or touch gestures,
 checks the resulting hierarchy and order, and reopens notes after relaunch
 to compare their literal Markdown.
 
+Mac long-list preparation focuses a fictional sidebar note fully below the
+Files header and above the footer, then uses native Home and Page Down keys
+before establishing the drag selection.
+These keys reach AppKit through XCTest, without a separate event-posting
+permission. Held-edge autoscroll still has to result from the drag itself.
+One public accessibility snapshot observes the native list's recycled rows
+without repeated queries.
+
+The edge-drag check reads the dropped note's actual parent from the native
+Move sheet, cancels that sheet, and records its immediate sibling identities.
+After relaunch it requires the same parent and sibling order, as well as the
+original literal source. A canceled drop that leaves the source first fails.
+
 The continuous-hover helper constructs one test-runner pointer path with
 folder dwell points and one final release. It checks the installed XCTest
 runtime signatures before using them. Those runtime APIs are confined to
@@ -100,6 +129,15 @@ the UI-test target; unavailable signatures explicitly skip that test.
 The bounded `long-list` and `nested` fixtures are available only in Debug,
 inside a newly created preview notebook with a validated run identifier.
 They never seed a normal local or iCloud notebook.
+
+The `Notebook browser gestures` workflow runs all three destinations on
+separate GitHub-hosted Xcode 27 guests and checks out the exact PR head.
+Its runner script refuses local execution because Mac UI tests control
+the logged-in desktop. Each guest retains its toolchain, fixture flags,
+result bundle, logs, and attachments. Success requires nine distinct
+passing cases, zero skips, and a recording mapped to every case on the
+tested device. Review those recordings before treating the gestures as
+accepted; the artifact check verifies coverage rather than visual quality.
 
 Run the same suite with Mac, iPhone, and iPad destinations:
 
