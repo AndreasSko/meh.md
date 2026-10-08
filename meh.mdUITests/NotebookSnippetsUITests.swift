@@ -490,9 +490,16 @@ final class NotebookSnippetsUITests: XCTestCase {
     }
 
     private func openSnippetSettings(_ app: XCUIApplication) {
-        app.buttons["notebook-app-menu"].tap()
-        app.buttons["notebook-settings"].tap()
-        app.buttons["notebook-templates-settings"].tap()
+        let settings = app.buttons["notebook-settings"]
+        // Regular iPad exposes Settings in the sidebar's bottom controls.
+        // Opening Browser Actions first would cover that existing button.
+        if !settings.isHittable { app.buttons["notebook-app-menu"].tap() }
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.isHittable)
+        settings.tap()
+        let templates = app.buttons["notebook-templates-settings"]
+        XCTAssertTrue(templates.waitForExistence(timeout: 5))
+        templates.tap()
         XCTAssertTrue(app.navigationBars["Templates & Snippets"]
             .waitForExistence(timeout: 5))
     }
@@ -521,7 +528,13 @@ final class NotebookSnippetsUITests: XCTestCase {
     }
 
     private func menuItem(_ name: String, in app: XCUIApplication) -> XCUIElement {
-        app.buttons[name].firstMatch
+        // UIKit menu actions have their own identifiers (or none). Files and
+        // Recents remain visible on regular iPad and can have the same label;
+        // their notebook identifiers must never satisfy a menu assertion.
+        app.buttons.matching(NSPredicate(
+            format: "label == %@ AND NOT identifier BEGINSWITH %@",
+            name, "notebook-"
+        )).firstMatch
     }
 
     private func chooseMenuItem(_ name: String, in app: XCUIApplication) {

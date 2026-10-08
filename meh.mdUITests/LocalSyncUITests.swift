@@ -12,7 +12,10 @@ final class LocalSyncUITests: XCTestCase {
         app = XCUIApplication()
         continueAfterFailure = false
         app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
-        app.launchEnvironment["MEH_SYNC_URL"] = "http://127.0.0.1:8765"
+        app.launchEnvironment["MEH_SYNC_URL"] =
+            ProcessInfo.processInfo.ciLoopbackURL
+            ?? ProcessInfo.processInfo.environment["MEH_SYNC_TEST_URL"]
+            ?? "http://127.0.0.1:8765"
         app.launchEnvironment["MEH_SYNC_WORKSPACE"] =
             ProcessInfo.processInfo.environment["MEH_SYNC_TEST_WORKSPACE"]
             ?? "milestone2-ui"

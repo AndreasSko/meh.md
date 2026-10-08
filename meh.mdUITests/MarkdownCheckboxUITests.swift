@@ -29,22 +29,18 @@ final class MarkdownCheckboxUITests: XCTestCase {
 
         let noteTitle = app.buttons["note-title"]
         XCTAssertTrue(noteTitle.waitForExistence(timeout: 5))
-        let firstCheckbox = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(
-                dx: editor.frame.minX + 40,
-                dy: noteTitle.frame.maxY + 27
-            ))
+        let firstCheckbox = app.coordinate(atScreenPoint: CGPoint(
+            x: editor.frame.minX + 40, y: noteTitle.frame.maxY + 27
+        ))
         firstCheckbox.tap()
         XCTAssertTrue(waitForSource(editor) {
             $0 == "- [x] Pack a star chart\n- [ ] Mark the route"
         }, "Checkbox tap left source as \(editor.value ?? "nil")")
         capture(app, name: "First task checked")
 
-        let secondCheckbox = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(
-                dx: editor.frame.minX + 40,
-                dy: noteTitle.frame.maxY + 49
-            ))
+        let secondCheckbox = app.coordinate(atScreenPoint: CGPoint(
+            x: editor.frame.minX + 40, y: noteTitle.frame.maxY + 49
+        ))
         secondCheckbox.tap()
         XCTAssertTrue(waitForSource(editor) {
             $0 == "- [x] Pack a star chart\n- [x] Mark the route"

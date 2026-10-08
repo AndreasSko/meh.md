@@ -159,10 +159,13 @@ struct NotebookView: View {
     @State private var isLoadingHistory = false
     @State private var historyLoadTask: Task<Void, Never>?
     @State private var historyLoadID = UUID()
-    @AppStorage("editor.fontSize") private var editorFontSize = 17.0
-    @AppStorage("editor.fontFamily") private var editorFontFamilyRaw =
+    @AppStorage("editor.fontSize", store: NotebookEditorPreferences.store)
+    private var editorFontSize = 17.0
+    @AppStorage("editor.fontFamily", store: NotebookEditorPreferences.store)
+    private var editorFontFamilyRaw =
         EditorFontFamily.system.rawValue
-    @AppStorage("editor.mode") private var editorModeRaw =
+    @AppStorage("editor.mode", store: NotebookEditorPreferences.store)
+    private var editorModeRaw =
         MarkdownEditorMode.livePreview.rawValue
     @State private var deletionSelection: NotebookDeletionSelection?
     @State private var navigationState: NotebookNavigationState
@@ -265,6 +268,15 @@ struct NotebookView: View {
         #endif
     }
 
+    private var selectionCountInBottomToolbar: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .pad
+            && horizontalSizeClass == .regular
+        #else
+        false
+        #endif
+    }
+
     private var notebookSidebar: some View {
             ZStack {
                 libraryBrowser
@@ -311,11 +323,17 @@ struct NotebookView: View {
                     }
                     if showsSelectionControls && !search.isPresented {
                         ToolbarItem(placement: .cancellationAction) { selectAllButton }
-                        ToolbarItem(placement: .principal) { selectionCount }
+                        if !selectionCountInBottomToolbar {
+                            ToolbarItem(placement: .principal) { selectionCount }
+                        }
                         ToolbarItem(placement: .confirmationAction) { selectionDone }
                         #if os(iOS)
                         ToolbarItem(placement: .bottomBar) { moveSelectedButton }
                         ToolbarSpacer(.flexible, placement: .bottomBar)
+                        if selectionCountInBottomToolbar {
+                            ToolbarItem(placement: .bottomBar) { selectionCount }
+                            ToolbarSpacer(.flexible, placement: .bottomBar)
+                        }
                         ToolbarItem(placement: .bottomBar) { trashSelectedButton }
                         #else
                         ToolbarItemGroup {

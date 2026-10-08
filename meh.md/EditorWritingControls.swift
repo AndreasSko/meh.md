@@ -1,6 +1,55 @@
 import SwiftUI
 import Observation
 import NoteCore
+import CryptoKit
+
+/// Fictional notebooks keep editor preferences through relaunch, without
+/// carrying another UI scenario's font, mode, or toolbar order forward.
+enum NotebookEditorPreferences {
+    nonisolated static var store: UserDefaults {
+        store(for: ProcessInfo.processInfo.environment)
+    }
+
+    nonisolated static func store(for environment: [String: String]) -> UserDefaults {
+        guard let name = suiteName(for: environment),
+              let defaults = UserDefaults(suiteName: name) else { return .standard }
+        return defaults
+    }
+
+    nonisolated static func suiteName(for environment: [String: String]) -> String? {
+        #if DEBUG && (!ICLOUD_ENABLED || ICLOUD_DEV) && !NOTEBOOK_PERFORMANCE_HOST
+        func validID(_ value: String?) -> String? {
+            guard let value,
+                  value.range(of: "^[A-Za-z0-9_-]{1,64}$",
+                              options: .regularExpression) != nil else { return nil }
+            return value
+        }
+
+        let scope: String
+        if environment["MEH_SYNC_TEST_TRANSPORT"] == "loopback" {
+            guard let endpoint = environment["MEH_SYNC_URL"],
+                  let url = URL(string: endpoint), url.scheme == "http",
+                  ["127.0.0.1", "localhost", "::1"].contains(url.host ?? ""),
+                  let workspace = validID(environment["MEH_SYNC_WORKSPACE"])
+            else { return nil }
+            scope = "loopback#\(url.absoluteString)#\(workspace)"
+        } else {
+            guard environment["MEH_NOTEBOOK_PREVIEW"] == "1",
+                  environment["MEH_SYNC_URL"] == nil,
+                  environment["MEH_SYNC_CLOUDKIT"] != "1",
+                  let run = validID(environment["MEH_NOTEBOOK_PREVIEW_RUN"])
+            else { return nil }
+            scope = "preview#\(run)"
+        }
+        let digest = SHA256.hash(data: Data(scope.utf8)).map {
+            String(format: "%02x", $0)
+        }.joined()
+        return "meh.md.editor-fixture.\(digest)"
+        #else
+        return nil
+        #endif
+    }
+}
 
 #if os(iOS)
 import UIKit
@@ -1462,12 +1511,12 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         }
 
         private func saveOrder() {
-            UserDefaults.standard.set(commands.map(\.id), forKey: Self.orderDefaultsKey)
+            NotebookEditorPreferences.store.set(commands.map(\.id), forKey: Self.orderDefaultsKey)
         }
 
         private static func savedCommands() -> [KeyboardCommandDefinition] {
             let ids = KeyboardCommandDefinition.all.map(\.id)
-            let saved = UserDefaults.standard.stringArray(forKey: orderDefaultsKey) ?? []
+            let saved = NotebookEditorPreferences.store.stringArray(forKey: orderDefaultsKey) ?? []
             var retained: [String] = []
             for id in saved where ids.contains(id) && !retained.contains(id) {
                 retained.append(id)

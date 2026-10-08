@@ -54,6 +54,16 @@ if [[ "${1:-}" == "--scheduled" ]]; then
     export MEH_NOTEBOOK_SCALE_COUNTS="100,500,1000"
 fi
 export MEH_NOTEBOOK_HTTP_URL="http://127.0.0.1:$port"
+if [[ "${1:-}" == "--complete" ]]; then
+# These benchmarks are entirely synthetic; none needs an iCloud account.
+export MEH_TYPING_BENCHMARK=1
+export MEH_SYNC_BENCHMARK=1
+export MEH_EXCHANGE_BENCHMARK=1
+export MEH_BOOTSTRAP_VALIDATION_BENCHMARK=1
+export MEH_RUN_MODEL_SYNC_BENCHMARK=1
+export MEH_CATALOG_BENCHMARK=1
+export MEH_FULL_PARSE_BENCHMARK=1
+fi
 
 if ! python3 -m unittest discover -s Tools/LocalSyncServer -p 'test_*.py' \
     >"$evidence_root/python-test.log" 2>&1; then
@@ -73,6 +83,16 @@ if ! swift test --disable-sandbox >"$test_log" 2>&1; then
     printf 'Full test log: %s\n' "$test_log"
     printf 'Service log: %s\n' "$service_log"
     exit 1
+fi
+
+if [[ "${1:-}" == "--complete" ]]; then
+swift test --skip-build list >"$evidence_root/discovered-tests.txt"
+MEH_CARET_PROOF_PATH="$evidence_root/caret-proof.txt" \
+    scripts/run_editor_caret_check.sh >"$evidence_root/caret.log" 2>&1
+python3 scripts/check_ci_test_coverage.py --platform macos --scope package \
+    --swift-log "$test_log" --discovered "$evidence_root/discovered-tests.txt" \
+    --caret-proof "$evidence_root/caret-proof.txt" \
+    --output "$evidence_root/coverage-report.json"
 fi
 
 tail -n 20 "$evidence_root/python-test.log"
