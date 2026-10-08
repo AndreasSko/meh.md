@@ -311,7 +311,7 @@ private struct EditorMacFormattingRow: View {
 
     var body: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 4) {
+            HStack(alignment: .center, spacing: 4) {
                 ForEach(KeyboardCommandDefinition.all) { definition in
                     EditorMacFormattingChoice(
                         definition: definition, navigation: navigation,
@@ -321,9 +321,10 @@ private struct EditorMacFormattingRow: View {
                     .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
                 }
             }
-            .padding(4)
+            .padding(.horizontal, 4)
+            .frame(height: EditorMacFormattingMetrics.rowHeight, alignment: .center)
         }
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.never)
         .accessibilityIdentifier("editor-formatting-commands")
     }
 }
@@ -339,7 +340,7 @@ private struct EditorMacFormattingChoice: View {
         Group {
             if definition.command == .heading {
                 Button(action: showHeadings) {
-                    Text(verbatim: "H").font(.system(size: 16))
+                    Text(verbatim: "H").font(.system(size: 18))
                         .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
                 }
                 .disabled(!navigation.headingCommands.isEnabled)
@@ -358,7 +359,7 @@ private struct EditorMacFormattingChoice: View {
                     .menuIndicator(.hidden)
             }
         }
-        .font(.system(size: 16))
+        .font(.system(size: 18))
         .labelStyle(.iconOnly)
         .buttonStyle(.borderless)
         .help(Text(definition.title))
@@ -485,7 +486,7 @@ private struct EditorHeadingStylePicker: View {
     var body: some View {
         ScrollViewReader { scroll in
             ScrollView(.horizontal) {
-                HStack(spacing: 4) {
+                HStack(alignment: .center, spacing: 4) {
                     ForEach(HeadingCommandDefinition.all) { definition in
                         EditorHeadingHorizontalChoice(
                             definition: definition,
@@ -499,8 +500,16 @@ private struct EditorHeadingStylePicker: View {
                         .id(definition.id)
                     }
                 }
+                #if os(macOS)
+                .padding(.horizontal, 4)
+                .frame(height: controlHeight + 8, alignment: .center)
+                #else
                 .padding(4)
+                #endif
             }
+            #if os(macOS)
+            .scrollIndicators(.never)
+            #endif
             .onChange(of: state.level, initial: true) { _, level in
                 if let definition = HeadingCommandDefinition.all.first(where: {
                     $0.command.headingLevel == level
@@ -523,7 +532,12 @@ private struct EditorHeadingStylePicker: View {
 
     private func choiceWidth(_ definition: HeadingCommandDefinition) -> CGFloat {
         let title = String(localized: definition.title) as NSString
-        return max(64, ceil(title.size(withAttributes: [
+        #if os(macOS)
+        let minimumWidth: CGFloat = 40
+        #else
+        let minimumWidth: CGFloat = 64
+        #endif
+        return max(minimumWidth, ceil(title.size(withAttributes: [
             .font: definition.previewFont(
                 bodyFont: state.bodyFont, interfacePointSize: interfacePointSize
             )

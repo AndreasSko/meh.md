@@ -3,7 +3,7 @@ import XCTest
 #if os(macOS)
 @MainActor
 final class MacFormattingUITests: XCTestCase {
-    func testCompactFormattingKeepsHeadingAndWritingInOnePopover() throws {
+    func testCompactFormattingShowsEveryHeadingWithoutScrolling() throws {
         continueAfterFailure = false
         let app = makeFixture()
         let editor = app.textViews["markdown-editor"]
@@ -19,7 +19,13 @@ final class MacFormattingUITests: XCTestCase {
         XCTAssertLessThanOrEqual(commands.frame.height, 40)
         XCTAssertGreaterThanOrEqual(commands.frame.minY, formatting.frame.maxY)
         XCTAssertTrue(element(app, "editor-command-bold").isHittable)
+        assertCenteredWithoutScrollbars(commands,
+            choice: element(app, "editor-command-bold"))
         print("Mac control geometry: Aa", formatting.frame, "formatting", commands.frame, "New Note", newNote.frame)
+        commands.scroll(byDeltaX: 80, deltaY: 0)
+        assertNoVisibleScrollbars(commands)
+        commands.scroll(byDeltaX: -80, deltaY: 0)
+        assertNoVisibleScrollbars(commands)
         capture(app, name: "Mac compact formatting controls")
         editor.click()
         XCTAssertFalse(element(app, "editor-formatting-popover").exists)
@@ -46,6 +52,15 @@ final class MacFormattingUITests: XCTestCase {
         let picker = element(app, "editor-heading-style-picker")
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
         XCTAssertLessThanOrEqual(picker.frame.height, 40)
+        assertAllHeadingsVisible(app)
+        capture(app, name: "Mac all heading levels fit with Body selected")
+        choose(app, id: "editor-command-heading-1", forward: true)
+        waitForSource(editor, "# Observatory plans")
+        openHeadings(app)
+        assertAllHeadingsVisible(app)
+        choose(app, id: "editor-command-body", forward: false)
+        waitForSource(editor, "Observatory plans")
+        openHeadings(app)
         let back = element(app, "editor-formatting-back")
         XCTAssertTrue(back.isHittable)
         back.click()
@@ -58,6 +73,8 @@ final class MacFormattingUITests: XCTestCase {
         let h3 = element(app, "editor-command-heading-3")
         XCTAssertTrue(h3.isHittable)
         XCTAssertTrue(isChecked(h3))
+        assertCenteredWithoutScrollbars(picker, choice: h3)
+        assertAllHeadingsVisible(app)
         let h1Height = element(app, "editor-command-heading-1").frame.height
         let h6Height = element(app, "editor-command-heading-6").frame.height
         XCTAssertEqual(h1Height, h3.frame.height, accuracy: 2)
@@ -76,7 +93,8 @@ final class MacFormattingUITests: XCTestCase {
         let h6 = element(app, "editor-command-heading-6")
         XCTAssertTrue(h6.isHittable)
         XCTAssertTrue(isChecked(h6))
-        capture(app, name: "Mac H6 selected after horizontal scrolling")
+        assertAllHeadingsVisible(app)
+        capture(app, name: "Mac H6 selected with every heading visible")
         choose(app, id: "editor-command-body", forward: false)
         waitForSource(editor, "Observatory plans")
         app.typeText(" for tonight")
@@ -86,11 +104,16 @@ final class MacFormattingUITests: XCTestCase {
     }
 
     private func makeFixture() -> XCUIApplication {
-        let app = XCUIApplication()
+        let fixturePath = ProcessInfo.processInfo.environment["MEH_MAC_UI_FIXTURE_APP_PATH"]
+        let app = fixturePath.map { XCUIApplication(url: URL(fileURLWithPath: $0)) }
+            ?? XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchArguments += ["-editor.mode", "source", "-editor.fontSize", "17"]
+        app.launchArguments += ["-editor.mode", "source", "-editor.fontSize", "17",
+                                "-AppleShowScrollBars",
+                                ProcessInfo.processInfo.environment["MEH_MAC_UI_SCROLLBARS"]
+                                    ?? "Always"]
         app.launch()
         app.activate()
         let newNote = element(app, "notebook-new-item")
@@ -135,14 +158,44 @@ final class MacFormattingUITests: XCTestCase {
         if !choice.exists || !choice.isHittable || !picker.frame.contains(choice.frame) {
             picker.hover()
             let before = choice.exists ? choice.frame : .null
+            picker.scroll(byDeltaX: forward ? -80 : 80, deltaY: 0)
+            assertNoVisibleScrollbars(picker)
+            print("Native wheel choice frame:", before, "->",
+                  choice.exists ? choice.frame : .null)
             if forward { picker.swipeLeft() } else { picker.swipeRight() }
             print("Native swipe choice frame:", before, "->", choice.exists ? choice.frame : .null,
                   "viewport:", picker.frame)
         }
+        assertNoVisibleScrollbars(picker)
         XCTAssertTrue(choice.waitForExistence(timeout: 5))
         XCTAssertTrue(choice.isHittable)
         XCTAssertTrue(picker.frame.contains(choice.frame))
         choice.click()
+    }
+
+    private func assertCenteredWithoutScrollbars(
+        _ viewport: XCUIElement, choice: XCUIElement
+    ) {
+        assertNoVisibleScrollbars(viewport)
+        XCTAssertEqual(choice.frame.midY, viewport.frame.midY, accuracy: 2)
+    }
+
+    private func assertNoVisibleScrollbars(_ viewport: XCUIElement) {
+        XCTAssertEqual(viewport.descendants(matching: .scrollBar)
+            .allElementsBoundByIndex.filter { $0.isHittable }.count, 0)
+    }
+
+    private func assertAllHeadingsVisible(_ app: XCUIApplication) {
+        let picker = element(app, "editor-heading-style-picker")
+        for id in ["editor-command-body"] + (1...6).map({ "editor-command-heading-\($0)" }) {
+            let choice = element(app, id)
+            XCTAssertTrue(choice.exists)
+            XCTAssertTrue(choice.isHittable)
+            XCTAssertTrue(picker.frame.contains(choice.frame))
+            XCTAssertLessThan(choice.frame.width, 64)
+            print("Fully visible heading:", id, choice.frame)
+        }
+        assertNoVisibleScrollbars(picker)
     }
 
     private func isChecked(_ choice: XCUIElement) -> Bool {
