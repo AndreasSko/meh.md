@@ -1,34 +1,23 @@
-name: iPhone editor regressions
-
+name: Failed title accessibility diagnostic
 on:
-  pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: editor-regressions-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  editor-regressions:
+  diagnostic:
     runs-on: xcode-27
-    # Native checks, 11 UI tests and Xcode result export can exceed an hour.
-    # App performance ceilings are enforced separately in Swift.
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Check native geometry and real keyboard editing
-        id: regression
-        run: scripts/run_editor_regressions.sh
-      - name: Preserve regression evidence
-        if: always() && steps.regression.outputs.evidence_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+          fetch-depth: 2
+      - run: python3 scripts/hosted_wiki_title_ax.py
+      - name: Preserve exact failed title evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: editor-regressions-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.regression.outputs.evidence_root }}
+          name: wiki-title-ax-ipad
+          path: ${{ runner.temp }}/wiki-title-ax-ipad
           if-no-files-found: error
           retention-days: 14

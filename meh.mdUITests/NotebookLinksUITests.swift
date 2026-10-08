@@ -722,8 +722,16 @@ final class NotebookLinksUITests: XCTestCase {
             predicate: NSPredicate(format: "label == %@", title),
             object: titleButton
         )
+        let titleWaitResult = XCTWaiter.wait(for: [expectedTitle], timeout: 10)
+        if titleWaitResult != .completed {
+            let tree = XCTAttachment(string: app.debugDescription)
+            tree.name = "Failed title wait accessibility tree: \(title)"
+            tree.lifetime = .keepAlways
+            add(tree)
+            capture(app, name: "Failed title wait screenshot: \(title)")
+        }
         XCTAssertEqual(
-            XCTWaiter.wait(for: [expectedTitle], timeout: 10), .completed,
+            titleWaitResult, .completed,
             "Expected the selected note to be titled \(title)",
             file: file, line: line
         )
