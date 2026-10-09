@@ -266,7 +266,7 @@ extension XCUIApplication {
         return nil
     }
 
-    private func revealNotebookSidebar(timeout: TimeInterval) {
+    func revealNotebookSidebar(timeout: TimeInterval = 15) {
 #if os(iOS)
         let files = buttons["notebook-tree-toggle"]
         guard !files.isHittable else { return }

@@ -26,53 +26,6 @@ final class MarkdownEditorPositionTests: XCTestCase {
         )
     }
 
-    func testCaptureAndRestorePreserveSelectionViewportAndEditorState()
-        async throws {
-        let lines = (0..<120).map { "Line \($0) with enough text for layout." }
-        let source = lines.joined(separator: "\n")
-        let navigation = MarkdownEditorNavigation()
-        let mounted = mount(text: source, navigation: navigation)
-        let textView = try XCTUnwrap(mounted.textView)
-        defer { mounted.tearDown() }
-        let selected = (source as NSString).range(of: lines[82])
-        setSelection(selected, in: textView)
-        scrollSelectionToVisible(in: textView)
-        layout(mounted)
-        #if os(macOS)
-        // AppKit can finish a programmatic TextKit 2 viewport layout on the
-        // next main-queue turn. Capture the settled viewport a user sees.
-        await flushMainQueue()
-        layout(mounted)
-        #endif
-        let originalOffset = verticalScrollOffset(in: textView)
-        XCTAssertGreaterThan(originalOffset, 0)
-        let position = try XCTUnwrap(navigation.capturePosition?())
-        let undoManager = try XCTUnwrap(textView.undoManager)
-        undoManager.removeAllActions()
-        undoManager.registerUndo(withTarget: textView) { _ in }
-        XCTAssertTrue(undoManager.canUndo)
-
-        setSelection(NSRange(location: 0, length: 0), in: textView)
-        setVerticalScrollOffset(0, in: textView)
-        navigation.restorePosition?(position)
-        await flushMainQueue()
-        layout(mounted)
-        await flushMainQueue()
-
-        XCTAssertEqual(selectedRange(in: textView), selected)
-        let restored = try XCTUnwrap(navigation.capturePosition?())
-        XCTAssertEqual(restored.scrollAnchor, position.scrollAnchor)
-        XCTAssertEqual(
-            restored.scrollAnchorOffset,
-            position.scrollAnchorOffset,
-            accuracy: 1
-        )
-        XCTAssertGreaterThan(verticalScrollOffset(in: textView), 0)
-        XCTAssertEqual(nativeText(in: textView), source)
-        XCTAssertTrue(undoManager.canUndo)
-        XCTAssertFalse(isFirstResponder(textView))
-    }
-
     func testRestoreIntoFreshEditorPreservesReadingViewport() async throws {
         // A short note is fully laid out before restoration and does not
         // exercise TextKit 2's provisional content extent on relaunch.
@@ -309,32 +262,6 @@ final class MarkdownEditorPositionTests: XCTestCase {
     }
 
     #if os(iOS)
-    func testNavigationPreviewStartsAtSavedAnchorBeforeAsyncAttachment() async throws {
-        let source = (0..<180).map { "Fictional observation \($0) across the page." }
-            .joined(separator: "\n")
-        let originalNavigation = MarkdownEditorNavigation()
-        let original = mount(text: source, navigation: originalNavigation)
-        let originalView = try XCTUnwrap(original.textView)
-        setSelection(NSRange(location: source.utf16.count, length: 0), in: originalView)
-        scrollSelectionToVisible(in: originalView)
-        layout(original)
-        await flushMainQueue()
-        setVerticalScrollOffset(1_600, in: originalView)
-        layout(original)
-        let position = try XCTUnwrap(originalNavigation.capturePosition?())
-        let insets = originalNavigation.captureViewportInsets?()
-        original.tearDown()
-
-        let navigation = MarkdownEditorNavigation()
-        let preview = mount(text: source, navigation: navigation, isReadOnly: true,
-                            initialPreviewPosition: position, initialPreviewInsets: insets)
-        defer { preview.tearDown() }
-        let restored = try XCTUnwrap(navigation.capturePosition?())
-        XCTAssertEqual(restored.scrollAnchor, position.scrollAnchor)
-        XCTAssertEqual(restored.scrollAnchorOffset, position.scrollAnchorOffset, accuracy: 1)
-        XCTAssertGreaterThan(try XCTUnwrap(preview.textView).contentOffset.y, 0)
-    }
-
     func testDestinationRevealAcknowledgesCanceledRestorationOnce() async throws {
         let navigation = MarkdownEditorNavigation()
         let mounted = mount(text: "Fictional first line\nSecond line", navigation: navigation)

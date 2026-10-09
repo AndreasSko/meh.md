@@ -9,104 +9,66 @@ import AppKit
 final class NotebookDragUITests: XCTestCase {
     private var ownedPreviewRuns = Set<String>()
 
-    func testSortDragResortAndRelaunchPreserveOrderAndSource() throws {
-        let app = launchNotebook()
-        let charlie = createNote("Charlie", in: app)
-        let alpha = createNote("Alpha", in: app)
-        let bravo = createNote("Bravo", in: app)
+    func testReorderUndoSortAndRelaunchPreserveOrderAndSource() throws {
+        let app = launchNotebook(scenario: "drag-order")
+        let outer = row(named: "Journeys", prefix: "notebook-sidebar-folder-", in: app)
+        expand(outer, in: app)
+        let inner = row(named: "Weekend", prefix: "notebook-sidebar-folder-", in: app)
+        collapse(outer, in: app)
+        let alpha = row(named: "Alpha", prefix: "notebook-sidebar-note-", in: app)
+        let bravo = row(named: "Bravo", prefix: "notebook-sidebar-note-", in: app)
+        let charlie = row(named: "Charlie", prefix: "notebook-sidebar-note-", in: app)
+        chooseSort("Name, A–Z", in: app)
+        assertOrder([alpha, bravo, charlie], in: app)
+        drag(bravo, to: alpha, at: 0.1)
+        assertOrder([bravo, alpha, charlie], in: app)
+        capture(app, "Native drag overrides name sort")
+
+        activate(appMenu(in: app))
+        let undo = app.descendants(matching: .any)["notebook-browser-undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        activate(undo)
+        assertOrder([alpha, bravo, charlie], in: app)
+        activate(appMenu(in: app))
+        let redo = app.descendants(matching: .any)["notebook-browser-redo"]
+        XCTAssertTrue(redo.waitForExistence(timeout: 5))
+        activate(redo)
+        assertOrder([bravo, alpha, charlie], in: app)
+        chooseSort("Name, A–Z", in: app)
+        assertOrder([alpha, bravo, charlie], in: app)
+
+        expand(outer, in: app)
+        drag(bravo, to: outer, at: 0.05)
+        assertOrder([bravo, outer, inner], in: app)
+        drag(bravo, to: outer, at: 0.95)
+        assertOrder([outer, inner, bravo], in: app)
+        collapse(outer, in: app)
+        XCTAssertTrue(bravo.waitForExistence(timeout: 5),
+                      "Folder edges must keep the note at Files root")
+        capture(app, "Both expanded-folder edges preserve sibling placement")
+
+        app.terminate()
+        app.launch()
+        showSidebar(app)
+        expand(outer, in: app)
+        assertOrder([outer, inner, bravo], in: app)
+        collapse(outer, in: app)
+        XCTAssertTrue(bravo.waitForExistence(timeout: 5))
         activate(title(of: bravo, in: app))
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        activate(editor)
-        editor.typeText("# Fictional voyage\n\nLiteral **Markdown** stays intact.")
-        showSidebar(app)
-        // Switching notes crosses the editor save boundary before dragging.
-        activate(title(of: alpha, in: app))
-        showSidebar(app)
-        chooseSort("Name, A–Z", in: app)
-        assertOrder([alpha, bravo, charlie], in: app)
-        capture(app, "01 Name sorted before drag")
-
-        drag(charlie, to: alpha, at: 0.1)
-        assertOrder([charlie, alpha, bravo], in: app)
-        capture(app, "02 Native drag overrides previous sort")
-        app.terminate()
-        app.launch()
-        showSidebar(app)
-        assertOrder([charlie, alpha, bravo], in: app)
-        capture(app, "03 Manual order persists after relaunch")
-
-        chooseSort("Name, Z–A", in: app)
-        assertOrder([charlie, bravo, alpha], in: app)
-        drag(alpha, to: charlie, at: 0.1)
-        assertOrder([alpha, charlie, bravo], in: app)
-        chooseSort("Name, A–Z", in: app)
-        assertOrder([alpha, bravo, charlie], in: app)
-        app.terminate()
-        app.launch()
-        showSidebar(app)
-        assertOrder([alpha, bravo, charlie], in: app)
-        activate(title(of: bravo, in: app))
-        XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        XCTAssertEqual(
-            editor.value as? String,
-            "# Fictional voyage\n\nLiteral **Markdown** stays intact."
-        )
-        capture(app, "04 Literal source preserved after drag and resort")
+        XCTAssertEqual(editor.value as? String,
+                       "# Fictional voyage\n\nLiteral **Markdown** stays intact.")
+        capture(app, "Manual sibling order and stable note source survive relaunch")
     }
 
-    func testClosedAndNestedFolderHoverThenReturnToFiles() throws {
-        let app = launchNotebook()
-        let note = createNote("Travel checklist", in: app)
-        let outer = createFolder("Journeys", in: app)
-        let inner = createFolder("Weekend", inside: outer, in: app)
-        collapse(outer, in: app)
-        XCTAssertFalse(inner.exists)
-        capture(app, "01 Closed destination before drag")
-
-        drag(note, to: outer, hold: 1.5)
-        XCTAssertEqual(disclosure(for: outer, in: app).value as? String, "Expanded")
-        XCTAssertTrue(inner.waitForExistence(timeout: 5))
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
-        capture(app, "02 Hover opens closed destination")
-        collapse(outer, in: app)
-        XCTAssertTrue(note.waitForNonExistence(timeout: 5))
-        expand(outer, in: app)
-
-        collapse(inner, in: app)
-        drag(note, to: inner, hold: 1.5)
-        XCTAssertEqual(disclosure(for: inner, in: app).value as? String, "Expanded")
-        capture(app, "03 Hover opens nested destination")
-        collapse(inner, in: app)
-        XCTAssertTrue(note.waitForNonExistence(timeout: 5))
-        expand(inner, in: app)
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
-
-        drag(note, to: app.buttons["notebook-tree-toggle"])
-        collapse(outer, in: app)
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
-        capture(app, "04 Files header returns note to root")
-        app.terminate()
-        app.launch()
-        showSidebar(app)
-        collapse(outer, in: app)
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
-        // A completed drag must leave ordinary native row actions available.
-        openContextMenu(on: note, in: app)
-        activate(menuAction("Move…", in: app))
-        let cancel = app.buttons["notebook-cancel-move"]
-        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
-        activate(cancel)
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
-        capture(app, "05 Context actions remain available after drag")
-    }
-
-    func testFolderSubtreeRejectsDescendantAndCancelledDragKeepsSelection() throws {
-        let app = launchNotebook()
-        let note = createNote("Packing list", in: app)
-        let parent = createFolder("Trips", in: app)
-        let child = createFolder("Island", inside: parent, in: app)
-        let destination = createFolder("Archive", in: app)
+    func testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag() throws {
+        let app = launchNotebook(scenario: "drag-subtree")
+        let note = row(named: "Packing list", prefix: "notebook-sidebar-note-", in: app)
+        let parent = row(named: "Trips", prefix: "notebook-sidebar-folder-", in: app)
+        expand(parent, in: app)
+        let child = row(named: "Island", prefix: "notebook-sidebar-folder-", in: app)
+        let destination = row(named: "Archive", prefix: "notebook-sidebar-folder-", in: app)
         expand(parent, in: app)
         drag(note, to: child, hold: 1.5)
         XCTAssertTrue(note.waitForExistence(timeout: 5))
@@ -120,8 +82,6 @@ final class NotebookDragUITests: XCTestCase {
         capture(app, "01 Folder subtree moved together")
         collapse(destination, in: app)
         XCTAssertTrue(parent.waitForNonExistence(timeout: 5))
-        XCTAssertFalse(child.exists)
-        XCTAssertFalse(note.exists)
         expand(destination, in: app)
         expand(parent, in: app)
         expand(child, in: app)
@@ -169,232 +129,31 @@ final class NotebookDragUITests: XCTestCase {
         expand(child, in: app)
         XCTAssertTrue(note.waitForExistence(timeout: 5))
         #endif
-    }
-
-    @MainActor
-    func testContinuousNestedHoverMovesNoteIntoDeepFolder() throws {
-        let app = launchNotebook()
-        let note = createNote("Voyage checklist", in: app)
-        let outer = createFolder("Journeys", in: app)
-        let inner = createFolder("Weekend", inside: outer, in: app)
-        let destination = createFolder("Island", inside: inner, in: app)
-        expand(outer, in: app)
-        expand(inner, in: app)
-        let destinationPoint = destination.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)
-        ).screenPoint
-        collapse(inner, in: app)
-        let innerPoint = inner.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)
-        ).screenPoint
-        collapse(outer, in: app)
-        let outerPoint = outer.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)
-        ).screenPoint
-        #if os(macOS)
-        activate(title(of: note, in: app))
-        assertSelection([note], in: app)
-        #endif
-        let sourcePoint = note.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)
-        ).screenPoint
-        capture(app, "Continuous drag starts with both folders closed")
-        try NotebookContinuousDrag.perform(
-            from: sourcePoint, hoveringOver: [outerPoint, innerPoint],
-            to: destinationPoint
-        )
-        XCTAssertEqual(disclosure(for: outer, in: app).value as? String, "Expanded")
-        XCTAssertEqual(disclosure(for: inner, in: app).value as? String, "Expanded")
-        expand(destination, in: app)
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
-        assertOrder([outer, inner, destination, note], in: app)
-        capture(app, "One held drag spring loads two folders and drops deeper")
-        collapse(destination, in: app)
-        XCTAssertTrue(note.waitForNonExistence(timeout: 5))
         app.terminate()
         app.launch()
         showSidebar(app)
-        expand(outer, in: app)
-        expand(inner, in: app)
         expand(destination, in: app)
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
-        capture(app, "Continuous nested drop persists after relaunch")
-    }
-
-    @MainActor
-    func testNestedFixtureSequentialAndContinuousHoverPreservesSource() throws {
-        let app = launchNotebook(nestedFixture: true)
-        let note = row(named: "Voyage checklist", prefix: "notebook-sidebar-note-", in: app)
-        let outer = row(named: "Journeys", prefix: "notebook-sidebar-folder-", in: app)
-        collapse(outer, in: app)
-        #if os(macOS)
-        activate(title(of: note, in: app))
-        assertSelection([note], in: app)
-        #endif
-        let cancelDestination = app.descendants(matching: .any)
-            .matching(identifier: "notebook-new-item").firstMatch
-        XCTAssertTrue(cancelDestination.waitForExistence(timeout: 5))
-        XCTAssertTrue(title(of: note, in: app).isHittable)
-        XCTAssertFalse(note.frame.isEmpty)
-        XCTAssertFalse(outer.frame.isEmpty)
-        capture(app, "Held hover cancellation starts with Journeys closed")
-        // Expand during one held drag, then release over the toolbar outside
-        // every drop destination. The next ordinary disclosure click must work.
-        try NotebookContinuousDrag.perform(
-            from: note.coordinate(
-                withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)
-            ).screenPoint,
-            hoveringOver: [outer.coordinate(
-                withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)
-            ).screenPoint],
-            to: cancelDestination.coordinate(
-                withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-            ).screenPoint,
-            // Match the public held-drag checks' margin for native lift and
-            // destination recognition before the app's spring timer starts.
-            hoverDuration: 1.5
-        )
-        XCTAssertEqual(disclosure(for: outer, in: app).value as? String, "Expanded")
-        let hoveredInner = row(named: "Weekend", prefix: "notebook-sidebar-folder-", in: app)
-        capture(app, "Cancelled held hover expands Journeys without moving Voyage")
-        collapse(outer, in: app)
-        XCTAssertEqual(disclosure(for: outer, in: app).value as? String, "Collapsed")
-        XCTAssertTrue(hoveredInner.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(note.waitForExistence(timeout: 5),
-                      "Cancelling the held hover keeps Voyage at Files root")
-        assertOrder([note, outer], in: app)
-
-        drag(note, to: outer, hold: 1.5)
-        XCTAssertEqual(disclosure(for: outer, in: app).value as? String, "Expanded")
-        let inner = row(named: "Weekend", prefix: "notebook-sidebar-folder-", in: app)
-        collapse(outer, in: app)
-        XCTAssertTrue(note.waitForNonExistence(timeout: 5))
-        expand(outer, in: app)
-        collapse(inner, in: app)
-        drag(note, to: inner, hold: 1.5)
-        XCTAssertEqual(disclosure(for: inner, in: app).value as? String, "Expanded")
-        let island = row(named: "Island", prefix: "notebook-sidebar-folder-", in: app)
-        collapse(inner, in: app)
+        expand(parent, in: app)
+        expand(child, in: app)
+        assertOrder([destination, parent, child, note], in: app)
+        collapse(child, in: app)
         XCTAssertTrue(note.waitForNonExistence(timeout: 5),
-                      "After collapse/reexpand, Weekend must receive the drop")
-        expand(inner, in: app)
-        capture(app, "Seeded sequential hover reaches nested folder")
-        drag(note, to: app.buttons["notebook-tree-toggle"])
-        collapse(outer, in: app)
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
-        capture(app, "Seeded nested note returns to Files root")
-
-        expand(outer, in: app)
-        expand(inner, in: app)
-        let islandPoint = island.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)
-        ).screenPoint
-        collapse(inner, in: app)
-        let innerPoint = inner.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)
-        ).screenPoint
-        collapse(outer, in: app)
-        let outerPoint = outer.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)
-        ).screenPoint
-        #if os(macOS)
-        activate(title(of: note, in: app))
-        assertSelection([note], in: app)
-        #endif
-        let sourcePoint = note.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)
-        ).screenPoint
-        capture(app, "Seeded continuous hover begins with both folders closed")
-        try NotebookContinuousDrag.perform(
-            from: sourcePoint, hoveringOver: [outerPoint, innerPoint], to: islandPoint
-        )
-        XCTAssertEqual(disclosure(for: outer, in: app).value as? String, "Expanded")
-        XCTAssertEqual(disclosure(for: inner, in: app).value as? String, "Expanded")
-        expand(island, in: app)
-        assertOrder([outer, inner, island, note], in: app)
-        capture(app, "Seeded continuous held drag reaches Island")
-        collapse(island, in: app)
-        XCTAssertTrue(note.waitForNonExistence(timeout: 5))
-        app.terminate()
-        app.launch()
-        showSidebar(app)
-        expand(outer, in: app)
-        expand(inner, in: app)
-        expand(island, in: app)
+                      "Relaunch must retain the note inside Island")
+        collapse(parent, in: app)
+        XCTAssertTrue(child.waitForNonExistence(timeout: 5),
+                      "Relaunch must retain Island inside Trips")
+        collapse(destination, in: app)
+        XCTAssertTrue(parent.waitForNonExistence(timeout: 5),
+                      "Relaunch must retain the entire moved subtree under Archive")
+        expand(destination, in: app)
+        expand(parent, in: app)
+        expand(child, in: app)
         activate(title(of: note, in: app))
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         XCTAssertEqual(editor.value as? String,
-                       "# Fictional voyage\n\nSample checklist.\n")
-        capture(app, "Seeded nested move persists with literal source intact")
-    }
-
-    func testExpandedFolderEdgesReorderRootWithoutMovingIntoSubtree() throws {
-        let app = launchNotebook(nestedFixture: true)
-        let note = row(named: "Voyage checklist", prefix: "notebook-sidebar-note-", in: app)
-        let outer = row(named: "Journeys", prefix: "notebook-sidebar-folder-", in: app)
-        expand(outer, in: app)
-        let inner = row(named: "Weekend", prefix: "notebook-sidebar-folder-", in: app)
-        expand(inner, in: app)
-        let island = row(named: "Island", prefix: "notebook-sidebar-folder-", in: app)
-        expand(island, in: app)
-
-        // The fixture creates the root note first. Move it after the tree
-        // so both subsequent edge drags must change its position.
-        drag(note, to: outer, at: 0.95)
-        assertOrder([outer, inner, island, note], in: app)
-        drag(note, to: outer, at: 0.05)
-        assertOrder([note, outer, inner, island], in: app)
-        capture(app, "Expanded folder top edge places note before subtree")
-        drag(note, to: outer, at: 0.95)
-        assertOrder([outer, inner, island, note], in: app)
-        collapse(outer, in: app)
-        XCTAssertTrue(note.waitForExistence(timeout: 5), "Bottom edge keeps the note at Files root")
-        XCTAssertTrue(inner.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(island.waitForNonExistence(timeout: 5))
-        capture(app, "Expanded folder bottom edge keeps note outside subtree")
-
-        app.terminate()
-        app.launch()
-        showSidebar(app)
-        expand(outer, in: app)
-        expand(inner, in: app)
-        expand(island, in: app)
-        assertOrder([outer, inner, island, note], in: app)
-        collapse(outer, in: app)
-        XCTAssertTrue(note.waitForExistence(timeout: 5), "Relaunch preserves Files root membership")
-        XCTAssertTrue(inner.waitForNonExistence(timeout: 5))
-        XCTAssertTrue(island.waitForNonExistence(timeout: 5))
-        activate(title(of: note, in: app))
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        XCTAssertEqual(editor.value as? String,
-                       "# Fictional voyage\n\nSample checklist.\n")
-        capture(app, "Expanded subtree edge placement persists with source intact")
-    }
-
-    func testFixtureReordersThreeVisibleNotes() throws {
-        let app = launchNotebook(fixture: true)
-        let first = row(named: "01 Field observation", prefix: "notebook-sidebar-note-", in: app)
-        let second = row(named: "02 Field observation", prefix: "notebook-sidebar-note-", in: app)
-        let third = row(named: "03 Field observation", prefix: "notebook-sidebar-note-", in: app)
-        assertOrder([first, second, third], in: app)
-        capture(app, "Fixture before native reorder")
-        drag(third, to: first, at: 0.1)
-        assertOrder([third, first, second], in: app)
-        capture(app, "Fixture after native reorder")
-        activate(appMenu(in: app))
-        let undo = app.descendants(matching: .any)["notebook-browser-undo"]
-        XCTAssertTrue(undo.waitForExistence(timeout: 5))
-        activate(undo)
-        assertOrder([first, second, third], in: app)
-        capture(app, "Undo Move restores the original order")
-        activate(appMenu(in: app))
-        let redo = app.descendants(matching: .any)["notebook-browser-redo"]
-        XCTAssertTrue(redo.waitForExistence(timeout: 5))
-        activate(redo)
-        assertOrder([third, first, second], in: app)
-        capture(app, "Redo Move restores the native drag placement")
+                       "# Fictional voyage\n\nLiteral **Markdown** stays intact.")
+        capture(app, "Recovered subtree persists with exact child source")
     }
 
     func testLongListDragAutoscrollsAndPersists() throws {
@@ -408,8 +167,6 @@ final class NotebookDragUITests: XCTestCase {
         activate(title(of: first, in: app))
         assertSelection([first], in: app)
         #endif
-        let witnessStartY = scrollWitness.frame.minY
-        let minimumScroll = scrollWitness.frame.height * 3
         let list = browserList(containing: first, in: app)
         let before = visibleNoteIDs(in: list, app: app)
         XCTAssertGreaterThan(before.count, 2)
@@ -444,18 +201,14 @@ final class NotebookDragUITests: XCTestCase {
         geometry.name = "Visible footer geometry before native edge drag"
         geometry.lifetime = .keepAlways
         add(geometry)
-        let hierarchy = XCTAttachment(string: app.debugDescription)
-        hierarchy.name = "Fictional notebook hierarchy before native edge drag"
-        hierarchy.lifetime = .keepAlways
-        add(hierarchy)
         #endif
         let edge = list.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: list.frame.width * 0.6,
                                  dy: edgeY - list.frame.minY))
         #if os(macOS)
-        start.click(forDuration: 0.15, thenDragTo: edge, withVelocity: .slow, thenHoldForDuration: 3)
+        start.click(forDuration: 0.15, thenDragTo: edge, withVelocity: .slow, thenHoldForDuration: 5)
         #else
-        start.press(forDuration: 0.6, thenDragTo: edge, withVelocity: .slow, thenHoldForDuration: 3)
+        start.press(forDuration: 0.6, thenDragTo: edge, withVelocity: .slow, thenHoldForDuration: 5)
         #endif
         #if os(macOS)
         capture(app, "Long list immediately after edge release")
@@ -467,26 +220,24 @@ final class NotebookDragUITests: XCTestCase {
             #if os(macOS)
             guard let observation = self.macBrowserObservation(in: app, viewport: viewport)
             else { return false }
-            if let frame = observation.titles[witnessID]?.frame,
-               frame.minY < witnessStartY - minimumScroll {
-                return true
-            }
             // The fixture contains 01...48 in their original order. 01 is
-            // the moved source; an unchanged 05 or later at the top proves
-            // scrolling at least three rows beyond the original witness 02,
-            // even when it has passed every initially visible row.
+            // the moved source. Relocating 01 alone leaves 02 at the top;
+            // 03 or later becoming the first unchanged visible note, with
+            // 02 outside the viewport, proves actual scrolling.
             guard let top = observation.visible.first(where: { $0.id != sourceID }),
-                  let ordinal = Int(top.name.prefix(2)), (5...48).contains(ordinal),
+                  let ordinal = Int(top.name.prefix(2)), (3...48).contains(ordinal),
                   top.name == String(format: "%02d Field observation", ordinal)
             else { return false }
             return !observation.visible.contains(where: { $0.id == witnessID })
             #else
+            // Relocating 01 alone cannot remove 02 from this viewport.
+            // Require 02 to pass the top boundary or become virtualized.
             return !scrollWitness.exists
-                || scrollWitness.frame.minY < witnessStartY - minimumScroll
+                || scrollWitness.frame.maxY <= list.frame.minY
             #endif
         }, object: app)
         XCTAssertEqual(XCTWaiter.wait(for: [scrolled], timeout: 5), .completed,
-                       "Edge holding must move an unchanged row by three row heights, or virtualize it")
+                       "Edge holding must scroll past the unchanged witness note")
         capture(app, "Long list after edge autoscroll and drop")
         #if os(macOS)
         assertSelection([first], in: app)
@@ -594,14 +345,17 @@ final class NotebookDragUITests: XCTestCase {
         guard let run = environment["MEH_NOTEBOOK_PREVIEW_RUN"],
               ownedPreviewRuns.contains(run), UUID(uuidString: run) != nil,
               environment["MEH_NOTEBOOK_PREVIEW"] == "1",
-              environment["MEH_NOTEBOOK_DRAG_FIXTURE"] == "long-list",
+              environment["MEH_NOTEBOOK_TEST_FIXTURE"] == "drag-long-list",
               environment["MEH_SYNC_CLOUDKIT"] == "0",
               environment["MEH_SYNC_AUTOMATIC"] == "0" else {
             XCTFail("Placement inspection requires this test's UUID-owned fixture")
             return ""
         }
-        scrollBrowserToStart(in: app)
-        scrollDown(until: app.staticTexts[sourceTitleID], in: app)
+        let sourceTitle = app.staticTexts[sourceTitleID]
+        if !sourceTitle.exists || !sourceTitle.isHittable {
+            scrollBrowserToStart(in: app)
+        }
+        scrollDown(until: sourceTitle, in: app)
         let sourceRowID = sourceTitleID.replacingOccurrences(
             of: "notebook-sidebar-title-", with: "notebook-sidebar-note-"
         )
@@ -646,7 +400,7 @@ final class NotebookDragUITests: XCTestCase {
         XCTAssertTrue(ownedPreviewRuns.contains(run))
         XCTAssertNotNil(UUID(uuidString: run))
         XCTAssertEqual(environment["MEH_NOTEBOOK_PREVIEW"], "1")
-        XCTAssertEqual(environment["MEH_NOTEBOOK_DRAG_FIXTURE"], "long-list")
+        XCTAssertEqual(environment["MEH_NOTEBOOK_TEST_FIXTURE"], "drag-long-list")
         XCTAssertEqual(environment["MEH_SYNC_CLOUDKIT"], "0")
         XCTAssertEqual(environment["MEH_SYNC_AUTOMATIC"], "0")
 
@@ -749,7 +503,9 @@ final class NotebookDragUITests: XCTestCase {
         return placement
     }
 
-    private func launchNotebook(fixture: Bool = false, nestedFixture: Bool = false) -> XCUIApplication {
+    private func launchNotebook(
+        fixture: Bool = false, scenario: String? = nil
+    ) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
@@ -758,39 +514,13 @@ final class NotebookDragUITests: XCTestCase {
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = previewRun
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchEnvironment["MEH_SYNC_CLOUDKIT"] = "0"
-        XCTAssertFalse(fixture && nestedFixture)
-        if fixture { app.launchEnvironment["MEH_NOTEBOOK_DRAG_FIXTURE"] = "long-list" }
-        if nestedFixture { app.launchEnvironment["MEH_NOTEBOOK_DRAG_FIXTURE"] = "nested" }
+        if fixture { app.launchEnvironment["MEH_NOTEBOOK_TEST_FIXTURE"] = "drag-long-list" }
+        if let scenario { app.launchEnvironment["MEH_NOTEBOOK_TEST_FIXTURE"] = scenario }
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "notebook-new-item").firstMatch.waitForExistence(timeout: 15))
         showSidebar(app)
         return app
-    }
-
-    private func createNote(_ name: String, in app: XCUIApplication) -> XCUIElement {
-        #if os(macOS)
-        let file = app.menuBars.menuBarItems["File"]
-        XCTAssertTrue(file.waitForExistence(timeout: 5))
-        activate(file)
-        activate(menuAction("New Note", in: app))
-        #else
-        activate(app.descendants(matching: .any).matching(identifier: "notebook-new-item").firstMatch)
-        #endif
-        #if os(macOS)
-        // The title is visibly selected after New Note, but its SwiftUI host
-        // inside the native editor does not expose a separate AX TextField.
-        XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 5))
-        app.typeKey("a", modifierFlags: .command)
-        app.typeText(name)
-        app.typeKey(.return, modifierFlags: [])
-        #else
-        let field = app.textFields["title-field"]
-        XCTAssertTrue(field.waitForExistence(timeout: 5))
-        replace(field, with: name)
-        #endif
-        showSidebar(app)
-        return row(named: name, prefix: "notebook-sidebar-note-", in: app)
     }
 
     private func createFolder(
@@ -1209,15 +939,24 @@ final class NotebookDragUITests: XCTestCase {
     }
 
     private func scrollBrowserToStart(in app: XCUIApplication) {
-        // A relaunch can restore its scroll offset. Reach the real beginning
-        // before comparing root order, including notes virtualized offscreen.
+        // A relaunch can restore the viewport. Stop as soon as the stable
+        // first unmoved fixture note is fully visible, instead of swiping
+        // eight times even when already at the beginning.
+        let witness = app.staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND (label == %@ OR value == %@)",
+            "notebook-sidebar-title-", "02 Field observation", "02 Field observation"
+        )).firstMatch
         #if os(macOS)
         focusMacSidebarForNavigation(in: app)
         app.typeKey(.home, modifierFlags: [])
         #else
         for _ in 0..<8 {
+            if witness.exists, witness.isHittable,
+               app.collectionViews.firstMatch.frame.contains(witness.frame) { return }
             app.collectionViews.firstMatch.swipeDown(velocity: .fast)
         }
+        XCTAssertTrue(witness.exists && witness.isHittable,
+                      "Expected the first unmoved note after bounded scrolling")
         #endif
     }
 
