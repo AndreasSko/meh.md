@@ -1,29 +1,17 @@
 #!/usr/bin/env python3
-"""Report existing native failures and reject new or incomplete results."""
+"""Check current native results against an approved recorded inventory."""
 
 import json
 import sys
 from pathlib import Path
 
 
-REQUIRED_METHODS = {
+INVENTORY = Path(__file__).with_name("fixtures") / "native-editor-inventory.json"
+RETIRED_METHODS = {
     "EditorSearchNavigationTests/testNativeFindAndMatchRevealDoNotEditOrFocusEditor()",
     "MarkdownEditorPositionTests/testCaptureAndRestorePreserveSelectionViewportAndEditorState()",
     "MarkdownEditorPositionTests/testNavigationPreviewStartsAtSavedAnchorBeforeAsyncAttachment()",
 }
-
-
-CURRENT_INVARIANT_METHODS = {
-    "MarkdownNativeTextChangeTests/testAttributeFixingKeepsExactMiddleInsertionIntent()",
-    "MarkdownRenderingIndexTests/testSelectionReusesSyntaxIndexAndEverySyntaxChangeInvalidatesIt()",
-    "MarkdownRenderingIndexTests/testParsedRenderingAndConcealmentMatchLegacyForEveryCharacter()",
-    "MarkdownRenderingIndexTests/testNestedAndBoundaryCodeSpansPreserveExactLegacyPredicate()",
-    "MarkdownSelectionSnapshotTests/testSelectionReportsLiteralCurrentSnapshotWithoutRebuildingIt()",
-}
-
-# Pinned main 64a7267 has 240 methods; this branch adds five invariants.
-PINNED_BASELINE_METHOD_COUNT = 240
-MINIMUM_CURRENT_METHOD_COUNT = 245
 
 
 def inspect(summary, tree, status):
@@ -40,13 +28,16 @@ def inspect(summary, tree, status):
                     or identifier in cases or result not in ("Passed", "Failed", "Skipped")):
                 raise ValueError("missing, duplicate, or invalid test case")
             cases[identifier] = result
-        for child in node.get("children", []):
+        children = node.get("children", [])
+        if not isinstance(children, list):
+            raise ValueError("invalid test children")
+        for child in children:
             visit(child)
 
     for node in tree.get("testNodes", []):
         visit(node)
-    if not cases or not REQUIRED_METHODS <= cases.keys():
-        raise ValueError("full native suite and all diagnostic methods must be present")
+    if not cases:
+        raise ValueError("full native suite must be present")
     counts = {result: sum(value == result for value in cases.values())
               for result in ("Passed", "Failed", "Skipped")}
     for field, expected in (("totalTestCount", len(cases)),
@@ -58,65 +49,61 @@ def inspect(summary, tree, status):
             raise ValueError(f"{field} disagrees with test tree")
     failed = {name for name, result in cases.items() if result == "Failed"}
     skipped = {name for name, result in cases.items() if result == "Skipped"}
-    if skipped & REQUIRED_METHODS:
-        raise ValueError("diagnostic methods must execute, not skip")
-    if status != (65 if failed else 0):
-        raise ValueError(f"unexpected test process status {status}; possible infrastructure failure")
-    if summary.get("result") != ("Failed" if failed else "Passed"):
-        raise ValueError("result disagrees with method failures")
+    if status != 0 or failed or summary.get("result") != "Passed":
+        raise ValueError(f"native test run failed or infrastructure status is invalid: {status}")
+    if summary.get("testFailures"):
+        raise ValueError("native result contains failure details")
     configurations = summary.get("devicesAndConfigurations", [])
     if len(configurations) != 1:
         raise ValueError("one simulator configuration is required")
     device = configurations[0].get("device", {})
     configuration = (device.get("modelName"), device.get("platform"), device.get("osVersion"))
-    if configuration[:2] != ("iPhone 18 Pro", "iOS Simulator") or configuration[2] != "27.0":
+    if configuration != ("iPhone 18 Pro", "iOS Simulator", "27.0"):
         raise ValueError(f"unexpected simulator configuration: {configuration}")
-    return cases, failed, skipped, configuration
+    return cases, skipped
 
 
-def compare(baseline_summary, baseline_tree, baseline_status,
-            current_summary, current_tree, current_status):
-    baseline, old_failures, old_skips, configuration = inspect(
-        baseline_summary, baseline_tree, baseline_status)
-    current, failures, skips, current_configuration = inspect(
-        current_summary, current_tree, current_status)
-    if len(baseline) != PINNED_BASELINE_METHOD_COUNT:
-        raise ValueError("pinned baseline must contain exactly 240 native methods")
-    if len(current) < MINIMUM_CURRENT_METHOD_COUNT or not CURRENT_INVARIANT_METHODS <= current.keys():
-        raise ValueError("current must contain at least 245 native methods and all five new invariants")
-    if any(current[method] != "Passed" for method in CURRENT_INVARIANT_METHODS):
-        raise ValueError("all five new invariant methods must pass")
-    if configuration != current_configuration:
-        raise ValueError("baseline and current simulator configurations differ")
-    if not baseline.keys() <= current.keys():
-        raise ValueError(f"current omitted baseline methods: {sorted(baseline.keys() - current.keys())}")
-    if not skips <= old_skips:
-        raise ValueError(f"new skipped methods: {sorted(skips - old_skips)}")
-    if failures - old_failures:
-        raise ValueError(f"NEW current failing methods: {sorted(failures - old_failures)}")
-    return old_failures, failures, old_skips
+def compare(inventory, summary, tree, status):
+    expected = set(inventory["methods"])
+    allowed_skips = set(inventory["allowedSkips"])
+    if not expected or not allowed_skips <= expected:
+        raise ValueError("recorded inventory is empty or has unknown allowed skips")
+    cases, skipped = inspect(summary, tree, status)
+    if len(expected) != len(inventory["methods"]):
+        raise ValueError("recorded inventory contains duplicate methods")
+    missing = expected - cases.keys()
+    if missing:
+        raise ValueError(f"current omitted recorded methods: {sorted(missing)}")
+    if RETIRED_METHODS & cases.keys():
+        raise ValueError("retired methods must be absent from current")
+    unexpected_skips = skipped - allowed_skips
+    if unexpected_skips:
+        raise ValueError(f"new skipped methods: {sorted(unexpected_skips)}")
+    if any(cases[name] != "Passed" for name in expected - allowed_skips):
+        raise ValueError("recorded native methods must pass")
+    if any(result != "Passed" for name, result in cases.items() if name not in expected):
+        raise ValueError("new native methods must pass")
+    return expected, skipped
 
 
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: check_native_editor_baseline_parity.py EVIDENCE_ROOT")
     root = Path(sys.argv[1])
-    arguments = []
     try:
-        for label in ("baseline", "current"):
-            arguments.extend((json.loads((root / f"{label}-summary.json").read_text()),
-                              json.loads((root / f"{label}-tests.json").read_text()),
-                              int((root / f"{label}-status.txt").read_text())))
-        existing, failures, skips = compare(*arguments)
+        inventory = json.loads(INVENTORY.read_text())
+        summary = json.loads((root / "current-summary.json").read_text())
+        tree = json.loads((root / "current-tests.json").read_text())
+        status = int((root / "current-status.txt").read_text())
+        methods, skips = compare(inventory, summary, tree, status)
     except (ValueError, TypeError, KeyError, OSError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
-    print(f"METHOD COVERAGE: baseline {arguments[0]['totalTestCount']}, "
-          f"current {arguments[3]['totalTestCount']}")
-    print("BASELINE failing methods:", *sorted(existing or {"none"}), sep="\n  ")
-    print("CURRENT existing failing methods:", *sorted(failures or {"none"}), sep="\n  ")
-    print("BASELINE skipped methods:", *sorted(skips or {"none"}), sep="\n  ")
-    print("PASS: full native suite has no new failing or skipped methods")
+    print(f"METHOD COVERAGE: {len(methods)} recorded, {summary['totalTestCount']} current")
+    print(f"RECORDED SOURCE: {inventory['sourceCommit']} (CI {inventory['ciRun']})")
+    print("CURRENT failing methods: none")
+    print("CURRENT skipped methods:", *sorted(skips), sep="\n  ")
+    print("PASS: all recorded methods are present and passing")
     return 0
 
 

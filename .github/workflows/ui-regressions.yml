@@ -1,0 +1,43 @@
+name: UI regression goals
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-regressions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ui:
+    name: UI goals (${{ matrix.platform }})
+    runs-on: xcode-27
+    # Harness watchdog with export/cleanup headroom, not an app speed budget.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [iphone, ipad, mac]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check execution and result gates
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s scripts -p 'test_ui_foundation.py'
+      - name: Build once and exercise independent UI goals
+        run: |
+          python3 scripts/run_ui_foundation.py '${{ matrix.platform }}' \
+            --evidence-root "$RUNNER_TEMP/ui-foundation"
+      - name: Preserve inventory, timings and UI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-goals-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-foundation
+          if-no-files-found: error
+          retention-days: 14

@@ -32,17 +32,11 @@ NATIVE_REQUIRED_METHODS = {
     "MarkdownSelectionSnapshotTests/testSelectionReportsLiteralCurrentSnapshotWithoutRebuildingIt()",
 }
 UI_METHODS = {
-    "EditorScrollTypingUITests/testSourceReopeningKeyboardNearEndRevealsCaret()",
-    "EditorScrollTypingUITests/testLivePreviewReopeningKeyboardNearEndRevealsCaret()",
-    "EditorScrollTypingUITests/testSourceTypingAtEndKeepsCaretStable()",
-    "EditorScrollTypingUITests/testLivePreviewTypingAtEndKeepsCaretStable()",
-    "EditorScrollTypingUITests/testLivePreviewListReturnAtEndKeepsCaretStable()",
-    "EditorScrollTypingUITests/testLivePreviewTypingOnEmptyEndLineKeepsCaretStable()",
-    "EditorLongNoteTapUITests/testTapNearEndReplacesPreviousEOFSelection()",
-    "NoteHistoryUITests/testBrowsingKeepsCurrentTextAndOffersBothRestorePaths()",
+    "EditorScrollTypingUITests/testSourceColdFocusAndReturnKeepInsertionVisible()",
+    "EditorScrollTypingUITests/testPreviewColdFocusTypesIntoTappedParagraph()",
+    "EditorScrollTypingUITests/testPreviewTypingAndListReturnKeepInsertionVisible()",
+    "LargeNoteHistoryUITests/testLargeHistoryCanCloseWhileIndexingAndBrowseWithoutChangingNote()",
     "NoteHistoryUITests/testRestoreAsNewNoteKeepsOriginalCurrentText()",
-    "LargeNoteHistoryUITests/testLargeHistoryLoadsBrowsesAndReopens()",
-    "LargeNoteHistoryUITests/testClosingLargeHistoryKeepsEditorAvailable()",
 }
 
 
