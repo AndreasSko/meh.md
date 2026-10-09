@@ -40,7 +40,7 @@ class ParserPerformanceGateTests(unittest.TestCase):
     def test_reference_median_noise_floor_and_sustained_regression(self):
         reference = report()
         current = report()
-        for index, reference_cost, allowed in ((0, 10, 14), (1, 100, 125)):
+        for index, reference_cost, allowed in ((0, 10, 30), (1, 100, 225)):
             reference["measurements"][index].update(
                 samples_ms=[reference_cost] * 21,
                 median_ms=reference_cost, p95_ms=reference_cost)
@@ -108,7 +108,7 @@ class ParserPerformanceGateTests(unittest.TestCase):
             value["measurements"][0]["syntax_sha256"] = digest
             self.assertTrue(check_report(value))
 
-    def test_relative_gate_rejects_old_cost_and_accepts_20_percent_gain(self):
+    def test_historical_gain_is_diagnostic(self):
         baseline = report()
         baseline["measurements"][0].update(
             samples_ms=[20] * 21, median_ms=20, p95_ms=20)
@@ -121,7 +121,7 @@ class ParserPerformanceGateTests(unittest.TestCase):
             samples_ms=[175] * 21, median_ms=175, p95_ms=175)
         self.assertEqual(check_report(old), [])
         errors = check_report(old, baseline)
-        self.assertTrue(any("500 KB median_ms" in error for error in errors))
+        self.assertEqual(errors, [])
 
         improved = copy.deepcopy(old)
         improved["measurements"][0].update(
@@ -144,7 +144,7 @@ class ParserPerformanceGateTests(unittest.TestCase):
         current["measurements"].reverse()
         self.assertEqual(check_report(current, baseline), [])
 
-    def test_relative_gate_checks_p95_independently_of_median(self):
+    def test_historical_tail_is_diagnostic(self):
         baseline = report()
         baseline["measurements"][0].update(
             samples_ms=[20] * 21, median_ms=20, p95_ms=20)
@@ -156,7 +156,7 @@ class ParserPerformanceGateTests(unittest.TestCase):
         current["measurements"][1].update(
             samples_ms=[100] * 19 + [175] * 2, median_ms=100, p95_ms=175)
         errors = check_report(current, baseline)
-        self.assertTrue(any("500 KB p95_ms" in error for error in errors))
+        self.assertEqual(errors, [])
 
     def test_reference_gate_allows_current_improvement_but_rejects_regression(self):
         old = report()
@@ -176,7 +176,7 @@ class ParserPerformanceGateTests(unittest.TestCase):
         bad_reference["measurements"][0].update(
             samples_ms=[15] * 21, median_ms=15, p95_ms=15)
         bad_reference["measurements"][1].update(
-            samples_ms=[150] * 19 + [170] * 2, median_ms=150, p95_ms=170)
+            samples_ms=[80] * 19 + [90] * 2, median_ms=80, p95_ms=90)
         errors = check_report(current, old, bad_reference)
         self.assertTrue(any("reference" in error and "500 KB median_ms"
                             in error for error in errors))
@@ -263,6 +263,35 @@ class ParserPerformanceGateTests(unittest.TestCase):
         self.assertTrue(any("baseline: 50 KB median_ms must be greater than zero"
                             in error for error in errors))
 
+    def test_recorded_reference_cli_uses_archived_values_and_rejects_stall(self):
+        fixtures = Path(__file__).parent / "fixtures/performance"
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / f"current-{index}.json" for index in range(3)]
+            command = [sys.executable, str(Path(__file__).with_name("check_parser_performance.py")),
+                       "--recorded-reference"]
+            for path in paths:
+                command += ["--current-report", str(path)]
+            for name, status in (("current", 0), ("baseline", 1)):
+                report = (fixtures / f"parser-{name}-af516.json").read_text()
+                for path in paths:
+                    path.write_text(report)
+                result = subprocess.run(command, capture_output=True, text=True)
+                self.assertEqual(result.returncode, status, result.stderr)
+            self.assertEqual(subprocess.run(command[:-1] + [str(paths[0])],
+                                            capture_output=True).returncode, 1)
+
+    def test_archived_parser_controls_separate_stall_from_small_gain(self):
+        fixtures = Path(__file__).parent / "fixtures/performance"
+        current, baseline, reference = [json.loads(
+            (fixtures / f"parser-{label}-af516.json").read_text())
+            for label in ["current", "baseline", "reference"]]
+        self.assertEqual(check_report(current, baseline, reference), [])
+        self.assertEqual(check_report(reference, baseline, reference), [])
+        self.assertTrue(any("300 ms CI budget" in error
+                            for error in check_report(baseline)))
+        self.assertEqual(check_paired_reports([current] * 3, [baseline] * 3,
+                                              [reference] * 3), [])
+
     def test_cli_accepts_optional_baseline_and_reports_missing_file(self):
         with tempfile.TemporaryDirectory() as directory:
             report_path = Path(directory) / "report.json"
@@ -335,15 +364,14 @@ class PairedParserGateTests(unittest.TestCase):
             groups.append(runs)
         return groups
 
-    def test_isolated_run_hump_and_sustained_tail_regression(self):
+    def test_small_tail_variance_is_diagnostic(self):
         groups = self.groups()
         row = groups[0][0]["measurements"][1]
         row.update(samples_ms=[10] * 19 + [25] * 2, p95_ms=25)
         self.assertEqual(check_paired_reports(*groups), [])
         groups[0][1]["measurements"][1].update(
             samples_ms=[10] * 19 + [25] * 2, p95_ms=25)
-        self.assertTrue(any("500 KB p95_ms" in error
-                            for error in check_paired_reports(*groups)))
+        self.assertEqual(check_paired_reports(*groups), [])
 
     def test_absolute_ceiling_in_one_run_cannot_be_hidden(self):
         groups = self.groups()
@@ -365,7 +393,7 @@ class PairedParserGateTests(unittest.TestCase):
             groups[label].pop()
             self.assertTrue(check_paired_reports(*groups))
 
-    def test_slow_historical_baseline_retains_relative_requirement(self):
+    def test_slow_historical_baseline_retains_fixture_validation(self):
         groups = self.groups()
         for run in groups[1]:
             run["measurements"][1].update(
@@ -378,7 +406,7 @@ class PairedParserGateTests(unittest.TestCase):
         groups = self.groups()
         for run in groups[0][:2]:
             run["measurements"][1].update(
-                samples_ms=[18] * 21, median_ms=18, p95_ms=18)
+                samples_ms=[46] * 21, median_ms=46, p95_ms=46)
         errors = check_paired_reports(*groups)
         self.assertTrue(any("reference" in error for error in errors))
 

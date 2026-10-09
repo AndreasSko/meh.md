@@ -32,6 +32,23 @@ def valid_report():
 
 
 class CheckCatalogPerformanceTests(unittest.TestCase):
+    def test_fresh_catalog_control_is_validated_without_required_budget_failure(self):
+        for name in ["current", "baseline"]:
+            report = json.loads((Path(__file__).parent / "fixtures/performance" /
+                                 f"catalog-{name}-af516.json").read_text())
+            self.assertEqual(check_report(report, enforce_budgets=False), [])
+            report[0]["notebook_id"] = "wrong"
+            self.assertTrue(check_report(report, enforce_budgets=False))
+
+    def test_archived_catalog_heartbeat_distinguishes_known_stall(self):
+        fixtures = Path(__file__).parent / "fixtures/performance"
+        current = json.loads((fixtures / "catalog-current-af516.json").read_text())
+        baseline = json.loads((fixtures / "catalog-baseline-af516.json").read_text())
+        self.assertEqual(check_report(current), [])
+        errors = check_report(baseline)
+        self.assertTrue(any("main_actor_gap_ms" in error for error in errors))
+        self.assertTrue(any("200.0 ms" in error for error in errors))
+
     def test_accepts_exact_fixtures_and_measurements(self):
         self.assertEqual(check_report(valid_report()), [])
 
