@@ -111,8 +111,8 @@ else
         > "$check_root/sources/$name.swift"
     fi
   done
-  # Table support is absent in historical comparison revisions.
-  for name in MarkdownTablePresentation MarkdownTableEditing MarkdownTableScrolling \
+  # Table support and fixture preferences can be absent in historical refs.
+  for name in NotebookEditorPreferences MarkdownTablePresentation MarkdownTableEditing MarkdownTableScrolling \
               MarkdownTableAccessibility MarkdownTableCellEditing MarkdownTableCellEditor; do
     if [[ "$revision" == working-tree ]]; then
       if [[ -f "$repo_root/meh.md/$name.swift" ]]; then

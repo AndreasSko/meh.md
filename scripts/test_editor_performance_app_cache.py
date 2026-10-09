@@ -16,6 +16,7 @@ class ProbeAppCacheTests(unittest.TestCase):
         self.sources.mkdir()
         self.write("Sources/NoteCore/Document.swift", "core")
         self.write("meh.md/MarkdownSyntax.swift", "syntax")
+        self.write("meh.md/NotebookEditorPreferences.swift", "preferences")
         self.write("Tools/EditorQuoteCheck/Probe.swift", "probe")
         self.write("Tools/EditorQuoteCheck/Info.plist", "plist")
         self.write("Package.swift", "package")

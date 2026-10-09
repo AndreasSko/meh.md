@@ -54,19 +54,29 @@ final class NotebookWorkspace {
         case invalid
     }
 
+    enum PreviewRequest: Equatable {
+        case none, valid(String), invalid
+    }
+
+    static func previewRequest(environment: [String: String]) -> PreviewRequest {
+        guard environment["MEH_NOTEBOOK_PREVIEW"] == "1" else { return .none }
+        guard let run = environment["MEH_NOTEBOOK_PREVIEW_RUN"],
+              run.range(of: "^[A-Za-z0-9_-]{1,64}$",
+                        options: .regularExpression) != nil,
+              environment["MEH_SYNC_URL"] == nil,
+              environment["MEH_SYNC_CLOUDKIT"] != "1",
+              environment["MEH_SYNC_TEST_TRANSPORT"] == nil
+        else { return .invalid }
+        return .valid(run)
+    }
+
     static var isPreviewEnabled: Bool {
         #if DEBUG && (!ICLOUD_ENABLED || ICLOUD_DEV)
-        let environment = ProcessInfo.processInfo.environment
-        #if ICLOUD_DEV
-        guard let run = environment["MEH_NOTEBOOK_PREVIEW_RUN"], run.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil
-        else { return false }
+        if case .valid = previewRequest(
+            environment: ProcessInfo.processInfo.environment
+        ) { return true }
         #endif
-        return environment["MEH_NOTEBOOK_PREVIEW"] == "1"
-            && environment["MEH_SYNC_URL"] == nil
-            && environment["MEH_SYNC_CLOUDKIT"] != "1"
-        #else
-        false
-        #endif
+        return false
     }
 
     private(set) var replica: NotebookReplica?
@@ -205,6 +215,13 @@ final class NotebookWorkspace {
             } else { mode = .invalid }
         } else if !preview, environment["MEH_SYNC_CLOUDKIT"] == "1" {
             mode = .cloud
+        }
+        #endif
+        #if DEBUG
+        switch Self.previewRequest(environment: environment) {
+        case .invalid: mode = .invalid
+        case .valid where !preview: mode = .invalid
+        default: break
         }
         #endif
         self.mode = mode
@@ -387,6 +404,10 @@ final class NotebookWorkspace {
         recoveryAction = nil
         defer { isLoading = false }
         do {
+            // Reject malformed test requests before reset or disk/network work.
+            if case .invalid = mode {
+                throw SyncError.unavailable("Set a valid isolated test workspace.")
+            }
             // Run before opening documents or starting any sync/save tasks.
             if replica == nil, UserDefaults.standard.bool(forKey: "meh.md.resetLocalStorage") {
                 let manager = FileManager.default
@@ -405,9 +426,6 @@ final class NotebookWorkspace {
                 UserDefaults.standard.synchronize()
             }
             if usesSync { syncEventLog.record("workspace opening") }
-            if case .invalid = mode {
-                throw SyncError.unavailable("Set a valid local sync URL and workspace name.")
-            }
             if replica == nil {
                 #if DEBUG && !NOTEBOOK_PERFORMANCE_HOST
                 // Custom optimized probes link Release NoteCore, which omits
@@ -424,7 +442,9 @@ final class NotebookWorkspace {
                 if !usesSync, loaded.catalogSnapshot == nil {
                     try await loaded.createLocalNotebook()
                     #if DEBUG
-                    try await seedBrowserDragFixtureIfRequested(loaded)
+                    try await NotebookUITestFixture.seedIfRequested(
+                        loaded, isPreview: isPreview, directory: directory
+                    )
                     #endif
                 }
                 // Existing catalogs are visible before account discovery or
@@ -442,47 +462,6 @@ final class NotebookWorkspace {
             errorMessage = error.localizedDescription
         }
     }
-
-    #if DEBUG
-    /// A bounded UI fixture lives only in a newly created preview-test folder.
-    private func seedBrowserDragFixtureIfRequested(
-        _ replica: NotebookReplica
-    ) async throws {
-        let environment = ProcessInfo.processInfo.environment
-        guard isPreview,
-              let fixture = environment["MEH_NOTEBOOK_DRAG_FIXTURE"],
-              ["long-list", "nested"].contains(fixture),
-              let run = environment["MEH_NOTEBOOK_PREVIEW_RUN"],
-              run.range(of: "^[A-Za-z0-9_-]{1,64}$",
-                        options: .regularExpression) != nil,
-              directory.lastPathComponent == run,
-              directory.deletingLastPathComponent().lastPathComponent
-                == "NotebookPreviewTests" else { return }
-        if fixture == "nested" {
-            _ = try await replica.createNote(
-                name: "Voyage checklist.md",
-                text: "# Fictional voyage\n\nSample checklist.\n")
-        } else {
-            for number in 1 ... 48 {
-                let name = String(format: "%02d Field observation.md", number)
-                _ = try await replica.createNote(
-                    name: name,
-                    text: "# Fictional observation \(number)\n\nSample voyage notes.\n"
-                )
-            }
-        }
-        let journeys = try await replica.createFolder(name: "Journeys")
-        let weekend = try await replica.createFolder(
-            name: "Weekend", parentID: journeys)
-        if fixture == "nested" {
-            _ = try await replica.createFolder(name: "Island", parentID: weekend)
-        } else {
-            _ = try await replica.createNote(
-                name: "Island.md", text: "# Fictional island\n\nA sample itinerary.\n",
-                parentID: weekend)
-        }
-    }
-    #endif
 
     func recoverCatalog() async {
         await recover(.catalog)

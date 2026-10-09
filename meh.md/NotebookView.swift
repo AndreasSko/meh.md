@@ -159,10 +159,13 @@ struct NotebookView: View {
     @State private var isLoadingHistory = false
     @State private var historyLoadTask: Task<Void, Never>?
     @State private var historyLoadID = UUID()
-    @AppStorage("editor.fontSize") private var editorFontSize = 17.0
-    @AppStorage("editor.fontFamily") private var editorFontFamilyRaw =
+    @AppStorage("editor.fontSize", store: NotebookEditorPreferences.store)
+    private var editorFontSize = 17.0
+    @AppStorage("editor.fontFamily", store: NotebookEditorPreferences.store)
+    private var editorFontFamilyRaw =
         EditorFontFamily.system.rawValue
-    @AppStorage("editor.mode") private var editorModeRaw =
+    @AppStorage("editor.mode", store: NotebookEditorPreferences.store)
+    private var editorModeRaw =
         MarkdownEditorMode.livePreview.rawValue
     @State private var deletionSelection: NotebookDeletionSelection?
     @State private var navigationState: NotebookNavigationState
