@@ -145,7 +145,8 @@ def main():
     parser.add_argument("app", type=Path)
     parser.add_argument("evidence", type=Path)
     parser.add_argument("--phase", choices=[
-        "account", "exchange", "publish", "receive", "edit", "verify", "cleanup"
+        "account", "exchange", "offline-join", "offline-ui-seed",
+        "offline-ui-verify", "publish", "receive", "edit", "verify", "cleanup"
     ], required=True)
     parser.add_argument("--allow-development-cloud", action="store_true")
     parser.add_argument("--run-id", type=uuid.UUID)
@@ -155,7 +156,7 @@ def main():
         parser.error("Explicit --allow-development-cloud is required")
     if not 10 <= args.timeout <= 300:
         parser.error("Timeout must be between 10 and 300 seconds")
-    if args.phase in ("receive", "edit", "verify") and args.run_id is None:
+    if args.phase in ("receive", "edit", "verify", "offline-ui-verify") and args.run_id is None:
         parser.error("Follow-up phases require the original --run-id")
     executable, symbol_file = verify(args.app.resolve())
     # A fresh run prevents touching earlier lab data, let alone app notebooks.

@@ -72,6 +72,8 @@ private struct NotebookSyncLabView: View {
         var observedText: String?
         var observedHeadsCount: Int?
         var cleanup: CleanupMeasurements?
+        var notebookID: UUID?
+        var notes: [ObservedNote]?
     }
 
     struct CleanupMeasurements: Codable {
@@ -82,6 +84,13 @@ private struct NotebookSyncLabView: View {
         let deletedSnapshots: Int
         let deletedCompressedBytes: Int
         let preservedPastVersions: Int
+    }
+
+    struct ObservedNote: Codable {
+        let id: UUID
+        let name: String
+        let text: String
+        let heads: Set<String>
     }
 
     struct FixtureManifest: Codable {
@@ -120,7 +129,8 @@ private struct NotebookSyncLabView: View {
               let rawRun = environment["MEH_SYNC_LAB_RUN"],
               let runID = UUID(uuidString: rawRun),
               let phase = environment["MEH_SYNC_LAB_PHASE"],
-              ["account", "exchange", "publish", "receive", "edit", "verify", "cleanup"]
+              ["account", "exchange", "offline-join", "offline-ui-seed",
+               "offline-ui-verify", "publish", "receive", "edit", "verify", "cleanup"]
                 .contains(phase) else {
             update("Stopped: explicit lab launch configuration required")
             return
@@ -168,7 +178,7 @@ private struct NotebookSyncLabView: View {
             return result
         }
         do {
-            if phase == "publish",
+            if ["publish", "offline-ui-seed"].contains(phase),
                FileManager.default.fileExists(atPath: sourceRoot.path)
                 || FileManager.default.fileExists(atPath: receiverRoot.path) {
                 throw LabError.existingFixture
@@ -349,22 +359,68 @@ private struct NotebookSyncLabView: View {
                         throw LabError.convergenceFailed
                     }
                 }
-            } else if phase == "publish" {
+            } else if phase == "offline-join" {
+                let source = NotebookReplica(directory: root.appending(path: "source/notebook"))
+                let destination = NotebookReplica(directory: root.appending(path: "destination/notebook"))
+                try await source.createNotebookForSync()
+                try await destination.createNotebookForSync()
+                let cloudID = try await source.createNote(name: "Cloud example.md", text: "# Cloud example\n")
+                let localID = try await destination.createNote(name: "Offline example.md", text: "# Offline example\r\n")
+                let local = try await destination.openNote(localID)
+                let originalHeads = local.currentSnapshot?.heads
+                let publisher = NotebookMarkdownPublisher(directory: root.appending(path: "copies"))
+                try await publisher.publish(catalog: destination.catalogSnapshot!,
+                    placements: destination.placements, notes: destination.persistedNoteSnapshots())
+                let sourceTransport = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container, stateDirectory: root.appending(path: "source/transport"), runID: runID)
+                let destinationTransport = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container, stateDirectory: root.appending(path: "destination/transport"), runID: runID)
+                transports = ["source": sourceTransport, "destination": destinationTransport]
+                let sourceSync = NotebookSyncCoordinator(replica: source, transport: sourceTransport)
+                let destinationSync = NotebookSyncCoordinator(replica: destination, transport: destinationTransport)
+                try await measure("offline_first_cloud") { try await synchronize(sourceSync) }
+                try await measure("offline_existing_cloud") { try await synchronize(destinationSync) }
+                try await measure("offline_convergence") { try await synchronize(sourceSync) }
+                try await destination.prepareMarkdownCopiesForFirstSync(publisher)
+                try await publisher.publish(catalog: destination.catalogSnapshot!,
+                    placements: destination.placements, notes: destination.persistedNoteSnapshots())
+                let uploaded = try await source.openNote(localID)
+                guard source.catalogSnapshot?.notebookID == destination.catalogSnapshot?.notebookID,
+                      Set(source.placements.map { $0.item.id }) == [localID, cloudID],
+                      Set(destination.placements.map { $0.item.id }) == [localID, cloudID],
+                      uploaded.text == local.text, uploaded.currentSnapshot?.heads == originalHeads,
+                      try Data(contentsOf: publisher.directory.appending(path: "Markdown/Offline example.md"))
+                        == Data("# Offline example\r\n".utf8) else { throw LabError.convergenceFailed }
+                let reopened = NotebookReplica(directory: destination.directory)
+                try await reopened.load()
+                try await synchronize(NotebookSyncCoordinator(replica: reopened, transport: destinationTransport))
+                guard Set(reopened.placements.map { $0.item.id }) == [localID, cloudID] else {
+                    throw LabError.convergenceFailed
+                }
+                report.noteID = localID
+                report.expectedText = local.text
+                report.observedText = uploaded.text
+                report.observedHeadsCount = uploaded.currentSnapshot?.heads.count
+            } else if phase == "publish" || phase == "offline-ui-seed" {
                 let source = NotebookReplica(directory: sourceRoot.appending(path: "notebook"))
                 try await measure("create_source_fixture") {
                     try await source.createLocalNotebook()
                     var firstID: UUID?
-                    for index in 0..<10 {
+                    let interactiveSeed = phase == "offline-ui-seed"
+                    let baseText = interactiveSeed
+                        ? "# Already in iCloud\n\nThis note was here before the simulator connected.\n"
+                        : "Synthetic sync lab \(runID) note 0\n"
+                    for index in 0..<(interactiveSeed ? 1 : 10) {
                         let id = try await source.createNote(
-                            name: "Fictional lab note \(index).md",
-                            text: "Synthetic sync lab \(runID) note \(index)\n"
+                            name: interactiveSeed ? "Already in iCloud.md" : "Fictional lab note \(index).md",
+                            text: interactiveSeed ? baseText : "Synthetic sync lab \(runID) note \(index)\n"
                         )
                         if firstID == nil { firstID = id }
                     }
                     guard let firstID else { throw LabError.missingFixture }
                     try saveManifest(FixtureManifest(
                         runID: runID, firstNoteID: firstID,
-                        baseText: "Synthetic sync lab \(runID) note 0\n"
+                        baseText: baseText
                     ), at: sourceRoot.appending(path: "manifest.json"))
                     report.noteID = firstID
                 }
@@ -392,6 +448,39 @@ private struct NotebookSyncLabView: View {
                 report.expectedText = manifest.baseText
                 report.observedText = editor.text
                 report.observedHeadsCount = editor.currentSnapshot?.heads.count
+            } else if phase == "offline-ui-verify" {
+                let manifest = try loadManifest(
+                    at: sourceRoot.appending(path: "manifest.json"), runID: runID
+                )
+                let source = NotebookReplica(directory: sourceRoot.appending(path: "notebook"))
+                try await source.load()
+                let transport = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container,
+                    stateDirectory: sourceRoot.appending(path: "transport"), runID: runID
+                )
+                transports["source"] = transport
+                let log = NotebookSyncEventLog(directory: sourceRoot)
+                diagnostics["source"] = log
+                let coordinator = NotebookSyncCoordinator(
+                    replica: source, transport: transport, diagnosticLog: log
+                )
+                try await measure("download_simulator_notes") { try await synchronize(coordinator) }
+                var notes: [ObservedNote] = []
+                for placement in source.placements where placement.item.kind == .note {
+                    let editor = try await source.openNote(placement.item.id)
+                    guard let snapshot = editor.currentSnapshot else {
+                        throw LabError.convergenceFailed
+                    }
+                    notes.append(ObservedNote(
+                        id: placement.item.id, name: placement.item.name,
+                        text: editor.text, heads: snapshot.heads
+                    ))
+                }
+                guard notes.contains(where: {
+                    $0.id == manifest.firstNoteID && $0.text == manifest.baseText
+                }) else { throw LabError.convergenceFailed }
+                report.notebookID = source.catalogSnapshot?.notebookID
+                report.notes = notes
             } else if phase == "receive" {
                 let transport = try await measure("receiver_transport") {
                     try await CloudKitSyncTransport.makeIsolatedNotebookLab(

@@ -881,6 +881,15 @@ enum CloudKitNotebookLabScope {
             zoneName != CloudKitTransportMode.notebook.zoneName
         else { throw SyncError.scopeChanged }
     }
+
+    static func fetchOptions(
+        _ original: CKSyncEngine.FetchChangesOptions, runID: UUID?
+    ) -> CKSyncEngine.FetchChangesOptions {
+        guard let runID else { return original }
+        var options = original
+        options.scope = .zoneIDs([CKRecordZone.ID(zoneName: zoneName(runID: runID))])
+        return options
+    }
 }
 
 /// An existing zone needs only its canonical record read. Resolve a zone
@@ -1588,6 +1597,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private let eventCommitter: CloudKitEventCommitter
     private let assetDirectory: URL
     private let automaticallySync: Bool
+    #if DEBUG
+    private let labRunID: UUID?
+    #endif
     private var assetStaging: CloudKitAssetStaging
     private var engineAssetLeases: [String: [URL]] = [:]
     private var batchStagingFailure: Error?
@@ -1660,7 +1672,10 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     public static func makeIsolatedNotebookLab(
         containerIdentifier: String,
         stateDirectory: URL,
-        runID: UUID
+        runID: UUID,
+        automaticallySync: Bool = false,
+        expectedScope: String? = nil,
+        expectedNotebookID: UUID? = nil
     ) async throws -> CloudKitSyncTransport {
         try await make(
             containerIdentifier: containerIdentifier,
@@ -1669,7 +1684,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             ),
             zoneName: CloudKitNotebookLabScope.zoneName(runID: runID),
             mode: .notebook,
-            automaticallySync: false,
+            automaticallySync: automaticallySync,
+            expectedScope: expectedScope,
+            expectedNotebookID: expectedNotebookID,
             labRunID: runID
         )
     }
@@ -1771,7 +1788,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             store: store,
             availabilityCooldown: availabilityCooldown,
             mode: mode,
-            automaticallySync: automaticallySync
+            automaticallySync: automaticallySync,
+            labRunID: labRunID
         )
         try await transport.initialize()
         #if DEBUG
@@ -1804,7 +1822,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         store: CloudKitTransportStateStore,
         availabilityCooldown: CloudKitAvailabilityCooldownStore,
         mode: CloudKitTransportMode,
-        automaticallySync: Bool
+        automaticallySync: Bool,
+        labRunID: UUID? = nil
     ) {
         account = services.account
         database = services.database
@@ -1824,6 +1843,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         assetStaging = CloudKitAssetStaging(directory: assetDirectory)
         self.availabilityCooldown = availabilityCooldown
         self.automaticallySync = automaticallySync
+        #if DEBUG
+        self.labRunID = labRunID
+        #endif
         scope = "\(containerIdentifier)/private/\(userRecordID.recordName)/\(zoneName)"
     }
 
@@ -2772,6 +2794,17 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
 
 @available(macOS 14.0, iOS 17.0, *)
 extension CloudKitSyncTransport: CKSyncEngineDelegate {
+    #if DEBUG
+    public func syncEngine(
+        _ syncEngine: CKSyncEngine,
+        fetchChangesOptions context: CKSyncEngine.FetchChangesContext
+    ) async -> CKSyncEngine.FetchChangesOptions {
+        // Automatic engine requests otherwise include every Development
+        // zone. A lab must not fetch ordinary developer notebook records.
+        CloudKitNotebookLabScope.fetchOptions(context.options, runID: labRunID)
+    }
+    #endif
+
     public func handleEvent(
         _ event: CKSyncEngine.Event, syncEngine: CKSyncEngine
     ) async {

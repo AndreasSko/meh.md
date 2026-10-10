@@ -1,7 +1,15 @@
+import CloudKit
 import CryptoKit
 import Foundation
 import Network
+#if NOTEBOOK_CLOUD_UI_LAB
+#if !DEBUG || !ICLOUD_DEV
+#error("The interactive CloudKit lab requires Debug-iCloud.")
+#endif
+@_spi(SyncLab) import NoteCore
+#else
 import NoteCore
+#endif
 import Observation
 #if os(iOS)
 import UIKit
@@ -71,7 +79,7 @@ final class NotebookWorkspace {
     }
 
     static var isPreviewEnabled: Bool {
-        #if DEBUG && (!ICLOUD_ENABLED || ICLOUD_DEV)
+        #if !NOTEBOOK_CLOUD_UI_LAB && DEBUG && (!ICLOUD_ENABLED || ICLOUD_DEV)
         if case .valid = previewRequest(
             environment: ProcessInfo.processInfo.environment
         ) { return true }
@@ -107,6 +115,9 @@ final class NotebookWorkspace {
     let mode: Mode
     let directory: URL
     private let documentsDirectory: URL
+    #if NOTEBOOK_CLOUD_UI_LAB
+    private let cloudUITestScope = NotebookCloudUITestScope(bundle: .main)
+    #endif
     private var notebookTransport: (any SyncTransport)?
     @ObservationIgnored private var transportFactory:
         (@MainActor (String?) async throws -> any SyncTransport)?
@@ -122,6 +133,8 @@ final class NotebookWorkspace {
     @ObservationIgnored private var pendingSyncTrigger = "automatic refresh"
 
     @ObservationIgnored private var cloudActivityTask: Task<Void, Never>?
+    @ObservationIgnored private var accountAvailabilityTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingAccountRecheck = false
     @ObservationIgnored private var connectivityMonitor: NWPathMonitor?
     @ObservationIgnored private var previousConnectivity: NWPath.Status?
     @ObservationIgnored private var retryPolicy = NotebookSyncRetryPolicy()
@@ -168,7 +181,9 @@ final class NotebookWorkspace {
     var label: String {
         switch mode {
         case .cloud:
-            #if ICLOUD_DEV
+            #if NOTEBOOK_CLOUD_UI_LAB
+            "iCloud Test"
+            #elseif ICLOUD_DEV
             "iCloud Dev"
             #else
             "iCloud"
@@ -182,6 +197,16 @@ final class NotebookWorkspace {
     init(preview: Bool = false) {
         backupFrequency = Self.savedBackupFrequency
         backupRetentionCount = Self.savedBackupRetentionCount
+        #if NOTEBOOK_CLOUD_UI_LAB
+        // The UUID is baked into this dedicated build. Icon launches and
+        // relaunches cannot fall back to the ordinary development notebook.
+        automaticSync = true
+        let component = cloudUITestScope?.directoryComponent
+            ?? "CloudKitUITests/invalid-configuration"
+        self.mode = cloudUITestScope == nil ? .invalid : .cloud
+        directory = URL.applicationSupportDirectory.appending(path: component + "/Notebook")
+        documentsDirectory = URL.documentsDirectory.appending(path: component)
+        #else
         let environment = ProcessInfo.processInfo.environment
         automaticSync = environment["MEH_SYNC_AUTOMATIC"] != "0"
         var mode: Mode = preview ? .preview : .local
@@ -264,6 +289,7 @@ final class NotebookWorkspace {
                 documentsDirectory = URL.documentsDirectory
             }
         }
+        #endif
     }
 
     /// Deterministic app-model tests use the same scheduler with an isolated
@@ -281,6 +307,8 @@ final class NotebookWorkspace {
         notebookTransport = transport
         self.transportFactory = transportFactory
     }
+
+    isolated deinit { accountAvailabilityTask?.cancel() }
 
     private static let backupFrequencyKey = "meh.md.backupFrequency"
     private static let backupRetentionKey = "meh.md.backupRetentionCount"
@@ -317,8 +345,9 @@ final class NotebookWorkspace {
             let store = backupStore ?? NotebookMarkdownBackupStore(directory: backupDirectory)
             backupStore = store
             let notebookID = replica?.catalogSnapshot?.notebookID
+            let firstLocalID = try replica?.firstSyncLocalNotebookID()
             lastBackup = try await store.listBackups().first {
-                $0.notebookID == notebookID
+                $0.notebookID == notebookID || $0.notebookID == firstLocalID
             }
         } catch { backupError = error.localizedDescription }
     }
@@ -439,22 +468,24 @@ final class NotebookWorkspace {
                 #endif
                 let loaded = NotebookReplica(directory: directory)
                 try await loaded.load()
-                if !usesSync, loaded.catalogSnapshot == nil {
-                    try await loaded.createLocalNotebook()
+                if loaded.catalogSnapshot == nil {
+                    if usesSync { try await loaded.createNotebookForSync() }
+                    else { try await loaded.createLocalNotebook() }
                     #if DEBUG
                     try await NotebookUITestFixture.seedIfRequested(
                         loaded, isPreview: isPreview, directory: directory
                     )
                     #endif
                 }
-                // Existing catalogs are visible before account discovery or
-                // any network request, so offline reopening remains useful.
+                // Fresh and existing notebooks are writable before account
+                // discovery or any network request.
                 replica = loaded
             }
             // A local backup can succeed even when the following cloud
             // exchange is delayed or unavailable.
             await runDueBackup()
             startConnectivityMonitoring()
+            startAccountAvailabilityMonitoring()
             await refresh(whileLoading: true, manual: manualRetry, trigger: "startup")
             await runDueBackup()
         } catch {
@@ -528,6 +559,9 @@ final class NotebookWorkspace {
         needsManualRefresh = false
         cloudActivityTask?.cancel()
         cloudActivityTask = nil
+        accountAvailabilityTask?.cancel()
+        accountAvailabilityTask = nil
+        pendingAccountRecheck = false
         connectivityMonitor?.cancel()
         connectivityMonitor = nil
         transportGeneration = UUID()
@@ -586,6 +620,7 @@ final class NotebookWorkspace {
         isForeground = newForeground
         guard !isResetPending, automaticSync, changed else { return }
         if newForeground {
+            pendingAccountRecheck = true
             requestAutomaticRefresh(trigger: "foreground activation")
         } else {
             // The engine owns background scheduling. App retry timers resume
@@ -630,6 +665,26 @@ final class NotebookWorkspace {
         }
         monitor.start(queue: DispatchQueue(label: "meh.notebook.connectivity"))
         connectivityMonitor = monitor
+    }
+
+    private func startAccountAvailabilityMonitoring() {
+        guard case .cloud = mode, automaticSync, accountAvailabilityTask == nil else { return }
+        // No CKSyncEngine exists when first account discovery fails. Observe
+        // availability independently, so signing in can finish first joining.
+        accountAvailabilityTask = Task { @MainActor [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: .CKAccountChanged) {
+                guard !Task.isCancelled else { return }
+                self?.cloudAccountAvailabilityChanged()
+            }
+        }
+    }
+
+    func cloudAccountAvailabilityChanged() {
+        guard !isResetPending, automaticSync else { return }
+        pendingAccountRecheck = true
+        searchScopeGeneration += 1
+        syncEventLog.record("iCloud account availability changed")
+        if isForeground { requestAutomaticRefresh(trigger: "iCloud account availability changed") }
     }
 
     func refresh(
@@ -687,7 +742,10 @@ final class NotebookWorkspace {
             var hasBinding = false
             do {
                 syncEventLog.record("notebook transport preparing")
-                try await prepareNotebookTransport(recoverIfHalted: manual)
+                let recheckAccount = pendingAccountRecheck
+                pendingAccountRecheck = false
+                try await prepareNotebookTransport(recoverIfHalted: manual,
+                                                   recheckAccount: recheckAccount)
                 guard !isResetPending else {
                     endSyncPresentation()
                     return
@@ -839,13 +897,16 @@ final class NotebookWorkspace {
         syncRetryNotBefore = deadline
     }
 
-    private func prepareNotebookTransport(recoverIfHalted: Bool) async throws {
+    private func prepareNotebookTransport(recoverIfHalted: Bool,
+                                          recheckAccount: Bool = false) async throws {
         var expectedScope: String?
+        var expectedNotebookID: UUID?
         if let existing = notebookTransport {
             guard let haltable = existing as? any HaltableSyncTransport,
                   let halt = await haltable.haltStatus() else { return }
             syncHalt = halt
-            guard recoverIfHalted, halt.isRecoverable else {
+            let accountRecheck = recheckAccount && halt.reason == .accountChanged
+            guard (recoverIfHalted && halt.isRecoverable) || accountRecheck else {
                 throw halt.underlyingError
             }
             // refresh owns the exchange throughout retirement and replacement.
@@ -857,6 +918,10 @@ final class NotebookWorkspace {
             await haltable.retire()
             sync = nil
             expectedScope = existing.scope
+            if let replica, (try? NotebookSyncCoordinator(replica: replica, transport: existing)
+                .hasDurableBinding()) == true {
+                expectedNotebookID = replica.catalogSnapshot?.notebookID
+            }
             syncEventLog.record("rebuilding halted cloud transport")
             // Retain the retired instance until creation succeeds, so another
             // manual attempt retains both the halt reason and expected scope.
@@ -867,14 +932,23 @@ final class NotebookWorkspace {
         } else {
             switch mode {
             case .cloud:
+                #if NOTEBOOK_CLOUD_UI_LAB
+                guard let scope = cloudUITestScope else { throw SyncError.invalidRecord }
+                transport = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: "iCloud.de.andreas-sk.meh-md",
+                    stateDirectory: directory.appending(path: "CloudKit"),
+                    runID: scope.runID, automaticallySync: automaticSync,
+                    expectedScope: expectedScope, expectedNotebookID: expectedNotebookID
+                )
+                #else
                 transport = try await CloudKitSyncTransport.makeNotebook(
                     containerIdentifier: "iCloud.de.andreas-sk.meh-md",
                     stateDirectory: directory.appending(path: "CloudKit"),
                     automaticallySync: automaticSync,
                     expectedScope: expectedScope,
-                    expectedNotebookID: expectedScope == nil
-                        ? nil : replica?.catalogSnapshot?.notebookID
+                    expectedNotebookID: expectedNotebookID
                 )
+                #endif
             case .development(let endpoint, let name):
                 transport = LocalSyncTransport(
                     baseURL: endpoint,
@@ -1001,6 +1075,7 @@ final class NotebookWorkspace {
             let output = documentsDirectory.appending(path: "Notebook Copies")
             let publisher = self.publisher ?? NotebookMarkdownPublisher(directory: output)
             self.publisher = publisher
+            try await replica.prepareMarkdownCopiesForFirstSync(publisher)
             guard let catalog = replica.catalogSnapshot else { return }
             let placements = replica.placements
             let notes = try await replica.persistedNoteSnapshots()
@@ -1014,3 +1089,22 @@ final class NotebookWorkspace {
         } catch { copyError = error.localizedDescription }
     }
 }
+
+#if NOTEBOOK_CLOUD_UI_LAB
+/// Present only in the dedicated interactive lab binary. A missing UUID
+/// disables sync rather than selecting the ordinary notebook or cloud zone.
+struct NotebookCloudUITestScope {
+    let runID: UUID
+
+    init?(runID: String?) {
+        guard let runID, let id = UUID(uuidString: runID) else { return nil }
+        self.runID = id
+    }
+
+    init?(bundle: Bundle) {
+        self.init(runID: bundle.object(forInfoDictionaryKey: "MehCloudLabRunID") as? String)
+    }
+
+    var directoryComponent: String { "CloudKitUITests/" + runID.uuidString.lowercased() }
+}
+#endif

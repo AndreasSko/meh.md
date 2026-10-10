@@ -163,6 +163,13 @@ public final class NoteSession {
         cancelDelayedSave()
     }
 
+    /// First joining changes catalog ownership, not note identity. Preserve
+    /// typing that arrived during the handoff before requiring a restart.
+    func suspendEditingForFirstSyncRecovery() {
+        queueSave(immediately: true)
+        isEditingSuspended = true
+    }
+
     /// Permanent deletion disables new edits first, then waits for the one
     /// serialized writer that may already have captured a snapshot.
     func waitForPendingSave() async {

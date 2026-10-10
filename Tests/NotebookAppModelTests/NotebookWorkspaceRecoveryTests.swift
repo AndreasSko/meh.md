@@ -102,6 +102,58 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
         XCTAssertTrue(workspace.canRetrySync)
     }
 
+    func testAccountAvailabilityAutomaticallyRejoinsTheSameAccount() async throws {
+        let factory = RecoveryTransportFactory()
+        let original = HaltableRecordingTransport(scope: "same-account", remoteStore: factory.remoteStore)
+        let workspace = makeWorkspace(transport: original, factory: factory, automaticSync: true)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        let replica = try XCTUnwrap(workspace.replica)
+        let id = try await replica.createNote(name: "Offline.md", text: "Keep this local edit")
+        await original.setHalt(.accountChanged, underlyingError: SyncError.scopeChanged, recoverable: false)
+
+        workspace.cloudAccountAvailabilityChanged()
+        try await waitUntil {
+            factory.creationCount == 1 && workspace.syncHalt == nil && !workspace.isRefreshing
+        }
+
+        XCTAssertEqual(factory.expectedScopes, ["same-account"])
+        XCTAssertNil(workspace.syncFailure)
+        let body = try await replica.openNote(id)
+        XCTAssertEqual(body.text, "Keep this local edit")
+        let replacement = try XCTUnwrap(factory.transports.first)
+        let publications = await replacement.publishCount
+        XCTAssertGreaterThan(publications, 0)
+        workspace.localStorageResetWasScheduled()
+    }
+
+    func testAutomaticAccountRecheckRejectsAnotherAccountBeforeUploading() async throws {
+        let factory = RecoveryTransportFactory()
+        let original = HaltableRecordingTransport(scope: "account-a", remoteStore: factory.remoteStore)
+        let workspace = makeWorkspace(transport: original, factory: factory, automaticSync: true)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        let replica = try XCTUnwrap(workspace.replica)
+        _ = try await replica.createNote(name: "Private.md", text: "Only in account A")
+        let before = replica.catalogSnapshot
+        factory.nextScopeOverride = "account-b"
+        await original.setHalt(.accountChanged, underlyingError: SyncError.scopeChanged, recoverable: false)
+
+        workspace.cloudAccountAvailabilityChanged()
+        try await waitUntil { factory.creationCount == 1 && !workspace.isRefreshing }
+
+        XCTAssertEqual(factory.expectedScopes, ["account-a"])
+        XCTAssertEqual(replica.catalogSnapshot, before)
+        let replacement = try XCTUnwrap(factory.transports.first)
+        let publications = await replacement.publishCount
+        let retired = await replacement.isRetired
+        XCTAssertEqual(publications, 0)
+        XCTAssertTrue(retired)
+        XCTAssertNotNil(workspace.syncFailure)
+        XCTAssertFalse(replica.localEditsSuspended)
+        workspace.localStorageResetWasScheduled()
+    }
+
     func testManualStartupRecoveryBootstrapsAnEmptyLocalNotebook() async throws {
         let factory = RecoveryTransportFactory()
         let original = HaltableRecordingTransport(
@@ -118,7 +170,8 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
         await workspace.start()
 
         XCTAssertEqual(factory.creationCount, 0)
-        XCTAssertNil(workspace.replica?.catalogSnapshot)
+        XCTAssertNotNil(workspace.replica?.catalogSnapshot)
+        XCTAssertFalse(workspace.replica?.localEditsSuspended ?? true)
 
         await workspace.start(manualRetry: true)
 
@@ -246,7 +299,8 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
 
     private func makeWorkspace(
         transport: any SyncTransport,
-        factory: RecoveryTransportFactory
+        factory: RecoveryTransportFactory,
+        automaticSync: Bool = false
     ) -> NotebookWorkspace {
         let root = FileManager.default.temporaryDirectory.appending(
             path: "sync-recovery-\(UUID().uuidString)"
@@ -257,8 +311,9 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
             directory: root.appending(path: "Notebook"),
             documentsDirectory: root.appending(path: "Documents"),
             transport: transport,
-            automaticSync: false,
+            automaticSync: automaticSync,
             mode: .development(URL(string: "http://127.0.0.1")!, "recovery"),
+            syncSchedule: .init(coalescingDelay: .milliseconds(20)),
             transportFactory: { expectedScope in
                 try await factory.makeTransport(expectedScope: expectedScope)
             }

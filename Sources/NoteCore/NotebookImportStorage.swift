@@ -79,6 +79,27 @@ struct NotebookImportStorage {
         FileManager.default.fileExists(atPath: journalURL.path)
     }
 
+    /// Retained recovery records must follow the notebook's first binding,
+    /// so later permanent deletion can still scrub their embedded bodies.
+    func rebindForOfflineJoin(from sourceID: UUID, to destinationID: UUID) throws {
+        var urls = try contentsIfPresent(of: directory.appending(path: "import-recovery"))
+            .filter { $0.pathExtension == "json" }
+        if hasPendingImport { urls.append(journalURL) }
+        for url in urls {
+            let journal = try JSONDecoder().decode(NotebookImportJournal.self,
+                                                   from: Data(contentsOf: url))
+            guard journal.isSupported,
+                  journal.notebookID == sourceID || journal.notebookID == destinationID else {
+                throw NotebookImportError.notebookIdentityMismatch
+            }
+            guard journal.notebookID != destinationID else { continue }
+            let replacement = NotebookImportJournal(
+                notebookID: destinationID, plan: journal.plan, snapshots: journal.snapshots,
+                destinationParentID: journal.destinationParentID)
+            try SyncFileIO.replace(JSONEncoder().encode(replacement), at: url)
+        }
+    }
+
     func create(_ journal: NotebookImportJournal) throws {
         let fileManager = FileManager.default
         try fileManager.createDirectory(

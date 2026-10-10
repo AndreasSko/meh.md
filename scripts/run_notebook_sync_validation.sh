@@ -75,8 +75,17 @@ if ! swift test --disable-sandbox >"$test_log" 2>&1; then
     exit 1
 fi
 
+if ! swift test --disable-sandbox \
+    -Xswiftc -DNOTEBOOK_CLOUD_UI_LAB -Xswiftc -DICLOUD_DEV \
+    -Xswiftc -DICLOUD_ENABLED --filter NotebookCloudUITestScopeTests \
+    >"$evidence_root/ui-lab-scope-test.log" 2>&1; then
+    tail -n 80 "$evidence_root/ui-lab-scope-test.log"
+    exit 1
+fi
+
 tail -n 20 "$evidence_root/python-test.log"
 tail -n 20 "$evidence_root/lab-guard-test.log"
+tail -n 20 "$evidence_root/ui-lab-scope-test.log"
 grep 'Notebook scale' "$test_log" || true
 tail -n 40 "$test_log"
 printf 'Validation evidence: %s\n' "$evidence_root"

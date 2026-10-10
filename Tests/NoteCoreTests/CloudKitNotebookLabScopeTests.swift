@@ -1,3 +1,4 @@
+import CloudKit
 import Foundation
 import XCTest
 
@@ -10,6 +11,28 @@ final class CloudKitNotebookLabScopeTests: XCTestCase {
     private let secondRun = UUID(
         uuidString: "E6290B3B-90EC-4BE0-83CC-E5CDE173395D"
     )!
+
+    func testAutomaticLabFetchExcludesOrdinaryAndOtherRunZones() {
+        let options = CloudKitNotebookLabScope.fetchOptions(.init(), runID: firstRun)
+        XCTAssertTrue(options.scope.contains(CKRecordZone.ID(
+            zoneName: CloudKitNotebookLabScope.zoneName(runID: firstRun)
+        )))
+        for name in [CloudKitTransportMode.notebook.zoneName,
+                     CloudKitTransportMode.legacy.zoneName,
+                     CloudKitNotebookLabScope.zoneName(runID: secondRun)] {
+            XCTAssertFalse(options.scope.contains(CKRecordZone.ID(zoneName: name)))
+        }
+    }
+
+    func testOrdinaryTransportRetainsItsFetchOptions() {
+        let zone = CKRecordZone.ID(zoneName: "ordinary-scope")
+        let original = CKSyncEngine.FetchChangesOptions(scope: .zoneIDs([zone]))
+        let options = CloudKitNotebookLabScope.fetchOptions(original, runID: nil)
+        XCTAssertTrue(options.scope.contains(zone))
+        XCTAssertFalse(options.scope.contains(CKRecordZone.ID(
+            zoneName: CloudKitNotebookLabScope.zoneName(runID: firstRun)
+        )))
+    }
 
     func testLabZoneIsDerivedAndDisjointFromCanonicalNotebook() throws {
         let zone = CloudKitNotebookLabScope.zoneName(runID: firstRun)
