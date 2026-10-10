@@ -971,6 +971,10 @@ final class NotebookWorkspace {
            await cloud.recoveredRetryMetadata {
             syncEventLog.record("cloud retry metadata recovered")
         }
+        if let cloud = transport as? CloudKitSyncTransport,
+           await cloud.recoveredLegacySnapshotDeletionHalt {
+            syncEventLog.record("legacy snapshot deletion halt recovered")
+        }
         syncHalt = nil
         let generation = transportGeneration
         if automaticSync, let cloud = notebookTransport as? CloudKitSyncTransport {

@@ -78,7 +78,8 @@ final class NotebookWorkspaceOfflineTests: XCTestCase {
         factory.isAvailable = true
         reopened.sceneActivityChanged(id: UUID(), isActive: true)
         reopened.cloudAccountAvailabilityChanged()
-        try await waitUntil { reopened.lastSuccessfulSync != nil }
+        // The exchange succeeds before refresh clears its old error state.
+        try await waitUntil { reopened.lastSuccessfulSync != nil && !reopened.isRefreshing }
 
         XCTAssertNil(reopened.syncFailure)
         XCTAssertNil(reopened.syncSetupError)

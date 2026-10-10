@@ -28,7 +28,8 @@ Canonical bootstrap deletion and deletion of an already joined zone retain
 their existing protections. Permanent note deletion continues to use catalog
 tombstones. Payloads, local cursor offsets, and inbox generations remain
 unchanged. New bookkeeping decodes with an empty default in older state files.
-An older build's ambiguous fatal deletion flag is not silently cleared.
+An older build's ambiguous fatal deletion flag requires the separate
+[verified legacy recovery](legacy-sync-halt-recovery.md) before it is cleared.
 
 ## Verification
 

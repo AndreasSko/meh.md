@@ -26,6 +26,8 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         case omitDeleteResult(matching: @Sendable (CKRecord.ID) -> Bool)
         case crashAfterServerDelete
         case failNextRead
+        /// Fail the next zone result rather than the enclosing request.
+        case failNextZoneResult(CKError.Code, retryAfter: TimeInterval)
         /// Remove a record after fetched events, just before a direct read.
         case deleteBeforeNextRead(String)
         /// The next engine send stores its batch, then the app dies before
@@ -58,6 +60,8 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     private var deletedNames: [String] = []
     private var fetchedCount = 0
     private var fetchedBytes = 0
+    private var directReads: [String] = []
+    private var cloudMutationCount = 0
 
     init(directory: URL) throws {
         assetDirectory = directory.appending(path: "fake-cloudkit-assets")
@@ -123,6 +127,8 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     }
 
     var deletedRecordNames: [String] { locked { deletedNames } }
+    var directRecordReads: [String] { locked { directReads } }
+    var mutationCount: Int { locked { cloudMutationCount } }
 
     var fetchMeasurements: (records: Int, assetBytes: Int) {
         locked { (fetchedCount, fetchedBytes) }
@@ -158,6 +164,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     // MARK: CloudKitDatabaseClient
 
     func record(for recordID: CKRecord.ID) async throws -> CKRecord {
+        locked { directReads.append(recordID.recordName) }
         try checkReachable()
         if case let .deleteBeforeNextRead(name)? = takeFault(where: {
             if case .deleteBeforeNextRead = $0 { return true }
@@ -197,6 +204,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         saveResults: [CKRecord.ID: Result<CKRecord, any Error>],
         deleteResults: [CKRecord.ID: Result<Void, any Error>]
     ) {
+        locked { cloudMutationCount += 1 }
         try checkReachable()
         var saveResults: [CKRecord.ID: Result<CKRecord, any Error>] = [:]
         for record in recordsToSave {
@@ -242,6 +250,13 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         for ids: [CKRecordZone.ID]
     ) async throws -> [CKRecordZone.ID: Result<CKRecordZone, any Error>] {
         try checkReachable()
+        if case let .failNextZoneResult(code, retryAfter)? = takeFault(where: {
+            if case .failNextZoneResult = $0 { return true }
+            return false
+        }) {
+            let error = CKError(code, userInfo: [CKErrorRetryAfterKey: retryAfter])
+            return Dictionary(uniqueKeysWithValues: ids.map { ($0, .failure(error)) })
+        }
         return locked {
             Dictionary(uniqueKeysWithValues: ids.map { id in
                 (id, id == zoneID && zoneExists
@@ -258,6 +273,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         saveResults: [CKRecordZone.ID: Result<CKRecordZone, any Error>],
         deleteResults: [CKRecordZone.ID: Result<Void, any Error>]
     ) {
+        locked { cloudMutationCount += 1 }
         try checkReachable()
         return locked {
             var saved: [CKRecordZone.ID: Result<CKRecordZone, any Error>] = [:]
@@ -287,6 +303,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     }
 
     func store(_ record: CKRecord) throws -> Result<CKRecord, CKError> {
+        locked { cloudMutationCount += 1 }
         if case let .failSave(code, _)? = takeFault(where: {
             if case let .failSave(_, matching) = $0 {
                 return matching(record.recordID)
