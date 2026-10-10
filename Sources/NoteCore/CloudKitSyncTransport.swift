@@ -48,6 +48,7 @@ struct CloudKitTransportState: Codable, Equatable {
     var pendingRemoteDeletionIDs: Set<String>
     var scannedDeletedNoteIDs: Set<UUID>
     var unresolvedRemoteDeletionRecordIDs: Set<String>
+    var remoteDeletedSnapshotIDs: Set<String>
     var hasUnexpectedDeletion: Bool
     var retryNotBefore: Date?
     var recoveredInvalidRetryDeadline = false
@@ -69,6 +70,7 @@ struct CloudKitTransportState: Codable, Equatable {
         pendingRemoteDeletionIDs = []
         scannedDeletedNoteIDs = []
         unresolvedRemoteDeletionRecordIDs = []
+        remoteDeletedSnapshotIDs = []
         hasUnexpectedDeletion = false
         retryNotBefore = nil
     }
@@ -78,6 +80,7 @@ struct CloudKitTransportState: Codable, Equatable {
         case engineState, inbox, outbox, deletedNoteIDs, purgedRecordIDs
         case pendingRemoteDeletionIDs, scannedDeletedNoteIDs
         case unresolvedRemoteDeletionRecordIDs
+        case remoteDeletedSnapshotIDs
         case hasUnexpectedDeletion, retryNotBefore
     }
 
@@ -111,6 +114,9 @@ struct CloudKitTransportState: Codable, Equatable {
         hasUnexpectedDeletion = try values.decode(
             Bool.self, forKey: .hasUnexpectedDeletion
         )
+        remoteDeletedSnapshotIDs = try values.decodeIfPresent(
+            Set<String>.self, forKey: .remoteDeletedSnapshotIDs
+        ) ?? []
         do {
             retryNotBefore = try values.decodeIfPresent(
                 Date.self, forKey: .retryNotBefore
@@ -144,6 +150,7 @@ struct CloudKitTransportState: Codable, Equatable {
             forKey: .unresolvedRemoteDeletionRecordIDs
         )
         try values.encode(hasUnexpectedDeletion, forKey: .hasUnexpectedDeletion)
+        try values.encode(remoteDeletedSnapshotIDs, forKey: .remoteDeletedSnapshotIDs)
         try values.encodeIfPresent(retryNotBefore, forKey: .retryNotBefore)
     }
 
@@ -173,6 +180,7 @@ struct CloudKitTransportState: Codable, Equatable {
         }
         try CloudKitSnapshotSizeLimit.validate(record)
         unresolvedRemoteDeletionRecordIDs.remove(record.id)
+        remoteDeletedSnapshotIDs.remove(record.id)
         if purgedRecordIDs.contains(record.id) {
             if record.protocolVersion == 2, record.kind == .note,
                deletedNoteIDs.contains(record.snapshot.noteID) {
@@ -200,11 +208,13 @@ struct CloudKitTransportState: Codable, Equatable {
         let priorPendingDeletionIDs = pendingRemoteDeletionIDs
         let priorPurgedRecordIDs = purgedRecordIDs
         let priorUnresolvedDeletionIDs = unresolvedRemoteDeletionRecordIDs
+        let priorRemoteDeletedIDs = remoteDeletedSnapshotIDs
         try appendToInbox(record)
         return inboxSlots.count != priorInboxCount
             || pendingRemoteDeletionIDs != priorPendingDeletionIDs
             || purgedRecordIDs != priorPurgedRecordIDs
             || unresolvedRemoteDeletionRecordIDs != priorUnresolvedDeletionIDs
+            || remoteDeletedSnapshotIDs != priorRemoteDeletedIDs
     }
 
     mutating func purgeDeletedNotes(
@@ -265,15 +275,17 @@ struct CloudKitTransportState: Codable, Equatable {
         let knownNoteRecordIDs = Set(inbox.lazy.filter {
             $0.kind == .note
         }.map(\.id))
-        let unexpectedNoteRecordIDs = recordNames
-            .intersection(knownNoteRecordIDs)
+        let knownSnapshotIDs = catalogRecordIDs.union(knownNoteRecordIDs)
+        remoteDeletedSnapshotIDs.formUnion(recordNames.intersection(knownSnapshotIDs))
+        let unexpectedSnapshotIDs = recordNames
+            .intersection(knownSnapshotIDs)
             .subtracting(purgedRecordIDs)
+            .subtracting([bootstrapRecordName])
         unresolvedRemoteDeletionRecordIDs.formUnion(
-            unexpectedNoteRecordIDs
+            unexpectedSnapshotIDs
         )
         hasUnexpectedDeletion = hasUnexpectedDeletion
             || recordNames.contains(bootstrapRecordName)
-            || !catalogRecordIDs.isDisjoint(with: recordNames)
         let newlyUnresolved = unresolvedRemoteDeletionRecordIDs
             .subtracting(priorUnresolved).count
         return newlyUnresolved
@@ -349,6 +361,9 @@ struct CloudKitTransportState: Codable, Equatable {
             throw SyncError.invalidRecord
         }
         try unresolvedRemoteDeletionRecordIDs.forEach {
+            try CloudKitRemoteRecordValidator.validateSnapshotID($0)
+        }
+        try remoteDeletedSnapshotIDs.forEach {
             try CloudKitRemoteRecordValidator.validateSnapshotID($0)
         }
         guard !inbox.contains(where: {
@@ -527,7 +542,7 @@ actor CloudKitEventCommitter {
         }
     }
 
-    func finishFetch() async throws {
+    func finishFetch(allowUnresolvedSnapshots: Bool = false) async throws {
         guard failure == nil else { throw failure! }
         do {
             let current = await store.snapshot()
@@ -537,7 +552,9 @@ actor CloudKitEventCommitter {
             }
             try await store.update { state in
                 try state.resolveRemoteNoteDeletions()
-                try state.validateRemoteDeletions()
+                if !allowUnresolvedSnapshots || state.hasUnexpectedDeletion {
+                    try state.validateRemoteDeletions()
+                }
             }
         } catch let error as CloudKitSyncTransportError
             where error == .unexpectedDeletion
@@ -2043,16 +2060,64 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         if let delegateFailure {
             throw delegateFailure
         }
-        let fetched = await store.snapshot()
-        if !fetched.unresolvedRemoteDeletionRecordIDs.isEmpty {
-            try await store.update {
-                try $0.resolveRemoteNoteDeletions()
-            }
-        }
+        try await resolveRemoteSnapshotDeletions()
         let state = await store.snapshot()
         try assertActive()
         try state.validateRemoteDeletions()
         return try state.page(after: cursor, limit: Self.pageSize)
+    }
+
+    /// Confirm surviving immutable records outside CKSyncEngine callbacks.
+    /// The inbox retains deleted payloads for replay, so membership there is
+    /// not evidence that iCloud still holds a replacement. No record is
+    /// removed locally or remotely by this compatibility check.
+    private func resolveRemoteSnapshotDeletions() async throws {
+        let initial = await store.snapshot()
+        guard !initial.unresolvedRemoteDeletionRecordIDs.isEmpty else { return }
+        try await store.update { try $0.resolveRemoteNoteDeletions() }
+        let pending = await store.snapshot()
+        try assertActive()
+        guard !pending.hasUnexpectedDeletion else {
+            throw CloudKitSyncTransportError.unexpectedDeletion
+        }
+        let candidates = try pending.retirementCandidates()
+        for candidate in candidates {
+            try Task.checkCancellation()
+            let current = await store.snapshot()
+            if current.unresolvedRemoteDeletionRecordIDs.isEmpty { break }
+            guard !current.remoteDeletedSnapshotIDs.contains(candidate.id) else {
+                continue
+            }
+            let id = CKRecord.ID(recordName: candidate.id, zoneID: zoneID)
+            do {
+                let cloudRecord = try await cloudRequest(
+                    labLabel: "retirement.readSurvivor"
+                ) {
+                    try await database.record(for: id)
+                }
+                let confirmed = try decode(cloudRecord)
+                try await store.update {
+                    try $0.resolveSnapshotRetirements(
+                        confirmedRecords: [confirmed]
+                    )
+                }
+            } catch let error as CKError where error.code == .unknownItem {
+                // A cached replacement may itself have been retired while
+                // this device was offline. Preserve that obligation too.
+                let bootstrapRecordName = mode.bootstrapName
+                try await store.update {
+                    _ = $0.observeRemoteDeletions(
+                        [candidate.id], bootstrapRecordName: bootstrapRecordName
+                    )
+                }
+            } catch let error as CKError where error.code == .zoneNotFound {
+                try await haltForDeletedZone()
+                throw CloudKitSyncTransportError.unexpectedDeletion
+            }
+        }
+        let resolved = await store.snapshot()
+        try assertActive()
+        try resolved.validateRemoteDeletions()
     }
 
     public func purgeDeletedNotes(
@@ -2096,16 +2161,10 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 )
             }
             if let delegateFailure { throw delegateFailure }
-            let fetched = await store.snapshot()
-            if !fetched.unresolvedRemoteDeletionRecordIDs.isEmpty
-                || requiresScan {
+            try await resolveRemoteSnapshotDeletions()
+            if requiresScan {
                 try await store.update {
-                    if !$0.unresolvedRemoteDeletionRecordIDs.isEmpty {
-                        try $0.resolveRemoteNoteDeletions()
-                    }
-                    if requiresScan {
-                        $0.scannedDeletedNoteIDs.formUnion(noteIDs)
-                    }
+                    $0.scannedDeletedNoteIDs.formUnion(noteIDs)
                 }
             }
             state = await store.snapshot()
@@ -2752,7 +2811,12 @@ extension CloudKitSyncTransport {
                 }
             case let .didFetchChanges(scheduled):
                 do {
-                    try await eventCommitter.finishFetch()
+                    // This callback reports durable receipt, not sync success.
+                    // Normal fetch/purge confirms retirement coverage after
+                    // the engine returns, without nested cloud requests here.
+                    try await eventCommitter.finishFetch(
+                        allowUnresolvedSnapshots: true
+                    )
                     let reason: CloudKitSyncReason =
                         scheduled ? .scheduled : .manual
                     if let activity = activityTracker.finishFetch(

@@ -320,7 +320,7 @@ final class CloudKitTransportStateTests: XCTestCase {
         XCTAssertThrowsError(try state.validateRemoteDeletions())
     }
 
-    func testCanonicalNotebookDeletionStillPoisonsTransport() throws {
+    func testCanonicalDeletionIsFatalButOrdinaryCatalogIsRetryable() throws {
         var state = CloudKitTransportState(
             accountRecordName: "account",
             zoneName: "meh-md-notebook-v2",
@@ -344,7 +344,11 @@ final class CloudKitTransportStateTests: XCTestCase {
             [catalog.id],
             bootstrapRecordName: "canonical-notebook-v2"
         )
-        XCTAssertTrue(catalogState.hasUnexpectedDeletion)
+        XCTAssertFalse(catalogState.hasUnexpectedDeletion)
+        XCTAssertEqual(
+            catalogState.unresolvedRemoteDeletionRecordIDs, [catalog.id]
+        )
+        XCTAssertThrowsError(try catalogState.validateRemoteDeletions())
     }
 
     func testRetryDeadlineAndPendingOutboxPersistTogether() async throws {
