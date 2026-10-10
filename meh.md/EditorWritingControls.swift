@@ -1462,12 +1462,12 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         }
 
         private func saveOrder() {
-            UserDefaults.standard.set(commands.map(\.id), forKey: Self.orderDefaultsKey)
+            NotebookEditorPreferences.store.set(commands.map(\.id), forKey: Self.orderDefaultsKey)
         }
 
         private static func savedCommands() -> [KeyboardCommandDefinition] {
             let ids = KeyboardCommandDefinition.all.map(\.id)
-            let saved = UserDefaults.standard.stringArray(forKey: orderDefaultsKey) ?? []
+            let saved = NotebookEditorPreferences.store.stringArray(forKey: orderDefaultsKey) ?? []
             var retained: [String] = []
             for id in saved where ids.contains(id) && !retained.contains(id) {
                 retained.append(id)

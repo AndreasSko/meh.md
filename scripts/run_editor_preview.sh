@@ -21,6 +21,7 @@ xcrun swiftc -parse-as-library -swift-version 6 \
   "$repo_root/meh.md/MarkdownLivePreview.swift" \
   "$repo_root/meh.md/EditorTextSizeControl.swift" \
   "$repo_root/meh.md/EditorWritingControls.swift" \
+  "$repo_root/meh.md/NotebookEditorPreferences.swift" \
   "$repo_root/Tools/EditorPreview/EditorPreview.swift" \
   -o "$preview_app/Contents/MacOS/EditorPreview"
 

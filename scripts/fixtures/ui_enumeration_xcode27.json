@@ -1,0 +1,20 @@
+{
+  "errors": [],
+  "values": [
+    {
+      "disabledTests": [],
+      "enabledTests": [
+        {
+          "identifier": "meh.mdUITests/EditorScrollTypingUITests/testSourceReopeningKeyboardNearEndRevealsCaret()"
+        },
+        {
+          "identifier": "meh.mdUITests/NotebookDragUITests/testSortDragResortAndRelaunchPreserveOrderAndSource()"
+        },
+        {
+          "identifier": "meh.mdUITests/WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote()"
+        }
+      ],
+      "testPlan": "CIUniverse"
+    }
+  ]
+}

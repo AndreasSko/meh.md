@@ -11,6 +11,10 @@ build/
 .build/
 .swiftpm/xcode/
 
+# Python helpers must not make a hosted source checkout appear dirty.
+__pycache__/
+*.pyc
+
 # Xcode-generated project metadata
 *.xcscmblueprint
 *.xccheckout

@@ -2,133 +2,116 @@ import XCTest
 
 /// Runs against a fictional, isolated notebook, including in iCloud Dev.
 final class LargeNoteHistoryUITests: XCTestCase {
-    @MainActor
-    func testLargeHistoryLoadsBrowsesAndReopens() throws {
-        #if os(macOS)
-        throw XCTSkip("Large History interaction regression runs on iPhone and iPad")
-        #endif
-        continueAfterFailure = false
-        let app = makeApp()
-        app.launch()
-        openFixture(in: app)
-        let current = try XCTUnwrap(app.textViews["markdown-editor"].value as? String)
-
-        openHistory(in: app)
-        let preview = app.textViews["note-history-preview"]
-        XCTAssertTrue(preview.waitForExistence(timeout: 10),
-                      "Large History should show its current preview promptly")
-        waitForValue(current, in: preview)
-        let heading = app.descendants(matching: .any)
-            .matching(identifier: "note-history-title").firstMatch
-        XCTAssertTrue(heading.exists)
-        let navigationBar = app.navigationBars.firstMatch
-        XCTAssertTrue(navigationBar.exists)
-        XCTAssertGreaterThanOrEqual(heading.frame.minY, navigationBar.frame.maxY)
-        let loading = app.descendants(matching: .any)
-            .matching(identifier: "note-history-index-loading").firstMatch
-        let completionStarted = Date()
-        var completionPolls = 0
-        // A large accessibility snapshot can consume 20 seconds on CI. This
-        // functional wait allows polling; Swift Release guards enforce timing.
-        let finished = XCTNSPredicateExpectation(
-            predicate: NSPredicate { object, _ in
-                completionPolls += 1
-                guard let indicator = object as? XCUIElement else { return false }
-                return !indicator.exists
-            }, object: loading
-        )
-        let completionResult = XCTWaiter.wait(for: [finished], timeout: 60)
-        XCTAssertEqual(completionResult, .completed,
-                       "Index completion polls: \(completionPolls), elapsed: " +
-                       "\(Date().timeIntervalSince(completionStarted)) seconds")
-        let previous = app.buttons["note-history-previous"]
-        waitUntilEnabled(previous, timeout: 20)
-        previous.tap()
-        waitForDifferentValue(current, in: preview)
-        let earlier = try XCTUnwrap(preview.value as? String)
-        XCTAssertNotEqual(earlier, current)
-
-        // Each tap can supersede a still-running preview request. The last
-        // selected version must win, even if an older request finishes later.
-        let next = app.buttons["note-history-next"]
-        for _ in 0..<3 {
-            waitUntilEnabled(next, timeout: 30)
-            next.tap()
-            waitUntilEnabled(previous, timeout: 30)
-            previous.tap()
-        }
-        waitUntilEnabled(next, timeout: 30)
-        next.tap()
-        waitForValue(current, in: preview)
-        let stalePreview = XCTNSPredicateExpectation(
-            predicate: NSPredicate { object, _ in
-                guard let actual = (object as? XCUIElement)?.value as? String else {
-                    return false
-                }
-                return actual != current
-            }, object: preview
-        )
-        stalePreview.isInverted = true
-        XCTAssertEqual(XCTWaiter.wait(for: [stalePreview], timeout: 2), .completed)
-        capture(app, name: "Large History current version after rapid browsing")
-        let detail = app.buttons["note-history-detail-toggle"]
-        detail.tap()
-        XCTAssertTrue(app.buttons["Overview"].waitForExistence(timeout: 5))
-        previous.tap()
-        waitForDifferentValue(current, in: preview)
-        app.buttons["note-history-date-list"].tap()
-        let currentVersion = app.buttons["Current version"]
-        let menu = app.collectionViews.firstMatch
-        for _ in 0..<3 where !currentVersion.exists {
-            if menu.exists { menu.swipeDown() }
-        }
-        XCTAssertTrue(currentVersion.waitForExistence(timeout: 5))
-        currentVersion.tap()
-        waitForValue(current, in: preview)
-        detail.tap()
-        XCTAssertTrue(app.buttons["More Detail"].waitForExistence(timeout: 5))
-
-        app.buttons["note-history-done"].tap()
-        XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.textViews["markdown-editor"].value as? String, current)
-        openHistory(in: app)
-        XCTAssertTrue(preview.waitForExistence(timeout: 5))
-        // Accessibility snapshots of the large preview can take over 20
-        // seconds on CI. Core tests separately enforce cache timing.
-        waitUntilEnabled(previous, timeout: 30)
-        previous.tap()
-        waitForValue(earlier, in: preview)
-        capture(app, name: "Large History reopened with cached versions")
-    }
+    // UI readiness includes slow accessibility queries on hosted simulators.
+    // App latency remains guarded by the separate History benchmarks.
+    private let historyReadinessTimeout: TimeInterval = 180
 
     @MainActor
-    func testClosingLargeHistoryKeepsEditorAvailable() throws {
-        #if os(macOS)
-        throw XCTSkip("Large History interaction regression runs on iPhone and iPad")
-        #endif
+    func testLargeHistoryCanCloseWhileIndexingAndBrowseWithoutChangingNote() throws {
+#if os(macOS)
+        throw XCTSkip("Large History interaction regression runs on iPhone")
+#else
         continueAfterFailure = false
         let app = makeApp()
+        defer { app.terminate() }
         app.launch()
         openFixture(in: app)
         let editor = app.textViews["markdown-editor"]
-        let current = try XCTUnwrap(editor.value as? String)
+        let current = try readSource(from: editor)
+        let expectedFixture = "# Fictional Observatory\n" + String(repeating:
+            "Café e\u{301} 👋🏽 observations from a fictional mountain station.\n",
+            count: 1_800) + (0..<600).map { $0 % 19 == 0 ? "\n" : "x" }.joined()
+        XCTAssertTrue(current.utf8.elementsEqual(expectedFixture.utf8),
+                      "Editor must contain this complete fictional fixture")
+
+        // Close immediately after opening, before waiting for the index.
+        // This checks the cancellation path independently of completed browsing.
         openHistory(in: app)
         let done = app.buttons["note-history-done"]
-        XCTAssertTrue(done.waitForExistence(timeout: 5),
-                      "History must remain dismissible during indexing")
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
         XCTAssertTrue(done.isEnabled)
         done.tap()
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        XCTAssertEqual(editor.value as? String, current)
-        editor.tap()
-        editor.typeText("\nFictional cancellation check.")
-        let updated = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value CONTAINS %@",
-                                   "Fictional cancellation check."),
-            object: editor
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 5), .completed)
         XCTAssertFalse(app.textViews["note-history-preview"].exists)
+        editor.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
+        let addition = "\nFictional cancellation check."
+        editor.typeText(addition)
+        let updated = try readSource(from: editor)
+        let unchangedParts = updated.components(separatedBy: addition)
+        XCTAssertEqual(unchangedParts.count, 2,
+                       "The editor must contain exactly one complete addition")
+        XCTAssertTrue(unchangedParts.joined().utf8.elementsEqual(current.utf8),
+                      "Typing must preserve every original source byte")
+
+        openHistory(in: app)
+        let preview = app.textViews["note-history-preview"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        waitForIndexReady(in: app)
+        let previous = app.buttons["note-history-previous"]
+        waitUntilEnabled(previous, timeout: historyReadinessTimeout)
+        previous.tap()
+        waitForPreviewReady(in: app)
+        let earlier = try readSource(from: preview)
+        XCTAssertFalse(earlier.utf8.elementsEqual(updated.utf8))
+        app.buttons["note-history-next"].tap()
+        waitForPreviewReady(in: app)
+        let nextSource = try readSource(from: preview)
+        let firstDifference = zip(updated.utf8, nextSource.utf8)
+            .prefix(while: { $0.0 == $0.1 }).count
+        XCTAssertTrue(nextSource.utf8.elementsEqual(updated.utf8),
+                      "Returning to Current must match the validated live edit; " +
+                      "expected \(updated.utf8.count) UTF-8 bytes, " +
+                      "actual \(nextSource.utf8.count), " +
+                      "first differing byte offset \(firstDifference)")
+        done.tap()
+        XCTAssertTrue(try readSource(from: editor).utf8.elementsEqual(updated.utf8),
+                      "Browsing historical text must leave current source intact")
+        openHistory(in: app)
+        waitForIndexReady(in: app)
+        waitUntilEnabled(previous, timeout: historyReadinessTimeout)
+        previous.tap()
+        waitForPreviewReady(in: app)
+        XCTAssertTrue(try readSource(from: preview).utf8.elementsEqual(earlier.utf8))
+        capture(app, name: "Large History can close, browse and reopen safely")
+        done.tap()
+#endif
+    }
+
+#if os(iOS)
+    @MainActor
+    private func readSource(from textView: XCUIElement) throws -> String {
+        XCTAssertTrue(textView.waitForExistence(timeout: 10))
+        // Read the actual editor once after the small readiness markers settle.
+        // Compare UTF-8 locally rather than polling the full source through AX.
+        return try XCTUnwrap(textView.value as? String)
+    }
+#endif
+
+    @MainActor
+    private func waitForPreviewReady(in app: XCUIApplication) {
+        waitForLoadingToFinish(
+            "note-history-preview-loading", in: app, timeout: historyReadinessTimeout
+        )
+    }
+
+    @MainActor
+    private func waitForIndexReady(in app: XCUIApplication) {
+        waitForLoadingToFinish(
+            "note-history-index-loading", in: app, timeout: historyReadinessTimeout
+        )
+    }
+
+    @MainActor
+    private func waitForLoadingToFinish(
+        _ identifier: String, in app: XCUIApplication, timeout: TimeInterval
+    ) {
+        let loading = app.descendants(matching: .any)
+            .matching(identifier: identifier).firstMatch
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: loading
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: timeout), .completed)
     }
 
     @MainActor
@@ -140,7 +123,7 @@ final class LargeNoteHistoryUITests: XCTestCase {
         app.launchEnvironment["MEH_NOTEBOOK_HISTORY_FIXTURE"] = "1"
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchEnvironment.removeValue(forKey: "MEH_SYNC_URL")
-        app.launchEnvironment.removeValue(forKey: "MEH_SYNC_CLOUDKIT")
+        app.launchEnvironment["MEH_SYNC_CLOUDKIT"] = "0"
         app.launchArguments += ["-editor.mode", "source"]
         return app
     }
@@ -181,29 +164,6 @@ final class LargeNoteHistoryUITests: XCTestCase {
             object: element
         )
         XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: timeout), .completed)
-    }
-
-    @MainActor
-    private func waitForValue(_ value: String, in element: XCUIElement) {
-        let selected = XCTNSPredicateExpectation(
-            predicate: NSPredicate { object, _ in
-                (object as? XCUIElement)?.value as? String == value
-            }, object: element
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 10), .completed)
-    }
-
-    @MainActor
-    private func waitForDifferentValue(_ value: String, in element: XCUIElement) {
-        let selected = XCTNSPredicateExpectation(
-            predicate: NSPredicate { object, _ in
-                guard let actual = (object as? XCUIElement)?.value as? String else {
-                    return false
-                }
-                return actual != value
-            }, object: element
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 10), .completed)
     }
 
     @MainActor

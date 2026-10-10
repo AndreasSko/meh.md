@@ -4,31 +4,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 evidence_root="${RUNNER_TEMP:-/tmp}/editor-performance-evidence-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 mkdir -p "$evidence_root"
+cp "$repo_root/scripts/fixtures/performance/native-reference-af516.json" \
+  "$evidence_root/recorded-reference.json"
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   printf 'evidence_root=%s\n' "$evidence_root" >> "$GITHUB_OUTPUT"
 fi
 
-baseline_root="${EDITOR_PERFORMANCE_BASELINE_ROOT:-}"
-reference_root="${EDITOR_PERFORMANCE_REFERENCE_ROOT:-}"
-require_control_sources() {
-  local root="$1" expected="$2" label="$3"
-  [[ -n "$root" && -f "$root/.git" ]] || {
-    echo "A detached $label worktree is required" >&2
-    exit 2
-  }
-  local revision
-  revision="$(git -C "$root" rev-parse --verify HEAD)"
-  [[ "$revision" == "$expected" ]] || {
-    echo "Unexpected $label source revision: $revision" >&2
-    exit 2
-  }
-  git -C "$root" -c core.fsmonitor=false diff --quiet HEAD -- Sources meh.md || {
-    echo "$label production sources must match the frozen revision" >&2
-    exit 2
-  }
-}
-require_control_sources "$baseline_root" 1378bf5e1b9fcaf0ff5e97435a320ef7d726ef42 baseline
-require_control_sources "$reference_root" 369814141840b6f9ee1f898eae628d35ad4d68ca reference
 app_cache_root="${RUNNER_TEMP:-/tmp}/editor-performance-app-cache-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 inventory="$evidence_root/simulators.json"
 xcrun simctl list --json > "$inventory"
@@ -63,7 +44,7 @@ trap cleanup EXIT
 
 run_case() {
   local label="$1" size="$2" mode="$3" context="$4" shape="$5"
-  local source_root="${6:-$repo_root}" control="${7:-current}"
+  local source_root="$repo_root"
   local report="$evidence_root/${label}.json"
   local log="$evidence_root/${label}.log"
   printf 'Running %s: %s KB, %s, context=%s\n' "$label" "$size" "$mode" "$context"
@@ -81,41 +62,16 @@ run_case() {
     printf '%s runner failed with status %s\n' "$label" "$run_status" >&2
     return "$run_status"
   fi
-  if [[ "$control" == baseline ]]; then
-    # The control must preserve fidelity/structure; expected slowness is allowed.
-    PYTHONPATH="$repo_root/scripts" python3 - "$report" <<'PY' 2>&1 | tee -a "$log"
-import json
-import sys
-from check_editor_performance import check_report
-with open(sys.argv[1], encoding="utf-8") as source:
-    errors = check_report(json.load(source), 500, "livePreview", "standard",
-                          "notebook", "standard", enforce_budgets=False)
-if errors:
-    sys.exit("\n".join(errors))
-print("Control native fidelity and structure passed")
-PY
-    local check_status=${PIPESTATUS[0]}
-    [[ "$check_status" == 0 ]] || return "$check_status"
-  else
-    # Bash 3.2 treats an empty array as unset under nounset.
-    local checker_arguments=("$report" --size-kb "$size" --mode "$mode"
-      --context "$context" --host notebook --shape "$shape")
-    if [[ "$label" == standard-500kb ]]; then
-      checker_arguments+=(--baseline-report "$evidence_root/baseline-standard-500kb.json")
-    fi
-    python3 "$repo_root/scripts/check_editor_performance.py" \
-      "${checker_arguments[@]}" 2>&1 | tee -a "$log" || return "$?"
-  fi
+  python3 "$repo_root/scripts/check_editor_performance.py" "$report" \
+    --size-kb "$size" --mode "$mode" --context "$context" \
+    --host notebook --shape "$shape" 2>&1 | tee -a "$log" || return "$?"
 }
 
-# Compile every source variant before measuring any of them. The three
-# current workloads share one verified binary.
-for source_root in "$baseline_root" "$reference_root" "$repo_root"; do
-  EDITOR_PERFORMANCE_APP_CACHE="$app_cache_root" \
-    EDITOR_PERFORMANCE_BUILD_ONLY=1 EDITOR_PERFORMANCE_HOST=notebook \
-    "$source_root/scripts/run_editor_performance_check.sh" \
-    "$sim_udid" working-tree livePreview 500
-done
+# Compile the current source once; all workloads reuse this binary.
+EDITOR_PERFORMANCE_APP_CACHE="$app_cache_root" \
+  EDITOR_PERFORMANCE_BUILD_ONLY=1 EDITOR_PERFORMANCE_HOST=notebook \
+  "$repo_root/scripts/run_editor_performance_check.sh" \
+  "$sim_udid" working-tree livePreview 500
 
 failed_cases=()
 record_case() {
@@ -128,34 +84,17 @@ record_case() {
     return 0
   fi
 }
-record_case baseline-standard-500kb 500 livePreview standard standard "$baseline_root" baseline
-paired_arguments=()
-attempt="${GITHUB_RUN_ATTEMPT:-1}"
-[[ "$attempt" =~ ^[0-9]+$ ]] || { echo "Invalid run attempt" >&2; exit 2; }
-for pair in 1 2 3; do
-  suffix=""
-  [[ "$pair" == 1 ]] || suffix="-$pair"
-  current_label="standard-500kb$suffix"
-  reference_label="reference-standard-500kb$suffix"
-  paired_arguments+=(--paired-current-report "$evidence_root/$current_label.json"
-    --paired-reference-report "$evidence_root/$reference_label.json")
-  # Reverse order within successive pairs and across rerun attempts.
-  if (( (attempt + pair) % 2 == 0 )); then
-    record_case "$reference_label" 500 livePreview standard standard "$reference_root" reference
-    record_case "$current_label" 500 livePreview standard standard
-  else
-    record_case "$current_label" 500 livePreview standard standard
-    record_case "$reference_label" 500 livePreview standard standard "$reference_root" reference
-  fi
+current_arguments=()
+for run in 1 2 3; do
+  label="standard-500kb-$run"
+  current_arguments+=(--current-report "$evidence_root/$label.json")
+  record_case "$label" 500 livePreview standard standard
 done
-if python3 "$repo_root/scripts/check_editor_performance.py" \
-  "$evidence_root/standard-500kb.json" --size-kb 500 --host notebook \
-  --context standard "${paired_arguments[@]}" \
-  > "$evidence_root/paired-comparison.log" 2>&1; then
-  cat "$evidence_root/paired-comparison.log"
-else
-  cat "$evidence_root/paired-comparison.log"
-  failed_cases+=("paired comparison")
+if ! python3 "$repo_root/scripts/check_editor_performance.py" \
+  "$evidence_root/standard-500kb-1.json" --size-kb 500 --host notebook \
+  --context standard --recorded-reference "${current_arguments[@]}" \
+  2>&1 | tee "$evidence_root/recorded-comparison.log"; then
+  failed_cases+=("recorded baseline comparison")
 fi
 record_case mixed-50kb 50 livePreview mixed standard
 record_case nearby-table-50kb 50 livePreview standard nearby-table

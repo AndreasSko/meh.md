@@ -1,25 +1,26 @@
 # iPhone editor regression gate
 
-The `iPhone editor regressions` workflow runs on the Xcode 27 runner. It
-uses a fresh, owned iPhone 12 Pro Max simulator with an available iOS 27
-runtime. It requires the software keyboard and fails if the expected
-tests are missing or skipped. It does not change global Simulator settings.
+The native workflow and UI workflow now share the coverage contract in
+[Test foundation](test-foundation.md). The iPhone UI lane retains the fresh,
+owned iPhone 12 Pro Max with an available iOS 27 runtime. The software keyboard
+is required; missing or skipped cases fail. Global Simulator settings stay
+unchanged.
 
-Run locally with `scripts/run_editor_regressions.sh`, after coordinating
-simulator ownership. The script creates a package-only temporary directory
-with source links to the checkout and a regular copy of `Package.swift`.
-The copied manifest filters out the unrelated `NotebookAppModel` product
-and `NotebookAppModel`, `NotebookAppModelTests` and `NoteCoreTests` targets.
-All existing native target definitions and paths stay intact. The aggregate
-`MehCore-Package` scheme then builds its existing iOS test runner without
-selecting the adjacent app project. UI tests use the shared `meh.md iCloud
-Dev` scheme and explicit `-only-testing` selection. Test data are fictional,
-unique preview notebooks with automatic sync disabled; ordinary notebooks
-are not opened. Native tests mount editors with fixture bindings.
+Run the UI plan locally with an owned simulator and a new evidence directory:
+
+```sh
+python3 scripts/run_ui_foundation.py iphone \
+  --evidence-root /tmp/meh-ui-evidence
+```
+
+The full native comparison runs with
+`scripts/run_native_editor_baseline_parity.sh`. CI also checks all 47 strict
+editor guards inside its current result. The two older runners were removed
+because the unified execution owns their coverage and evidence.
 
 ## Automatic coverage
 
-The native stage requires 35 passing iOS tests, with no skips or failures:
+The strict native subset requires 47 passing iOS tests, with no skips:
 
 | Class | Tests |
 | --- | ---: |
@@ -27,6 +28,9 @@ The native stage requires 35 passing iOS tests, with no skips or failures:
 | `MarkdownParagraphGapTests` | 9 |
 | `MarkdownHeadingGeometryTests` | 1 |
 | `MarkdownRenderingAttributeTests` | 1 |
+| `MarkdownRenderingIndexTests` | 3 |
+| `MarkdownNativeTextChangeTests` | 8 |
+| `MarkdownSelectionSnapshotTests` | 1 |
 | `NativeEditorIntegrationTests` | 12 |
 
 These cover gap insertion/deletion, neighbor refresh, unusual separators,
@@ -34,35 +38,38 @@ table metrics, heading typography, native EOF caret geometry, focus
 rendering, bounded viewport changes, literal editing and undo. The heading
 test includes 36 font/mode/text geometry comparisons.
 
-The UI stage requires exactly these seven passing tests, with no skips:
+The iPhone UI plan uses three keyboard journeys, with no skips:
 
-`EditorScrollTypingUITests`:
+- `testSourceColdFocusAndReturnKeepInsertionVisible`
+- `testPreviewColdFocusTypesIntoTappedParagraph`
+- `testPreviewTypingAndListReturnKeepInsertionVisible`
 
-- `testSourceReopeningKeyboardNearEndRevealsCaret`
-- `testLivePreviewReopeningKeyboardNearEndRevealsCaret`
-- `testSourceTypingAtEndKeepsCaretStable`
-- `testLivePreviewTypingAtEndKeepsCaretStable`
-- `testLivePreviewListReturnAtEndKeepsCaretStable`
-- `testLivePreviewTypingOnEmptyEndLineKeepsCaretStable`
-
-`EditorLongNoteTapUITests`:
-
-- `testTapNearEndReplacesPreviousEOFSelection`
-
-They check exact source insertion, the intended paragraph, visible caret
-pixels, and text anchors after first letters and repeated Returns. Their
-13/15-point monospaced fixtures and OCR/tap coordinates were validated on
-the specified phone geometry; this is not an all-device UI matrix.
+These retain cold focus, typing into the intended paragraph, visible
+insertion and native list Return behavior with exact literal source checks.
+Cold-focus cases check the tapped paragraph above the keyboard before the
+first character, then verify its exact insertion location. Each new line
+uses distinct visible text. Blinking caret color is not an acceptance oracle.
+Two History journeys cover closing while indexing, browsing without changing
+the current note, and restoring a separate note without changing the original.
+They run on the specified phone geometry; this is not an all-device UI matrix.
 
 ## Evidence and limits
 
-Each run preserves the source revision, three production source hashes,
-original/temporary manifest hashes and filter list, simulator inventory,
-build/test logs, both result bundles, summaries, exact test identifiers and
-screenshot attachments. A failed test stage keeps its continuous recording.
-Successful-stage recordings are removed. Cancellation cleans only the
-owned recording process, simulator and temporary build directory; evidence
-remains available. GitHub retains the artifact for 14 days.
+The unified UI artifact preserves source, plan, toolchain and product hashes,
+compiled discovery, exact results, screenshots, per-drag recordings and stage
+timings. Raw result bundles remain on failure. Cancellation removes only the
+owned simulator and build directory. GitHub retains evidence for 14 days.
+The full native artifact preserves its pinned baseline and current results.
+The retained native inventory is expected to contain 244 methods: 243 that
+passed the preceding full run and one opt-in performance skip, after retiring
+three known failing methods. This projection requires fresh execution on the
+changed head. The frozen baseline retains its historical failures.
+Comparison allows only those three explicit removals; every retained current
+method must pass, with no unexpected missing methods or new skips. The 47
+strict guards remain intact. Retirement removes their specific Find and
+first-layout position assertions; it does not establish those outcomes as
+correct. Other saved-position tests remain, but the removed first-preview
+anchor test no longer supplies an automated opening-frame check.
 
 The original interactive canceled Home gesture remains a manual acceptance
 check. Its temporary local acceptance harness uses a private XCTest event

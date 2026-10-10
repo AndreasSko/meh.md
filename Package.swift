@@ -53,6 +53,7 @@ let package = Package(
                 "MarkdownTableAccessibility.swift",
                 "MarkdownLivePreview.swift",
                 "EditorWritingControls.swift",
+                "NotebookEditorPreferences.swift",
                 "MarkdownPresentation.swift", "MarkdownTablePresentation.swift", "MarkdownSyntax.swift", "MyApp.swift",
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
                 "NotebookQuickActionRequests.swift",
@@ -75,6 +76,7 @@ let package = Package(
             ],
             sources: [
                 "NotebookWorkspace.swift",
+                "NotebookUITestFixture.swift",
                 "NotebookIncomingImportRequests.swift",
                 "NotebookSyncIndicator.swift",
                 "NotebookNoteName.swift",
@@ -101,6 +103,7 @@ let package = Package(
             path: "meh.md",
             exclude: [
                 "MyApp.swift", "Assets.xcassets",
+                "NotebookUITestFixture.swift",
                 "NotebookView.swift", "NotebookNoteEditor.swift", "NotebookWorkspace.swift",
                 "NotebookBrowserDropInteraction.swift", "NotebookBrowserDrag.swift",
                 "NotebookBrowserNativeUIKitDrop.swift",
@@ -140,6 +143,7 @@ let package = Package(
             ],
             sources: [
                 "MarkdownEditor.swift",
+                "NotebookEditorPreferences.swift",
                 "EditorTextSizeControl.swift",
                 "MarkdownEditingCommands.swift",
                 "MarkdownTableEditing.swift",

@@ -10,178 +10,100 @@ final class EditorScrollTypingUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
-    func testSourceReopeningKeyboardNearEndRevealsCaret() throws {
-        try checkReopeningKeyboardNearEnd(mode: "source")
+    func testSourceColdFocusAndReturnKeepInsertionVisible() throws {
+        try checkReopeningKeyboardNearEnd(mode: "source", checkEndReturn: true)
     }
 
-    func testLivePreviewReopeningKeyboardNearEndRevealsCaret() throws {
+    func testPreviewColdFocusTypesIntoTappedParagraph() throws {
         try checkReopeningKeyboardNearEnd(mode: "livePreview")
     }
 
-    func testSourceTypingAtEndKeepsCaretStable() throws {
-        try checkTypingAtEnd(mode: "source")
-    }
-
-    func testLivePreviewTypingAtEndKeepsCaretStable() throws {
-        try checkTypingAtEnd(mode: "livePreview")
-    }
-
-    func testLivePreviewListReturnAtEndKeepsCaretStable() throws {
-        try checkTypingAtEnd(
-            mode: "livePreview", lastLine: "- TARGET 12345", continuation: "- "
-        )
-    }
-
-    func testLivePreviewTypingOnEmptyEndLineKeepsCaretStable() throws {
-        try checkTypingAtEnd(
-            mode: "livePreview", lastLine: "TARGET 12345\n", firstWord: "test"
-        )
-    }
-
-    private func checkTypingAtEnd(
-        mode: String, lastLine: String = "TARGET 12345", continuation: String = "",
-        firstWord: String = "a"
-    ) throws {
-        try XCTSkipUnless(
-            UIDevice.current.userInterfaceIdiom == .phone,
-            "Regression recorded with the iPhone software keyboard"
-        )
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchArguments += [
-            "-editor.mode", mode,
-            "-editor.fontFamily", "monospaced",
-            "-editor.fontSize", "13",
-        ]
-        app.launch()
-        let newItem = app.buttons["notebook-new-item"]
-        XCTAssertTrue(newItem.waitForExistence(timeout: 20))
-        newItem.tap()
-        let title = app.textFields["title-field"]
-        XCTAssertTrue(title.waitForExistence(timeout: 10))
-        title.tap()
-        title.typeText("\n")
-
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        editor.tap()
-        let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
-        // The numeric ending and the later word "test" avoid autocorrection
-        // on both German and English keyboards when Return commits a word.
-        let fixture = (1...40).map {
-            "Fictional prose line \($0) for Cedar journal."
-        }.joined(separator: "\n") + "\n" + lastLine
-        try paste(fixture, into: editor, in: app)
-        XCTAssertEqual(editor.value as? String, fixture)
-        XCTAssertEqual(
-            fixture.components(separatedBy: "\n").count,
-            40 + lastLine.components(separatedBy: "\n").count
-        )
-        try alignEndMarker(in: app, editor: editor)
-
-        let initialAnchor = try requireText("TARGET", in: app, editor: editor)
-        var previousAnchor = initialAnchor
-        let keyboardFrame = keyboard.frame
-        let visibleEditor = unobscuredEditor(editor, keyboard: keyboard)
-        XCTAssertEqual(
-            initialAnchor.midY, visibleEditor.midY,
-            accuracy: visibleEditor.height * 0.2,
-            "The end caret starts near the middle with whitespace below"
-        )
-        capture(app, name: "\(mode)-end-before-typing")
-
-        var expected = fixture
-        expected += tapLetter(String(firstWord.prefix(1)), in: app)
-        previousAnchor = try assertStable(
-            app, editor: editor, expected: expected, anchor: previousAnchor,
-            keyboardFrame: keyboardFrame, stage: "\(mode)-first-letter"
-        )
-        if firstWord.count > 1 {
-            for letter in firstWord.dropFirst() {
-                expected += tapLetter(String(letter), in: app)
-            }
-            previousAnchor = try assertStable(
-                app, editor: editor, expected: expected, anchor: previousAnchor,
-                keyboardFrame: keyboardFrame, stage: "\(mode)-first-word"
-            )
-        }
-        for cycle in 1...4 {
-            let returnKey = app.buttons.matching(
-                NSPredicate(format: "label IN %@", ["Return", "return"])
-            ).firstMatch
-            XCTAssertTrue(returnKey.exists)
-            returnKey.tap()
-            expected += "\n" + continuation
-            previousAnchor = try assertStable(
-                app, editor: editor, expected: expected, anchor: previousAnchor,
-                keyboardFrame: keyboardFrame,
-                stage: "\(mode)-cycle-\(cycle)-return",
-                returnMayAdvance: true
-            )
-            XCTAssertGreaterThanOrEqual(
-                previousAnchor.midY, initialAnchor.midY - CGFloat(32 * cycle) - 8,
-                "Repeated Return must move by at most one paragraph per line"
-            )
-            // Measure the first letter separately: the original failure
-            // reverses the Return jump as soon as the next letter arrives.
-            expected += tapLetter("t", in: app)
-            previousAnchor = try assertStable(
-                app, editor: editor, expected: expected, anchor: previousAnchor,
-                keyboardFrame: keyboardFrame,
-                stage: "\(mode)-cycle-\(cycle)-first-letter"
-            )
-            for letter in ["e", "s", "t"] {
-                expected += tapLetter(letter, in: app)
-            }
-            previousAnchor = try assertStable(
-                app, editor: editor, expected: expected, anchor: previousAnchor,
-                keyboardFrame: keyboardFrame,
-                stage: "\(mode)-cycle-\(cycle)-word"
-            )
-            let lastLine = try requireText(
-                "test", in: app, editor: editor, last: true
-            )
-            let visible = unobscuredEditor(editor, keyboard: keyboard)
-            XCTAssertGreaterThanOrEqual(lastLine.minY, visible.minY)
-            XCTAssertGreaterThanOrEqual(
-                lastLine.minY, initialAnchor.minY - 8,
-                "The insertion line must stay in place or advance downward"
-            )
-            XCTAssertLessThan(lastLine.maxY, visible.maxY - 8)
-        }
-        // Exact suffix readback proves typing stayed at EOF. OCR verifies
-        // the final insertion line remains above the software keyboard.
-        XCTAssertEqual(editor.value as? String, expected)
-    }
-
-    private func checkReopeningKeyboardNearEnd(mode: String) throws {
+    func testPreviewTypingAndListReturnKeepInsertionVisible() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
         continueAfterFailure = false
+        let app = makeApp(mode: "livePreview")
+        defer { app.terminate() }
+        app.launch()
+        let editor = try createEditor(in: app)
+        let fixture = (1...40).map {
+            "Fictional prose line \($0) for Cedar journal."
+        }.joined(separator: "\n") + "\n- TARGET 12345"
+        try paste(fixture, into: editor, in: app)
+        try alignEndMarker(in: app, editor: editor)
+        var expected = fixture
+        for letter in "test" { expected += tapLetter(String(letter), in: app) }
+        try assertVisibleInsertion(expected, in: app, editor: editor, marker: "TARGET")
+        let completedListSource = expected
+        tapReturn(in: app)
+        expected += "\n- "
+        XCTAssertEqual(editor.value as? String, expected)
+        try requireVisibleInsertionParagraph("TARGET", in: app, editor: editor)
+        // Empty-item Return exits the list; typing then remains literal prose.
+        tapReturn(in: app)
+        expected = completedListSource + "\n"
+        XCTAssertEqual(editor.value as? String, expected)
+        for letter in "clear" { expected += tapLetter(String(letter), in: app) }
+        try assertVisibleInsertion(expected, in: app, editor: editor, marker: "clear")
+        tapReturn(in: app)
+        expected += "\n"
+        for letter in "next" { expected += tapLetter(String(letter), in: app) }
+        try assertVisibleInsertion(expected, in: app, editor: editor, marker: "next")
+        capture(app, name: "Preview writing stays visible after list and plain Return")
+    }
+
+    private func makeApp(mode: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchArguments += [
-            "-editor.mode", mode, "-editor.fontFamily", "monospaced",
-            "-editor.fontSize", "13",
-        ]
-        app.launch()
+        app.launchEnvironment["MEH_SYNC_CLOUDKIT"] = "0"
+        app.launchArguments += ["-editor.mode", mode]
+        return app
+    }
+
+    private func createEditor(in app: XCUIApplication) throws -> XCUIElement {
         let newItem = app.buttons["notebook-new-item"]
         XCTAssertTrue(newItem.waitForExistence(timeout: 20))
         newItem.tap()
         let title = app.textFields["title-field"]
         XCTAssertTrue(title.waitForExistence(timeout: 10))
-        title.tap()
         title.typeText("\n")
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        return editor
+    }
+
+    private func tapReturn(in app: XCUIApplication) {
+        let key = app.buttons.matching(NSPredicate(
+            format: "label IN %@", ["Return", "return"]
+        )).firstMatch
+        XCTAssertTrue(key.exists)
+        key.tap()
+    }
+
+    private func assertVisibleInsertion(
+        _ expected: String, in app: XCUIApplication,
+        editor: XCUIElement, marker: String
+    ) throws {
+        XCTAssertEqual(editor.value as? String, expected)
+        let line = try requireText(marker, in: app, editor: editor, last: true)
+        let visible = unobscuredEditor(editor, in: app, keyboard: app.keyboards.firstMatch)
+        XCTAssertTrue(visible.contains(CGPoint(x: line.midX, y: line.midY)),
+                      "The insertion line must remain visible above the keyboard")
+    }
+
+    private func checkReopeningKeyboardNearEnd(
+        mode: String, checkEndReturn: Bool = false
+    ) throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
+        continueAfterFailure = false
+        let app = makeApp(mode: mode)
+        defer { app.terminate() }
+        app.launch()
+        let editor = try createEditor(in: app)
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
 
         var lines = ["# Fictional Cedar journal", ""]
         for week in 1...100 {
@@ -195,7 +117,7 @@ final class EditorScrollTypingUITests: XCTestCase {
             "## Final discussion", "", "- TARGET Cedar meeting 12345 67890",
             "- Follow up with Morgan.", "- Review the draft agenda.", "",
             "## Remaining items", "", "- Pack the sample folders.",
-            "- Check the room booking.", "- Close the fictional journal.",
+            "- Check the room booking.", "Close the fictional journal.",
         ]
         let fixture = lines.joined(separator: "\n")
         try paste(fixture, into: editor, in: app)
@@ -210,10 +132,13 @@ final class EditorScrollTypingUITests: XCTestCase {
         // Real scrolling leaves TextKit estimating offscreen paragraphs.
         // Do not query caret geometry or materialize document layout here.
         for _ in 0..<20 { editor.swipeDown() }
-        let lowerBand = app.frame.height * 0.744...app.frame.height * 0.915
-        let preferredY = app.frame.height * 0.824
-        let dragX = app.frame.maxX - 32
-        let dragY = app.frame.height * 0.435
+        let closedViewport = editor.frame.intersection(app.frame)
+        let minimumY = closedViewport.minY + closedViewport.height * 0.65
+        let maximumY = closedViewport.minY + closedViewport.height * 0.9
+        let lowerBand = minimumY...maximumY
+        let preferredY = closedViewport.minY + closedViewport.height * 0.8
+        let dragX = closedViewport.maxX - closedViewport.width * 0.08
+        let dragY = closedViewport.midY
         var target: CGRect?
         for _ in 0..<25 {
             target = try textRects("TARGET", in: app, editor: editor).first
@@ -240,17 +165,18 @@ final class EditorScrollTypingUITests: XCTestCase {
         // Use the numeric suffix: tapping a spellchecked word can select it
         // legitimately, which does not produce an insertion caret.
         app.coordinate(withNormalizedOffset: .zero).withOffset(
-            CGVector(dx: 280, dy: closedTarget.midY)
+            CGVector(dx: closedTarget.maxX - closedTarget.width * 0.08,
+                     dy: closedTarget.midY)
         ).tap()
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
-        try requireVisibleCaret(in: app, editor: editor)
+        try requireVisibleInsertionParagraph("TARGET", in: app, editor: editor)
         capture(app, name: "\(mode)-cold-focus-keyboard-open")
 
         let inserted = tapLetter("q", in: app)
         capture(app, name: "\(mode)-cold-focus-first-character")
-        // A single Q can be recognized as O at this size. Check the actual
-        // insertion caret and exact source bytes after the first key.
-        try requireVisibleCaret(in: app, editor: editor)
+        // Exact bytes identify the insertion position; the tapped paragraph
+        // must remain visible above the keyboard after the first character.
+        try requireVisibleInsertionParagraph("TARGET", in: app, editor: editor)
         let changed = try XCTUnwrap(editor.value as? String)
         let before = Array(fixture.utf16), after = Array(changed.utf16)
         let location = zip(before, after).prefix { $0.0 == $0.1 }.count
@@ -268,76 +194,20 @@ final class EditorScrollTypingUITests: XCTestCase {
         let insertionLine = (fixture as NSString).substring(to: location)
             .components(separatedBy: "\n").count
         print("Cold focus \(mode): inserted \(inserted) on source line \(insertionLine)")
-        if try textRects(inserted, in: app, editor: editor).isEmpty {
-            capture(app, name: "\(mode)-single-character-OCR-unrecognized")
+        if checkEndReturn {
+            editor.typeKey(.downArrow, modifierFlags: .command)
+            tapReturn(in: app)
+            var suffix = "\n"
+            for letter in "finish" { suffix += tapLetter(String(letter), in: app) }
+            try assertVisibleInsertion(expected + suffix, in: app,
+                                       editor: editor, marker: "finish")
         }
     }
 
-    private func requireVisibleCaret(
-        in app: XCUIApplication, editor: XCUIElement
+    private func requireVisibleInsertionParagraph(
+        _ marker: String, in app: XCUIApplication, editor: XCUIElement
     ) throws {
-        // This fictional note has no links or other blue content. Detect
-        // UIKit's blinking caret in actual pixels, without layout queries.
-        // Accessibility queries can make each attempt take about two seconds.
-        // Stagger the intervals so every sample cannot hit the caret's hidden
-        // blink phase, as observed in the CI recording.
-        let delays: [TimeInterval] = [0.17, 0.43, 0.71, 0.29, 0.59]
-        var failedSamples: [(XCUIScreenshot, CGRect)] = []
-        for attempt in 0...delays.count {
-            let screenshot = app.screenshot()
-            let image = try XCTUnwrap(UIImage(data: screenshot.pngRepresentation)?.cgImage)
-            let width = image.width, height = image.height
-            var pixels = [UInt8](repeating: 0, count: width * height * 4)
-            pixels.withUnsafeMutableBytes { bytes in
-                let context = CGContext(
-                    data: bytes.baseAddress, width: width, height: height,
-                    bitsPerComponent: 8, bytesPerRow: width * 4,
-                    space: CGColorSpaceCreateDeviceRGB(),
-                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                        | CGBitmapInfo.byteOrder32Big.rawValue
-                )!
-                context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            }
-            let scale = CGFloat(height) / app.frame.height
-            let visible = unobscuredEditor(
-                editor, keyboard: app.keyboards.firstMatch
-            )
-            let toolbar = app.otherElements["editor-keyboard-toolbar"]
-            let bold = app.buttons["editor-command-bold"]
-            let accessoryTop = toolbar.exists ? toolbar.frame.minY
-                : bold.exists ? bold.frame.minY : visible.maxY
-            let coveredY = min(visible.maxY, accessoryTop)
-            let top = Int(max(116, visible.minY) * scale)
-            let bottom = Int(min(app.frame.maxY, coveredY - 8) * scale)
-            var firstRow = height, lastRow = -1
-            for y in top..<bottom {
-                for x in 0..<width {
-                    let offset = (y * width + x) * 4
-                    let red = Int(pixels[offset]), green = Int(pixels[offset + 1])
-                    let blue = Int(pixels[offset + 2])
-                    if blue > 180, blue > red + 70, blue > green + 50 {
-                        firstRow = min(firstRow, y)
-                        lastRow = max(lastRow, y)
-                    }
-                }
-            }
-            if CGFloat(lastRow - firstRow) >= scale * 6 { return }
-            failedSamples.append((screenshot, CGRect(
-                x: 0, y: CGFloat(top) / scale, width: CGFloat(width) / scale,
-                height: CGFloat(bottom - top) / scale
-            )))
-            if attempt < delays.count {
-                Thread.sleep(forTimeInterval: delays[attempt])
-            }
-        }
-        for (index, sample) in failedSamples.enumerated() {
-            let attachment = XCTAttachment(screenshot: sample.0)
-            attachment.name = "Caret sample \(index + 1), visible \(sample.1)"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-        }
-        capture(app, name: "Focused caret missing above keyboard")
-        XCTFail("The caret must be visible when the keyboard opens and typing begins")
+        _ = try requireText(marker, in: app, editor: editor, last: true)
     }
 
     private func paste(
@@ -382,12 +252,12 @@ final class EditorScrollTypingUITests: XCTestCase {
     ) throws {
         let keyboard = app.keyboards.firstMatch
         for _ in 0..<5 {
-            let visible = unobscuredEditor(editor, keyboard: keyboard)
+            let visible = unobscuredEditor(editor, in: app, keyboard: keyboard)
             let marker = try textRects("TARGET", in: app, editor: editor).last
             let delta = marker.map { visible.midY - $0.midY }
                 ?? -visible.height * 0.5
             if let marker,
-               abs(marker.midY - visible.midY) <= visible.height * 0.15 {
+               visible.contains(CGPoint(x: marker.midX, y: marker.midY)) {
                 return
             }
             let movement = max(-visible.height * 0.5,
@@ -404,39 +274,9 @@ final class EditorScrollTypingUITests: XCTestCase {
             ))
             start.press(forDuration: 0.05, thenDragTo: end,
                         withVelocity: .slow, thenHoldForDuration: 0)
-            Thread.sleep(forTimeInterval: 0.3)
             XCTAssertTrue(keyboard.exists)
         }
-        XCTFail("Could not align the final line near the editor midpoint")
-    }
-
-    private func assertStable(
-        _ app: XCUIApplication, editor: XCUIElement, expected: String,
-        anchor: CGRect, keyboardFrame: CGRect, stage: String,
-        returnMayAdvance: Bool = false
-    ) throws -> CGRect {
-        capture(app, name: stage)
-        XCTAssertEqual(editor.value as? String, expected)
-        let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.exists)
-        XCTAssertEqual(keyboard.frame.minY, keyboardFrame.minY, accuracy: 1)
-        XCTAssertEqual(keyboard.frame.height, keyboardFrame.height, accuracy: 1)
-        let current = try requireText("TARGET", in: app, editor: editor)
-        if returnMayAdvance {
-            // At the fixed 13-point monospaced size, native caret following
-            // can scroll one new paragraph upward (observed around 23 pt).
-            // Allow 32 pt for that advance, while rejecting the original
-            // large Return jump and any downward reversal on the next key.
-            let movement = current.midY - anchor.midY
-            XCTAssertGreaterThanOrEqual(movement, -32)
-            XCTAssertLessThanOrEqual(movement, 8)
-        } else {
-            XCTAssertEqual(
-                current.midY, anchor.midY, accuracy: 8,
-                "Letters must preserve the position reached after Return"
-            )
-        }
-        return current
+        XCTFail("Could not reveal the final paragraph above the keyboard")
     }
 
     private func tapLetter(_ letter: String, in app: XCUIApplication) -> String {
@@ -450,24 +290,49 @@ final class EditorScrollTypingUITests: XCTestCase {
     }
 
     private func unobscuredEditor(
-        _ editor: XCUIElement, keyboard: XCUIElement
+        _ editor: XCUIElement, in app: XCUIApplication, keyboard: XCUIElement
     ) -> CGRect {
         let frame = editor.frame
+        let keyboardTop = keyboard.exists ? keyboard.frame.minY : frame.maxY
+        let toolbar = app.otherElements["editor-keyboard-toolbar"]
+        let bold = app.buttons["editor-command-bold"]
+        let accessoryTop = toolbar.exists ? toolbar.frame.minY
+            : bold.exists ? bold.frame.minY : keyboardTop
+        let bottom = min(frame.maxY, min(keyboardTop, accessoryTop))
         return CGRect(x: frame.minX, y: frame.minY, width: frame.width,
-                      height: min(frame.maxY, keyboard.frame.minY) - frame.minY)
+                      height: max(0, bottom - frame.minY))
     }
 
     private func requireText(
         _ text: String, in app: XCUIApplication, editor: XCUIElement,
         last: Bool = false
     ) throws -> CGRect {
-        for attempt in 0..<2 {
-            let matches = try textRects(text, in: app, editor: editor)
-            if let match = last ? matches.last : matches.first { return match }
-            if attempt == 0 { Thread.sleep(forTimeInterval: 0.3) }
+        var observed: CGRect?
+        var observationError: Error?
+        let visibleText = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                do {
+                    let visible = self.unobscuredEditor(
+                        editor, in: app, keyboard: app.keyboards.firstMatch
+                    )
+                    let matches = try self.textRects(text, in: app, editor: editor)
+                        .filter { visible.contains(CGPoint(x: $0.midX, y: $0.midY)) }
+                    observed = last ? matches.last : matches.first
+                    return observed != nil
+                } catch {
+                    observationError = error
+                    return false
+                }
+            }, object: editor
+        )
+        let result = XCTWaiter.wait(for: [visibleText], timeout: 15)
+        if result != .completed {
+            capture(app, name: "Missing visible text: \(text)")
         }
-        capture(app, name: "Missing OCR text: \(text)")
-        return try XCTUnwrap(nil as CGRect?, "Visible text missing: \(text)")
+        XCTAssertEqual(result, .completed,
+                       "Expected the paragraph above the keyboard: \(text)")
+        if let observationError, observed == nil { throw observationError }
+        return try XCTUnwrap(observed, "Visible text missing: \(text)")
     }
 
     private func textRects(

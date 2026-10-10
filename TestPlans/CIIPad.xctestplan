@@ -1,0 +1,36 @@
+{
+  "configurations": [
+    {
+      "id": "AD0551F4-4D63-49A5-97EA-7A8CB7388988",
+      "name": "CI",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "testTimeoutsEnabled": true,
+    "defaultTestExecutionTimeAllowance": 1800,
+    "maximumTestExecutionTimeAllowance": 2700,
+    "testExecutionOrdering": "lexical",
+    "preferredScreenCaptureFormat": "video",
+    "uiTestingScreenshotsLifetime": "deleteOnSuccess",
+    "userAttachmentLifetime": "deleteOnSuccess"
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:meh.md.xcodeproj",
+        "identifier": "000000000000000100000001",
+        "name": "meh.mdUITests"
+      },
+      "parallelizable": false,
+      "selectedTests": [
+        "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",
+        "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
+        "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
+        "NotebookDragUITests/testSelectedNotesDragTogetherAndKeepTheirSource",
+        "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote"
+      ]
+    }
+  ],
+  "version": 1
+}

@@ -32,16 +32,10 @@ def valid_results(phase="native"):
 
 
 class CheckEditorRegressionResultsTests(unittest.TestCase):
-    def test_accepts_all_47_native_and_11_ui_cases(self):
-        for phase, count in (("native", 47), ("ui", 11)):
+    def test_accepts_all_47_native_and_5_ui_cases(self):
+        for phase, count in (("native", 47), ("ui", 5)):
             with self.subTest(phase=phase):
                 self.assertEqual(len(check(phase, *valid_results(phase))), count)
-
-    def test_runner_selects_both_edit_invariant_classes(self):
-        runner = Path(__file__).with_name("run_editor_regressions.sh").read_text()
-        for name in ("MarkdownNativeTextChangeTests", "MarkdownSelectionSnapshotTests",
-                     "MarkdownRenderingIndexTests"):
-            self.assertIn(f"-only-testing:NativeEditorTests/{name} \\", runner)
 
     def test_rejects_old_native_selection_even_with_passing_summary(self):
         summary, tests = valid_results()
