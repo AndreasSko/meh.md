@@ -23,6 +23,8 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         case failSave(CKError.Code, matching: @Sendable (CKRecord.ID) -> Bool)
         /// The next direct record read fails with `networkFailure`.
         case failNextRead
+        /// Remove a record after fetched events, just before a direct read.
+        case deleteBeforeNextRead(String)
         /// The next engine send stores its batch, then the app dies before
         /// the sent-changes event is delivered.
         case crashAfterServerSave
@@ -128,6 +130,12 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
 
     func record(for recordID: CKRecord.ID) async throws -> CKRecord {
         try checkReachable()
+        if case let .deleteBeforeNextRead(name)? = takeFault(where: {
+            if case .deleteBeforeNextRead = $0 { return true }
+            return false
+        }) {
+            deleteRecord(named: name)
+        }
         if takeFault(where: {
             if case .failNextRead = $0 { return true }
             return false
