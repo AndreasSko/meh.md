@@ -10,7 +10,7 @@ extension CloudKitTransportState {
         }
         var histories: [String: Set<String>] = [:]
         for record in deleted {
-            histories[record.id] = try retirementHistory(record)
+            histories[record.id] = try snapshotHistoryChangeHashes(record)
         }
         return try inbox.filter { candidate in
             guard !remoteDeletedSnapshotIDs.contains(candidate.id),
@@ -18,10 +18,10 @@ extension CloudKitTransportState {
                 return false
             }
             let matching = deleted.filter {
-                retirementIdentityMatches($0, candidate)
+                snapshotHistoryIdentityMatches($0, candidate)
             }
             guard !matching.isEmpty else { return false }
-            let history = try retirementHistory(candidate)
+            let history = try snapshotHistoryChangeHashes(candidate)
             return matching.contains {
                 histories[$0.id]!.isSubset(of: history)
             }
@@ -39,12 +39,12 @@ extension CloudKitTransportState {
         for confirmed in confirmedRecords {
             try confirmed.validate()
             guard candidates.contains(confirmed) else { continue }
-            let history = try retirementHistory(confirmed)
+            let history = try snapshotHistoryChangeHashes(confirmed)
             for deleted in inbox where
                 unresolvedRemoteDeletionRecordIDs.contains(deleted.id)
-                    && retirementIdentityMatches(deleted, confirmed)
+                    && snapshotHistoryIdentityMatches(deleted, confirmed)
             {
-                if try retirementHistory(deleted).isSubset(of: history) {
+                if try snapshotHistoryChangeHashes(deleted).isSubset(of: history) {
                     covered.insert(deleted.id)
                 }
             }
@@ -53,7 +53,7 @@ extension CloudKitTransportState {
     }
 }
 
-private func retirementIdentityMatches(
+func snapshotHistoryIdentityMatches(
     _ lhs: SyncRecord, _ rhs: SyncRecord
 ) -> Bool {
     lhs.protocolVersion == rhs.protocolVersion
@@ -62,7 +62,7 @@ private func retirementIdentityMatches(
         && lhs.snapshot.noteID == rhs.snapshot.noteID
 }
 
-private func retirementHistory(_ record: SyncRecord) throws -> Set<String> {
+func snapshotHistoryChangeHashes(_ record: SyncRecord) throws -> Set<String> {
     if let catalog = record.catalogSnapshot {
         return try NotebookCatalogDocument(snapshot: catalog).historyHeads
     }

@@ -52,6 +52,8 @@ struct CloudKitTransportState: Codable, Equatable {
     var unresolvedRemoteDeletionRecordIDs: Set<String>
     var remoteDeletedSnapshotIDs: Set<String>
     var hasUnexpectedDeletion: Bool
+    var remoteDeletionHaltReason: CloudKitRemoteDeletionHaltReason?
+    var completedSyncStateMigrations: Set<String>
     var retryNotBefore: Date?
     var recoveredInvalidRetryDeadline = false
 
@@ -76,6 +78,10 @@ struct CloudKitTransportState: Codable, Equatable {
         unresolvedRemoteDeletionRecordIDs = []
         remoteDeletedSnapshotIDs = []
         hasUnexpectedDeletion = false
+        remoteDeletionHaltReason = nil
+        completedSyncStateMigrations = [
+            CloudKitSyncStateMigration.legacySnapshotDeletionHalt
+        ]
         retryNotBefore = nil
     }
 
@@ -87,6 +93,7 @@ struct CloudKitTransportState: Codable, Equatable {
         case unresolvedRemoteDeletionRecordIDs
         case remoteDeletedSnapshotIDs
         case hasUnexpectedDeletion, retryNotBefore
+        case remoteDeletionHaltReason, completedSyncStateMigrations
     }
 
     init(from decoder: any Decoder) throws {
@@ -126,6 +133,12 @@ struct CloudKitTransportState: Codable, Equatable {
         hasUnexpectedDeletion = try values.decode(
             Bool.self, forKey: .hasUnexpectedDeletion
         )
+        remoteDeletionHaltReason = try values.decodeIfPresent(
+            CloudKitRemoteDeletionHaltReason.self, forKey: .remoteDeletionHaltReason
+        )
+        completedSyncStateMigrations = try values.decodeIfPresent(
+            Set<String>.self, forKey: .completedSyncStateMigrations
+        ) ?? []
         remoteDeletedSnapshotIDs = try values.decodeIfPresent(
             Set<String>.self, forKey: .remoteDeletedSnapshotIDs
         ) ?? []
@@ -164,6 +177,8 @@ struct CloudKitTransportState: Codable, Equatable {
             forKey: .unresolvedRemoteDeletionRecordIDs
         )
         try values.encode(hasUnexpectedDeletion, forKey: .hasUnexpectedDeletion)
+        try values.encodeIfPresent(remoteDeletionHaltReason, forKey: .remoteDeletionHaltReason)
+        try values.encode(completedSyncStateMigrations, forKey: .completedSyncStateMigrations)
         try values.encode(remoteDeletedSnapshotIDs, forKey: .remoteDeletedSnapshotIDs)
         try values.encodeIfPresent(retryNotBefore, forKey: .retryNotBefore)
     }
@@ -308,6 +323,9 @@ struct CloudKitTransportState: Codable, Equatable {
         )
         hasUnexpectedDeletion = hasUnexpectedDeletion
             || recordNames.contains(bootstrapRecordName)
+        if recordNames.contains(bootstrapRecordName) {
+            remoteDeletionHaltReason = .canonicalBootstrapDeleted
+        }
         let newlyUnresolved = unresolvedRemoteDeletionRecordIDs
             .subtracting(priorUnresolved).count
         return newlyUnresolved
@@ -354,6 +372,9 @@ struct CloudKitTransportState: Codable, Equatable {
     ) throws {
         guard protocolVersion == expectedProtocolVersion else {
             throw SyncError.scopeChanged
+        }
+        guard hasUnexpectedDeletion || remoteDeletionHaltReason == nil else {
+            throw SyncError.invalidRecord
         }
         for (index, slot) in inboxSlots.enumerated() {
             guard let record = slot else { continue }
@@ -1583,6 +1604,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     public nonisolated let scope: String
     public nonisolated let activity: AsyncStream<CloudKitSyncActivity>
     public private(set) var recoveredRetryMetadata = false
+    public private(set) var recoveredLegacySnapshotDeletionHalt = false
 
     private static let pageSize = 100
 
@@ -1597,6 +1619,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private let eventCommitter: CloudKitEventCommitter
     private let assetDirectory: URL
     private let automaticallySync: Bool
+    private let readOnlyRecovery: Bool
     #if DEBUG
     private let labRunID: UUID?
     #endif
@@ -1696,7 +1719,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     static func makeNotebook(
         services: CloudKitServices,
         containerIdentifier: String,
-        stateDirectory: URL
+        stateDirectory: URL,
+        writeState: (@Sendable (Data, URL) throws -> Void)? = nil
     ) async throws -> CloudKitSyncTransport {
         try await make(
             containerIdentifier: containerIdentifier,
@@ -1704,7 +1728,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             zoneName: CloudKitTransportMode.notebook.zoneName,
             mode: .notebook,
             automaticallySync: false,
-            services: services
+            services: services,
+            writeState: writeState
         )
     }
 
@@ -1717,7 +1742,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         expectedScope: String? = nil,
         expectedNotebookID: UUID? = nil,
         labRunID: UUID? = nil,
-        services: CloudKitServices? = nil
+        services: CloudKitServices? = nil,
+        writeState: (@Sendable (Data, URL) throws -> Void)? = nil
     ) async throws -> CloudKitSyncTransport {
         if let labRunID {
             guard mode == .notebook else { throw SyncError.scopeChanged }
@@ -1767,7 +1793,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             directory: stateDirectory,
             accountRecordName: userRecordID.recordName,
             zoneName: zoneName,
-            protocolVersion: mode.protocolVersion
+            protocolVersion: mode.protocolVersion,
+            writeState: writeState
         )
         if let expectedNotebookID {
             let state = await store.snapshot()
@@ -1789,6 +1816,11 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             availabilityCooldown: availabilityCooldown,
             mode: mode,
             automaticallySync: automaticallySync,
+            labRunID: labRunID
+        )
+        try await transport.prepareSyncStateMigrations(
+            containerIdentifier: containerIdentifier,
+            services: services, stateDirectory: stateDirectory,
             labRunID: labRunID
         )
         try await transport.initialize()
@@ -1823,7 +1855,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         availabilityCooldown: CloudKitAvailabilityCooldownStore,
         mode: CloudKitTransportMode,
         automaticallySync: Bool,
-        labRunID: UUID? = nil
+        labRunID: UUID? = nil,
+        readOnlyRecovery: Bool = false
     ) {
         account = services.account
         database = services.database
@@ -1843,10 +1876,209 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         assetStaging = CloudKitAssetStaging(directory: assetDirectory)
         self.availabilityCooldown = availabilityCooldown
         self.automaticallySync = automaticallySync
+        self.readOnlyRecovery = readOnlyRecovery
         #if DEBUG
         self.labRunID = labRunID
         #endif
         scope = "\(containerIdentifier)/private/\(userRecordID.recordName)/\(zoneName)"
+    }
+
+    /// Run named state migrations before the normal engine can offer uploads
+    /// or receive automatic events. Legacy verification owns an empty outbox,
+    /// a fresh fetch token and a disposable store; the original stays halted.
+    private func prepareSyncStateMigrations(
+        containerIdentifier: String, services: CloudKitServices,
+        stateDirectory: URL, labRunID: UUID?
+    ) async throws {
+        guard mode == .notebook else { return }
+        let migration = CloudKitSyncStateMigration.legacySnapshotDeletionHalt
+        let original = await store.snapshot()
+        guard !original.completedSyncStateMigrations.contains(migration),
+              original.remoteDeletionHaltReason == nil else { return }
+        guard original.hasUnexpectedDeletion else {
+            // Healthy legacy state requires no cloud inspection.
+            _ = try await store.update { $0.completedSyncStateMigrations.insert(migration) }
+            return
+        }
+        let notebookID = try original.legacyRecoveryNotebookID()
+        // Old transport-only deadlines must also constrain recovery reads.
+        var recoveryCooldown = availabilityCooldown
+        _ = try recoveryCooldown.reconciledDeadline(
+            saved: original.retryNotBefore, now: Date(),
+            uptime: ProcessInfo.processInfo.systemUptime
+        )
+        try await recoveryCooldown.wait()
+        availabilityCooldown = recoveryCooldown
+        let recoveryRoot = stateDirectory.appending(path: "legacy-recovery-v1")
+        CloudKitAssetGenerationCleanup.prunePreviousProcessGenerations(in: recoveryRoot)
+        let directory = recoveryRoot.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let verificationStore = try await CloudKitTransportStateStore.open(
+            directory: directory, accountRecordName: expectedUserRecordID.recordName,
+            zoneName: zoneID.zoneName, protocolVersion: mode.protocolVersion
+        )
+        let verification = CloudKitSyncTransport(
+            containerIdentifier: containerIdentifier, services: services,
+            userRecordID: expectedUserRecordID, zoneName: zoneID.zoneName,
+            stateDirectory: directory, store: verificationStore,
+            availabilityCooldown: availabilityCooldown, mode: mode,
+            automaticallySync: false, labRunID: labRunID, readOnlyRecovery: true
+        )
+        do {
+            try await verification.initialize()
+            let evidence = try await verification.verifyLegacyDeletionRecovery(
+                original: original, notebookID: notebookID
+            )
+            try Task.checkCancellation()
+            // Preserve the complete old transport state, including outbox
+            // bytes and replay slots, before the single durable transition.
+            let backup = stateDirectory.appending(
+                path: "cloudkit-sync-state.before-legacy-recovery-v1.json"
+            )
+            if !FileManager.default.fileExists(atPath: backup.path) {
+                try SyncFileIO.replace(JSONEncoder().encode(original), at: backup)
+            }
+            try await store.update { state in
+                try Task.checkCancellation()
+                guard state == original, state.needsLegacySnapshotDeletionRecovery else {
+                    throw CloudKitSyncTransportError.unexpectedDeletion
+                }
+                try state.appendToInbox(evidence.canonical)
+                for record in evidence.received.inbox {
+                    try state.appendToInbox(record)
+                }
+                state.remoteDeletedSnapshotIDs.formUnion(
+                    evidence.received.remoteDeletedSnapshotIDs
+                )
+                state.unresolvedRemoteDeletionRecordIDs.removeAll()
+                state.hasUnexpectedDeletion = false
+                state.completedSyncStateMigrations.insert(migration)
+            }
+            recoveredLegacySnapshotDeletionHalt = true
+            await verification.retire()
+        } catch {
+            await verification.retire()
+            throw error
+        }
+    }
+
+    /// No bootstrap creation, publication, cleanup or original engine state
+    /// is allowed in this verifier. A fresh fetch discovers survivors unknown
+    /// to the offline device; direct reads then prove current cloud existence.
+    private func verifyLegacyDeletionRecovery(
+        original: CloudKitTransportState, notebookID: UUID
+    ) async throws -> (
+        canonical: CloudKitValidatedBootstrapRecord,
+        received: CloudKitTransportState
+    ) {
+        try await verifyAccount()
+        let zones = try await cloudRequest {
+            try await database.recordZones(for: [zoneID])
+        }
+        guard let zone = zones[zoneID] else {
+            throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        do {
+            _ = try zone.get()
+        } catch {
+            // Per-zone failures are returned inside Result, outside the
+            // request wrapper. Keep their server cooldown durable too.
+            await observeRetryAfter(error)
+            if let cloudError = error as? CKError,
+               cloudError.code == .zoneNotFound || cloudError.code == .unknownItem {
+                throw CloudKitSyncTransportError.unexpectedDeletion
+            }
+            throw error
+        }
+        let canonicalID = CKRecord.ID(recordName: mode.bootstrapName, zoneID: zoneID)
+        let cloudCanonical: CKRecord
+        do {
+            cloudCanonical = try await cloudRequest {
+                try await database.record(for: canonicalID)
+            }
+        } catch let error as CKError
+            where error.code == .unknownItem || error.code == .zoneNotFound {
+            throw CloudKitSyncTransportError.unexpectedDeletion
+        }
+        let canonical = try codec.decodeBootstrap(
+            cloudCanonical, using: &bootstrapValidationCache
+        )
+        guard canonical.record.notebookID == notebookID else { throw SyncError.scopeChanged }
+        try await store.update { try $0.appendToInbox(canonical) }
+        try await cloudRequest {
+            try await engine.fetchChanges(.init(scope: .zoneIDs([zoneID])))
+        }
+        var confirmed = [canonical.record.id: canonical.record]
+        // Re-fetch after confirmation to observe deletion races. A covering
+        // successor can be verified in the next round without clearing a halt
+        // from stale evidence. Bound churn; transient contention stays retryable.
+        for _ in 0..<3 {
+            try Task.checkCancellation()
+            try await assertHealthy()
+            let received = await store.snapshot()
+            guard received.inbox.allSatisfy({ $0.notebookID == notebookID }) else {
+                throw SyncError.scopeChanged
+            }
+            var proof = CloudKitSnapshotRecoveryProof(
+                requiredRecords: original.inbox + received.inbox
+            )
+            for record in confirmed.values where
+                !received.remoteDeletedSnapshotIDs.contains(record.id) {
+                try proof.confirm(record)
+            }
+            let candidates = try proof.candidates(in: received.inbox.filter {
+                !received.remoteDeletedSnapshotIDs.contains($0.id)
+            })
+            for candidate in candidates {
+                if proof.isComplete { break }
+                guard try proof.needs(candidate) else { continue }
+                let name = candidate.id == received.canonicalSnapshotID
+                    ? mode.bootstrapName : candidate.id
+                let id = CKRecord.ID(recordName: name, zoneID: zoneID)
+                do {
+                    let cloudRecord = try await cloudRequest {
+                        try await database.record(for: id)
+                    }
+                    let record = try decode(cloudRecord)
+                    guard record == candidate else {
+                        throw CloudKitSyncTransportError.invalidRemoteRecord
+                    }
+                    confirmed[record.id] = record
+                    try proof.confirm(record)
+                } catch let error as CKError where error.code == .unknownItem {
+                    let bootstrapName = mode.bootstrapName
+                    _ = try await store.update {
+                        $0.observeRemoteDeletions([name], bootstrapRecordName: bootstrapName)
+                    }
+                } catch let error as CKError where error.code == .zoneNotFound {
+                    throw CloudKitSyncTransportError.unexpectedDeletion
+                }
+            }
+            try await cloudRequest {
+                try await engine.fetchChanges(.init(scope: .zoneIDs([zoneID])))
+            }
+            try await assertHealthy()
+            let latest = await store.snapshot()
+            guard latest.inbox.allSatisfy({ $0.notebookID == notebookID }) else {
+                throw SyncError.scopeChanged
+            }
+            var finalProof = CloudKitSnapshotRecoveryProof(
+                requiredRecords: original.inbox + latest.inbox
+            )
+            for record in confirmed.values where
+                !latest.remoteDeletedSnapshotIDs.contains(record.id) {
+                try finalProof.confirm(record)
+            }
+            if finalProof.isComplete {
+                try await verifyAccount()
+                return (canonical, latest)
+            }
+            guard latest.inbox != received.inbox
+                    || latest.remoteDeletedSnapshotIDs != received.remoteDeletedSnapshotIDs else {
+                throw CloudKitSyncTransportError.unexpectedDeletion
+            }
+        }
+        throw SyncError.unavailable("Cloud snapshots changed during recovery. Try again later.")
     }
 
     private func initialize() async throws {
@@ -1926,6 +2158,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     }
 
     public func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
+        try assertWritable()
         try await assertHealthy()
         let proposal = try bootstrapValidationCache.validate(
             record, mode: mode
@@ -1997,6 +2230,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     public func publishBatch(
         _ records: [SyncRecord]
     ) async throws -> SyncBatchResult {
+        try assertWritable()
         guard !records.isEmpty else {
             return SyncBatchResult(acknowledgedIDs: [], error: nil)
         }
@@ -2181,6 +2415,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     public func purgeDeletedNotes(
         _ noteIDs: Set<UUID>, notebookID: UUID
     ) async throws {
+        try assertWritable()
         guard mode == .notebook else {
             throw SyncError.unavailable(
                 "Permanent body cleanup requires notebook sync."
@@ -2288,6 +2523,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     public func cleanupRedundantSnapshots(
         notebookID: UUID
     ) async throws -> SyncSnapshotCleanupReport {
+        try assertWritable()
         guard mode == .notebook else { return SyncSnapshotCleanupReport() }
         await acquirePublishLease()
         defer { releasePublishLease() }
@@ -2627,6 +2863,12 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         }
     }
 
+    private func assertWritable() throws {
+        guard !readOnlyRecovery else {
+            throw SyncError.unavailable("Recovery cannot publish or delete cloud data.")
+        }
+    }
+
     private func assertActive() throws {
         guard !isRetired else { throw CloudKitRetiredTransportError() }
         if let failure = store.writeHealth.failure {
@@ -2652,7 +2894,10 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private func haltForDeletedZone() async throws {
         unexpectedDeletionObserved = true
         latchFailure(CloudKitSyncTransportError.unexpectedDeletion)
-        try await store.update { $0.hasUnexpectedDeletion = true }
+        try await store.update {
+            $0.hasUnexpectedDeletion = true
+            $0.remoteDeletionHaltReason = .zoneDeleted
+        }
         lastReportedFailure = CloudKitSyncTransportError.unexpectedDeletion
     }
 
@@ -2681,6 +2926,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             try await haltForDeletedZone()
             throw CloudKitSyncTransportError.unexpectedDeletion
         }
+        try assertWritable()
         let saved = try await cloudRequest(labLabel: "ensureZone.createZone") {
             try await database.modifyRecordZones(
                 saving: [CKRecordZone(zoneID: zoneID)], deleting: []
@@ -3089,6 +3335,7 @@ extension CloudKitSyncTransport {
         pending: [CKSyncEngine.PendingRecordZoneChange],
         from syncEngine: any CloudKitSyncEngineClient
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
+        guard !readOnlyRecovery else { return nil }
         do {
             let prepared = try await CloudKitOutgoingBatchPreparer.assemble(
                 allowed: { await self.canOfferOutgoingBatch(syncEngine) },
