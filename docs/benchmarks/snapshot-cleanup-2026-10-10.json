@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-10",
+  "fake_cloudkit": {
+    "compressed_asset_bytes_after": 5577,
+    "compressed_asset_bytes_before": 82222,
+    "current_body_preserved": true,
+    "fixture": "testLongEditHistoryReducesFreshJoinTransferAndKeepsHistory",
+    "fresh_fetch_asset_bytes_after": 5577,
+    "fresh_fetch_asset_bytes_before": 82222,
+    "fresh_fetch_records_after": 2,
+    "fresh_fetch_records_before": 34,
+    "history_readback_seconds": 0.07622694969177246,
+    "limitations": [
+      "One deterministic fictional fixture; compressed byte counts vary slightly with generated metadata.",
+      "Direct canonical bootstrap reads are excluded from fetch counters in both samples."
+    ],
+    "past_versions_preserved": 32,
+    "records_after": 2,
+    "records_before": 34
+  },
+  "live_cloudkit": {
+    "binary_sha256": "6c77e2ce77dd8ad6818f078747423fdb11dce6f6ca8e556dfa309e1a9ac0faba",
+    "limitations": [
+      "One smoke run, not a latency benchmark.",
+      "Counts and bytes represent logical received compressed snapshots, not physical CloudKit record count, quota billing, or wire overhead.",
+      "Both fresh receivers ran on one Mac; no physical iPhone, push-delivery, or UI evidence.",
+      "The lab retained the fictional survivors in its task-owned zone."
+    ],
+    "measurements": {
+      "compressedBytesAfter": 1313,
+      "compressedBytesBefore": 16045,
+      "deletedCompressedBytes": 14732,
+      "deletedSnapshots": 24,
+      "preservedPastVersions": 24,
+      "snapshotsAfter": 2,
+      "snapshotsBefore": 26
+    },
+    "run_id": "b417131a-15f4-4e3a-bb54-22d8077afcf3",
+    "source_baseline": "3c66c186a771cc4028cebc4697d9de7a79fe8a36",
+    "source_state": "Canonical bootstrap identity fix and deterministic race regressions on top of the reviewed baseline.",
+    "status": "passed",
+    "tested_source_sha256": {
+      "Sources/NoteCore/CloudKitSnapshotCleanup.swift": "9ef253990bf6c293b27005e4653d15258dd7bef7c353b8cb9eaa9fa2f674b8e1",
+      "Sources/NoteCore/CloudKitSyncTransport.swift": "4957dfe08f108615d391de05faa255768a77cf7b7e31152110cc9da5f1af5b75",
+      "Sources/NoteCore/NotebookSyncCoordinator.swift": "00881481d530b59f0fed7d1cc55202397f4bc4b5376d368610b7e2771608ff1c",
+      "Sources/NoteCore/SyncTransport.swift": "eb98daf2187c708f4572553b63d7a5f1a16027004bc009848b7718f69af85781",
+      "meh.md/NotebookSyncLabApp.swift": "e9aa50239f962f02fa814c7b7dec1ba4bc3d3ba8af8852122f706e21bae43e62"
+    },
+    "timings_ms": {
+      "account_status": [
+        6.74275
+      ],
+      "cleanup_delete": [
+        2224.124375
+      ],
+      "cleanup_fixture_upload": [
+        2695.461958
+      ],
+      "cleanup_fresh_fetch_after": [
+        1063.968416
+      ],
+      "cleanup_fresh_fetch_before": [
+        1660.0219160000001
+      ],
+      "cleanup_writer_transport": [
+        22.739792
+      ]
+    },
+    "zone": "meh-md-notebook-lab-v2-b417131a-15f4-4e3a-bb54-22d8077afcf3"
+  },
+  "scope": "Fictional data only. Live signed macOS iCloud Dev lab, fresh UUID CloudKit Development zone; separate deterministic in-process CloudKit fixture."
+}

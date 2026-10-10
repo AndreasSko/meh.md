@@ -62,7 +62,7 @@ def lab_report_path(device, run, phase):
 
 
 def ensure_fresh_phase(report_path, phase):
-    if phase in ("account", "exchange", "publish") and report_path.parent.parent.exists():
+    if phase in ("account", "exchange", "publish", "cleanup") and report_path.parent.parent.exists():
         raise RuntimeError("A fresh lab run ID is required for the initial phase")
     if report_path.exists():
         raise RuntimeError("This lab phase already has a report")
@@ -87,7 +87,7 @@ def main():
     parser.add_argument("simulator", type=uuid.UUID, help="Exact dedicated simulator UDID")
     parser.add_argument("evidence", type=Path)
     parser.add_argument("--phase", choices=[
-        "account", "exchange", "publish", "receive", "edit", "verify"
+        "account", "exchange", "publish", "receive", "edit", "verify", "cleanup"
     ], required=True)
     parser.add_argument("--allow-development-cloud", action="store_true")
     parser.add_argument(

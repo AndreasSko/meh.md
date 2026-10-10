@@ -71,6 +71,17 @@ private struct NotebookSyncLabView: View {
         var expectedText: String?
         var observedText: String?
         var observedHeadsCount: Int?
+        var cleanup: CleanupMeasurements?
+    }
+
+    struct CleanupMeasurements: Codable {
+        let snapshotsBefore: Int
+        let snapshotsAfter: Int
+        let compressedBytesBefore: Int
+        let compressedBytesAfter: Int
+        let deletedSnapshots: Int
+        let deletedCompressedBytes: Int
+        let preservedPastVersions: Int
     }
 
     struct FixtureManifest: Codable {
@@ -109,7 +120,7 @@ private struct NotebookSyncLabView: View {
               let rawRun = environment["MEH_SYNC_LAB_RUN"],
               let runID = UUID(uuidString: rawRun),
               let phase = environment["MEH_SYNC_LAB_PHASE"],
-              ["account", "exchange", "publish", "receive", "edit", "verify"]
+              ["account", "exchange", "publish", "receive", "edit", "verify", "cleanup"]
                 .contains(phase) else {
             update("Stopped: explicit lab launch configuration required")
             return
@@ -170,7 +181,113 @@ private struct NotebookSyncLabView: View {
             guard account == .available else {
                 throw CloudKitSyncTransportError.accountUnavailable
             }
-            if phase == "exchange" {
+            if phase == "cleanup" {
+                // Only this fresh run's fictional zone and stores are opened.
+                // Each edit publishes a full-history immutable snapshot.
+                guard !FileManager.default.fileExists(
+                    atPath: root.appending(path: "source").path
+                ) else { throw LabError.existingFixture }
+                let source = NotebookReplica(
+                    directory: root.appending(path: "source")
+                )
+                try await source.createLocalNotebook()
+                let noteID = try await source.createNote(
+                    name: "Fictional cleanup journal.md",
+                    text: "Fictional cleanup journal\n"
+                )
+                let editor = try await source.openNote(noteID)
+                guard let catalog = source.catalogSnapshot,
+                      let first = editor.currentSnapshot else {
+                    throw LabError.missingFixture
+                }
+                let notebookID = catalog.notebookID
+                let seed = SyncRecord(catalog: catalog)
+                var snapshots = [SyncRecord(snapshot: first, notebookID: notebookID)]
+                for index in 0..<24 {
+                    try editor.replaceAll(
+                        with: "Fictional revision \(index): a preserved edit.\n"
+                            + editor.text
+                    )
+                    try await editor.flush()
+                    guard let snapshot = editor.currentSnapshot else {
+                        throw LabError.missingFixture
+                    }
+                    snapshots.append(SyncRecord(
+                        snapshot: snapshot, notebookID: notebookID
+                    ))
+                }
+                let writer = try await measure("cleanup_writer_transport") {
+                    try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                        containerIdentifier: container,
+                        stateDirectory: root.appending(path: "writer/transport"),
+                        runID: runID
+                    )
+                }
+                transports["writer"] = writer
+                guard try await writer.bootstrap(proposing: seed) == seed else {
+                    throw LabError.existingFixture
+                }
+                try await measure("cleanup_fixture_upload") {
+                    let result = try await writer.publishBatch(snapshots + [seed])
+                    if let error = result.error { throw error }
+                    guard result.acknowledgedIDs
+                        == Set((snapshots + [seed]).map(\.id)) else {
+                        throw LabError.syncFailed
+                    }
+                }
+                let before = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container,
+                    stateDirectory: root.appending(path: "before/transport"),
+                    runID: runID
+                )
+                transports["before"] = before
+                _ = try await before.bootstrap(proposing: seed)
+                let beforeRecords = try await measure("cleanup_fresh_fetch_before") {
+                    try await drain(before)
+                }
+                let result = try await measure("cleanup_delete") {
+                    try await writer.cleanupRedundantSnapshots(notebookID: notebookID)
+                }
+                let after = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container,
+                    stateDirectory: root.appending(path: "after/transport"),
+                    runID: runID
+                )
+                transports["after"] = after
+                let confirmedSeed = try await after.bootstrap(proposing: seed)
+                guard confirmedSeed == seed else { throw LabError.convergenceFailed }
+                let afterRecords = try await measure("cleanup_fresh_fetch_after") {
+                    try await drain(after)
+                }
+                guard let latest = snapshots.last,
+                      afterRecords.contains(latest),
+                      afterRecords.count < beforeRecords.count,
+                      result.deletedSnapshotCount == snapshots.count - 1 else {
+                    throw LabError.convergenceFailed
+                }
+                guard let received = afterRecords.first(where: { $0.id == latest.id })
+                else { throw LabError.convergenceFailed }
+                let preserved = try await history(received.snapshot)
+                let expected = try await history(latest.snapshot)
+                guard preserved.versions == expected.versions,
+                      preserved.texts == expected.texts,
+                      preserved.versions.count == 24 else {
+                    throw LabError.convergenceFailed
+                }
+                report.cleanup = CleanupMeasurements(
+                    snapshotsBefore: beforeRecords.count,
+                    snapshotsAfter: afterRecords.count,
+                    compressedBytesBefore: beforeRecords.reduce(0) {
+                        $0 + $1.snapshot.data.count
+                    },
+                    compressedBytesAfter: afterRecords.reduce(0) {
+                        $0 + $1.snapshot.data.count
+                    },
+                    deletedSnapshots: result.deletedSnapshotCount,
+                    deletedCompressedBytes: result.deletedCompressedPayloadBytes,
+                    preservedPastVersions: preserved.versions.count
+                )
+            } else if phase == "exchange" {
                 let senderTransport = try await measure("sender_transport") {
                     try await CloudKitSyncTransport.makeIsolatedNotebookLab(
                         containerIdentifier: container,
@@ -401,6 +518,32 @@ private struct NotebookSyncLabView: View {
         }
         do { try save() }
         catch { update("Failed to save lab report") }
+    }
+
+    static func history(_ snapshot: NoteSnapshot) async throws -> (
+        versions: [NoteHistoryVersion], texts: [String]
+    ) {
+        let reader = NoteHistoryReader(snapshot: snapshot)
+        var versions: [NoteHistoryVersion] = []
+        for try await update in await reader.updates() {
+            if update.isComplete { versions = update.versions }
+        }
+        var texts: [String] = []
+        for version in versions {
+            texts.append(try await reader.historicalText(for: version))
+        }
+        return (versions, texts)
+    }
+
+    static func drain(_ transport: CloudKitSyncTransport) async throws -> [SyncRecord] {
+        var records: [SyncRecord] = []
+        var cursor: String?
+        repeat {
+            let page = try await transport.fetch(after: cursor)
+            records.append(contentsOf: page.records)
+            cursor = page.cursor
+            if !page.hasMore { return records }
+        } while true
     }
 }
 #endif

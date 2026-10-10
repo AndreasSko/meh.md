@@ -289,9 +289,12 @@ class DedicatedSimulatorTests(unittest.TestCase):
             report = run / "receive/report.json"
             ensure_fresh_phase(report, "receive")
             ensure_fresh_phase(run / "publish/report.json", "publish")
+            ensure_fresh_phase(run / "cleanup/report.json", "cleanup")
             report.parent.mkdir(parents=True)
             with self.assertRaises(RuntimeError):
                 ensure_fresh_phase(run / "publish/report.json", "publish")
+            with self.assertRaises(RuntimeError):
+                ensure_fresh_phase(run / "cleanup/report.json", "cleanup")
             report.write_text("{}")
             with self.assertRaises(RuntimeError):
                 ensure_fresh_phase(report, "receive")

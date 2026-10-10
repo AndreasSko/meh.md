@@ -135,6 +135,20 @@ public struct SyncBatchResult: Sendable {
     }
 }
 
+/// Compressed snapshot bytes removed by maintenance, not provider quota usage.
+public struct SyncSnapshotCleanupReport: Sendable, Equatable {
+    public var deletedSnapshotCount: Int
+    public var deletedCompressedPayloadBytes: Int
+
+    public init(
+        deletedSnapshotCount: Int = 0,
+        deletedCompressedPayloadBytes: Int = 0
+    ) {
+        self.deletedSnapshotCount = deletedSnapshotCount
+        self.deletedCompressedPayloadBytes = deletedCompressedPayloadBytes
+    }
+}
+
 /// A remote record store, not a peer-to-peer stream. All methods may be
 /// retried after an uncertain result. Cursors are scoped to one backend.
 public protocol SyncTransport: Sendable {
@@ -155,6 +169,9 @@ public protocol SyncTransport: Sendable {
     func purgeDeletedNotes(
         _ noteIDs: Set<UUID>, notebookID: UUID
     ) async throws
+    func cleanupRedundantSnapshots(
+        notebookID: UUID
+    ) async throws -> SyncSnapshotCleanupReport
     /// The earliest useful retry time known by the transport.
     func retryNotBefore() async -> Date?
 }
@@ -179,6 +196,12 @@ extension SyncTransport {
             acknowledgedIDs: acknowledgedIDs,
             error: nil
         )
+    }
+
+    public func cleanupRedundantSnapshots(
+        notebookID: UUID
+    ) async throws -> SyncSnapshotCleanupReport {
+        SyncSnapshotCleanupReport()
     }
 
     public func retryNotBefore() async -> Date? { nil }
