@@ -44,9 +44,9 @@ live CloudKit delivery timing or account-dependent behavior.
 
 ## Follow-up cleanup
 
-Cleanup must publish and confirm complete checkpoints before deleting any
-covered records, preserve concurrent branches and deletion markers, and keep
-the canonical bootstrap discoverable. It must address older app versions
-that still reject snapshot deletion before enabling retention. Local inbox
-compaction and its cursor protocol remain separate work. Storage and transfer
-savings must be measured using fictional long-history fixtures.
+The [cleanup follow-up](snapshot-cleanup.md) confirms complete remote snapshots
+before deleting covered records, preserves concurrent branches and deletion
+markers, and keeps the canonical bootstrap discoverable. Device registration
+and old-build compatibility gates are outside the agreed rollout scope. Local
+inbox compaction and its cursor protocol remain separate work. Storage and
+transfer savings are measured using fictional long-history fixtures.

@@ -1,3 +1,4 @@
+import CloudKit
 import Foundation
 import Observation
 
@@ -298,6 +299,41 @@ public final class NotebookSyncCoordinator {
             }
         }
         if let oversizedError { throw oversizedError }
+        do {
+            let report = try await transport.cleanupRedundantSnapshots(
+                notebookID: notebookID
+            )
+            diagnosticLog?.record("snapshot_cleanup_end", counts: [
+                "deleted": report.deletedSnapshotCount,
+                "compressedBytes": report.deletedCompressedPayloadBytes,
+            ])
+        } catch {
+            // Maintenance must not turn an acknowledged exchange into a
+            // failure on a transient CloudKit outage. Integrity failures and
+            // local write failures still stop the exchange.
+            try Task.checkCancellation()
+            let retryable: Bool
+            if let transportError = error as? CloudKitSyncTransportError {
+                switch transportError {
+                case .accountUnavailable, .uploadNotAcknowledged:
+                    retryable = true
+                default:
+                    retryable = false
+                }
+            } else if let cloudError = error as? CKError {
+                retryable = [.networkUnavailable, .networkFailure,
+                             .serviceUnavailable, .requestRateLimited,
+                             .zoneBusy, .serverResponseLost]
+                    .contains(cloudError.code)
+            } else {
+                retryable = false
+            }
+            guard retryable else { throw error }
+            diagnosticLog?.record(
+                "snapshot_cleanup_retry:" + NotebookSyncEventLog.errorCode(error)
+            )
+        }
+
         let current = try await replica.records()
         status =
             current.allSatisfy { state.acknowledgedHeads[$0.documentKey] == $0.snapshot.heads }

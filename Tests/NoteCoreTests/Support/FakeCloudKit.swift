@@ -22,6 +22,9 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         /// The next save of a matching record fails with this code.
         case failSave(CKError.Code, matching: @Sendable (CKRecord.ID) -> Bool)
         /// The next direct record read fails with `networkFailure`.
+        case failDelete(CKError.Code, matching: @Sendable (CKRecord.ID) -> Bool)
+        case omitDeleteResult(matching: @Sendable (CKRecord.ID) -> Bool)
+        case crashAfterServerDelete
         case failNextRead
         /// Remove a record after fetched events, just before a direct read.
         case deleteBeforeNextRead(String)
@@ -51,6 +54,9 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     private var faults: [Fault] = []
     private var isOffline = false
     private var engines: [FakeSyncEngine] = []
+    private var deletedNames: [String] = []
+    private var fetchedCount = 0
+    private var fetchedBytes = 0
 
     init(directory: URL) throws {
         assetDirectory = directory.appending(path: "fake-cloudkit-assets")
@@ -114,6 +120,27 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         locked { Set(records.keys.map(\.recordName)) }
     }
 
+    var deletedRecordNames: [String] { locked { deletedNames } }
+
+    var fetchMeasurements: (records: Int, assetBytes: Int) {
+        locked { (fetchedCount, fetchedBytes) }
+    }
+
+    func resetFetchMeasurements() {
+        locked { fetchedCount = 0; fetchedBytes = 0 }
+    }
+
+    var storedAssetBytes: Int {
+        locked { records.values.reduce(0) { $0 + assetBytes(of: $1) } }
+    }
+
+    private func assetBytes(of record: CKRecord) -> Int {
+        record.allKeys().reduce(0) { sum, key in
+            guard let url = (record[key] as? CKAsset)?.fileURL else { return sum }
+            return sum + ((try? Data(contentsOf: url).count) ?? 0)
+        }
+    }
+
     // MARK: CloudKitAccountClient
 
     func accountStatus() async throws -> CKAccountStatus {
@@ -174,18 +201,38 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
             saveResults[record.recordID] = try store(record)
                 .mapError { $0 as any Error }
         }
-        let deleteResults = locked {
-            Dictionary(uniqueKeysWithValues: recordIDsToDelete.map { id in
+        var deleteResults: [CKRecord.ID: Result<Void, any Error>] = [:]
+        for id in recordIDsToDelete {
+            if case let .failDelete(code, _)? = takeFault(where: {
+                if case let .failDelete(_, matching) = $0 { return matching(id) }
+                return false
+            }) {
+                deleteResults[id] = .failure(CKError(code, userInfo:
+                    code == .requestRateLimited
+                        ? [CKErrorRetryAfterKey: 0.001] : [:]
+                ))
+                continue
+            }
+            deleteResults[id] = locked {
                 guard records.removeValue(forKey: id) != nil else {
-                    return (id, Result<Void, any Error>.failure(
-                        CKError(.unknownItem)
-                    ))
+                    return .failure(CKError(.unknownItem))
                 }
+                deletedNames.append(id.recordName)
                 sequence += 1
                 changes.append(Change(sequence: sequence, recordID: id))
-                return (id, .success(()))
-            })
+                return .success(())
+            }
         }
+        for id in recordIDsToDelete {
+            if takeFault(where: {
+                if case let .omitDeleteResult(matching) = $0 { return matching(id) }
+                return false
+            }) != nil { deleteResults.removeValue(forKey: id) }
+        }
+        if !recordIDsToDelete.isEmpty, takeFault(where: {
+            if case .crashAfterServerDelete = $0 { return true }
+            return false
+        }) != nil { throw FakeCloudKitCrash() }
         return (saveResults, deleteResults)
     }
 
@@ -285,6 +332,8 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
             for change in changes.reversed() where change.sequence > token {
                 guard seen.insert(change.recordID).inserted else { continue }
                 if let record = records[change.recordID] {
+                    fetchedCount += 1
+                    fetchedBytes += assetBytes(of: record)
                     modifications.append(try serverCopy(of: record))
                 } else if !zoneDeleted {
                     deletions.append(change.recordID)

@@ -41,11 +41,13 @@ struct CloudKitTransportState: Codable, Equatable {
     var protocolVersion: Int
     var inboxGeneration: UUID
     var engineState: Data?
+    var canonicalSnapshotID: String?
     private var inboxSlots: [SyncRecord?]
     var outbox: [String: SyncRecord]
     var deletedNoteIDs: Set<UUID>
     var purgedRecordIDs: Set<String>
     var pendingRemoteDeletionIDs: Set<String>
+    var pendingSnapshotCleanup: [String: CloudKitSnapshotCleanupPlan]
     var scannedDeletedNoteIDs: Set<UUID>
     var unresolvedRemoteDeletionRecordIDs: Set<String>
     var remoteDeletedSnapshotIDs: Set<String>
@@ -63,11 +65,13 @@ struct CloudKitTransportState: Codable, Equatable {
         self.protocolVersion = protocolVersion
         inboxGeneration = UUID()
         engineState = nil
+        canonicalSnapshotID = nil
         inboxSlots = []
         outbox = [:]
         deletedNoteIDs = []
         purgedRecordIDs = []
         pendingRemoteDeletionIDs = []
+        pendingSnapshotCleanup = [:]
         scannedDeletedNoteIDs = []
         unresolvedRemoteDeletionRecordIDs = []
         remoteDeletedSnapshotIDs = []
@@ -77,8 +81,9 @@ struct CloudKitTransportState: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case accountRecordName, zoneName, protocolVersion, inboxGeneration
-        case engineState, inbox, outbox, deletedNoteIDs, purgedRecordIDs
+        case engineState, canonicalSnapshotID, inbox, outbox, deletedNoteIDs, purgedRecordIDs
         case pendingRemoteDeletionIDs, scannedDeletedNoteIDs
+        case pendingSnapshotCleanup
         case unresolvedRemoteDeletionRecordIDs
         case remoteDeletedSnapshotIDs
         case hasUnexpectedDeletion, retryNotBefore
@@ -93,6 +98,9 @@ struct CloudKitTransportState: Codable, Equatable {
         ) ?? 1
         inboxGeneration = try values.decode(UUID.self, forKey: .inboxGeneration)
         engineState = try values.decodeIfPresent(Data.self, forKey: .engineState)
+        canonicalSnapshotID = try values.decodeIfPresent(
+            String.self, forKey: .canonicalSnapshotID
+        )
         inboxSlots = try values.decode([SyncRecord?].self, forKey: .inbox)
         outbox = try values.decode([String: SyncRecord].self, forKey: .outbox)
         deletedNoteIDs = try values.decodeIfPresent(
@@ -104,6 +112,10 @@ struct CloudKitTransportState: Codable, Equatable {
         pendingRemoteDeletionIDs = try values.decodeIfPresent(
             Set<String>.self, forKey: .pendingRemoteDeletionIDs
         ) ?? purgedRecordIDs
+        pendingSnapshotCleanup = try values.decodeIfPresent(
+            [String: CloudKitSnapshotCleanupPlan].self,
+            forKey: .pendingSnapshotCleanup
+        ) ?? [:]
         scannedDeletedNoteIDs = try values.decodeIfPresent(
             Set<UUID>.self, forKey: .scannedDeletedNoteIDs
         ) ?? []
@@ -134,6 +146,7 @@ struct CloudKitTransportState: Codable, Equatable {
         try values.encode(protocolVersion, forKey: .protocolVersion)
         try values.encode(inboxGeneration, forKey: .inboxGeneration)
         try values.encodeIfPresent(engineState, forKey: .engineState)
+        try values.encodeIfPresent(canonicalSnapshotID, forKey: .canonicalSnapshotID)
         try values.encode(inboxSlots, forKey: .inbox)
         try values.encode(outbox, forKey: .outbox)
         try values.encode(deletedNoteIDs, forKey: .deletedNoteIDs)
@@ -142,6 +155,7 @@ struct CloudKitTransportState: Codable, Equatable {
             pendingRemoteDeletionIDs,
             forKey: .pendingRemoteDeletionIDs
         )
+        try values.encode(pendingSnapshotCleanup, forKey: .pendingSnapshotCleanup)
         try values.encode(
             scannedDeletedNoteIDs, forKey: .scannedDeletedNoteIDs
         )
@@ -170,6 +184,14 @@ struct CloudKitTransportState: Codable, Equatable {
         }
         try CloudKitSnapshotSizeLimit.validate(validated.record)
         try appendValidatedRecord(validated.record)
+        // The canonical payload's digest is not its reserved cloud record name.
+        // Remember that provenance on every accepted bootstrap path, including
+        // a conflict, and discard intentions created before it was known.
+        canonicalSnapshotID = validated.record.id
+        pendingSnapshotCleanup = pendingSnapshotCleanup.filter {
+            $0.value.victimID != validated.record.id
+                && $0.value.survivorID != validated.record.id
+        }
     }
 
     private mutating func appendValidatedRecord(
@@ -360,6 +382,14 @@ struct CloudKitTransportState: Codable, Equatable {
               scannedDeletedNoteIDs.isSubset(of: deletedNoteIDs) else {
             throw SyncError.invalidRecord
         }
+        if let canonicalSnapshotID {
+            try CloudKitRemoteRecordValidator.validateSnapshotID(canonicalSnapshotID)
+            guard inbox.contains(where: {
+                $0.id == canonicalSnapshotID
+                    && (protocolVersion == 1 || $0.kind == .catalog)
+            }) else { throw SyncError.invalidRecord }
+        }
+        try validateSnapshotCleanupPlans()
         try unresolvedRemoteDeletionRecordIDs.forEach {
             try CloudKitRemoteRecordValidator.validateSnapshotID($0)
         }
@@ -2074,6 +2104,10 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private func resolveRemoteSnapshotDeletions() async throws {
         let initial = await store.snapshot()
         guard !initial.unresolvedRemoteDeletionRecordIDs.isEmpty else { return }
+        guard !initial.hasUnexpectedDeletion else {
+            throw CloudKitSyncTransportError.unexpectedDeletion
+        }
+        try await ensureCanonicalSnapshotIdentity()
         try await store.update { try $0.resolveRemoteNoteDeletions() }
         let pending = await store.snapshot()
         try assertActive()
@@ -2088,7 +2122,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             guard !current.remoteDeletedSnapshotIDs.contains(candidate.id) else {
                 continue
             }
-            let id = CKRecord.ID(recordName: candidate.id, zoneID: zoneID)
+            let name = candidate.id == current.canonicalSnapshotID
+                ? mode.bootstrapName : candidate.id
+            let id = CKRecord.ID(recordName: name, zoneID: zoneID)
             do {
                 let cloudRecord = try await cloudRequest(
                     labLabel: "retirement.readSurvivor"
@@ -2107,7 +2143,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 let bootstrapRecordName = mode.bootstrapName
                 try await store.update {
                     _ = $0.observeRemoteDeletions(
-                        [candidate.id], bootstrapRecordName: bootstrapRecordName
+                        [name], bootstrapRecordName: bootstrapRecordName
                     )
                 }
             } catch let error as CKError where error.code == .zoneNotFound {
@@ -2225,6 +2261,168 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             }
             if let failure { throw failure }
         }
+    }
+
+    public func cleanupRedundantSnapshots(
+        notebookID: UUID
+    ) async throws -> SyncSnapshotCleanupReport {
+        guard mode == .notebook else { return SyncSnapshotCleanupReport() }
+        await acquirePublishLease()
+        defer { releasePublishLease() }
+        try Task.checkCancellation()
+        try await assertHealthy()
+        try await ensureCanonicalSnapshotIdentity(notebookID: notebookID)
+        let initial = await store.snapshot()
+        try initial.validateRemoteDeletions()
+        guard initial.inbox.contains(where: {
+            $0.kind == .catalog && $0.notebookID == notebookID
+        }) else { throw SyncError.identityConflict }
+        let proposals = try initial.proposedSnapshotCleanupPlans()
+        if proposals.isEmpty && initial.pendingSnapshotCleanup.isEmpty {
+            return SyncSnapshotCleanupReport()
+        }
+        try await store.update { try $0.persistSnapshotCleanupPlans(proposals) }
+        let planned = await store.snapshot()
+        let plans = Array(planned.pendingSnapshotCleanup.values.sorted {
+            $0.victimID < $1.victimID
+        }.prefix(100))
+        let proofs = try planned.snapshotCleanupRecords(for: plans)
+        guard !proofs.isEmpty else {
+            try await store.update { state in
+                for plan in plans { state.dropSnapshotCleanup(plan) }
+            }
+            return SyncSnapshotCleanupReport()
+        }
+        try await verifyAccount()
+        try await ensureZone()
+        var confirmedSurvivors: [String: SyncRecord] = [:]
+        let survivorIDs = Set(proofs.values.map { $0.survivor.id })
+        for survivorID in survivorIDs.sorted() {
+            try Task.checkCancellation()
+            let id = CKRecord.ID(recordName: survivorID, zoneID: zoneID)
+            do {
+                let cloudRecord = try await cloudRequest(
+                    labLabel: "snapshotCleanup.readSurvivor"
+                ) { try await database.record(for: id) }
+                confirmedSurvivors[survivorID] = try decode(cloudRecord)
+            } catch let error as CKError where error.code == .unknownItem {
+                // A direct missing-record response is durable absence evidence,
+                // not merely a stale cleanup plan. Retained local payloads must
+                // never make this snapshot eligible as a survivor again.
+                let bootstrapRecordName = mode.bootstrapName
+                try await store.update {
+                    _ = $0.observeRemoteDeletions(
+                        [survivorID], bootstrapRecordName: bootstrapRecordName
+                    )
+                }
+            }
+        }
+        // Verify another remotely stored snapshot covers any newly discovered
+        // absence. An unresolved deletion stops this pass before any DELETE.
+        try await resolveRemoteSnapshotDeletions()
+        // Recheck the current durable state after throttling and all survivor
+        // reads, then dispatch one bounded batch without another suspension.
+        let deletion = try await cloudRequest(
+            labLabel: "snapshotCleanup.deleteVictims"
+        ) {
+            try Task.checkCancellation()
+            let latest = await store.snapshot()
+            try latest.validateRemoteDeletions()
+            var admitted: [CloudKitSnapshotCleanupPlan] = []
+            for plan in plans {
+                guard let proof = proofs[plan.victimID],
+                      confirmedSurvivors[plan.survivorID] == proof.survivor,
+                      latest.snapshotCleanupRecords(
+                        for: plan, reusing: proof
+                      ) != nil else { continue }
+                guard proof.victim.notebookID == notebookID,
+                      proof.survivor.notebookID == notebookID,
+                      plan.victimID != mode.bootstrapName,
+                      plan.survivorID != mode.bootstrapName else {
+                    throw SyncError.identityConflict
+                }
+                admitted.append(plan)
+            }
+            try assertActive()
+            if let delegateFailure { throw delegateFailure }
+            let ids = admitted.map {
+                CKRecord.ID(recordName: $0.victimID, zoneID: zoneID)
+            }
+            if ids.isEmpty {
+                return (admitted, [CKRecord.ID: Result<Void, Error>]())
+            }
+            let results = try await database.modifyRecords(
+                saving: [], deleting: ids,
+                savePolicy: .ifServerRecordUnchanged, atomically: false
+            ).deleteResults
+            return (admitted, results)
+        }
+        let (admitted, results) = deletion
+        let admittedIDs = Set(admitted.map(\.victimID))
+        var completed: [CloudKitSnapshotCleanupPlan] = []
+        var failures: [any Error] = []
+        var report = SyncSnapshotCleanupReport()
+        for plan in admitted {
+            let id = CKRecord.ID(recordName: plan.victimID, zoneID: zoneID)
+            guard let result = results[id] else {
+                failures.append(CloudKitSyncTransportError.uploadNotAcknowledged)
+                continue
+            }
+            switch result {
+            case .success:
+                completed.append(plan)
+                report.deletedSnapshotCount += 1
+                report.deletedCompressedPayloadBytes +=
+                    proofs[plan.victimID]!.victim.snapshot.data.count
+            case .failure(let error as CKError) where error.code == .unknownItem:
+                completed.append(plan)
+            case .failure(let error):
+                failures.append(error)
+            }
+        }
+        // Persist every successful result before observing failures/retry waits.
+        try await store.update { state in
+            for plan in completed { state.completeSnapshotCleanup(plan) }
+            for plan in plans where !admittedIDs.contains(plan.victimID) {
+                state.dropSnapshotCleanup(plan)
+            }
+        }
+        for error in failures { await observeRetryAfter(error) }
+        if let failure = failures.first { throw failure }
+        return report
+    }
+
+    /// Older state cannot distinguish the bootstrap digest from a snapshot
+    /// record name. Backfill it from the authoritative reserved record before
+    /// cleanup or retirement checks; accepting that exact payload also clears
+    /// only its false digest-absence evidence, leaving real deletions intact.
+    private func ensureCanonicalSnapshotIdentity(notebookID: UUID? = nil) async throws {
+        guard mode == .notebook,
+              await store.snapshot().canonicalSnapshotID == nil else { return }
+        try await verifyAccount()
+        try await ensureZone()
+        let id = CKRecord.ID(recordName: mode.bootstrapName, zoneID: zoneID)
+        let cloudRecord: CKRecord
+        do {
+            cloudRecord = try await cloudRequest(labLabel: "bootstrap.backfillIdentity") {
+                try await database.record(for: id)
+            }
+        } catch let error as CKError where error.code == .unknownItem {
+            let bootstrapName = mode.bootstrapName
+            try await store.update {
+                _ = $0.observeRemoteDeletions(
+                    [bootstrapName], bootstrapRecordName: bootstrapName
+                )
+            }
+            throw CloudKitSyncTransportError.unexpectedDeletion
+        }
+        let canonical = try codec.decodeBootstrap(
+            cloudRecord, using: &bootstrapValidationCache
+        )
+        if let notebookID, canonical.record.notebookID != notebookID {
+            throw SyncError.identityConflict
+        }
+        try await store.update { try $0.appendToInbox(canonical) }
     }
 
     public func retryNotBefore() async -> Date? {
