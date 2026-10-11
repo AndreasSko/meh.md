@@ -1,0 +1,50 @@
+{
+  "result": "PASS",
+  "existingTypesAndPermissionsPreserved": true,
+  "matchesReviewedDevelopmentSchema": true,
+  "additions": {
+    "AutomergeNotebookSnapshotV2": [
+      "catalogFormatVersion INT64 QUERYABLE SORTABLE",
+      "migrationSnapshotID STRING QUERYABLE SEARCHABLE SORTABLE",
+      "minimumReaderVersion INT64 QUERYABLE SORTABLE",
+      "minimumWriterVersion INT64 QUERYABLE SORTABLE",
+      "publicationID STRING QUERYABLE SEARCHABLE SORTABLE"
+    ],
+    "AutomergeSnapshotV1": [],
+    "NotebookAttachmentV1": [
+      "\"___createTime\" TIMESTAMP",
+      "\"___createdBy\" REFERENCE",
+      "\"___etag\" STRING",
+      "\"___modTime\" TIMESTAMP",
+      "\"___modifiedBy\" REFERENCE",
+      "\"___recordID\" REFERENCE",
+      "GRANT CREATE TO \"_icloud\"",
+      "GRANT READ TO \"_world\"",
+      "GRANT WRITE TO \"_creator\"",
+      "asset ASSET",
+      "attachmentID STRING QUERYABLE SEARCHABLE SORTABLE",
+      "byteCount INT64 QUERYABLE SORTABLE",
+      "deleted INT64 QUERYABLE SORTABLE",
+      "notebookID STRING QUERYABLE SEARCHABLE SORTABLE",
+      "sha256 STRING QUERYABLE SEARCHABLE SORTABLE"
+    ],
+    "Users": []
+  },
+  "hashes": {
+    "production-before.ckdb": "c858ffe2ddcb7c19ac8742b341650dca0c1a27bfd93757d952b7eab16457187d",
+    "development-before.ckdb": "1770cf23fe7ceedff95cfcb18f2e3d7e3c8d3c0b680395c988a4d25e34ce762c",
+    "production-after.ckdb": "1770cf23fe7ceedff95cfcb18f2e3d7e3c8d3c0b680395c988a4d25e34ce762c"
+  },
+  "date": "2026-10-11",
+  "container": "iCloud.de.andreas-sk.meh-md",
+  "deployment": "CloudKit Console, explicitly approved complete additive schema",
+  "notebookDataMigrated": false,
+  "appReleased": false,
+  "swiftTests": {
+    "executions": 1187,
+    "skipped": 9,
+    "failures": 0
+  },
+  "labGuardTests": 24,
+  "localServerTests": 16
+}

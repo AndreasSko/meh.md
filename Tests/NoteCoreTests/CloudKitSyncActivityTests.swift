@@ -43,6 +43,22 @@ final class CloudKitSyncActivityTests: XCTestCase {
         XCTAssertNil(tracker.finishSend(wasScheduled: true))
     }
 
+    func testPublicationPendingCoalescesWithoutReplacingOtherActivities() async {
+        let channel = CloudKitSyncActivityChannel()
+        channel.yield([
+            .publicationPending, .publicationPending,
+            .uploadsAcknowledged(recordCount: 2), .publicationPending
+        ])
+        var iterator = channel.stream.makeAsyncIterator()
+        let pending = await iterator.next()
+        let uploaded = await iterator.next()
+        XCTAssertEqual(pending, .publicationPending)
+        XCTAssertEqual(uploaded, .uploadsAcknowledged(recordCount: 2))
+        channel.finish()
+        let finished = await iterator.next()
+        XCTAssertNil(finished)
+    }
+
     func testActivityChannelPreservesBufferedOrder() async {
         let channel = CloudKitSyncActivityChannel()
         channel.yield([

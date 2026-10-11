@@ -93,6 +93,7 @@ final class NotebookWorkspace {
     private(set) var syncSetupError: String?
     private(set) var syncFailure: SyncFailurePresentation?
     private(set) var syncHalt: CloudKitSyncHaltStatus?
+    private(set) var syncUpdateRequiredVersion: UInt64?
     private(set) var copyError: String?
     private(set) var copiesURL: URL?
     private(set) var backupError: String?
@@ -141,6 +142,7 @@ final class NotebookWorkspace {
     private var plannedRetryDate: Date?
     private var plannedRetryUptime: TimeInterval?
     private var plannedRetryDelay: TimeInterval?
+    private var publicationRetryPending = false
     // A notification may launch the process without creating a UI scene.
     private var isForeground = false
     @ObservationIgnored private var activeSceneIDs = Set<UUID>()
@@ -167,17 +169,30 @@ final class NotebookWorkspace {
         recoveryAction?.kind == .catalog
     }
     var usesSync: Bool {
+        #if DEBUG
+        if isPreviewUpdateRequirementFixture { return true }
+        #endif
         switch mode {
-        case .cloud, .development: true
-        default: false
+        case .cloud, .development: return true
+        default: return false
         }
     }
     var canRetrySync: Bool {
         if isResetPending { return false }
+        if isSyncUpdateRequired { return false }
         if syncFailure?.retryDisposition == .unavailable { return false }
         if let syncHalt { return syncHalt.isRecoverable }
         return true
     }
+    var isSyncUpdateRequired: Bool {
+        syncUpdateRequiredVersion != nil || syncHalt?.reason == .updateRequired
+    }
+    #if DEBUG
+    private var isPreviewUpdateRequirementFixture: Bool {
+        isPreview && Self.isPreviewEnabled
+            && ProcessInfo.processInfo.environment["MEH_NOTEBOOK_UPDATE_REQUIRED_TEST"] == "1"
+    }
+    #endif
     var label: String {
         switch mode {
         case .cloud:
@@ -469,7 +484,7 @@ final class NotebookWorkspace {
                 let loaded = NotebookReplica(directory: directory)
                 try await loaded.load()
                 if loaded.catalogSnapshot == nil {
-                    if usesSync { try await loaded.createNotebookForSync() }
+                    if usesSync && !isPreview { try await loaded.createNotebookForSync() }
                     else { try await loaded.createLocalNotebook() }
                     #if DEBUG
                     try await NotebookUITestFixture.seedIfRequested(
@@ -481,6 +496,20 @@ final class NotebookWorkspace {
                 // discovery or any network request.
                 replica = loaded
             }
+            #if DEBUG
+            if isPreviewUpdateRequirementFixture {
+                let error = SyncError.updateRequired(requiredVersion: 3)
+                syncHalt = CloudKitSyncHaltStatus(
+                    reason: .updateRequired,
+                    underlyingError: error,
+                    isRecoverable: false
+                )
+                syncFailure = SyncFailurePresentation(
+                    error: error, retryWillOccurAutomatically: false
+                )
+                recordUpdateRequirement(from: error)
+            }
+            #endif
             // A local backup can succeed even when the following cloud
             // exchange is delayed or unavailable.
             await runDueBackup()
@@ -550,6 +579,7 @@ final class NotebookWorkspace {
     func localStorageResetWasScheduled() {
         guard !isResetPending else { return }
         isResetPending = true
+        publicationRetryPending = false
         replica?.suspendLocalEditsForPendingReset()
         scheduledRefresh?.cancel()
         scheduledRefresh = nil
@@ -572,6 +602,10 @@ final class NotebookWorkspace {
 
     private func scheduleRefresh(trigger: String, notBefore: Date? = nil) {
         guard !isResetPending else { return }
+        if isSyncUpdateRequired {
+            Task { await publishCopies() }
+            return
+        }
         pendingSyncTrigger = trigger
         syncSchedule.request(at: syncTime)
         armScheduledRefresh(notBefore: notBefore)
@@ -579,6 +613,7 @@ final class NotebookWorkspace {
 
     private func armScheduledRefresh(notBefore: Date? = nil) {
         guard !isResetPending else { return }
+        guard !isSyncUpdateRequired else { return }
         guard let policyDelay = syncSchedule.delay(at: syncTime) else { return }
         scheduledRefresh?.cancel()
         guard isForeground || !usesSync || !automaticSync else { return }
@@ -693,6 +728,11 @@ final class NotebookWorkspace {
         guard !isResetPending else { return }
         guard whileLoading || !isLoading else { return }
         guard let replica else { return }
+        if isSyncUpdateRequired {
+            try? await replica.cleanupDeletedContent()
+            await publishCopies()
+            return
+        }
         await updateRetryDeadline()
         if !manual, !whileLoading,
            let deadline = syncRetryNotBefore, deadline > Date() {
@@ -787,6 +827,8 @@ final class NotebookWorkspace {
             await updateRetryDeadline()
             syncHalt = await (notebookTransport as? any HaltableSyncTransport)?.haltStatus()
             if let failure {
+                recordUpdateRequirement(from: failure)
+                if let syncHalt { recordUpdateRequirement(from: syncHalt.underlyingError) }
                 let now = Date()
                 plannedRetryDate = syncHalt == nil ? retryPolicy.retryDate(
                     for: failure, now: now,
@@ -808,11 +850,16 @@ final class NotebookWorkspace {
                 )
             } else {
                 syncFailure = nil
+                syncUpdateRequiredVersion = nil
                 retryPolicy.reset()
                 plannedRetryDate = nil
                 plannedRetryUptime = nil
                 plannedRetryDelay = nil
                 if automaticSync, sync?.status == .pending { needsAnotherRefresh = true }
+            }
+            if publicationRetryPending {
+                publicationRetryPending = false
+                await schedulePublicationRetry(generation: transportGeneration)
             }
             endSyncPresentation()
             syncEventLog.record("refresh ended", counts: [
@@ -873,6 +920,27 @@ final class NotebookWorkspace {
         showSyncCheck = false
     }
 
+    private func recordUpdateRequirement(from error: any Error) {
+        guard let syncError = error as? SyncError,
+              case .updateRequired(let version) = syncError else { return }
+        syncUpdateRequiredVersion = version
+        publicationRetryPending = false
+        scheduledRefresh?.cancel()
+        scheduledRefresh = nil
+        syncSchedule.clearPending()
+        needsAnotherRefresh = false
+        needsImmediateRefresh = false
+        needsManualRefresh = false
+        plannedRetryDate = nil
+        plannedRetryUptime = nil
+        plannedRetryDelay = nil
+        syncRetryNotBefore = nil
+        retryPolicy.reset()
+        syncEventLog.record("sync paused: app update required", counts: [
+            "required_format_version": Int(clamping: version)
+        ])
+    }
+
     private func updateRetryDeadline() async {
         if let plannedRetryUptime, let plannedRetryDelay {
             let elapsed = max(
@@ -913,6 +981,7 @@ final class NotebookWorkspace {
             // Invalidate hints before suspending; old callbacks cannot start a
             // pass against the replacement coordinator.
             transportGeneration = UUID()
+            publicationRetryPending = false
             cloudActivityTask?.cancel()
             cloudActivityTask = nil
             await haltable.retire()
@@ -1005,6 +1074,14 @@ final class NotebookWorkspace {
         case .accountChanged:
             searchScopeGeneration += 1
             syncEventLog.record("cloud account changed")
+        case .publicationPending:
+            guard automaticSync, !isSyncUpdateRequired else { return }
+            if isRefreshing {
+                publicationRetryPending = true
+                return
+            }
+            await schedulePublicationRetry(generation: transportGeneration)
+            return
         case .failed(let message):
             syncEventLog.record("cloud automatic operation failed")
             syncSetupError = message
@@ -1014,6 +1091,7 @@ final class NotebookWorkspace {
             if let generation, generation != transportGeneration { return }
             syncHalt = halt
             if let failure = halt?.underlyingError ?? failure {
+                recordUpdateRequirement(from: failure)
                 syncFailure = SyncFailurePresentation(
                     error: failure,
                     // A failed activity does not schedule an app retry. Do
@@ -1028,12 +1106,43 @@ final class NotebookWorkspace {
         }
         // AsyncStream delivery never awaits the CK delegate. This serialized
         // exchange applies the durable inbox to editors.
-        guard automaticSync else { return }
+        guard automaticSync, !isSyncUpdateRequired else { return }
         if isForeground {
             requestAutomaticRefresh(trigger: "cloud activity")
         } else {
             await refresh(trigger: "cloud activity")
         }
+    }
+
+    private func schedulePublicationRetry(generation: UUID) async {
+        guard !isResetPending, automaticSync, !isSyncUpdateRequired,
+              generation == transportGeneration else { return }
+        let halt = await (notebookTransport as? any HaltableSyncTransport)?.haltStatus()
+        guard !isResetPending, automaticSync, !isSyncUpdateRequired,
+              generation == transportGeneration, halt == nil else { return }
+        await updateRetryDeadline()
+        guard !isResetPending, automaticSync, !isSyncUpdateRequired,
+              generation == transportGeneration else { return }
+        let failure = CloudKitSyncTransportError.uploadNotAcknowledged
+        // Coalesced hints share one deadline and one backoff step. A new hint
+        // after the retry pass advances the bounded policy if work remains.
+        if plannedRetryDate == nil {
+            let now = Date()
+            plannedRetryDate = retryPolicy.retryDate(
+                for: failure, now: now, serverNotBefore: syncRetryNotBefore
+            )
+            plannedRetryUptime = ProcessInfo.processInfo.systemUptime
+            plannedRetryDelay = plannedRetryDate.map {
+                max(0, $0.timeIntervalSince(now))
+            }
+        }
+        await updateRetryDeadline()
+        guard !isResetPending, automaticSync, !isSyncUpdateRequired,
+              generation == transportGeneration else { return }
+        syncFailure = SyncFailurePresentation(
+            error: failure, retryWillOccurAutomatically: true
+        )
+        scheduleRefresh(trigger: "cloud publication retry", notBefore: syncRetryNotBefore)
     }
 
     private func unavailableWhenRequested(

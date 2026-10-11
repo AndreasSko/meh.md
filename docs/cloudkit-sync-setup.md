@@ -35,6 +35,28 @@ schema.
 See [live verification](icloud-live-verification.md) for the isolated Mac smoke
 check and historical single-note evidence.
 
+## Notebook format control
+
+The upgrade safety release adds optional fields to the existing
+`AutomergeNotebookSnapshotV2` type. Deploy these fields before releasing it:
+
+| Field | CloudKit type |
+| --- | --- |
+| `minimumReaderVersion` | Int64 |
+| `minimumWriterVersion` | Int64 |
+| `catalogFormatVersion` | Int64 |
+| `migrationSnapshotID` | String |
+| `publicationID` | String |
+
+Only the canonical bootstrap record uses these fields. Its original snapshot
+remains intact. Existing records without the fields describe format 1. Every
+notebook upload conditionally writes the control record in an atomic batch
+with its snapshots, including engine background uploads. See the
+[upgrade safety and rollout contract](notebook-upgrade-safety.md) for local
+editing while paused, devices running older releases, and live acceptance.
+
+## App scheduling
+
 Both cloud configurations include APNs entitlements and the iOS remote
 notification background mode for [automatic sync](notebook-sync-scheduling.md).
 The production App ID must have Push Notifications enabled before its

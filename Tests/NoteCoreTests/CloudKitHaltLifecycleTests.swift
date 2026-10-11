@@ -236,6 +236,11 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
         XCTAssertEqual(CloudKitSyncHaltStatus(
             error: SyncError.scopeChanged
         ).reason, .accountChanged)
+        let futureFormat = CloudKitSyncHaltStatus(
+            error: SyncError.updateRequired(requiredVersion: 3)
+        )
+        XCTAssertEqual(futureFormat.reason, .updateRequired)
+        XCTAssertFalse(futureFormat.isRecoverable)
     }
 
     private func makeRecord() throws -> SyncRecord {
