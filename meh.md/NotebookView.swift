@@ -565,19 +565,20 @@ struct NotebookView: View {
                                     .disabled(!session.isEditingEnabled || busy)
                                     .accessibilityIdentifier("notebook-version-history")
                                     Divider()
-                                    EditorModeControl(
-                                        mode: editorModeBinding,
-                                        isEnabled: session.isEditingEnabled
-                                            && !busy
-                                    )
-                                    Divider()
-                                    Button {
-                                        showingTextSize = true
-                                    } label: {
-                                        Label(
-                                            "Font & Text Size…",
-                                            systemImage: "textformat.size"
+                                    Menu {
+                                        EditorModeControl(
+                                            mode: editorModeBinding,
+                                            isEnabled: session.isEditingEnabled && !busy
                                         )
+                                        Divider()
+                                        Button {
+                                            showingTextSize = true
+                                        } label: {
+                                            Label("Font & Text Size…",
+                                                  systemImage: "textformat.size")
+                                        }
+                                    } label: {
+                                        Label("Editor Display", systemImage: "textformat")
                                     }
                                     Divider()
                                     actions(
@@ -1425,7 +1426,8 @@ struct NotebookView: View {
         ) { _ in
             setRecentHidden(true, for: id)
         })
-        menuActions.append(UIAction(
+        var reusableActions: [UIMenuElement] = []
+        reusableActions.append(UIAction(
             title: replica.isTemplateSource(id)
                 ? String(localized: "Stop Using as Template")
                 : String(localized: "Use as Template"),
@@ -1434,7 +1436,7 @@ struct NotebookView: View {
         ) { _ in
             setTemplateSource(id, enabled: !replica.isTemplateSource(id))
         })
-        menuActions.append(UIAction(
+        reusableActions.append(UIAction(
             title: replica.isSnippetSource(id)
                 ? String(localized: "Stop Using as Snippet")
                 : String(localized: "Use as Snippet"),
@@ -1443,6 +1445,11 @@ struct NotebookView: View {
         ) { _ in
             setSnippetSource(id, enabled: !replica.isSnippetSource(id))
         })
+        menuActions.append(UIMenu(
+            title: String(localized: "Templates & Snippets"),
+            image: UIImage(systemName: "doc.on.doc"),
+            children: reusableActions
+        ))
         menuActions.append(UIAction(
             title: String(localized: "Move to Trash"),
             attributes: .destructive
@@ -2047,28 +2054,32 @@ struct NotebookView: View {
         }
         if allowsRename { Button("Rename…") { beginRenaming(placement) } }
         if !placement.isInTrash {
-            let registered = replica.isTemplateSource(placement.item.id)
-            let title: LocalizedStringKey = placement.item.kind == .folder
-                ? (registered ? "Stop Using as Template Folder" : "Use as Template Folder")
-                : (registered ? "Stop Using as Template" : "Use as Template")
-            Button {
-                setTemplateSource(placement.item.id, enabled: !registered)
+            Menu {
+                let registered = replica.isTemplateSource(placement.item.id)
+                let title: LocalizedStringKey = placement.item.kind == .folder
+                    ? (registered ? "Stop Using as Template Folder" : "Use as Template Folder")
+                    : (registered ? "Stop Using as Template" : "Use as Template")
+                Button {
+                    setTemplateSource(placement.item.id, enabled: !registered)
+                } label: {
+                    Label(title, systemImage: "doc.on.doc")
+                }
+                .disabled(busy)
+                .accessibilityIdentifier("notebook-use-as-template-\(placement.item.id)")
+                let snippetRegistered = replica.isSnippetSource(placement.item.id)
+                let snippetTitle: LocalizedStringKey = placement.item.kind == .folder
+                    ? (snippetRegistered ? "Stop Using as Snippet Folder" : "Use as Snippet Folder")
+                    : (snippetRegistered ? "Stop Using as Snippet" : "Use as Snippet")
+                Button {
+                    setSnippetSource(placement.item.id, enabled: !snippetRegistered)
+                } label: {
+                    Label(snippetTitle, systemImage: "text.badge.plus")
+                }
+                .disabled(busy)
+                .accessibilityIdentifier("notebook-use-as-snippet-\(placement.item.id)")
             } label: {
-                Label(title, systemImage: "doc.on.doc")
+                Label("Templates & Snippets", systemImage: "doc.on.doc")
             }
-            .disabled(busy)
-            .accessibilityIdentifier("notebook-use-as-template-\(placement.item.id)")
-            let snippetRegistered = replica.isSnippetSource(placement.item.id)
-            let snippetTitle: LocalizedStringKey = placement.item.kind == .folder
-                ? (snippetRegistered ? "Stop Using as Snippet Folder" : "Use as Snippet Folder")
-                : (snippetRegistered ? "Stop Using as Snippet" : "Use as Snippet")
-            Button {
-                setSnippetSource(placement.item.id, enabled: !snippetRegistered)
-            } label: {
-                Label(snippetTitle, systemImage: "text.badge.plus")
-            }
-            .disabled(busy)
-            .accessibilityIdentifier("notebook-use-as-snippet-\(placement.item.id)")
         }
         Button("Move…") {
             beginMoving([placement.item.id], fromTrash: placement.isInTrash)
