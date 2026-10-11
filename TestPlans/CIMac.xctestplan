@@ -27,7 +27,9 @@
         "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
-        "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote"
+        "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote",
+        "NotebookReleaseMenuUITests/testFileMenuPickersAndNewWindowPreserveWriting",
+        "NotebookReleaseMenuUITests/testSelectionCommandsRespectEditorAndTitleFocus"
       ]
     }
   ],
