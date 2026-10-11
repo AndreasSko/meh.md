@@ -24,6 +24,7 @@ struct NotebookSettingsView: View {
     @State private var errorMessage: String?
     @State private var destinationError: String?
     @State private var updatingDefaultDestination = false
+    @State private var showingSyncEventLog = false
 
     var body: some View {
         NavigationStack {
@@ -150,6 +151,16 @@ struct NotebookSettingsView: View {
                     Text("Removes local notes, settings, and sync data on the next launch. Unsynced changes will be lost. iCloud data and backups are kept.")
                         .font(.footnote)
                 }
+                Section("Diagnostics") {
+                    Button("Sync Event Log") { showingSyncEventLog = true }
+                        .accessibilityIdentifier("notebook-sync-event-log")
+                    if let error = workspace.syncSetupError {
+                        Text(error).font(.caption)
+                    }
+                    if let error = workspace.notificationRegistrationError {
+                        Text(error).font(.caption)
+                    }
+                }
             }
             .formStyle(.grouped)
             .navigationTitle("Settings")
@@ -164,6 +175,9 @@ struct NotebookSettingsView: View {
         .frame(width: 480, height: 460)
         #endif
         .interactiveDismissDisabled(preparing || saving)
+        .sheet(isPresented: $showingSyncEventLog) {
+            NotebookSyncEventLogView(log: workspace.syncEventLog)
+        }
         .alert("Reset All Local Data?", isPresented: $confirmingReset) {
             Button("Cancel", role: .cancel) {}
             Button("Reset on Next Launch", role: .destructive) {

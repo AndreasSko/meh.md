@@ -34,29 +34,31 @@ extension XCUIApplication {
         XCTAssertLessThan(details.frame.midX, newNote.frame.midX)
 #endif
         let recents = buttons["notebook-recents-toggle"]
-        if files.exists, recents.exists {
+        if files.exists, recents.exists, textViews["markdown-editor"].exists {
             XCTAssertEqual(files.frame.minX, recents.frame.minX, accuracy: 4)
             XCTAssertEqual(files.frame.maxX, recents.frame.maxX, accuracy: 4)
         }
         activate(details)
         XCTAssertTrue(
-            buttons["sync-now"].waitForExistence(timeout: timeout),
-            "Expected sync details to contain the Sync Now button"
+            descendants(matching: .any)
+                .matching(identifier: "note-sync-status")
+                .firstMatch.waitForExistence(timeout: timeout),
+            "Expected the sync status view to open"
         )
     }
 
     func closeSyncDetails(timeout: TimeInterval = 5) {
-        let syncNow = buttons["sync-now"]
-        guard syncNow.exists else { return }
-        let close = buttons["notebook-sync-details-close"]
-        XCTAssertTrue(
-            close.waitForExistence(timeout: timeout),
-            "Expected notebook sync details to contain a Close button"
-        )
-        activate(close)
+        let status = descendants(matching: .any)
+            .matching(identifier: "note-sync-status").firstMatch
+        guard status.exists else { return }
+#if os(iOS)
+        coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+#else
+        typeKey(.escape, modifierFlags: [])
+#endif
         let closed = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"),
-            object: syncNow
+            object: status
         )
         XCTAssertEqual(
             XCTWaiter.wait(for: [closed], timeout: timeout),
@@ -66,6 +68,20 @@ extension XCUIApplication {
 #if os(iOS)
         restoreNotebookEditorFromSidebar(timeout: timeout)
 #endif
+    }
+
+    func openNotebookSettings(timeout: TimeInterval = 15) {
+#if os(iOS)
+        revealNotebookSidebar(timeout: timeout)
+#endif
+        guard let settings = notebookMenuAction(
+            identifier: "notebook-settings", timeout: timeout
+        ) else { return }
+        activate(settings)
+        XCTAssertTrue(
+            navigationBars["Settings"].waitForExistence(timeout: timeout),
+            "Expected notebook Settings to open"
+        )
     }
 
     func openTrash(timeout: TimeInterval = 15) {

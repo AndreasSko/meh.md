@@ -1,0 +1,63 @@
+import Foundation
+import NoteCore
+
+#if DEBUG
+/// A per-run in-memory transport for the sync status UI fixture.
+/// Delays expose real coordinator phases long enough for UI automation and
+/// screen recordings to capture them.
+struct NotebookSyncStatusPreviewTransport: SyncTransport {
+    let scope: String
+    private let base: InMemorySyncTransport
+    private let phaseDelay: Duration
+
+    init(runID: String, phaseDelay: Duration = .seconds(5)) {
+        scope = "sync-status-preview-\(runID)"
+        base = InMemorySyncTransport(
+            scope: scope,
+            store: InMemorySyncStore(),
+            pageSize: 2
+        )
+        self.phaseDelay = phaseDelay
+    }
+
+    func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
+        try await pause()
+        return try await base.bootstrap(proposing: record)
+    }
+
+    func publish(_ record: SyncRecord) async throws {
+        try await pause()
+        try await base.publish(record)
+    }
+
+    func publishBatch(_ records: [SyncRecord]) async throws -> SyncBatchResult {
+        try await pause()
+        return try await base.publishBatch(records)
+    }
+
+    func fetch(after cursor: String?) async throws -> SyncPage {
+        try await pause()
+        return try await base.fetch(after: cursor)
+    }
+
+    func purgeDeletedNotes(
+        _ noteIDs: Set<UUID>, notebookID: UUID
+    ) async throws {
+        try await pause()
+        try await base.purgeDeletedNotes(noteIDs, notebookID: notebookID)
+    }
+
+    func cleanupRedundantSnapshots(
+        notebookID: UUID
+    ) async throws -> SyncSnapshotCleanupReport {
+        try await pause()
+        return try await base.cleanupRedundantSnapshots(notebookID: notebookID)
+    }
+
+    func retryNotBefore() async -> Date? { nil }
+
+    private func pause() async throws {
+        try await Task.sleep(for: phaseDelay)
+    }
+}
+#endif

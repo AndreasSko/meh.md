@@ -83,8 +83,7 @@ final class LocalSyncUITests: XCTestCase {
 
     private func synchronize() {
         app.openSyncDetails()
-        app.buttons["sync-now"].tap()
-        let predicate = NSPredicate(format: "label BEGINSWITH %@", "Last sync:")
+        let predicate = NSPredicate(format: "label == %@", "Synced with iCloud")
         let status = app.descendants(matching: .any)
             .matching(identifier: "note-sync-status")
             .matching(predicate).firstMatch

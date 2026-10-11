@@ -35,6 +35,8 @@
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
         "NotebookDragUITests/testSelectedNotesDragTogetherAndKeepTheirSource",
+        "NotebookSyncStatusUITests/testSettingsContainsTheSyncEventLog",
+        "NotebookSyncStatusUITests/testToolbarOpensStatusAndShowsActiveFilesDuringSync",
         "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote"
       ]
     }

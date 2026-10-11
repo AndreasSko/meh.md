@@ -151,16 +151,6 @@ final class ICloudDevelopmentUITests: XCTestCase {
 
     private func exchange() {
         app.openSyncDetails()
-        let button = app.buttons["sync-now"]
-        let enabled = expectation(
-            for: NSPredicate(format: "enabled == true"), evaluatedWith: button
-        )
-        wait(for: [enabled], timeout: 30)
-#if os(macOS)
-        button.click()
-#else
-        button.tap()
-#endif
         let status = app.staticTexts["note-sync-status"]
         let completed = NSPredicate { _, _ in
             let text = status.label + " " + (status.value as? String ?? "")

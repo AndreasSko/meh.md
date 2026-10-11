@@ -6,6 +6,7 @@ import NoteCore
 /// Catalog UUIDs are generated once and remain stable when the run relaunches.
 enum NotebookUITestFixture: String, CaseIterable {
     case writing
+    case syncStatus = "sync-status"
     case historyRestore = "history-restore"
     case dragOrder = "drag-order"
     case dragNested = "drag-nested"
@@ -123,6 +124,20 @@ enum NotebookUITestFixture: String, CaseIterable {
                 name: "Fictional field notes.md", text: Self.literalSource)
             _ = try await replica.createNote(
                 name: "Save boundary.md", text: "# Save boundary\n\nFictional notes.")
+        case .syncStatus:
+            for name in ["Field notes", "Tide chart", "Island sketch"] {
+                _ = try await replica.createNote(
+                    name: "\(name).md",
+                    text: "# \(name)\n\nFictional sync status sample."
+                )
+            }
+            let deletedID = try await replica.createNote(
+                name: "Old waypoint.md",
+                text: "Fictional note scheduled for deletion cleanup."
+            )
+            _ = try await replica.trashItems([deletedID])
+            let deletion = try replica.deletionSelection(rootID: deletedID)
+            try await replica.permanentlyDelete(deletion)
         case .dragOrder:
             for name in ["Charlie", "Alpha", "Bravo"] {
                 _ = try await replica.createNote(

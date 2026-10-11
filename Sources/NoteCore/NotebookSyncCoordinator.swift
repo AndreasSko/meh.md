@@ -56,6 +56,26 @@ public final class NotebookSyncCoordinator {
         return replica.catalogSnapshot?.notebookID == notebookID
     }
 
+    /// Reads an existing local binding without account discovery or network work.
+    /// A provisional state without an accepted notebook has no bound scope.
+    public static func boundScope(for replica: NotebookReplica) throws -> String? {
+        let url = replica.directory.appending(path: "notebook-sync-state.json")
+        let state: NotebookSyncState
+        do {
+            state = try JSONDecoder().decode(
+                NotebookSyncState.self, from: Data(contentsOf: url)
+            )
+        } catch CocoaError.fileReadNoSuchFile { return nil }
+        guard state.version == 2,
+              !state.scope.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { throw SyncError.invalidRecord }
+        guard let notebookID = state.notebookID else { return nil }
+        guard replica.catalogSnapshot?.notebookID == notebookID else {
+            throw SyncError.identityConflict
+        }
+        return state.scope
+    }
+
     public func synchronize() async {
         guard !inFlight else { return }
         let startedAt = Date()
@@ -69,7 +89,18 @@ public final class NotebookSyncCoordinator {
             completedNotes: 0,
             totalNotes: 0
         )
-        defer { inFlight = false }
+        defer {
+            inFlight = false
+            if let previous = progress {
+                progress = NotebookSyncProgress(
+                    phase: previous.phase,
+                    receivedRecords: previous.receivedRecords,
+                    completedNotes: previous.completedNotes,
+                    totalNotes: previous.totalNotes,
+                    lastProgressAt: previous.lastProgressAt
+                )
+            }
+        }
         do {
             try await exchange()
             let isPending = status == .pending
@@ -179,6 +210,10 @@ public final class NotebookSyncCoordinator {
                 continue
             }
             for record in page.records {
+                updateProgress(
+                    phase: .receiving,
+                    activeNoteIDs: record.kind == .note ? [record.snapshot.noteID] : []
+                )
                 try await replica.apply(record)
                 updateProgress(
                     phase: .receiving,
@@ -271,6 +306,10 @@ public final class NotebookSyncCoordinator {
             }
             guard !batch.isEmpty else { continue }
             do {
+                updateProgress(
+                    phase: .uploadingNotes,
+                    activeNoteIDs: batch.map { $0.snapshot.noteID }
+                )
                 try await publish(
                     batch,
                     state: &state,
@@ -298,13 +337,14 @@ public final class NotebookSyncCoordinator {
             let deleted = Set(try NotebookCatalogDocument(snapshot: snapshot)
                 .items().filter(\.isPermanentlyDeleted).map(\.id))
             if !deleted.isEmpty {
-                updateProgress(phase: .cleaningUp)
+                updateProgress(phase: .cleaningUp, cleanupItemCount: deleted.count)
                 diagnosticLog?.record("deletion_cleanup_start", counts: ["items": deleted.count])
                 try await transport.purgeDeletedNotes(deleted, notebookID: notebookID)
                 diagnosticLog?.record("deletion_cleanup_end", counts: ["items": deleted.count])
             }
         }
         if let oversizedError { throw oversizedError }
+        updateProgress(phase: .cleaningUpSnapshots)
         do {
             let report = try await transport.cleanupRedundantSnapshots(
                 notebookID: notebookID
@@ -406,14 +446,18 @@ public final class NotebookSyncCoordinator {
         phase: NotebookSyncProgress.Phase,
         receivedRecords: Int? = nil,
         completedNotes: Int? = nil,
-        totalNotes: Int? = nil
+        totalNotes: Int? = nil,
+        activeNoteIDs: [UUID] = [],
+        cleanupItemCount: Int = 0
     ) {
         progress = NotebookSyncProgress(
             phase: phase,
             receivedRecords: receivedRecords ?? progress?.receivedRecords ?? 0,
             completedNotes: completedNotes ?? progress?.completedNotes ?? 0,
             totalNotes: totalNotes ?? progress?.totalNotes ?? 0,
-            lastProgressAt: Date()
+            lastProgressAt: Date(),
+            activeNoteIDs: activeNoteIDs,
+            cleanupItemCount: cleanupItemCount
         )
     }
 

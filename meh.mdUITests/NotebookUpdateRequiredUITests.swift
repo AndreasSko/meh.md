@@ -14,10 +14,10 @@ final class NotebookUpdateRequiredUITests: XCTestCase {
 
         let syncDetails = app.buttons["notebook-sync-details"]
         XCTAssertTrue(syncDetails.waitForExistence(timeout: 15))
-        XCTAssertEqual(syncDetails.value as? String, "Update required")
+        XCTAssertEqual(syncDetails.value as? String, "Update needed to sync")
         syncDetails.tap()
 
-        let title = app.staticTexts["Update required"]
+        let title = app.staticTexts["Update needed to sync"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts[
             "Update meh.md to resume iCloud sync. You can keep editing your notes on this device."
