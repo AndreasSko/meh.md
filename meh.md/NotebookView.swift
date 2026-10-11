@@ -272,6 +272,23 @@ struct NotebookView: View {
         #endif
     }
 
+    private var isLibraryEmpty: Bool {
+        !replica.placements.contains {
+            !$0.isInTrash && !$0.item.isPermanentlyDeleted
+        }
+    }
+
+    private var emptyLibraryView: some View {
+        NotebookEmptyLibraryView(
+            onStartWriting: {
+                createItem(kind: .note, parentID: nil,
+                           usesDefaultDestination: true, startsWriting: true)
+            },
+            onImportMarkdown: requestImport
+        )
+        .disabled(busy)
+    }
+
     private var sidebarTitle: String {
         if showsSelectionControls && !search.isPresented { return "" }
         #if os(iOS)
@@ -283,7 +300,13 @@ struct NotebookView: View {
 
     private var notebookSidebar: some View {
             ZStack {
-                libraryBrowser
+                Group {
+                    if isPhoneLayout && isLibraryEmpty {
+                        emptyLibraryView
+                    } else {
+                        libraryBrowser
+                    }
+                }
                     .opacity(search.isPresented ? 0 : 1)
                     .allowsHitTesting(!search.isPresented)
                     .accessibilityHidden(search.isPresented)
@@ -616,6 +639,8 @@ struct NotebookView: View {
                             }
                         }
                     }
+                } else if isLibraryEmpty {
+                    emptyLibraryView
                 } else {
                     ContentUnavailableView {
                         Label("Select a note", systemImage: "note.text")
@@ -2197,7 +2222,7 @@ struct NotebookView: View {
     private func createItem(
         kind: NotebookItemKind, parentID: UUID?,
         position: NotebookCreationPosition = .append,
-        usesDefaultDestination: Bool = false
+        usesDefaultDestination: Bool = false, startsWriting: Bool = false
     ) {
         var createdFolderID: UUID?
         perform {
@@ -2220,19 +2245,33 @@ struct NotebookView: View {
                         name: name, parentID: parentID, position: position))
                 reveal(id)
                 try await selectNote(id)
-                detailEditingID = id
-                detailOriginalName = name
-                detailProposedTitle = NotebookNoteName.title(from: name)
-                detailTitleHeight = 32
-                detailTitleFocusRequest = NotebookTitleFocusRequest(
-                    noteID: id, selectsAll: true
-                )
+                if !startsWriting {
+                    detailEditingID = id
+                    detailOriginalName = name
+                    detailProposedTitle = NotebookNoteName.title(from: name)
+                    detailTitleHeight = 32
+                    detailTitleFocusRequest = NotebookTitleFocusRequest(
+                        noteID: id, selectsAll: true
+                    )
+                }
             case .folder:
                 createdFolderID = try await replica.createFolder(
                     name: "Untitled Folder", parentID: parentID,
                     position: position)
             }
         } onSuccess: {
+            if startsWriting {
+                // This explicit visit owns focus, rather than the ordinary
+                // position-restoration task that also waits for attachment.
+                let incoming = editorNavigation
+                let noteID = selectedID
+                incoming.hasExplicitVisitDestination = true
+                incoming.whenAttached { [weak incoming] in
+                    guard let incoming, incoming === editorNavigation,
+                          selectedID == noteID else { return }
+                    incoming.focusEditor?()
+                }
+            }
             guard let id = createdFolderID else { return }
             navigationState.isTreeExpanded = true
             reveal(id)
