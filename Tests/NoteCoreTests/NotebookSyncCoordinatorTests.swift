@@ -938,6 +938,45 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         assertExchanged(coordinator.status)
     }
 
+    func testRemoteHistoryActivityDistinguishesLocalWorkFromCloudWait() async throws {
+        let transport = PhasePausingTransport(
+            base: InMemorySyncTransport(scope: "remote-history-progress")
+        )
+        let coordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: directory()), transport: transport
+        )
+        let synchronization = Task { await coordinator.synchronize() }
+        await transport.waitForBootstrap()
+        await transport.resumeBootstrap()
+        await transport.waitForFetch()
+
+        await transport.reportReceiveActivity(.checkingHistory)
+        let local = try XCTUnwrap(coordinator.progress)
+        XCTAssertEqual(local.phase, .checkingRemoteHistory)
+        XCTAssertNil(local.waitingSince)
+        XCTAssertEqual(local.overallFraction, 0.2)
+        XCTAssertNil(local.completedUnits)
+        XCTAssertNil(local.totalUnits)
+
+        await transport.reportReceiveActivity(.waitingForCloud)
+        let waiting = try XCTUnwrap(coordinator.progress)
+        XCTAssertEqual(waiting.phase, .checkingRemoteHistory)
+        XCTAssertNotNil(waiting.waitingSince)
+        XCTAssertEqual(waiting.overallFraction, 0.2)
+        await transport.reportReceiveActivity(.checkingHistory)
+        XCTAssertNil(coordinator.progress?.waitingSince)
+        XCTAssertEqual(coordinator.progress?.overallFraction, 0.2)
+
+        await transport.resumeFetch()
+        await synchronization.value
+        XCTAssertNil(coordinator.progress)
+        assertExchanged(coordinator.status)
+        let handlerBound = await transport.hasReceiveActivityHandler
+        XCTAssertFalse(handlerBound)
+        await transport.reportReceiveActivity(.checkingHistory)
+        XCTAssertNil(coordinator.progress)
+    }
+
     func testNonfinalReceivingPagesKeepOverallBudgetAtStart() async throws {
         let store = InMemorySyncStore()
         let sender = NotebookReplica(directory: directory())
@@ -1825,6 +1864,20 @@ private actor RemoteBatchRecordingTransport: SyncTransport {
 }
 
 private actor PhasePausingTransport: SyncTransport {
+    private var receiveActivityHandler:
+        (@Sendable (SyncReceiveActivity) async -> Void)?
+    var hasReceiveActivityHandler: Bool { receiveActivityHandler != nil }
+
+    func setReceiveActivityHandler(
+        _ handler: (@Sendable (SyncReceiveActivity) async -> Void)?
+    ) async {
+        receiveActivityHandler = handler
+    }
+
+    func reportReceiveActivity(_ activity: SyncReceiveActivity) async {
+        await receiveActivityHandler?(activity)
+    }
+
     nonisolated let scope: String
     private let base: InMemorySyncTransport
     private var bootstrapStarted = false

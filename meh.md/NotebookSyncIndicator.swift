@@ -63,6 +63,7 @@ nonisolated struct NotebookSyncActivityPresentation {
         if progress.waitingSince != nil { return "Waiting for iCloud…" }
         switch progress.phase {
         case .checking: return "Checking for changes…"
+        case .checkingRemoteHistory: return "Checking iCloud history…"
         case .receiving:
             return progress.activeNoteIDs.isEmpty
                 ? "Receiving changes…" : "Updating this device…"
@@ -86,7 +87,8 @@ nonisolated struct NotebookSyncActivityPresentation {
             return count > 0 ? "Removing copies of \(count) deleted notes"
                 : "Removing copies of deleted notes"
         case .cleaningUpSnapshots: return "Removing extra sync copies from iCloud"
-        case .checking, .receiving, .uploadingNotes, .comparing, .finalizing: return nil
+        case .checking, .checkingRemoteHistory, .receiving, .uploadingNotes,
+             .comparing, .finalizing: return nil
         }
     }
 
@@ -106,7 +108,7 @@ nonisolated struct NotebookSyncActivityPresentation {
             return "\(progress.completedNotes) of \(progress.totalNotes) notes sent"
         case .cleaningUp, .cleaningUpSnapshots:
             return "\(completed) of \(total) items processed"
-        case .uploadingCatalog: return nil
+        case .uploadingCatalog, .checkingRemoteHistory: return nil
         }
     }
 }

@@ -129,6 +129,81 @@ final class CloudKitSnapshotRetirementTests: XCTestCase {
         XCTAssertThrowsError(try state.validateRemoteDeletions())
     }
 
+    func testConfirmationLoadsOnlyMatchingDeletionHistories() throws {
+        let notebookID = UUID()
+        var state = state()
+        var confirmed: SyncRecord!
+        var matchingDeleted: SyncRecord!
+        for identity in 0..<2 {
+            let note = try NoteDocument(noteID: UUID())
+            let old = SyncRecord(snapshot: note.snapshot(), notebookID: notebookID)
+            try state.appendToInbox(old)
+            observe(old, in: &state)
+            for edit in 0..<8 {
+                try note.replaceAll(with: "Fictional identity \(identity), edit \(edit)")
+                let record = SyncRecord(snapshot: note.snapshot(), notebookID: notebookID)
+                try state.appendToInbox(record)
+                if identity == 0 { confirmed = record; matchingDeleted = old }
+            }
+        }
+        var candidateLoads = 0
+        _ = try state.retirementCandidates { record in
+            candidateLoads += 1
+            return try snapshotHistoryChangeHashes(record)
+        }
+        XCTAssertEqual(candidateLoads, 18)
+        var loadedIDs: [String] = []
+        try state.resolveSnapshotRetirements(confirmedRecords: [confirmed]) { record in
+            loadedIDs.append(record.id)
+            return try snapshotHistoryChangeHashes(record)
+        }
+        // The prior confirmation rebuilt all candidates (18 loads), then
+        // loaded the confirmed and matching deleted histories again (2).
+        XCTAssertEqual(loadedIDs, [confirmed.id, matchingDeleted.id])
+        XCTAssertEqual(state.unresolvedRemoteDeletionRecordIDs.count, 1)
+        XCTAssertFalse(state.unresolvedRemoteDeletionRecordIDs.contains(matchingDeleted.id))
+    }
+
+    func testConfirmationRejectsDifferentBufferedHeadsOrBytes() throws {
+        let notebookID = UUID()
+        let note = try NoteDocument(noteID: UUID())
+        let old = SyncRecord(snapshot: note.snapshot(), notebookID: notebookID)
+        try note.replaceAll(with: "Fictional descendant")
+        let confirmed = SyncRecord(snapshot: note.snapshot(), notebookID: notebookID)
+        for alterHeads in [false, true] {
+            var state = state()
+            try state.appendToInbox(old)
+            try state.appendToInbox(confirmed)
+            observe(old, in: &state)
+            let alteredSnapshot = NoteSnapshot(
+                data: alterHeads ? confirmed.snapshot.data : old.snapshot.data,
+                heads: alterHeads ? old.snapshot.heads : confirmed.snapshot.heads,
+                noteID: confirmed.snapshot.noteID
+            )
+            let altered = SyncRecord(snapshot: alteredSnapshot, notebookID: notebookID)
+            // Retain the candidate ID to exercise full record equality rather
+            // than merely an ID mismatch. A durable store rejects this state;
+            // confirmation must remain conservative even before that check.
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(altered)
+            ) as? [String: Any])
+            json["id"] = confirmed.id
+            var stateJSON = try XCTUnwrap(JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(state)
+            ) as? [String: Any])
+            var inbox = try XCTUnwrap(stateJSON["inbox"] as? [[String: Any]])
+            let index = try XCTUnwrap(inbox.firstIndex {
+                $0["id"] as? String == confirmed.id
+            })
+            inbox[index] = json
+            stateJSON["inbox"] = inbox
+            state = try JSONDecoder().decode(CloudKitTransportState.self, from:
+                JSONSerialization.data(withJSONObject: stateJSON))
+            try state.resolveSnapshotRetirements(confirmedRecords: [confirmed])
+            XCTAssertEqual(state.unresolvedRemoteDeletionRecordIDs, [old.id])
+        }
+    }
+
     func testRestartPreservesEvidenceAndCursorAndOldStateDecodes() throws {
         let note = try NoteDocument(noteID: UUID())
         let record = SyncRecord(snapshot: note.snapshot(), notebookID: UUID())

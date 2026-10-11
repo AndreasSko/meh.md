@@ -149,6 +149,11 @@ public struct SyncSnapshotCleanupReport: Sendable, Equatable {
     }
 }
 
+/// Distinguishes local receive verification from awaiting a cloud response.
+public enum SyncReceiveActivity: Equatable, Sendable {
+    case checkingHistory, waitingForCloud
+}
+
 /// Counts from work already planned by the transport; never a remote estimate.
 public struct SyncCleanupProgress: Sendable, Equatable {
     public enum Stage: Sendable, Equatable {
@@ -171,6 +176,10 @@ public struct SyncCleanupProgress: Sendable, Equatable {
         self.confirmedDeletionCount = confirmedDeletionCount
     }
 }
+
+/// Keep the callback's isolation consistent across clients that enable
+/// NonisolatedNonsendingByDefault and the core transport protocol.
+public typealias SyncReceiveActivityHandler = @Sendable (SyncReceiveActivity) async -> Void
 
 /// A remote record store, not a peer-to-peer stream. All methods may be
 /// retried after an uncertain result. Cursors are scoped to one backend.
@@ -195,6 +204,9 @@ public protocol SyncTransport: Sendable {
     func cleanupRedundantSnapshots(
         notebookID: UUID
     ) async throws -> SyncSnapshotCleanupReport
+    func setReceiveActivityHandler(
+        _ handler: SyncReceiveActivityHandler?
+    ) async
     func setCleanupProgressHandler(
         _ handler: (@Sendable (SyncCleanupProgress) async -> Void)?
     ) async
@@ -232,6 +244,10 @@ extension SyncTransport {
     ) async throws -> SyncSnapshotCleanupReport {
         SyncSnapshotCleanupReport()
     }
+
+    public func setReceiveActivityHandler(
+        _ handler: SyncReceiveActivityHandler?
+    ) async {}
 
     public func setCleanupProgressHandler(
         _ handler: (@Sendable (SyncCleanupProgress) async -> Void)?

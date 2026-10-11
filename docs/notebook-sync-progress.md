@@ -45,6 +45,10 @@ starts a new attempt with its own counters.
   Non-final pages display batch counts without advancing the receiving budget.
   The final page can advance that budget, with its end reserved for the durable
   cursor checkpoint. Network waits never advance because time has passed.
+- Received snapshot deletions require confirmed surviving history before a
+  page can be applied. This local work shows "Checking iCloud history";
+  "Waiting for iCloud" is reserved for its remote confirmation requests.
+  Neither stage invents progress while the overall receive total is unknown.
 - Cleanup counts existing survivor checks and planned deletion work. Confirmed
   deletions are logged separately from absent records and rejected plans.
 - Partial failure keeps the acknowledged portion durable. Details retain those
@@ -76,6 +80,12 @@ fallback with partial-acknowledgement reporting.
 Buffered inbox pages drain without a new CloudKit fetch per page. Reaching the
 buffer tip still performs a fresh fetch in the same exchange, so continuous
 local editing cannot indefinitely hide changes from another device.
+
+Snapshot-retirement confirmation checks only the confirmed survivor and its
+matching unresolved deletions. It retains exact buffered-record equality,
+current deletion evidence, notebook identity, and full history coverage. The
+initial candidate scan is unchanged; confirming one survivor no longer rebuilds
+every unrelated candidate's Automerge history.
 
 Foreground activation, saved edits, and manual sync still request exchanges.
 Cloud builds now use engine scheduling and change notifications instead of
@@ -127,6 +137,11 @@ work counts, publish-lease wait completion, and CloudKit request outcomes help
 locate delays. Request durations exclude retry cooldown, which has separate
 wait events. New duration measurements use a monotonic clock. No per-document
 scan events are written, and the existing 500-event limit remains in place.
+
+Retirement-plan and candidate-scan events include remaining obligations and
+candidate counts. Survivor-check events separate snapshot decoding from the
+durable validation/checkpoint time. These local durations complement the
+already separate cloud-request durations.
 
 Exports include app version/build and OS version, timestamps, event names,
 counts, and sanitized error categories/codes. They exclude note text, titles,

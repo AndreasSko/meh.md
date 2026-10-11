@@ -129,6 +129,24 @@ final class NotebookUITestFixtureTests: XCTestCase {
         }
     }
 
+    func testPreviewReceiveCallbackRoutesThroughTransportProtocol() async throws {
+        let transport: any SyncTransport = NotebookSyncStatusPreviewTransport(
+            runID: "receive-handler", phaseDelay: .zero
+        )
+        let capture = PreviewReceiveActivityCapture()
+        await transport.setReceiveActivityHandler { activity in
+            await capture.record(activity)
+        }
+        _ = try await transport.fetch(after: nil)
+        let activities = await capture.activities
+        XCTAssertEqual(activities, [.checkingHistory])
+
+        await transport.setReceiveActivityHandler(nil)
+        _ = try await transport.fetch(after: nil)
+        let afterClearing = await capture.activities
+        XCTAssertEqual(afterClearing, activities)
+    }
+
     func testMalformedOrUnisolatedRequestsCannotSeed() {
         let directory = URL(filePath: "/tmp/NotebookPreviewTests/run")
         let valid = preview("run", fixture: "writing")
@@ -203,5 +221,9 @@ final class NotebookUITestFixtureTests: XCTestCase {
         ["MEH_NOTEBOOK_PREVIEW": "1", "MEH_NOTEBOOK_PREVIEW_RUN": run,
          "MEH_NOTEBOOK_TEST_FIXTURE": fixture]
     }
+}
+private actor PreviewReceiveActivityCapture {
+    private(set) var activities: [SyncReceiveActivity] = []
+    func record(_ activity: SyncReceiveActivity) { activities.append(activity) }
 }
 #endif

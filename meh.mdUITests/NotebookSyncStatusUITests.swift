@@ -1,6 +1,110 @@
 import XCTest
 
 final class NotebookSyncStatusUITests: XCTestCase {
+    func testNotebookNavigationAllowsToolbarPopoversToReopen() throws {
+        let app = makeFixture()
+        app.launch()
+        let syncButton = app.buttons["notebook-sync-details"]
+        XCTAssertTrue(syncButton.waitForExistence(timeout: 30))
+        app.openSyncDetails()
+        let syncStatus = app.staticTexts["note-sync-status"]
+        XCTAssertTrue(syncStatus.waitForExistence(timeout: 5))
+        capture(app, name: "Popover bug - sync details open")
+
+        let notes = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "notebook-sidebar-note-"
+        ))
+        XCTAssertTrue(notes.firstMatch.waitForExistence(timeout: 15))
+
+        let note = notes.firstMatch
+        let editor = app.textViews["markdown-editor"]
+        let noteTap = app.coordinate(withNormalizedOffset: CGVector(
+            dx: note.frame.midX / app.frame.width,
+            dy: note.frame.midY / app.frame.height
+        ))
+        noteTap.tap()
+        let navigatedOnFirstTap = editor.waitForExistence(timeout: 3)
+        if !navigatedOnFirstTap {
+            XCTAssertFalse(syncStatus.exists, "The first note tap should dismiss the popover")
+            noteTap.tap()
+        }
+        let navigated = navigatedOnFirstTap || editor.waitForExistence(timeout: 10)
+        XCTAssertTrue(
+            navigated,
+            "A note tap should navigate after the popover is dismissed"
+        )
+        capture(app, name: "Popover bug - note opened directly from browser")
+
+        let tree = app.buttons["notebook-tree-toggle"]
+        if !tree.isHittable {
+            let back = app.navigationBars.buttons.firstMatch
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
+        }
+        XCTAssertTrue(tree.waitForExistence(timeout: 10))
+        XCTAssertTrue(syncButton.isHittable)
+
+        syncButton.tap()
+        let reopenedSync = syncStatus.waitForExistence(timeout: 5)
+        if reopenedSync {
+            capture(app, name: "Popover bug - sync details reopened")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+            let dismissed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"), object: syncStatus
+            )
+            _ = XCTWaiter.wait(for: [dismissed], timeout: 5)
+        }
+
+        let menu = app.buttons["notebook-app-menu"]
+        XCTAssertTrue(menu.isHittable)
+        menu.tap()
+        let newNoteAction = app.buttons.matching(
+            NSPredicate(format: "label == %@", "New Note")
+        ).firstMatch
+        let menuReopened = newNoteAction.waitForExistence(timeout: 5)
+        if menuReopened {
+            capture(app, name: "Popover bug - browser menu reopened")
+        }
+        XCTAssertTrue(reopenedSync, "The sync details popover should reopen after note navigation")
+        XCTAssertTrue(menuReopened, "The ellipsis menu should open after note navigation")
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+        XCTAssertTrue(syncButton.isHittable)
+        syncButton.tap()
+        XCTAssertTrue(syncStatus.waitForExistence(timeout: 5))
+        let plus = app.buttons["notebook-new-item"].firstMatch
+        XCTAssertTrue(plus.exists)
+        let plusTap = app.coordinate(withNormalizedOffset: CGVector(
+            dx: plus.frame.midX / app.frame.width,
+            dy: plus.frame.midY / app.frame.height
+        ))
+        plusTap.tap()
+        XCTAssertFalse(syncStatus.exists, "The first plus tap should dismiss sync details")
+        XCTAssertFalse(editor.exists, "The first plus tap should not create a note")
+        plusTap.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "The second plus tap should create a note")
+        capture(app, name: "After - new note created from toolbar plus")
+
+        let treeAfterCreate = app.buttons["notebook-tree-toggle"]
+        if !treeAfterCreate.isHittable {
+            let back = app.navigationBars.buttons.firstMatch
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
+        }
+        XCTAssertTrue(treeAfterCreate.waitForExistence(timeout: 10))
+        XCTAssertTrue(syncButton.isHittable)
+        syncButton.tap()
+        XCTAssertTrue(syncStatus.waitForExistence(timeout: 5))
+        capture(app, name: "After - sync details reopened after new note")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+        let menuAfterCreate = app.buttons["notebook-app-menu"]
+        XCTAssertTrue(menuAfterCreate.isHittable)
+        menuAfterCreate.tap()
+        XCTAssertTrue(newNoteAction.waitForExistence(timeout: 5))
+        capture(app, name: "After - ellipsis reopened after new note")
+        app.terminate()
+    }
+
     func testToolbarOpensStatusAndShowsActiveFilesDuringSync() throws {
         let app = makeFixture()
         app.launch()
@@ -37,16 +141,28 @@ final class NotebookSyncStatusUITests: XCTestCase {
         let waitingElapsed = app.staticTexts["notebook-sync-work-count"]
         XCTAssertTrue(waitingElapsed.exists)
         let initialWaitingLabel = waitingElapsed.label
+        capture(app, name: "After - waiting at 20 percent")
         let timerAdvanced = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label != %@", initialWaitingLabel),
+            predicate: NSPredicate { _, _ in
+                guard status.label.contains("Waiting for iCloud"),
+                      waitingElapsed.exists else { return false }
+                return waitingElapsed.label != initialWaitingLabel
+            },
             object: waitingElapsed
         )
+        let checkingHistory = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Checking iCloud history"),
+            object: status
+        )
         XCTAssertEqual(
-            XCTWaiter.wait(for: [timerAdvanced], timeout: 4), .completed,
-            "The waiting timer should advance while sync remains at 20 percent"
+            XCTWaiter.wait(
+                for: [timerAdvanced, checkingHistory], timeout: 15,
+                enforceOrder: true
+            ), .completed,
+            "The waiting timer should advance before remote-history checking"
         )
         XCTAssertEqual(progress.value as? String, "20 percent complete")
-        capture(app, name: "After - waiting at 20 percent")
+        capture(app, name: "After - checking iCloud history")
         let sending = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label CONTAINS %@", "Sending 3 notes"),
             object: status

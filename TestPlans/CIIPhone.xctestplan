@@ -36,6 +36,7 @@
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
         "NotebookDragUITests/testSelectedNotesDragTogetherAndKeepTheirSource",
         "NotebookSyncStatusUITests/testSettingsContainsTheSyncEventLog",
+        "NotebookSyncStatusUITests/testNotebookNavigationAllowsToolbarPopoversToReopen",
         "NotebookSyncStatusUITests/testToolbarOpensStatusAndShowsActiveFilesDuringSync",
         "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote"
       ]
