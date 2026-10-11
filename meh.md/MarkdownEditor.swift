@@ -724,6 +724,11 @@ final class MarkdownTextView: NSTextView {
 
     override func accessibilityChildren() -> [Any]? {
         var children = super.accessibilityChildren() ?? []
+        if let markdownTitleHost, !children.contains(where: {
+            ($0 as AnyObject) === markdownTitleHost
+        }) {
+            children.append(markdownTitleHost)
+        }
         for overlay in markdownTableScrollOverlays where !children.contains(where: {
             ($0 as AnyObject) === overlay
         }) {

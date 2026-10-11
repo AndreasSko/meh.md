@@ -148,6 +148,7 @@ struct NotebookView: View {
     @State private var quickOpenDidNavigate = false
     @State private var resumeEditorAfterQuickOpen = false
     @State private var searchLandingPosition: MarkdownEditorPosition?
+    @State private var showingExport = false
     @State private var showingImport = false
     @State private var importingFolder = false
     @State private var choosingImportSource = false
@@ -256,12 +257,18 @@ struct NotebookView: View {
     #if os(macOS)
     private var menuAvailable: Bool {
         !busy && !search.showingQuickOpen && !showingSettings
-            && !showingTrash && !showingImport && !showingTextSize
+            && !showingTrash && !showingImport && !showingExport
+            && !choosingImportSource && !showingTextSize
             && movingIDs.isEmpty && deletionSelection == nil
             && errorMessage == nil && sharedImportID == nil
             && !showingBacklinks && linkInsertion == nil
             && linkChoices.isEmpty && missingLink == nil
             && workspace?.isResetPending != true
+    }
+    private var canManageMenuSelection: Bool {
+        menuAvailable && browserFocused && editingID == nil
+            && detailEditingID == nil && !search.isPresented
+            && !browserSelection.isEmpty
     }
     #endif
     private var syncToolbarPlacement: ToolbarItemPlacement {
@@ -820,6 +827,39 @@ struct NotebookView: View {
         .onChange(of: menuAvailable, initial: true) { _, available in
             menu.isAvailable = available
         }
+        .onChange(of: canManageMenuSelection, initial: true) { _, available in
+            menu.canManageSelection = available
+        }
+        .onChange(of: isLibraryEmpty, initial: true) { _, empty in
+            menu.canExport = !empty
+        }
+        .onChange(of: supportsMultipleWindows, initial: true) { _, supported in
+            menu.canOpenWindow = supported
+        }
+        .onChange(of: menu.newFolderRequest) { _, _ in
+            guard menuAvailable else { return }
+            createItem(kind: .folder, parentID: nil)
+        }
+        .onChange(of: menu.newWindowRequest) { _, _ in
+            guard menuAvailable, supportsMultipleWindows else { return }
+            openWindow(id: "notebook", value: NotebookWindowValue())
+        }
+        .onChange(of: menu.importRequest) { _, _ in
+            guard menuAvailable else { return }
+            requestImport()
+        }
+        .onChange(of: menu.exportRequest) { _, _ in
+            guard menuAvailable, !isLibraryEmpty else { return }
+            showingExport = true
+        }
+        .onChange(of: menu.moveRequest) { _, _ in
+            guard canManageMenuSelection else { return }
+            beginMoving(browserSelection.orderedIDs(in: activeBrowserOrder))
+        }
+        .onChange(of: menu.trashRequest) { _, _ in
+            guard canManageMenuSelection else { return }
+            trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+        }
         .onChange(of: menu.newNoteRequest) { _, _ in
             guard menuAvailable else { return }
             createDefaultNote()
@@ -975,6 +1015,9 @@ struct NotebookView: View {
         } message: {
             Text(missingLink?.destination ?? "")
         }
+        .notebookMarkdownExporter(
+            isPresented: $showingExport, replica: replica, beforeExport: flushEditor
+        )
         .notebookMarkdownImporter(
             isPresented: $showingImport, choosingFolder: importingFolder,
             replica: replica, onImport: importMarkdown
