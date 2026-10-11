@@ -193,6 +193,7 @@ struct EditorWritingControls: View {
             .presentationCompactAdaptation(.popover)
 #endif
             .onDisappear {
+                headingPickerPresented = false
                 if let command = pendingHeadingCommand {
                     pendingHeadingCommand = nil
                     navigation.performCommand?(command)
@@ -255,6 +256,7 @@ private struct EditorMacWritingControls: View {
                 isPresented = false
             }
             .onDisappear {
+                isPresented = false
                 let command = pendingCommand
                 pendingCommand = nil
                 if let command { navigation.performCommand?(command) }

@@ -599,6 +599,7 @@ struct NotebookView: View {
                                         fontFamily: editorFontFamilyBinding
                                     )
                                         .presentationCompactAdaptation(.popover)
+                                        .onDisappear { showingTextSize = false }
                                 }
                             }
                         }

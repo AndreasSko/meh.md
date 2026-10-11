@@ -18,7 +18,8 @@ struct NotebookSyncButton: View {
         )) { context in
             let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
             Button {
-                showingDetails = true
+                showingDetails.toggle()
+                guard showingDetails else { return }
                 Task { await workspace.requestSyncFromStatus() }
             } label: {
                 Image(systemName: presentation.activity.fraction != nil
@@ -41,7 +42,9 @@ struct NotebookSyncButton: View {
             .popover(isPresented: $showingDetails) {
                 NotebookSyncDetailsView(workspace: workspace)
                     .presentationCompactAdaptation(.popover)
+                    .onDisappear { showingDetails = false }
             }
+            .onDisappear { showingDetails = false }
         }
     }
 
