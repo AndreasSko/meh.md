@@ -23,9 +23,13 @@ actor NotebookHistoryChecker {
     func containsHistory(
         _ checkpoints: [String: Set<String>],
         records: [SyncRecord],
-        deleted: Set<UUID>
-    ) throws -> Bool {
+        deleted: Set<UUID>,
+        progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> Bool {
         try Task.checkCancellation()
+        let total = checkpoints.count
+        let progressInterval = max(1, (total + 99) / 100)
+        if let progress { await progress(0, total) }
         let indexed = Dictionary(uniqueKeysWithValues: records.map { ($0.documentKey, $0) })
         // Retain only members of this pass's active working set. A missing or
         // changed record must never inherit a previously decoded history.
@@ -40,13 +44,27 @@ actor NotebookHistoryChecker {
         }
         // A stable order keeps the same bounded subset resident when a
         // notebook has more checkpoints than the cache can hold.
-        for (key, heads) in checkpoints.sorted(by: { $0.key < $1.key }) {
+        for (index, checkpoint) in checkpoints.sorted(by: { $0.key < $1.key }).enumerated() {
             try Task.checkCancellation()
-            if isDeletedNote(key, deleted: deleted) { continue }
-            // Presence is checked on every pass, even when history is cached:
-            // a deleted or lost file must still cause replay.
-            guard let record = indexed[key] else { return false }
-            if !heads.isSubset(of: try history(for: record)) { return false }
+            let (key, heads) = checkpoint
+            let contains: Bool
+            if isDeletedNote(key, deleted: deleted) {
+                contains = true
+            } else if let record = indexed[key] {
+                // Presence is checked even when history is cached: a lost file
+                // must still cause replay.
+                contains = heads.isSubset(of: try history(for: record))
+            } else {
+                contains = false
+            }
+            let completed = index + 1
+            if let progress,
+                completed == 1 || completed.isMultiple(of: progressInterval)
+                    || completed == total || !contains
+            {
+                await progress(completed, total)
+            }
+            if !contains { return false }
         }
         return true
     }

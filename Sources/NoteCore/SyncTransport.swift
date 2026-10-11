@@ -149,6 +149,29 @@ public struct SyncSnapshotCleanupReport: Sendable, Equatable {
     }
 }
 
+/// Counts from work already planned by the transport; never a remote estimate.
+public struct SyncCleanupProgress: Sendable, Equatable {
+    public enum Stage: Sendable, Equatable {
+        case survivorVerification
+        case deletion
+    }
+
+    public let stage: Stage
+    public let completedCount: Int
+    public let totalCount: Int
+    public let confirmedDeletionCount: Int
+
+    public init(
+        stage: Stage, completedCount: Int, totalCount: Int,
+        confirmedDeletionCount: Int = 0
+    ) {
+        self.stage = stage
+        self.completedCount = completedCount
+        self.totalCount = totalCount
+        self.confirmedDeletionCount = confirmedDeletionCount
+    }
+}
+
 /// A remote record store, not a peer-to-peer stream. All methods may be
 /// retried after an uncertain result. Cursors are scoped to one backend.
 public protocol SyncTransport: Sendable {
@@ -172,6 +195,12 @@ public protocol SyncTransport: Sendable {
     func cleanupRedundantSnapshots(
         notebookID: UUID
     ) async throws -> SyncSnapshotCleanupReport
+    func setCleanupProgressHandler(
+        _ handler: (@Sendable (SyncCleanupProgress) async -> Void)?
+    ) async
+    func setDiagnosticsHandler(
+        _ handler: (@Sendable (String, [String: Int]) async -> Void)?
+    ) async
     /// The earliest useful retry time known by the transport.
     func retryNotBefore() async -> Date?
 }
@@ -203,6 +232,14 @@ extension SyncTransport {
     ) async throws -> SyncSnapshotCleanupReport {
         SyncSnapshotCleanupReport()
     }
+
+    public func setCleanupProgressHandler(
+        _ handler: (@Sendable (SyncCleanupProgress) async -> Void)?
+    ) async {}
+
+    public func setDiagnosticsHandler(
+        _ handler: (@Sendable (String, [String: Int]) async -> Void)?
+    ) async {}
 
     public func retryNotBefore() async -> Date? { nil }
 

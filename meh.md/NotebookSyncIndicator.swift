@@ -47,6 +47,9 @@ nonisolated struct NotebookSyncActivityPresentation {
     }
 
     var fraction: Double? {
+        if let fraction = progress?.overallFraction {
+            return fraction.isFinite ? min(1, max(0, fraction)) : nil
+        }
         guard let progress, progress.phase == .uploadingNotes,
               progress.totalNotes > 0 else { return nil }
         return min(1, max(0, Double(progress.completedNotes)
@@ -57,6 +60,7 @@ nonisolated struct NotebookSyncActivityPresentation {
 
     var title: LocalizedStringResource {
         guard let progress else { return "Checking for changes…" }
+        if progress.waitingSince != nil { return "Waiting for iCloud…" }
         switch progress.phase {
         case .checking: return "Checking for changes…"
         case .receiving:
@@ -67,6 +71,8 @@ nonisolated struct NotebookSyncActivityPresentation {
             return count > 1 ? "Sending \(count) notes…" : "Sending changes…"
         case .uploadingCatalog: return "Updating your notebook…"
         case .cleaningUp, .cleaningUpSnapshots: return "Cleaning up…"
+        case .comparing: return "Checking local changes…"
+        case .finalizing: return "Finishing sync…"
         }
     }
 
@@ -80,7 +86,27 @@ nonisolated struct NotebookSyncActivityPresentation {
             return count > 0 ? "Removing copies of \(count) deleted notes"
                 : "Removing copies of deleted notes"
         case .cleaningUpSnapshots: return "Removing extra sync copies from iCloud"
-        case .checking, .receiving, .uploadingNotes: return nil
+        case .checking, .receiving, .uploadingNotes, .comparing, .finalizing: return nil
+        }
+    }
+
+    func detail(at now: Date) -> LocalizedStringResource? {
+        guard let progress else { return nil }
+        if let started = progress.waitingSince {
+            let seconds = max(0, Int(now.timeIntervalSince(started)))
+            return "Waiting for \(seconds) seconds"
+        }
+        guard let completed = progress.completedUnits,
+              let total = progress.totalUnits, total > 0 else { return nil }
+        switch progress.phase {
+        case .checking, .comparing, .finalizing:
+            return "\(completed) of \(total) documents checked"
+        case .receiving: return "\(completed) of \(total) changes in this batch"
+        case .uploadingNotes:
+            return "\(progress.completedNotes) of \(progress.totalNotes) notes sent"
+        case .cleaningUp, .cleaningUpSnapshots:
+            return "\(completed) of \(total) items processed"
+        case .uploadingCatalog: return nil
         }
     }
 }

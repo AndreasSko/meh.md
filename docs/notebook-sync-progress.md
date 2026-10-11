@@ -6,24 +6,54 @@ result, and manual sync. Routine sync progress no longer takes space below
 the writing screen. Markdown-copy failures, deletion-cleanup errors, and
 recovery actions remain visible in the bottom status area.
 
-The button border shows measured progress only when a transfer total is known.
-Checks, receiving without a total, and maintenance use the syncing cloud icon.
-The status popover continues to show its activity indicator during active work.
+The button border shows estimated completion of one finite exchange. It uses
+fixed phase budgets and known work counts, rather than elapsed time. An initial
+wait without measured work uses the syncing cloud icon. Later waits hold the
+earned fraction. The status popover groups the bar under "Syncing with iCloud"
+and shows the current phase beneath it, followed by available work counts and
+elapsed iCloud wait time. This keeps overall progress distinct from the number
+of notes sent in the current phase, without spinning the button border.
 
 ## What progress means
 
+| Work | Exchange budget |
+| --- | --- |
+| Check local records and saved history | 0-20% |
+| Receive and apply changes | 20-50% |
+| Compare outgoing local records | 50-55% |
+| Send saved note revisions | 55-78% |
+| Send notebook metadata | 78-80% |
+| Remove copies of deleted notes | 80-85% |
+| Verify and remove redundant snapshots | 85-98% |
+| Verify the final local state | 98-100% |
+
+These weights describe completion of planned work, not remaining time. Each
+phase starts where the preceding budget ends. Empty phases skip forward;
+progress never decreases within a pass. Only successful final verification
+can complete the pass. New edits may require another pass, and a failed retry
+starts a new attempt with its own counters.
+
+- Local scans count the eligible IDs and catalog already being read. History
+  comparisons count existing checkpoints. Reporting is throttled to about
+  100 updates per scan; it adds no discovery scan or CloudKit count query.
 - Upload progress counts current saved note revisions acknowledged by the
   service in this pass, not bytes or notes delivered to every other device.
   Acknowledged heads are checkpointed before the displayed count advances.
 - Folder metadata is a separate catalog document and has its own final phase.
-- Receiving counts valid changes durably applied from fetched pages. There is
-  no invented download percentage when the service has not supplied a total.
+- Receiving counts valid changes applied from fetched pages. CloudKit provides
+  batch contents and whether more changes remain, but no overall change total.
+  Non-final pages display batch counts without advancing the receiving budget.
+  The final page can advance that budget, with its end reserved for the durable
+  cursor checkpoint. Network waits never advance because time has passed.
+- Cleanup counts existing survivor checks and planned deletion work. Confirmed
+  deletions are logged separately from absent records and rejected plans.
 - Partial failure keeps the acknowledged portion durable. Details retain those
   counts and the error. A retry starts a new pass with reset counters and
   reconstructs remaining uploads from the saved acknowledgements.
 - Edits made during upload remain pending when they differ from the captured
-  revision. A queued permanently deleted note is removed from the target count,
-  never reported as uploaded.
+  revision. A queued permanently deleted note is removed from the notes-to-send
+  count and resolves its original work unit; it is never reported as uploaded.
+  The weighted work denominator remains fixed for that attempt.
 - A received revision is treated as already remote only when its exact heads
   match the persisted local result. Locally merged changes still need upload.
 - A known CloudKit cooldown is shown as a retry deadline, including persisted
@@ -84,6 +114,19 @@ cooldowns, errors, and pass outcomes. Counts distinguish notes with no saved
 upload acknowledgement from revisions changed since their acknowledgement.
 A match with an applied checkpoint is diagnostic evidence only: it is not
 proof that the current revision already exists remotely.
+
+Actual scene phases (active, inactive, background) are logged separately from
+refresh triggers, with the number of active windows. iOS background execution
+leases log acquisition, expiration and release. Returning to an unfinished
+exchange records its phase and monotonic elapsed time. These events establish
+requested background execution, not continuous execution while iOS suspends
+the app; there is no callback at the instant the process becomes suspended.
+
+Phase and scan boundaries, fetch return before application, bootstrap, cleanup
+work counts, publish-lease wait completion, and CloudKit request outcomes help
+locate delays. Request durations exclude retry cooldown, which has separate
+wait events. New duration measurements use a monotonic clock. No per-document
+scan events are written, and the existing 500-event limit remains in place.
 
 Exports include app version/build and OS version, timestamps, event names,
 counts, and sanitized error categories/codes. They exclude note text, titles,

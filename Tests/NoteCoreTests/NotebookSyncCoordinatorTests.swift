@@ -813,6 +813,8 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(first.phase, .uploadingNotes)
         XCTAssertEqual(first.completedNotes, 0)
         XCTAssertEqual(first.totalNotes, 51)
+        XCTAssertEqual(first.overallFraction, 0.55)
+        XCTAssertEqual(first.totalUnits, 51)
         let firstBatch = await transport.currentPausedBatch()
         XCTAssertEqual(first.activeNoteIDs, firstBatch.map { $0.snapshot.noteID })
         XCTAssertEqual(first.activeNoteIDs.count, 50)
@@ -821,6 +823,9 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         await transport.waitForBatch(2)
         let second = try XCTUnwrap(coordinator.progress)
         XCTAssertEqual(second.completedNotes, 50)
+        XCTAssertEqual(second.totalUnits, 51)
+        XCTAssertEqual(try XCTUnwrap(second.overallFraction),
+                       0.55 + 0.23 * 50 / 51, accuracy: 0.0001)
         let secondBatch = await transport.currentPausedBatch()
         XCTAssertEqual(second.activeNoteIDs, secondBatch.map { $0.snapshot.noteID })
         XCTAssertEqual(second.activeNoteIDs.count, 1)
@@ -831,6 +836,8 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         let catalog = try XCTUnwrap(coordinator.progress)
         XCTAssertEqual(catalog.phase, .uploadingCatalog)
         XCTAssertEqual(catalog.completedNotes, 51)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(catalog.overallFraction),
+                                    try XCTUnwrap(second.overallFraction))
         XCTAssertTrue(catalog.activeNoteIDs.isEmpty)
         XCTAssertGreaterThanOrEqual(catalog.lastProgressAt, second.lastProgressAt)
         await transport.resumeBatch()
@@ -913,17 +920,113 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         let checking = try XCTUnwrap(coordinator.progress)
         XCTAssertEqual(checking.phase, .checking)
         XCTAssertEqual(checking.totalNotes, 0)
+        XCTAssertNil(checking.overallFraction)
+        XCTAssertNotNil(checking.waitingSince)
         await transport.resumeBootstrap()
 
         await transport.waitForFetch()
         let receiving = try XCTUnwrap(coordinator.progress)
         XCTAssertEqual(receiving.phase, .receiving)
         XCTAssertEqual(receiving.totalNotes, 0)
+        XCTAssertEqual(receiving.overallFraction, 0.2)
+        XCTAssertNotNil(receiving.waitingSince)
         XCTAssertGreaterThanOrEqual(receiving.lastProgressAt, checking.lastProgressAt)
         await transport.resumeFetch()
         await synchronization.value
 
         XCTAssertNil(coordinator.progress)
+        assertExchanged(coordinator.status)
+    }
+
+    func testNonfinalReceivingPagesKeepOverallBudgetAtStart() async throws {
+        let store = InMemorySyncStore()
+        let sender = NotebookReplica(directory: directory())
+        let source = InMemorySyncTransport(scope: "paged-progress", store: store)
+        let senderSync = NotebookSyncCoordinator(replica: sender, transport: source)
+        await senderSync.synchronize()
+        _ = try await sender.createNote(name: "one.md", text: "one")
+        _ = try await sender.createNote(name: "two.md", text: "two")
+        await senderSync.synchronize()
+        let transport = PausingPageTransport(base: InMemorySyncTransport(
+            scope: source.scope, store: store, pageSize: 1
+        ))
+        let receiver = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(replica: receiver, transport: transport)
+        let synchronization = Task { await coordinator.synchronize() }
+        var pageNumber = 1
+        while true {
+            let page = await transport.waitForPage(pageNumber)
+            let progress = try XCTUnwrap(coordinator.progress)
+            XCTAssertEqual(progress.phase, .receiving)
+            XCTAssertEqual(progress.overallFraction, 0.2)
+            XCTAssertEqual(progress.receivedRecords, pageNumber - 1)
+            XCTAssertNil(progress.totalUnits)
+            XCTAssertNotNil(progress.waitingSince)
+            await transport.resumePage()
+            if !page.hasMore { break }
+            pageNumber += 1
+        }
+        await synchronization.value
+        XCTAssertGreaterThan(pageNumber, 1)
+        assertExchanged(coordinator.status)
+        XCTAssertNil(coordinator.progress)
+        XCTAssertEqual(receiver.placements.filter { $0.item.kind == .note }.count, 2)
+        // Reopening must use the durable final cursor, not replay those pages.
+        let resumedTransport = PausingPageTransport(base: source)
+        let reopened = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: receiver.directory), transport: resumedTransport
+        )
+        let resumedSync = Task { await reopened.synchronize() }
+        let resumedPage = await resumedTransport.waitForPage(1)
+        XCTAssertTrue(resumedPage.records.isEmpty)
+        XCTAssertFalse(resumedPage.hasMore)
+        await resumedTransport.resumePage()
+        await resumedSync.value
+        assertExchanged(reopened.status)
+    }
+
+    func testSkippedUploadAndPartialFailureKeepFrozenWorkTotal() async throws {
+        let base = InMemorySyncTransport(scope: "skip-partial-progress")
+        let transport = PausingBatchTransport(base: base)
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        for index in 0..<52 {
+            _ = try await replica.createNote(name: "\(index).md", text: "\(index)")
+        }
+        await transport.startPausing(partialFailureBatch: 2)
+        let synchronization = Task { await coordinator.synchronize() }
+        await transport.waitForBatch(1)
+        let firstBatch = await transport.currentPausedBatch()
+        let firstIDs = Set(firstBatch.map { $0.snapshot.noteID })
+        let outgoing = try await replica.records()
+        let queued = try XCTUnwrap(outgoing.first {
+            $0.kind == .note && !firstIDs.contains($0.snapshot.noteID)
+        })
+        try await replica.markPermanentlyDeleted([queued.snapshot.noteID])
+        await transport.resumeBatch()
+        await transport.waitForBatch(2)
+        let uploading = try XCTUnwrap(coordinator.progress)
+        XCTAssertEqual(uploading.totalUnits, 52)
+        XCTAssertEqual(uploading.completedUnits, 51)
+        XCTAssertEqual(uploading.totalNotes, 51)
+        XCTAssertEqual(uploading.completedNotes, 50)
+        XCTAssertEqual(try XCTUnwrap(uploading.overallFraction),
+                       0.55 + 0.23 * 51 / 52, accuracy: 0.0001)
+        await transport.resumeBatch()
+        await synchronization.value
+        guard case .failed = coordinator.status else {
+            return XCTFail("Expected an acknowledged partial batch error")
+        }
+        let failure = try XCTUnwrap(coordinator.progress)
+        XCTAssertEqual(failure.totalUnits, 52)
+        XCTAssertEqual(failure.completedUnits, 52)
+        XCTAssertEqual(failure.completedNotes, 51)
+        XCTAssertEqual(try XCTUnwrap(failure.overallFraction), 0.78, accuracy: 0.0001)
+        XCTAssertTrue(failure.activeNoteIDs.isEmpty)
+        // The acknowledgement survives the failure, so retry sends no bodies.
+        await transport.stopPausing()
+        await coordinator.synchronize()
         assertExchanged(coordinator.status)
     }
 
@@ -1609,6 +1712,7 @@ private actor PausingBatchTransport: SyncTransport {
     private let base: InMemorySyncTransport
     private var shouldPause = false
     private var failBatch = false
+    private var partialFailureBatch: Int?
     private var pausedBatchCount = 0
     private var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
     private var resumeContinuation: CheckedContinuation<Void, Never>?
@@ -1640,6 +1744,12 @@ private actor PausingBatchTransport: SyncTransport {
             }
         }
         if failBatch { throw SyncError.invalidRecord }
+        if partialFailureBatch == pausedBatchCount, records.first?.kind == .note,
+           let first = records.first {
+            try await base.publish(first)
+            published.insert(first.id)
+            return SyncBatchResult(acknowledgedIDs: [first.id], error: BatchTestError.failed)
+        }
         let result = try await base.publishBatch(records)
         published.formUnion(result.acknowledgedIDs)
         return result
@@ -1649,7 +1759,16 @@ private actor PausingBatchTransport: SyncTransport {
         try await base.fetch(after: cursor)
     }
 
-    func startPausing(failBatch: Bool = false) {
+    func purgeDeletedNotes(_ noteIDs: Set<UUID>, notebookID: UUID) async throws {
+        try await base.purgeDeletedNotes(noteIDs, notebookID: notebookID)
+    }
+
+    func cleanupRedundantSnapshots(notebookID: UUID) async throws -> SyncSnapshotCleanupReport {
+        try await base.cleanupRedundantSnapshots(notebookID: notebookID)
+    }
+
+    func startPausing(failBatch: Bool = false, partialFailureBatch: Int? = nil) {
+        self.partialFailureBatch = partialFailureBatch
         self.failBatch = failBatch
         shouldPause = true
         pausedBatchCount = 0
@@ -1665,6 +1784,11 @@ private actor PausingBatchTransport: SyncTransport {
     func resumeBatch() {
         resumeContinuation?.resume()
         resumeContinuation = nil
+    }
+
+    func stopPausing() {
+        shouldPause = false
+        partialFailureBatch = nil
     }
 
     func currentPausedBatch() -> [SyncRecord] { pausedBatch }
@@ -1854,6 +1978,47 @@ private actor PausingCleanupTransport: SyncTransport {
     }
 
     func resumeCleanup() {
+        resume?.resume()
+        resume = nil
+    }
+}
+
+private actor PausingPageTransport: SyncTransport {
+    nonisolated let scope: String
+    private let base: InMemorySyncTransport
+    private var pageNumber = 0
+    private var page: SyncPage?
+    private var waiters: [(Int, CheckedContinuation<SyncPage, Never>)] = []
+    private var resume: CheckedContinuation<Void, Never>?
+
+    init(base: InMemorySyncTransport) {
+        self.base = base
+        scope = base.scope
+    }
+
+    func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
+        try await base.bootstrap(proposing: record)
+    }
+
+    func publish(_ record: SyncRecord) async throws { try await base.publish(record) }
+
+    func fetch(after cursor: String?) async throws -> SyncPage {
+        let fetched = try await base.fetch(after: cursor)
+        pageNumber += 1
+        page = fetched
+        let ready = waiters.filter { $0.0 <= pageNumber }
+        waiters.removeAll { $0.0 <= pageNumber }
+        for (_, waiter) in ready { waiter.resume(returning: fetched) }
+        await withCheckedContinuation { resume = $0 }
+        return fetched
+    }
+
+    func waitForPage(_ number: Int) async -> SyncPage {
+        if pageNumber >= number, let page { return page }
+        return await withCheckedContinuation { waiters.append((number, $0)) }
+    }
+
+    func resumePage() {
         resume?.resume()
         resume = nil
     }

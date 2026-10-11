@@ -90,35 +90,21 @@ struct NotebookSyncDetailsView: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 8) {
+                if presentation.showsActivity {
+                    NotebookSyncOverallProgressView(
+                        fraction: presentation.activity.fraction,
+                        accessibilityValue: presentation.accessibilityValue
+                    )
+                    NotebookSyncPhaseDetailsView(
+                        activity: presentation.activity,
+                        files: presentation.activeFiles,
+                        now: context.date
+                    )
+                } else {
                     Text(presentation.title)
                         .font(.headline)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("note-sync-status")
-                    if presentation.showsActivity {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(.blue)
-                            .accessibilityLabel("Sync in progress")
-                            .accessibilityIdentifier("notebook-sync-activity")
-                    }
-                }
-                if presentation.showsActivity {
-                    NotebookSyncFilesView(files: presentation.activeFiles)
-                    if let hint = presentation.activity.hint {
-                        Text(hint).font(.callout).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("notebook-sync-activity-hint")
-                    }
-                    if let fraction = presentation.activity.fraction {
-                        ProgressView(value: fraction)
-                            .progressViewStyle(.linear)
-                            .tint(.blue)
-                            .accessibilityLabel("Sync progress")
-                            .accessibilityValue(presentation.accessibilityValue)
-                            .accessibilityIdentifier("notebook-sync-progress")
-                    }
-                } else {
                     NotebookSyncFailureView(workspace: workspace)
                 }
                 if let date = workspace.lastSuccessfulSync {
@@ -131,6 +117,65 @@ struct NotebookSyncDetailsView: View {
             .frame(idealWidth: 320, maxWidth: 380, alignment: .leading)
         }
         .presentationSizing(.fitted)
+    }
+}
+
+private struct NotebookSyncOverallProgressView: View {
+    let fraction: Double?
+    let accessibilityValue: LocalizedStringResource
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Syncing with iCloud…")
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("notebook-sync-overall-status")
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.blue)
+                    .accessibilityLabel("Sync in progress")
+                    .accessibilityIdentifier("notebook-sync-activity")
+            }
+            if let fraction {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+                    .tint(.blue)
+                    .accessibilityLabel("Overall sync progress")
+                    .accessibilityValue(accessibilityValue)
+                    .accessibilityIdentifier("notebook-sync-progress")
+            }
+        }
+    }
+}
+
+private struct NotebookSyncPhaseDetailsView: View {
+    let activity: NotebookSyncActivityPresentation
+    let files: [NotebookSyncActiveFile]
+    let now: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(activity.title)
+                .font(.subheadline).fontWeight(.medium)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("note-sync-status")
+            NotebookSyncFilesView(files: files)
+            if let waitingSince = activity.progress?.waitingSince {
+                Text("Waiting for \(waitingSince, style: .timer)")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("notebook-sync-work-count")
+            } else if let detail = activity.detail(at: now) {
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("notebook-sync-work-count")
+            }
+            if let hint = activity.hint {
+                Text(hint).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("notebook-sync-activity-hint")
+            }
+        }
     }
 }
 
@@ -324,7 +369,7 @@ private struct NotebookSyncPresentation {
     var accessibilityValue: LocalizedStringResource {
         if let fraction = activity.fraction {
             let percent = Int((fraction * 100).rounded())
-            return "\(percent) percent of notes sent"
+            return "\(percent) percent complete"
         }
         return title
     }

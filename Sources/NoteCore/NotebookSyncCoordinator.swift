@@ -34,6 +34,9 @@ public final class NotebookSyncCoordinator {
     @ObservationIgnored private let proposalURL: URL
     @ObservationIgnored private let diagnosticLog: NotebookSyncEventLog?
     @ObservationIgnored private var inFlight = false
+    @ObservationIgnored private var progressMeter = NotebookSyncProgressMeter()
+    @ObservationIgnored private var skippedUploadCount = 0
+    @ObservationIgnored private var phaseStartedAt = ContinuousClock.now
     @ObservationIgnored private var validatedProposalCache: ValidatedProposalCache?
 
     public init(
@@ -80,6 +83,9 @@ public final class NotebookSyncCoordinator {
         guard !inFlight else { return }
         let startedAt = Date()
         inFlight = true
+        progressMeter = NotebookSyncProgressMeter()
+        skippedUploadCount = 0
+        progress = nil
         status = .syncing
         lastError = nil
         diagnosticLog?.record("pass_start")
@@ -97,9 +103,18 @@ public final class NotebookSyncCoordinator {
                     receivedRecords: previous.receivedRecords,
                     completedNotes: previous.completedNotes,
                     totalNotes: previous.totalNotes,
-                    lastProgressAt: previous.lastProgressAt
+                    lastProgressAt: previous.lastProgressAt,
+                    overallFraction: previous.overallFraction,
+                    completedUnits: previous.completedUnits,
+                    totalUnits: previous.totalUnits
                 )
             }
+        }
+        await transport.setCleanupProgressHandler { [weak self] work in
+            await self?.updateCleanupProgress(work)
+        }
+        await transport.setDiagnosticsHandler { [weak diagnosticLog] event, counts in
+            await diagnosticLog?.record(event, counts: counts)
         }
         do {
             try await exchange()
@@ -124,6 +139,8 @@ public final class NotebookSyncCoordinator {
             )
             status = .failed(failure.localizedDescription)
         }
+        await transport.setCleanupProgressHandler(nil)
+        await transport.setDiagnosticsHandler(nil)
     }
 
     private func namedOversizedError(_ error: any Error) -> any Error {
@@ -168,7 +185,11 @@ public final class NotebookSyncCoordinator {
         if let expected = state.notebookID, expected != bootstrapRecord.notebookID {
             throw SyncError.identityConflict
         }
+        updateProgress(phase: .checking, waiting: true)
+        diagnosticLog?.record("bootstrap_start")
         let seed = try await transport.bootstrap(proposing: bootstrapRecord)
+        diagnosticLog?.record("bootstrap_end")
+        updateProgress(phase: .checking)
         guard seed.protocolVersion == 2, seed.kind == .catalog,
             let notebookID = seed.notebookID
         else { throw SyncError.invalidRecord }
@@ -186,7 +207,24 @@ public final class NotebookSyncCoordinator {
         try replica.completeFirstSyncJoin(scope: transport.scope, notebookID: notebookID)
         let remembered = state.deletedIDs.union(try replica.deletedIDs)
         let checkpoints = state.appliedHeads.merging(state.acknowledgedHeads) { $0.union($1) }
-        if try await !replica.containsHistory(checkpoints, deleted: remembered) {
+        diagnosticLog?.record("history_check_start", counts: ["checkpoints": checkpoints.count])
+        let hasHistory = try await replica.containsHistory(
+            checkpoints, deleted: remembered,
+            scanProgress: { [weak self] completed, total in
+                self?.updateProgress(
+                    phase: .checking, phaseFraction: 0.5 * Self.fraction(completed, total),
+                    completedUnits: completed, totalUnits: total
+                )
+            },
+            progress: { [weak self] completed, total in
+                self?.updateProgress(
+                    phase: .checking, phaseFraction: 0.5 + 0.5 * Self.fraction(completed, total),
+                    completedUnits: completed, totalUnits: total
+                )
+            }
+        )
+        diagnosticLog?.record("history_check_end", counts: ["matched": hasHistory ? 1 : 0])
+        if !hasHistory {
             diagnosticLog?.record("replay_missing_history")
             state.cursor = nil
             state.appliedHeads = [:]
@@ -196,10 +234,12 @@ public final class NotebookSyncCoordinator {
 
         var replayedInvalidCursor = false
         var pages = 0
-        updateProgress(phase: .receiving)
+        updateProgress(phase: .receiving, waiting: true)
         while true {
             try Task.checkCancellation()
             let page: SyncPage
+            updateProgress(phase: .receiving, waiting: true, clearUnits: true)
+            diagnosticLog?.record("page_fetch_start", counts: ["page": pages + 1])
             do { page = try await transport.fetch(after: state.cursor) } catch SyncError
                 .invalidCursor where !replayedInvalidCursor
             {
@@ -209,15 +249,27 @@ public final class NotebookSyncCoordinator {
                 replayedInvalidCursor = true
                 continue
             }
+            diagnosticLog?.record("page_fetch_returned", counts: [
+                "page": pages + 1, "records": page.records.count,
+                "hasMore": page.hasMore ? 1 : 0,
+            ])
+            updateProgress(phase: .receiving, completedUnits: 0, totalUnits: page.records.count)
+            var applied = 0
             for record in page.records {
                 updateProgress(
                     phase: .receiving,
                     activeNoteIDs: record.kind == .note ? [record.snapshot.noteID] : []
                 )
                 try await replica.apply(record)
+                applied += 1
                 updateProgress(
                     phase: .receiving,
-                    receivedRecords: (progress?.receivedRecords ?? 0) + 1
+                    receivedRecords: (progress?.receivedRecords ?? 0) + 1,
+                    // Only the final page has a known remaining denominator.
+                    // Leave room for the durable page checkpoint below.
+                    phaseFraction: page.hasMore ? nil
+                        : 0.9 * Self.fraction(applied, page.records.count),
+                    completedUnits: applied, totalUnits: page.records.count
                 )
             }
             if page.hasMore && page.cursor == state.cursor { throw SyncError.invalidCursor }
@@ -243,14 +295,25 @@ public final class NotebookSyncCoordinator {
                 ]
             )
             pages += 1
-            if !page.hasMore { break }
+            if !page.hasMore {
+                updateProgress(phase: .receiving, phaseFraction: 1)
+                break
+            }
             if pages >= 1_000 {
                 throw SyncError.unavailable(
                     "Notebook sync paused after too many pages. Retry to continue.")
             }
         }
 
-        let outgoing = try await replica.records()
+        updateProgress(phase: .comparing)
+        diagnosticLog?.record("outgoing_scan_start")
+        let outgoing = try await replica.records(progress: { [weak self] completed, total in
+            self?.updateProgress(
+                phase: .comparing, phaseFraction: Self.fraction(completed, total),
+                completedUnits: completed, totalUnits: total
+            )
+        })
+        diagnosticLog?.record("outgoing_scan_end", counts: ["records": outgoing.count])
         let pendingNotes = outgoing.filter {
             $0.kind == .note
                 && state.acknowledgedHeads[$0.documentKey] != $0.snapshot.heads
@@ -286,7 +349,9 @@ public final class NotebookSyncCoordinator {
         updateProgress(
             phase: .uploadingNotes,
             completedNotes: 0,
-            totalNotes: pendingNotes.count
+            totalNotes: pendingNotes.count,
+            phaseFraction: pendingNotes.isEmpty ? 1 : 0,
+            completedUnits: 0, totalUnits: pendingNotes.count
         )
         var oversizedError: CloudKitSyncTransportError?
         for start in stride(from: 0, to: pendingNotes.count, by: 50) {
@@ -297,11 +362,16 @@ public final class NotebookSyncCoordinator {
             let batch = capturedBatch.filter { !deleted.contains($0.snapshot.noteID) }
             let skipped = capturedBatch.count - batch.count
             if skipped > 0 {
+                skippedUploadCount += skipped
                 state.deletedIDs.formUnion(deleted)
                 try save(state)
                 updateProgress(
                     phase: .uploadingNotes,
-                    totalNotes: max(0, (progress?.totalNotes ?? 0) - skipped)
+                    totalNotes: max(0, (progress?.totalNotes ?? 0) - skipped),
+                    phaseFraction: Self.fraction(
+                        (progress?.completedNotes ?? 0) + skippedUploadCount, pendingNotes.count
+                    ),
+                    completedUnits: (progress?.completedNotes ?? 0) + skippedUploadCount
                 )
             }
             guard !batch.isEmpty else { continue }
@@ -324,6 +394,7 @@ public final class NotebookSyncCoordinator {
             updateProgress(phase: .uploadingCatalog)
             try await publish([pendingCatalog], state: &state, completedNoteCount: 0)
         }
+        updateProgress(phase: .uploadingCatalog, phaseFraction: 1)
         state.deletedIDs.formUnion(try replica.deletedIDs)
         try save(state)
         // Purge only identities represented by a remotely acknowledged catalog.
@@ -345,6 +416,7 @@ public final class NotebookSyncCoordinator {
         }
         if let oversizedError { throw oversizedError }
         updateProgress(phase: .cleaningUpSnapshots)
+        diagnosticLog?.record("snapshot_cleanup_start")
         do {
             let report = try await transport.cleanupRedundantSnapshots(
                 notebookID: notebookID
@@ -380,10 +452,19 @@ public final class NotebookSyncCoordinator {
             )
         }
 
-        let current = try await replica.records()
+        updateProgress(phase: .finalizing)
+        diagnosticLog?.record("final_scan_start")
+        let current = try await replica.records(progress: { [weak self] completed, total in
+            self?.updateProgress(
+                phase: .finalizing, phaseFraction: Self.fraction(completed, total),
+                completedUnits: completed, totalUnits: total
+            )
+        })
+        diagnosticLog?.record("final_scan_end", counts: ["records": current.count])
         status =
             current.allSatisfy { state.acknowledgedHeads[$0.documentKey] == $0.snapshot.heads }
             ? .exchanged(Date()) : .pending
+        if case .exchanged = status { progressMeter.finish() }
     }
 
     private func publish(
@@ -432,7 +513,14 @@ public final class NotebookSyncCoordinator {
                 updateProgress(
                     phase: .uploadingNotes,
                     completedNotes: (progress?.completedNotes ?? 0)
-                        + result.acknowledgedIDs.count
+                        + result.acknowledgedIDs.count,
+                    phaseFraction: Self.fraction(
+                        (progress?.completedNotes ?? 0) + result.acknowledgedIDs.count
+                            + skippedUploadCount,
+                        progress?.totalUnits ?? progress?.totalNotes ?? 0
+                    ),
+                    completedUnits: (progress?.completedNotes ?? 0)
+                        + result.acknowledgedIDs.count + skippedUploadCount
                 )
             }
         }
@@ -448,8 +536,26 @@ public final class NotebookSyncCoordinator {
         completedNotes: Int? = nil,
         totalNotes: Int? = nil,
         activeNoteIDs: [UUID] = [],
-        cleanupItemCount: Int = 0
+        cleanupItemCount: Int? = nil,
+        phaseFraction: Double? = nil,
+        completedUnits: Int? = nil,
+        totalUnits: Int? = nil,
+        waiting: Bool = false,
+        clearUnits: Bool = false
     ) {
+        let previous = progress
+        let phaseChanged = previous?.phase != phase
+        if phaseChanged {
+            if let previous {
+                let elapsed = phaseStartedAt.duration(to: .now).components
+                diagnosticLog?.record("phase_end:" + previous.phase.rawValue, counts: [
+                    "duration_ms": Int(elapsed.seconds * 1_000
+                        + elapsed.attoseconds / 1_000_000_000_000_000)
+                ])
+            }
+            phaseStartedAt = .now
+            diagnosticLog?.record("phase_start:" + phase.rawValue)
+        }
         progress = NotebookSyncProgress(
             phase: phase,
             receivedRecords: receivedRecords ?? progress?.receivedRecords ?? 0,
@@ -457,8 +563,26 @@ public final class NotebookSyncCoordinator {
             totalNotes: totalNotes ?? progress?.totalNotes ?? 0,
             lastProgressAt: Date(),
             activeNoteIDs: activeNoteIDs,
-            cleanupItemCount: cleanupItemCount
+            cleanupItemCount: cleanupItemCount ?? (phaseChanged ? 0 : previous?.cleanupItemCount ?? 0),
+            overallFraction: progressMeter.advance(phase: phase, completion: phaseFraction),
+            completedUnits: completedUnits ?? (phaseChanged || clearUnits ? nil : previous?.completedUnits),
+            totalUnits: totalUnits ?? (phaseChanged || clearUnits ? nil : previous?.totalUnits),
+            waitingSince: waiting ? previous?.waitingSince ?? Date() : nil
         )
+    }
+
+    private func updateCleanupProgress(_ work: SyncCleanupProgress) {
+        guard inFlight, let phase = progress?.phase,
+              phase == .cleaningUp || phase == .cleaningUpSnapshots else { return }
+        let completion = Self.fraction(work.completedCount, work.totalCount)
+        let phaseFraction = phase == .cleaningUp ? completion
+            : work.stage == .survivorVerification ? completion * 0.5 : 0.5 + completion * 0.5
+        updateProgress(phase: phase, phaseFraction: phaseFraction,
+                       completedUnits: work.completedCount, totalUnits: work.totalCount)
+    }
+
+    private static func fraction(_ completed: Int, _ total: Int) -> Double {
+        total > 0 ? min(1, max(0, Double(completed) / Double(total))) : 1
     }
 
     private static func durationMilliseconds(since start: Date) -> Int {

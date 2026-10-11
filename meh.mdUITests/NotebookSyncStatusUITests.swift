@@ -12,23 +12,62 @@ final class NotebookSyncStatusUITests: XCTestCase {
         app.openSyncDetails()
         let activity = app.activityIndicators["notebook-sync-activity"]
         XCTAssertTrue(activity.waitForExistence(timeout: 5))
+        let overallStatus = app.staticTexts["notebook-sync-overall-status"]
+        XCTAssertTrue(overallStatus.waitForExistence(timeout: 5))
+        XCTAssertTrue(overallStatus.label.contains("Syncing with iCloud"))
         let status = app.staticTexts["note-sync-status"]
-        XCTAssertEqual(activity.frame.midY, status.frame.midY, accuracy: 4)
-        XCTAssertGreaterThanOrEqual(activity.frame.minX, status.frame.maxX)
-        capture(app, name: "After - compact sync status")
+        let progress = app.progressIndicators["notebook-sync-progress"]
+        XCTAssertEqual(activity.frame.midY, overallStatus.frame.midY, accuracy: 4)
+        XCTAssertGreaterThanOrEqual(activity.frame.minX, overallStatus.frame.maxX)
+        let waiting = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Waiting for iCloud"),
+            object: status
+        )
+        let waitingPercent = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "20 percent complete"),
+            object: progress
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [waiting, waitingPercent], timeout: 30), .completed,
+            "The active fetch should wait at the 20 percent phase boundary"
+        )
+        XCTAssertEqual(progress.label, "Overall sync progress")
+        XCTAssertLessThan(overallStatus.frame.maxY, progress.frame.minY)
+        XCTAssertLessThan(progress.frame.maxY, status.frame.minY)
+        let waitingElapsed = app.staticTexts["notebook-sync-work-count"]
+        XCTAssertTrue(waitingElapsed.exists)
+        let initialWaitingLabel = waitingElapsed.label
+        let timerAdvanced = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label != %@", initialWaitingLabel),
+            object: waitingElapsed
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [timerAdvanced], timeout: 4), .completed,
+            "The waiting timer should advance while sync remains at 20 percent"
+        )
+        XCTAssertEqual(progress.value as? String, "20 percent complete")
+        capture(app, name: "After - waiting at 20 percent")
         let sending = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label CONTAINS %@", "Sending 3 notes"),
             object: status
         )
+        let weightedUploadStart = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "55 percent complete"),
+            object: progress
+        )
         XCTAssertEqual(
-            XCTWaiter.wait(for: [sending], timeout: 20), .completed,
+            XCTWaiter.wait(for: [sending, weightedUploadStart], timeout: 30), .completed,
             "The first toolbar tap should start the isolated upload"
         )
+        XCTAssertEqual(progress.value as? String, "55 percent complete")
+        XCTAssertLessThan(overallStatus.frame.maxY, progress.frame.minY)
+        XCTAssertLessThan(progress.frame.maxY, status.frame.minY)
+        XCTAssertEqual(waitingElapsed.label, "0 of 3 notes sent")
         let activeFiles = app.buttons["notebook-sync-active-files"]
         XCTAssertTrue(activeFiles.waitForExistence(timeout: 10))
         XCTAssertTrue(activity.exists)
-        XCTAssertTrue(app.progressIndicators["notebook-sync-progress"].exists)
-        capture(app, name: "After - current upload")
+        XCTAssertTrue(progress.exists)
+        capture(app, name: "After - weighted upload at 55 percent")
         activeFiles.tap()
 
         let activeNames = app.descendants(matching: .any).matching(

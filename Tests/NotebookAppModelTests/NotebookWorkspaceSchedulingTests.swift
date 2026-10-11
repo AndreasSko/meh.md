@@ -6,6 +6,80 @@ import XCTest
 
 @MainActor
 final class NotebookWorkspaceSchedulingTests: XCTestCase {
+    func testActualScenePhasesAreLoggedOnceWithoutRefreshReasons() {
+        let workspace = makeWorkspace(
+            transport: RecordingTransport(scope: "scene-phases"),
+            automaticSync: false
+        )
+        let scene = UUID()
+        workspace.sceneActivityChanged(id: scene, phase: .active)
+        workspace.sceneActivityChanged(id: scene, phase: .inactive)
+        workspace.sceneActivityChanged(id: scene, phase: .inactive)
+        workspace.sceneActivityChanged(id: scene, phase: .background)
+        workspace.sceneDidClose(id: scene)
+        workspace.sceneDidClose(id: scene)
+
+        XCTAssertEqual(workspace.syncEventLog.entries.map(\.event), [
+            "scene phase changed: active",
+            "scene phase changed: inactive",
+            "scene phase changed: background",
+            "scene closed"
+        ])
+        XCTAssertFalse(workspace.syncEventLog.entries.contains {
+            $0.event.contains(scene.uuidString)
+        })
+    }
+
+    func testScenePhaseDiagnosticsCountAllActiveWindows() {
+        let workspace = makeWorkspace(
+            transport: RecordingTransport(scope: "phase-counts"),
+            automaticSync: false
+        )
+        let firstScene = UUID()
+        let secondScene = UUID()
+        workspace.sceneActivityChanged(id: firstScene, phase: .active)
+        workspace.sceneActivityChanged(id: secondScene, phase: .active)
+        workspace.sceneActivityChanged(id: firstScene, phase: .background)
+        workspace.sceneDidClose(id: secondScene)
+
+        XCTAssertEqual(workspace.syncEventLog.entries.map {
+            $0.counts["active_scenes"]
+        }, [1, 2, 1, 0])
+    }
+
+    func testForegroundResumptionRecordsUnfinishedManualSync() async throws {
+        let transport = RecordingTransport(scope: "foreground-resumption")
+        let workspace = makeWorkspace(
+            transport: transport, automaticSync: false
+        )
+        let scene = UUID()
+        workspace.sceneActivityChanged(id: scene, phase: .active)
+        await workspace.start()
+        await transport.pauseNextFetch()
+        let exchange = Task { await workspace.refresh(manual: true) }
+        try await waitUntil { await transport.isFetchPaused }
+
+        workspace.sceneActivityChanged(id: scene, phase: .inactive)
+        workspace.sceneActivityChanged(id: scene, phase: .background)
+        workspace.sceneActivityChanged(id: scene, phase: .active)
+        workspace.sceneActivityChanged(id: UUID(), phase: .active)
+        let resumptions = workspace.syncEventLog.entries.filter {
+            $0.event.hasPrefix("foreground resumed unfinished sync: ")
+        }
+        XCTAssertEqual(resumptions.count, 1)
+        XCTAssertEqual(resumptions.first?.event,
+                       "foreground resumed unfinished sync: receiving")
+        XCTAssertGreaterThanOrEqual(resumptions.first?.counts["elapsed_ms"] ?? -1, 0)
+
+        await transport.resumeFetch()
+        await exchange.value
+        workspace.sceneActivityChanged(id: scene, phase: .background)
+        workspace.sceneActivityChanged(id: scene, phase: .active)
+        XCTAssertEqual(workspace.syncEventLog.entries.filter {
+            $0.event.hasPrefix("foreground resumed unfinished sync: ")
+        }.count, 1)
+    }
+
     func testSavedEditsCoalesceIntoOneAutomaticExchange() async throws {
         let transport = RecordingTransport(scope: "coalesced")
         let workspace = makeWorkspace(transport: transport)

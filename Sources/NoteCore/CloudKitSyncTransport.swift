@@ -1659,6 +1659,10 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private var isRetired = false
     private var unexpectedDeletionObserved = false
     private var retryThrottle = CloudKitRetryThrottle()
+    private var cleanupProgressHandler:
+        (@Sendable (SyncCleanupProgress) async -> Void)?
+    private var diagnosticsHandler:
+        (@Sendable (String, [String: Int]) async -> Void)?
     private var publishInProgress = false
     private var publishWaiters: [CheckedContinuation<Void, Never>] = []
     private let activityChannel: CloudKitSyncActivityChannel
@@ -2569,6 +2573,11 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         try assetStaging.purge(recordIDs: pendingIDs)
 
         let sortedPendingIDs = pendingIDs.sorted()
+        var completedDeletionCount = 0
+        await reportCleanup(.init(
+            stage: .deletion, completedCount: 0,
+            totalCount: sortedPendingIDs.count
+        ))
         for start in stride(
             from: 0, to: sortedPendingIDs.count, by: 200
         ) {
@@ -2584,6 +2593,11 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                     $0.pendingRemoteDeletionIDs.subtract(completed)
                 }
             }
+            completedDeletionCount += completed.count
+            await reportCleanup(.init(
+                stage: .deletion, completedCount: completedDeletionCount,
+                totalCount: sortedPendingIDs.count
+            ))
         }
     }
 
@@ -2622,6 +2636,14 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         try await ensureZone()
         var confirmedSurvivors: [String: SyncRecord] = [:]
         let survivorIDs = Set(proofs.values.map { $0.survivor.id })
+        await diagnose("snapshot_cleanup_work_start", counts: [
+            "planned_victims": plans.count, "survivors": survivorIDs.count
+        ])
+        var verifiedCount = 0
+        await reportCleanup(.init(
+            stage: .survivorVerification, completedCount: 0,
+            totalCount: survivorIDs.count
+        ))
         for survivorID in survivorIDs.sorted() {
             try Task.checkCancellation()
             let id = CKRecord.ID(recordName: survivorID, zoneID: zoneID)
@@ -2641,7 +2663,15 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                     )
                 }
             }
+            verifiedCount += 1
+            await reportCleanup(.init(
+                stage: .survivorVerification, completedCount: verifiedCount,
+                totalCount: survivorIDs.count
+            ))
         }
+        await reportCleanup(.init(
+            stage: .deletion, completedCount: 0, totalCount: plans.count
+        ))
         // Verify another remotely stored snapshot covers any newly discovered
         // absence. An unresolved deletion stops this pass before any DELETE.
         try await resolveRemoteSnapshotDeletions()
@@ -2712,6 +2742,17 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 state.dropSnapshotCleanup(plan)
             }
         }
+        await reportCleanup(.init(
+            stage: .deletion, completedCount: completed.count,
+            totalCount: admitted.count,
+            confirmedDeletionCount: report.deletedSnapshotCount
+        ))
+        await diagnose("snapshot_cleanup_work_end", counts: [
+            "admitted": admitted.count, "resolved": completed.count,
+            "deleted": report.deletedSnapshotCount,
+            "rejected": plans.count - admitted.count,
+            "failures": failures.count
+        ])
         for error in failures { await observeRetryAfter(error) }
         if let failure = failures.first { throw failure }
         return report
@@ -2748,6 +2789,34 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             throw SyncError.identityConflict
         }
         try await store.update { try $0.appendToInbox(canonical) }
+    }
+
+    public func setCleanupProgressHandler(
+        _ handler: (@Sendable (SyncCleanupProgress) async -> Void)?
+    ) async {
+        cleanupProgressHandler = handler
+    }
+
+    public func setDiagnosticsHandler(
+        _ handler: (@Sendable (String, [String: Int]) async -> Void)?
+    ) async {
+        diagnosticsHandler = handler
+    }
+
+    private func reportCleanup(_ progress: SyncCleanupProgress) async {
+        await cleanupProgressHandler?(progress)
+    }
+
+    private func diagnose(
+        _ event: String, counts: [String: Int] = [:]
+    ) async {
+        await diagnosticsHandler?(event, counts)
+    }
+
+    private func elapsedMilliseconds(since start: ContinuousClock.Instant) -> Int {
+        let duration = start.duration(to: .now).components
+        return max(0, Int(Double(duration.seconds) * 1_000
+            + Double(duration.attoseconds) / 1_000_000_000_000_000))
     }
 
     public func retryNotBefore() async -> Date? {
@@ -2811,9 +2880,15 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             publishInProgress = true
             return
         }
+        let started = ContinuousClock.now
+        // Log after entering the queue so telemetry cannot change lease order.
         await withCheckedContinuation { continuation in
             publishWaiters.append(continuation)
         }
+        await diagnose("publish_lease_wait_end", counts: [
+            "wait_ms": elapsedMilliseconds(since: started),
+            "remaining_waiters": publishWaiters.count
+        ])
     }
 
     private func releasePublishLease() {
@@ -2865,16 +2940,51 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         #endif
         try assertActive()
         if let delegateFailure { throw delegateFailure }
+        let cooldownStart = ContinuousClock.now
+        let remainingCooldown = retryThrottle.remaining(at: Date())
+        if let remainingCooldown, remainingCooldown > 0 {
+            await diagnose("cooldown_wait_start:" + labLabel, counts: [
+                "remaining_ms": Int(min(
+                    remainingCooldown * 1_000, Double(Int.max / 2)
+                ))
+            ])
+            try assertActive()
+            if let delegateFailure { throw delegateFailure }
+        }
         try await waitForRetryWindow()
+        if let remainingCooldown, remainingCooldown > 0 {
+            await diagnose("cooldown_wait_end:" + labLabel, counts: [
+                "wait_ms": elapsedMilliseconds(since: cooldownStart)
+            ])
+        }
+        await diagnose("request_start:" + labLabel, counts: [
+            "cooldown_ms": elapsedMilliseconds(since: cooldownStart)
+        ])
+        // Telemetry can suspend while another event extends the cooldown.
+        // Keep this final wait adjacent to dispatch, without another callback.
+        try await waitForRetryWindow()
+        let totalCooldownMilliseconds = elapsedMilliseconds(since: cooldownStart)
         // Actor state can change while a cooldown suspends this request.
         try assertActive()
         if let delegateFailure { throw delegateFailure }
+        let operationStart = ContinuousClock.now
         do {
             let result = try await operation()
             try assertActive()
             if let delegateFailure { throw delegateFailure }
+            await diagnose("request_end:" + labLabel, counts: [
+                "operation_ms": elapsedMilliseconds(since: operationStart),
+                "cooldown_ms": totalCooldownMilliseconds
+            ])
+            try assertActive()
+            if let delegateFailure { throw delegateFailure }
             return result
         } catch {
+            await diagnose("request_error:" + labLabel, counts: [
+                "operation_ms": elapsedMilliseconds(since: operationStart),
+                "cooldown_ms": totalCooldownMilliseconds,
+                "error_code": (error as NSError).code
+            ])
             try assertActive()
             if let delegateFailure { throw delegateFailure }
             await observeRetryAfter(error)
