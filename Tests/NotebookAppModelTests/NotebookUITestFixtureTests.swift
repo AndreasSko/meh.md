@@ -24,6 +24,8 @@ final class NotebookUITestFixtureTests: XCTestCase {
             case .storageLarge: expected = ["Field journals"]
             case .historyRestore: expected = ["Recovery Sketch.md"]
             case .writing: expected = ["Fictional field notes.md", "Save boundary.md"]
+            case .syncStatus:
+                expected = ["Field notes.md", "Tide chart.md", "Island sketch.md"]
             case .dragOrder: expected = ["Charlie.md", "Alpha.md", "Bravo.md", "Journeys"]
             case .dragNested: expected = ["Travel checklist.md", "Journeys"]
             case .dragSubtree: expected = ["Packing list.md", "Trips", "Archive"]
@@ -112,6 +114,18 @@ final class NotebookUITestFixtureTests: XCTestCase {
                 XCTAssertTrue(try versions.map { try session.historicalText(for: $0) }
                     .contains(NotebookUITestFixture.historyOriginalSource))
             }
+            if fixture == .syncStatus {
+                XCTAssertEqual(try replica.deletedIDs.count, 1)
+                XCTAssertEqual(try reopened.deletedIDs, try replica.deletedIDs)
+                let statusTransport = NotebookSyncStatusPreviewTransport(
+                    runID: "fixture-run"
+                )
+                XCTAssertEqual(statusTransport.scope, "sync-status-preview-fixture-run")
+                XCTAssertNotEqual(
+                    statusTransport.scope,
+                    NotebookSyncStatusPreviewTransport(runID: "another-run").scope
+                )
+            }
         }
     }
 
@@ -125,6 +139,23 @@ final class NotebookUITestFixtureTests: XCTestCase {
             isPreview: true, directory: directory))
         XCTAssertEqual(NotebookUITestFixture.requested(
             environment: valid, isPreview: true, directory: directory), .writing)
+        let syncStatus = preview("sync-status-run", fixture: "sync-status")
+        let syncStatusDirectory = URL(
+            filePath: "/tmp/NotebookPreviewTests/sync-status-run"
+        )
+        XCTAssertEqual(
+            NotebookUITestFixture.requested(
+                environment: syncStatus, isPreview: true,
+                directory: syncStatusDirectory
+            ),
+            .syncStatus
+        )
+        XCTAssertNil(NotebookUITestFixture.requested(
+            environment: syncStatus.merging(
+                ["MEH_SYNC_TEST_TRANSPORT": "loopback"]
+            ) { _, new in new },
+            isPreview: true, directory: syncStatusDirectory
+        ))
         for changes in [
             ["MEH_NOTEBOOK_PREVIEW_RUN": "../run"],
             ["MEH_NOTEBOOK_PREVIEW": "0"],

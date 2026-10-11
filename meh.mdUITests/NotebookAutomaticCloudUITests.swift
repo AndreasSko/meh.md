@@ -62,19 +62,20 @@ final class NotebookAutomaticCloudUITests: XCTestCase {
         app.launchEnvironment.removeValue(forKey: "MEH_SYNC_SIMULATE_OFFLINE")
         app.launch()
         XCTAssertNotNil(app.openNotebookNote(withText: body))
-        openSyncDetails(app)
-        let lastSync = app.staticTexts.matching(NSPredicate(
-            format: "label BEGINSWITH %@", "Last sync:"
-        )).firstMatch
-        let successful = XCTNSPredicateExpectation(predicate: NSPredicate {
-            _, _ in
-            lastSync.exists && lastSync.label.hasPrefix("Last sync:")
-                && !lastSync.label.contains("Never")
-        }, object: lastSync)
+        // Check automatic recovery before a status tap requests another sync.
+        app.revealNotebookSidebar(timeout: 20)
+        let cloud = app.buttons["notebook-sync-details"]
+        let successful = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Synced with iCloud"),
+            object: cloud
+        )
         XCTAssertEqual(
             XCTWaiter.wait(for: [successful], timeout: 120), .completed,
             "Expected automatic CloudKit exchange after removing the outage"
         )
+        openSyncDetails(app)
+        let lastSync = app.staticTexts["notebook-sync-last-success"]
+        XCTAssertTrue(lastSync.waitForExistence(timeout: 10))
         let syncEvidence = XCTAttachment(string: lastSync.label)
         syncEvidence.name = "Automatic sync status"
         syncEvidence.lifetime = .keepAlways
@@ -114,11 +115,10 @@ final class NotebookAutomaticCloudUITests: XCTestCase {
     }
 
     private func closeSyncDetails(_ app: XCUIApplication, body: String) {
-        let close = app.buttons["notebook-sync-details-close"]
-        XCTAssertTrue(close.waitForExistence(timeout: 10))
-        close.tap()
+        let status = app.staticTexts["note-sync-status"]
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
         let closed = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == false"), object: close)
+            predicate: NSPredicate(format: "exists == false"), object: status)
         XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 10), .completed)
         XCTAssertNotNil(app.openNotebookNote(withText: body))
     }

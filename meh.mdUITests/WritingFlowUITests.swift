@@ -273,11 +273,7 @@ final class WritingFlowUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["note-sync-status"].exists)
         XCTAssertFalse(saveStatus(in: app).exists)
         app.openSyncDetails()
-        activate(app.buttons["sync-now"])
-        let synced = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@",
-                        "Last sync:", "Last sync:")
-        ).firstMatch
+        let synced = app.staticTexts["notebook-sync-last-success"]
         XCTAssertTrue(synced.waitForExistence(timeout: 20))
         capture(app, name: "Cloud details during fictional-note writing")
         app.closeSyncDetails()
@@ -293,7 +289,6 @@ final class WritingFlowUITests: XCTestCase {
         }
         #endif
         app.openSyncDetails()
-        activate(app.buttons["sync-now"])
         let paused = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@",
                         "Sync paused", "Sync paused")

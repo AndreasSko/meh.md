@@ -108,6 +108,7 @@ final class NotebookWorkspace {
     private(set) var showSyncCheck = false
     private(set) var syncRetryNotBefore: Date?
     private(set) var lastSuccessfulSync: Date?
+    @ObservationIgnored private var statusSyncRequestInFlight = false
     @ObservationIgnored lazy var syncEventLog = NotebookSyncEventLog(directory: directory)
     private var syncMonitor: Task<Void, Never>?
     private var slowSyncIndicator: Task<Void, Never>?
@@ -206,7 +207,7 @@ final class NotebookWorkspace {
     }
     var usesSync: Bool {
         #if DEBUG
-        if isPreviewUpdateRequirementFixture { return true }
+        if isPreviewSyncStatusFixture || isPreviewUpdateRequirementFixture { return true }
         #endif
         switch mode {
         case .cloud, .development: return true
@@ -224,6 +225,17 @@ final class NotebookWorkspace {
         syncUpdateRequiredVersion != nil || syncHalt?.reason == .updateRequired
     }
     #if DEBUG
+    private var requestedPreviewFixture: NotebookUITestFixture? {
+        NotebookUITestFixture.requested(
+            environment: ProcessInfo.processInfo.environment,
+            isPreview: isPreview, directory: directory
+        )
+    }
+
+    private var isPreviewSyncStatusFixture: Bool {
+        requestedPreviewFixture == .syncStatus
+    }
+
     private var isPreviewUpdateRequirementFixture: Bool {
         isPreview && Self.isPreviewEnabled
             && ProcessInfo.processInfo.environment["MEH_NOTEBOOK_UPDATE_REQUIRED_TEST"] == "1"
@@ -537,6 +549,13 @@ final class NotebookWorkspace {
                 // discovery or any network request.
                 replica = loaded
             }
+            if usesSync, let replica {
+                lastSuccessfulSync = nil
+                if let scope = try? NotebookSyncCoordinator.boundScope(for: replica),
+                   let notebookID = replica.catalogSnapshot?.notebookID {
+                    loadLastSuccessfulSync(scope: scope, notebookID: notebookID)
+                }
+            }
             #if DEBUG
             if isPreviewUpdateRequirementFixture {
                 let error = SyncError.updateRequired(requiredVersion: 3)
@@ -556,7 +575,13 @@ final class NotebookWorkspace {
             await runDueBackup()
             startConnectivityMonitoring()
             startAccountAvailabilityMonitoring()
+#if DEBUG
+            if !isPreviewSyncStatusFixture {
+                await refresh(whileLoading: true, manual: manualRetry, trigger: "startup")
+            }
+#else
             await refresh(whileLoading: true, manual: manualRetry, trigger: "startup")
+#endif
             await runDueBackup()
         } catch {
             setRecoveryAction(for: error)
@@ -620,6 +645,7 @@ final class NotebookWorkspace {
     func localStorageResetWasScheduled() {
         guard !isResetPending else { return }
         isResetPending = true
+        lastSuccessfulSync = nil
         publicationRetryPending = false
         replica?.suspendLocalEditsForPendingReset()
         scheduledRefresh?.cancel()
@@ -844,6 +870,11 @@ final class NotebookWorkspace {
                 )
                 sync = coordinator
                 hasBinding = try coordinator.hasDurableBinding()
+                if hasBinding, let notebookID = replica.catalogSnapshot?.notebookID {
+                    loadLastSuccessfulSync(
+                        scope: notebookTransport.scope, notebookID: notebookID
+                    )
+                }
                 guard !isResetPending else {
                     endSyncPresentation()
                     return
@@ -851,10 +882,14 @@ final class NotebookWorkspace {
                 syncSetupError = nil
                 await coordinator.synchronize()
                 failure = coordinator.lastError
-                if case .exchanged(let date) = coordinator.status {
-                    lastSuccessfulSync = date
-                }
                 hasBinding = (try? coordinator.hasDurableBinding()) == true
+                if case .exchanged(let date) = coordinator.status, hasBinding,
+                   let notebookID = replica.catalogSnapshot?.notebookID {
+                    lastSuccessfulSync = date
+                    persistLastSuccessfulSync(
+                        date, scope: notebookTransport.scope, notebookID: notebookID
+                    )
+                }
                 if case .failed(let message) = coordinator.status {
                     if !hasBinding { errorMessage = message }
                 } else { errorMessage = nil }
@@ -867,7 +902,14 @@ final class NotebookWorkspace {
             }
             await updateRetryDeadline()
             syncHalt = await (notebookTransport as? any HaltableSyncTransport)?.haltStatus()
+            if syncHalt?.reason == .accountChanged {
+                lastSuccessfulSync = nil
+            }
             if let failure {
+                if let syncError = failure as? SyncError,
+                   syncError == .scopeChanged || syncError == .identityConflict {
+                    lastSuccessfulSync = nil
+                }
                 recordUpdateRequirement(from: failure)
                 if let syncHalt { recordUpdateRequirement(from: syncHalt.underlyingError) }
                 let now = Date()
@@ -915,6 +957,19 @@ final class NotebookWorkspace {
             }
         }
         await publishCopies()
+    }
+
+    /// Starts a manual exchange only when the status control is idle and the
+    /// retry deadline has elapsed. Repeated taps do not queue follow-up work.
+    func requestSyncFromStatus() async {
+        guard usesSync, canRetrySync, !isLoading, !isRefreshing,
+              !statusSyncRequestInFlight else { return }
+        statusSyncRequestInFlight = true
+        defer { statusSyncRequestInFlight = false }
+        await updateRetryDeadline()
+        guard usesSync, canRetrySync, !isLoading, !isRefreshing,
+              syncRetryNotBefore.map({ $0 <= Date() }) ?? true else { return }
+        await refresh(manual: true, trigger: "sync status button")
     }
 
     private func beginSyncPresentation(manual: Bool) {
@@ -1065,6 +1120,12 @@ final class NotebookWorkspace {
                     workspace: name,
                     protocolVersion: 2
                 )
+#if DEBUG
+            case .preview where isPreviewSyncStatusFixture:
+                transport = NotebookSyncStatusPreviewTransport(
+                    runID: directory.lastPathComponent
+                )
+#endif
             default: return
             }
         }
@@ -1114,6 +1175,7 @@ final class NotebookWorkspace {
                                 counts: ["records": count])
         case .accountChanged:
             searchScopeGeneration += 1
+            lastSuccessfulSync = nil
             syncEventLog.record("cloud account changed")
         case .publicationPending:
             guard automaticSync, !isSyncUpdateRequired else { return }
@@ -1207,6 +1269,51 @@ final class NotebookWorkspace {
                 + "current catalog will be kept for diagnosis.",
             kind: .catalog
         )
+    }
+
+    private var lastSuccessfulSyncURL: URL {
+        directory.appending(path: "last-successful-sync.json")
+    }
+
+    private func loadLastSuccessfulSync(scope: String, notebookID: UUID) {
+        do {
+            let data = try Data(contentsOf: lastSuccessfulSyncURL)
+            let stored = try JSONDecoder().decode(LastSuccessfulSync.self, from: data)
+            guard stored.scope == scope, stored.notebookID == notebookID else {
+                lastSuccessfulSync = nil
+                syncEventLog.record("last sync timestamp ignored for different identity")
+                return
+            }
+            lastSuccessfulSync = stored.date
+        } catch CocoaError.fileReadNoSuchFile {
+            lastSuccessfulSync = nil
+        } catch {
+            lastSuccessfulSync = nil
+            syncEventLog.record("last sync timestamp could not be read")
+        }
+    }
+
+    private func persistLastSuccessfulSync(
+        _ date: Date, scope: String, notebookID: UUID
+    ) {
+        do {
+            let data = try JSONEncoder().encode(
+                LastSuccessfulSync(date: date, scope: scope, notebookID: notebookID)
+            )
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true
+            )
+            try data.write(to: lastSuccessfulSyncURL, options: .atomic)
+        } catch {
+            // Sync has already succeeded; a UI timestamp must never fail it.
+            syncEventLog.record("last sync timestamp could not be saved")
+        }
+    }
+
+    private struct LastSuccessfulSync: Codable {
+        let date: Date
+        let scope: String
+        let notebookID: UUID
     }
 
     private func publishCopies() async {

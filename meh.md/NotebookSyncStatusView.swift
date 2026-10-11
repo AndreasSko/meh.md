@@ -17,16 +17,26 @@ struct NotebookSyncButton: View {
             minimumInterval: 1, paused: workspace.syncRetryNotBefore == nil
         )) { context in
             let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
-            Button { showingDetails = true } label: {
-                Image(systemName: presentation.indicator.symbol)
+            Button {
+                showingDetails = true
+                Task { await workspace.requestSyncFromStatus() }
+            } label: {
+                Image(systemName: presentation.showsActivity ? "icloud" : presentation.indicator.symbol)
                     .foregroundStyle(presentation.indicatorColor)
+                    .frame(width: 32, height: 32)
                     .contentShape(Rectangle())
             }
-            .help(presentation.accessibilityLabel)
+            .buttonBorderShape(.circle)
+            .overlay {
+                if presentation.showsActivity {
+                    NotebookSyncRing(fraction: presentation.activity.fraction)
+                }
+            }
+            .help(String(localized: presentation.title))
             .accessibilityIdentifier("notebook-sync-details")
-            .accessibilityLabel(presentation.accessibilityLabel)
+            .accessibilityLabel("Sync with iCloud")
             .accessibilityValue(presentation.accessibilityValue)
-            .accessibilityHint("Show sync details")
+            .accessibilityHint(presentation.showsActivity ? "Show current sync activity" : "Sync now and show status")
             .popover(isPresented: $showingDetails) {
                 NotebookSyncDetailsView(workspace: workspace)
                     .presentationCompactAdaptation(.popover)
@@ -74,134 +84,179 @@ struct NotebookWorkspaceStatusView: View {
 
 struct NotebookSyncDetailsView: View {
     let workspace: NotebookWorkspace
-    @State private var showingEventLog = false
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
             VStack(alignment: .leading, spacing: 12) {
-                NotebookSyncDetailsHeader()
-                ScrollView {
-                    NotebookSyncDetailsContent(workspace: workspace, now: context.date,
-                                               showingEventLog: $showingEventLog)
+                HStack(spacing: 8) {
+                    Text(presentation.title)
+                        .font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("note-sync-status")
+                    if presentation.showsActivity {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.blue)
+                            .accessibilityLabel("Sync in progress")
+                            .accessibilityIdentifier("notebook-sync-activity")
+                    }
+                }
+                if presentation.showsActivity {
+                    NotebookSyncFilesView(files: presentation.activeFiles)
+                    if let hint = presentation.activity.hint {
+                        Text(hint).font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("notebook-sync-activity-hint")
+                    }
+                    if let fraction = presentation.activity.fraction {
+                        ProgressView(value: fraction)
+                            .progressViewStyle(.linear)
+                            .tint(.blue)
+                            .accessibilityLabel("Sync progress")
+                            .accessibilityValue(presentation.accessibilityValue)
+                            .accessibilityIdentifier("notebook-sync-progress")
+                    }
+                } else {
+                    NotebookSyncFailureView(workspace: workspace)
+                }
+                if let date = workspace.lastSuccessfulSync {
+                    Text("Last synced \(date, format: .relative(presentation: .named))")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("notebook-sync-last-success")
                 }
             }
             .padding(20)
-            .frame(idealWidth: 340, maxWidth: 420)
-            .frame(idealHeight: 520, maxHeight: 600)
+            .frame(idealWidth: 320, maxWidth: 380, alignment: .leading)
         }
-        .presentationDetents([.medium, .large])
-        .sheet(isPresented: $showingEventLog) {
-            NotebookSyncEventLogView(log: workspace.syncEventLog)
-        }
+        .presentationSizing(.fitted)
     }
 }
 
-private struct NotebookSyncDetailsHeader: View {
-    @Environment(\.dismiss) private var dismiss
+private struct NotebookSyncFilesView: View {
+    let files: [NotebookSyncActiveFile]
+    @State private var expanded = false
 
     var body: some View {
-        HStack {
-            Text("Sync").font(.headline)
-            Spacer()
-            Button("Close") { dismiss() }
-                .accessibilityIdentifier("notebook-sync-details-close")
-        }
-    }
-}
-
-private struct NotebookSyncDetailsContent: View {
-    let workspace: NotebookWorkspace
-    let now: Date
-    @Binding var showingEventLog: Bool
-
-    var body: some View {
-        let presentation = NotebookSyncPresentation(workspace: workspace, now: now)
-        VStack(alignment: .leading, spacing: 12) {
-            Text(presentation.summary ?? lastSyncText)
-                .accessibilityIdentifier("note-sync-status")
-            if workspace.replica?.catalogSnapshot != nil,
-               workspace.replica?.localEditsSuspended == false,
-               workspace.syncFailure != nil || workspace.syncSetupError != nil {
-                Text("Notes stay on this device while sync is unavailable.")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("sync-local-saving-explanation")
-            }
-            if presentation.summary != nil { Text(lastSyncText).font(.caption) }
-            if let fraction = presentation.fraction {
-                ProgressView(value: fraction)
-                    .accessibilityLabel("Sync progress")
-                    .accessibilityValue(
-                        "\(Int((fraction * 100).rounded())) percent"
-                    )
-            } else if presentation.showsActivity {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel("Sync in progress")
-            }
-            if let progress = workspace.sync?.progress {
-                if progress.totalNotes > 0 {
-                    Text("Notes uploaded this pass: \(progress.completedNotes) of \(progress.totalNotes)")
-                }
-                if progress.receivedRecords > 0 {
-                    Text("Changes received this pass: \(progress.receivedRecords)")
-                }
-                Text("Last activity: \(progress.lastProgressAt.formatted(date: .omitted, time: .standard))")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if workspace.isSyncUpdateRequired {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Update required").font(.headline)
-                    Text("Update meh.md to resume iCloud sync. You can keep editing your notes on this device.")
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .font(.callout)
-                .accessibilityIdentifier("sync-update-required")
-            } else if let failure = workspace.syncFailure {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(failure.title).font(.headline)
-                    Text(failure.message)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let hint = failure.actionHint {
-                        Text(hint)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .foregroundStyle(.secondary)
+        if let first = files.first {
+            VStack(alignment: .leading, spacing: 6) {
+                if expanded && files.count > 1 {
+                    NotebookSyncFilesDisclosure(count: files.count - 1, expanded: $expanded)
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            NotebookSyncFilename(file: first, showsFolder: false)
+                            if files.count > 1 {
+                                NotebookSyncFilesDisclosure(count: files.count - 1, expanded: $expanded)
+                            }
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            NotebookSyncFilename(file: first, showsFolder: false)
+                            if files.count > 1 {
+                                NotebookSyncFilesDisclosure(count: files.count - 1, expanded: $expanded)
+                            }
+                        }
                     }
                 }
-                .font(.callout)
-                .accessibilityIdentifier("sync-failure-explanation")
-            } else if let error = workspace.syncSetupError {
-                Text(error).font(.caption)
-            }
-            if let error = workspace.notificationRegistrationError {
-                Text(error).font(.caption)
-            }
-            if workspace.syncFailure == nil,
-               case .failed(let error) = workspace.sync?.status {
-                Text(error).font(.caption)
-            }
-            Text("Progress counts saved revisions acknowledged by the sync service. Other devices receive them when they synchronize.")
-                .font(.caption).foregroundStyle(.secondary)
-            Button("Sync Event Log") { showingEventLog = true }
-                .accessibilityIdentifier("notebook-sync-event-log")
-            if !workspace.isSyncUpdateRequired {
-                Button(workspace.syncHalt?.isRecoverable == true
-                       ? "Retry Sync" : "Sync Now") {
-                    Task { await workspace.refresh(manual: true) }
+                if expanded && files.count > 1 {
+                    if files.count <= 4 {
+                        fileRows
+                    } else {
+                        ScrollView { fileRows }
+                            .frame(height: 180)
+                            .accessibilityIdentifier("notebook-sync-active-file-list")
+                    }
                 }
-                    .disabled(workspace.isRefreshing || !workspace.usesSync
-                              || !workspace.canRetrySync)
-                    .accessibilityIdentifier("sync-now")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .onChange(of: files.map(\.id)) { _, _ in expanded = false }
+        }
+    }
+
+    private var fileRows: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(files) { file in
+                NotebookSyncFilename(file: file, showsFolder: true)
+                    .accessibilityIdentifier("notebook-sync-active-file-\(file.id.uuidString)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
     }
+}
 
-    private var lastSyncText: String {
-        if let date = workspace.lastSuccessfulSync {
-            return "Last sync: \(date.formatted(date: .omitted, time: .standard))"
+private struct NotebookSyncFilename: View {
+    let file: NotebookSyncActiveFile
+    let showsFolder: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let name = file.name { Text(verbatim: name) }
+            else { Text("A note") }
+            if showsFolder, let folder = file.folder {
+                if folder.isEmpty { Text("Root").font(.caption) }
+                else { Text(verbatim: folder).font(.caption) }
+            }
         }
-        return "No completed sync in this session"
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct NotebookSyncFilesDisclosure: View {
+    let count: Int
+    @Binding var expanded: Bool
+
+    var body: some View {
+        Button { expanded.toggle() } label: {
+            if expanded { Text("Hide filenames") }
+            else if count == 1 { Text("and 1 other") }
+            else { Text("and \(count) others") }
+        }
+            .buttonStyle(.plain)
+            .foregroundStyle(.blue)
+            .padding(.vertical, 6)
+            .accessibilityLabel(expanded ? "Hide filenames" : "Show all filenames")
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("notebook-sync-active-files")
+    }
+}
+
+private struct NotebookSyncFailureView: View {
+    let workspace: NotebookWorkspace
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if workspace.isSyncUpdateRequired {
+                Text("Update meh.md to resume iCloud sync. You can keep editing your notes on this device.")
+                    .accessibilityIdentifier("sync-update-required")
+            } else if let failure = workspace.syncFailure {
+                Text(failure.message)
+                    .accessibilityIdentifier("sync-failure-explanation")
+                if let hint = failure.actionHint {
+                    Text(hint).foregroundStyle(.secondary)
+                }
+                if workspace.replica?.catalogSnapshot != nil,
+                   workspace.replica?.localEditsSuspended == false {
+                    Text("Notes stay on this device while sync is unavailable.")
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("sync-local-saving-explanation")
+                }
+                if workspace.canRetrySync {
+                    Button("Try Again") {
+                        Task { await workspace.requestSyncFromStatus() }
+                    }
+                    .disabled(workspace.isRefreshing || workspace.syncRetryNotBefore.map { $0 > Date() } == true)
+                    .accessibilityIdentifier("sync-now")
+                }
+            } else if workspace.syncSetupError != nil {
+                Text("Sync is paused. Open Settings → Diagnostics for details.")
+            } else if workspace.notificationRegistrationError != nil {
+                Text("Open Settings → Diagnostics for details about automatic sync notifications.")
+            }
+        }
+        .font(.callout)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -214,42 +269,31 @@ private struct NotebookSyncPresentation {
         return deadline
     }
 
-    var summary: String? {
-        guard workspace.usesSync else { return "Sync not enabled" }
-        if workspace.isSyncUpdateRequired { return "Sync paused · update required" }
-        if let deadline = retryDeadline {
-            let seconds = max(1, Int(ceil(deadline.timeIntervalSince(now))))
-            return "Sync paused · retry available in \(seconds)s"
-        }
-        if workspace.isSyncing {
-            if let progress = workspace.sync?.progress {
-                switch progress.phase {
-                case .uploadingNotes:
-                    return "Uploading notes · \(progress.completedNotes) of \(progress.totalNotes)"
-                case .uploadingCatalog: return "Updating folder structure…"
-                case .cleaningUp: return "Removing deleted note copies…"
-                case .receiving where progress.receivedRecords > 0:
-                    return "Receiving changes · \(progress.receivedRecords) received"
-                default: break
-                }
-            }
-            return workspace.showSyncCheck ? "Checking for changes…" : nil
-        }
-        if workspace.syncSetupError != nil { return "Sync paused · open for details" }
-        if case .failed = workspace.sync?.status { return "Sync paused · open for details" }
-        if workspace.notificationRegistrationError != nil {
-            return "Sync notifications unavailable · open for details"
-        }
-        if case .pending = workspace.sync?.status { return "Changes waiting to sync" }
-        return nil
+    var showsActivity: Bool {
+        workspace.usesSync && workspace.isSyncing && retryDeadline == nil
+            && !workspace.isSyncUpdateRequired
     }
 
-    var fraction: Double? {
-        guard workspace.isSyncing, !workspace.isSyncUpdateRequired,
-              retryDeadline == nil,
-              let progress = workspace.sync?.progress, progress.phase == .uploadingNotes,
-              progress.totalNotes > 0 else { return nil }
-        return min(1, max(0, Double(progress.completedNotes) / Double(progress.totalNotes)))
+    var activity: NotebookSyncActivityPresentation {
+        NotebookSyncActivityPresentation(isActive: showsActivity, progress: workspace.sync?.progress)
+    }
+
+    var activeFiles: [NotebookSyncActiveFile] {
+        NotebookSyncActiveFile.resolve(ids: activity.activeNoteIDs,
+                                       placements: workspace.replica?.placements ?? [])
+    }
+
+    var title: LocalizedStringResource {
+        guard workspace.usesSync else { return "Sync not enabled" }
+        if workspace.isSyncUpdateRequired { return "Update needed to sync" }
+        if retryDeadline != nil { return "Waiting to retry…" }
+        if showsActivity { return activity.title }
+        if let failure = workspace.syncFailure { return failure.title }
+        if workspace.syncSetupError != nil { return "Sync needs attention" }
+        if case .failed = workspace.sync?.status { return "Sync needs attention" }
+        if workspace.notificationRegistrationError != nil { return "Sync notifications unavailable" }
+        if case .pending = workspace.sync?.status { return "Changes waiting to sync" }
+        return workspace.lastSuccessfulSync == nil ? "Ready to sync" : "Synced with iCloud"
     }
 
     var indicator: NotebookSyncIndicator {
@@ -260,11 +304,9 @@ private struct NotebookSyncPresentation {
         if case .pending = workspace.sync?.status { pending = true }
         else { pending = false }
         return NotebookSyncIndicator(
-            isEnabled: workspace.usesSync,
-            isSyncing: workspace.isSyncing,
+            isEnabled: workspace.usesSync, isSyncing: workspace.isSyncing,
             isRetryPaused: retryDeadline != nil || workspace.isSyncUpdateRequired,
-            hasError: workspace.isSyncUpdateRequired || failed
-                || workspace.syncSetupError != nil
+            hasError: workspace.isSyncUpdateRequired || failed || workspace.syncSetupError != nil
                 || workspace.notificationRegistrationError != nil,
             hasPendingChanges: pending
         )
@@ -278,41 +320,40 @@ private struct NotebookSyncPresentation {
         }
     }
 
-    var showsActivity: Bool {
-        workspace.isSyncing && retryDeadline == nil && !workspace.isSyncUpdateRequired
-    }
-
-    var accessibilityLabel: String {
-        if let summary { return "Sync: \(summary)" }
-        return "Sync"
-    }
-
-    var accessibilityValue: String {
-        guard workspace.usesSync else { return "Not enabled" }
-        if workspace.isSyncUpdateRequired { return "Update required" }
-        if let fraction {
-            return "\(Int((fraction * 100).rounded())) percent complete"
+    var accessibilityValue: LocalizedStringResource {
+        if let fraction = activity.fraction {
+            let percent = Int((fraction * 100).rounded())
+            return "\(percent) percent of notes sent"
         }
-        if showsActivity { return "In progress" }
-        if retryDeadline != nil || workspace.syncSetupError != nil {
-            return "Paused"
-        }
-        if case .failed = workspace.sync?.status { return "Error" }
-        if workspace.notificationRegistrationError != nil {
-            return "Automatic sync notifications unavailable"
-        }
-        if case .pending = workspace.sync?.status { return "Waiting to sync" }
-        return lastSyncAccessibilityValue
-    }
-
-    private var lastSyncAccessibilityValue: String {
-        if workspace.lastSuccessfulSync != nil { return "Up to date" }
-        return "No completed sync in this session"
+        return title
     }
 }
 
+private struct NotebookSyncRing: View {
+    let fraction: Double?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-private struct NotebookSyncEventLogView: View {
+    var body: some View {
+        TimelineView(.animation(paused: reduceMotion || fraction != nil)) { context in
+            let angle = fraction != nil || reduceMotion ? -90
+                : context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6 * 360 - 90
+            Circle()
+                .trim(from: 0, to: max(0.01, fraction ?? 0.23))
+                .stroke(.blue, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                .rotationEffect(.degrees(angle))
+                #if os(iOS)
+                .padding(-4)
+                #else
+                .padding(1)
+                #endif
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: fraction)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+struct NotebookSyncEventLogView: View {
     let log: NotebookSyncEventLog
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
@@ -335,8 +376,8 @@ private struct NotebookSyncEventLogView: View {
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("notebook-sync-event-log-text")
             }
-            .accessibilityIdentifier("notebook-sync-event-log-text")
             HStack {
                 Button(copied ? "Copied" : "Copy Log") {
                     #if os(macOS)

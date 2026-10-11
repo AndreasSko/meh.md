@@ -9,10 +9,10 @@ final class NotebookOfflineUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Notebook unavailable"].exists)
         app.buttons["notebook-sync-details"].tap()
         XCTAssertTrue(app.staticTexts["sync-local-saving-explanation"].waitForExistence(timeout: 10))
-        app.buttons["notebook-sync-details-close"].tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
         let closed = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"),
-            object: app.buttons["sync-now"]
+            object: app.staticTexts["note-sync-status"]
         )
         XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 5), .completed)
 

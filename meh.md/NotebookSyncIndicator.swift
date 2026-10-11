@@ -1,4 +1,7 @@
-/// Four stable toolbar states; detailed progress stays in the sync popover.
+import Foundation
+import NoteCore
+
+/// Stable toolbar states keep idle and waiting distinct from active work.
 nonisolated enum NotebookSyncIndicator: Equatable {
     case synced, syncing, failed, disabled
 
@@ -30,6 +33,86 @@ nonisolated enum NotebookSyncIndicator: Equatable {
         case .syncing: "arrow.triangle.2.circlepath.icloud"
         case .disabled: "icloud.slash"
         case .failed: "exclamationmark.icloud"
+        }
+    }
+}
+
+/// Only an active pass may expose progress or filenames. A retained failure
+/// snapshot is useful for diagnostics, but must not appear to be live work.
+nonisolated struct NotebookSyncActivityPresentation {
+    let progress: NotebookSyncProgress?
+
+    init(isActive: Bool, progress: NotebookSyncProgress?) {
+        self.progress = isActive ? progress : nil
+    }
+
+    var fraction: Double? {
+        guard let progress, progress.phase == .uploadingNotes,
+              progress.totalNotes > 0 else { return nil }
+        return min(1, max(0, Double(progress.completedNotes)
+                          / Double(progress.totalNotes)))
+    }
+
+    var activeNoteIDs: [UUID] { progress?.activeNoteIDs ?? [] }
+
+    var title: LocalizedStringResource {
+        guard let progress else { return "Checking for changes…" }
+        switch progress.phase {
+        case .checking: return "Checking for changes…"
+        case .receiving:
+            return progress.activeNoteIDs.isEmpty
+                ? "Receiving changes…" : "Updating this device…"
+        case .uploadingNotes:
+            let count = progress.activeNoteIDs.count
+            return count > 1 ? "Sending \(count) notes…" : "Sending changes…"
+        case .uploadingCatalog: return "Updating your notebook…"
+        case .cleaningUp, .cleaningUpSnapshots: return "Cleaning up…"
+        }
+    }
+
+    var hint: LocalizedStringResource? {
+        guard let progress else { return nil }
+        switch progress.phase {
+        case .uploadingCatalog: return "Folder names, note details and order"
+        case .cleaningUp:
+            let count = progress.cleanupItemCount
+            if count == 1 { return "Removing copies of 1 deleted note" }
+            return count > 0 ? "Removing copies of \(count) deleted notes"
+                : "Removing copies of deleted notes"
+        case .cleaningUpSnapshots: return "Removing extra sync copies from iCloud"
+        case .checking, .receiving, .uploadingNotes: return nil
+        }
+    }
+}
+
+nonisolated struct NotebookSyncActiveFile: Identifiable, Equatable {
+    let id: UUID
+    let name: String?
+    let folder: String?
+
+    static func resolve(
+        ids: [UUID], placements: [NotebookPlacement]
+    ) -> [Self] {
+        let byID = Dictionary(uniqueKeysWithValues: placements.map { ($0.item.id, $0) })
+        let names = ids.compactMap { byID[$0]?.displayName }
+        var seen: Set<UUID> = []
+        return ids.filter { seen.insert($0).inserted }.map { id in
+            guard let placement = byID[id] else {
+                return Self(id: id, name: nil, folder: nil)
+            }
+            var folder: String?
+            if names.filter({ $0 == placement.displayName }).count > 1 {
+                var ancestors: [String] = []
+                var parent = placement.parentID
+                var visited: Set<UUID> = [id]
+                while let current = parent, visited.insert(current).inserted,
+                      let entry = byID[current] {
+                    ancestors.append(entry.displayName)
+                    parent = entry.parentID
+                }
+                folder = ancestors.reversed().joined(separator: " / ")
+            }
+            return Self(id: id, name: placement.displayName, folder: folder)
         }
     }
 }

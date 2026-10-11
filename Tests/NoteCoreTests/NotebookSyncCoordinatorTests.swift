@@ -792,6 +792,8 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.progress?.phase, .uploadingCatalog)
         XCTAssertEqual(coordinator.progress?.completedNotes, 2)
         XCTAssertEqual(coordinator.progress?.totalNotes, 2)
+        XCTAssertEqual(coordinator.progress?.activeNoteIDs, [])
+        XCTAssertEqual(coordinator.progress?.cleanupItemCount, 0)
     }
 
     func testProgressTracksChunkAcknowledgementsAndClearsOnSuccess() async throws {
@@ -811,11 +813,17 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(first.phase, .uploadingNotes)
         XCTAssertEqual(first.completedNotes, 0)
         XCTAssertEqual(first.totalNotes, 51)
+        let firstBatch = await transport.currentPausedBatch()
+        XCTAssertEqual(first.activeNoteIDs, firstBatch.map { $0.snapshot.noteID })
+        XCTAssertEqual(first.activeNoteIDs.count, 50)
         await transport.resumeBatch()
 
         await transport.waitForBatch(2)
         let second = try XCTUnwrap(coordinator.progress)
         XCTAssertEqual(second.completedNotes, 50)
+        let secondBatch = await transport.currentPausedBatch()
+        XCTAssertEqual(second.activeNoteIDs, secondBatch.map { $0.snapshot.noteID })
+        XCTAssertEqual(second.activeNoteIDs.count, 1)
         XCTAssertGreaterThanOrEqual(second.lastProgressAt, first.lastProgressAt)
         await transport.resumeBatch()
 
@@ -823,12 +831,73 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         let catalog = try XCTUnwrap(coordinator.progress)
         XCTAssertEqual(catalog.phase, .uploadingCatalog)
         XCTAssertEqual(catalog.completedNotes, 51)
+        XCTAssertTrue(catalog.activeNoteIDs.isEmpty)
         XCTAssertGreaterThanOrEqual(catalog.lastProgressAt, second.lastProgressAt)
         await transport.resumeBatch()
         await synchronization.value
 
         XCTAssertNil(coordinator.progress)
         assertExchanged(coordinator.status)
+    }
+
+    func testUploadFailureClearsActiveBatchButRetainsCounts() async throws {
+        let base = InMemorySyncTransport(scope: "batch-failure-progress")
+        let transport = PausingBatchTransport(base: base)
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        let noteID = try await replica.createNote(name: "one.md", text: "one")
+        await transport.startPausing(failBatch: true)
+        let synchronization = Task { await coordinator.synchronize() }
+        await transport.waitForBatch(1)
+        XCTAssertEqual(coordinator.progress?.activeNoteIDs, [noteID])
+        await transport.resumeBatch()
+        await synchronization.value
+        guard case .failed = coordinator.status else {
+            return XCTFail("Expected upload failure")
+        }
+        XCTAssertEqual(coordinator.progress?.phase, .uploadingNotes)
+        XCTAssertEqual(coordinator.progress?.totalNotes, 1)
+        XCTAssertEqual(coordinator.progress?.activeNoteIDs, [])
+    }
+
+    func testDeletionCleanupReportsCountAndClearsAfterSuccess() async throws {
+        let transport = PausingCleanupTransport(pauseSnapshots: false)
+        let replica = NotebookReplica(directory: directory())
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: transport)
+        await coordinator.synchronize()
+        let noteID = try await replica.createNote(name: "one.md", text: "one")
+        await coordinator.synchronize()
+        try await replica.markPermanentlyDeleted([noteID])
+        let synchronization = Task { await coordinator.synchronize() }
+        await transport.waitForCleanup()
+        XCTAssertEqual(coordinator.progress?.phase, .cleaningUp)
+        XCTAssertEqual(coordinator.progress?.cleanupItemCount, 1)
+        XCTAssertEqual(coordinator.progress?.activeNoteIDs, [])
+        await transport.resumeCleanup()
+        await synchronization.value
+        assertExchanged(coordinator.status)
+        XCTAssertNil(coordinator.progress)
+    }
+
+    func testSnapshotCleanupHasItsOwnPhaseAndClearsOnFailure() async throws {
+        let transport = PausingCleanupTransport()
+        let coordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: directory()), transport: transport
+        )
+        let synchronization = Task { await coordinator.synchronize() }
+        await transport.waitForCleanup()
+        let progress = try XCTUnwrap(coordinator.progress)
+        XCTAssertEqual(progress.phase, .cleaningUpSnapshots)
+        XCTAssertTrue(progress.activeNoteIDs.isEmpty)
+        XCTAssertEqual(progress.cleanupItemCount, 0)
+        await transport.resumeCleanup()
+        await synchronization.value
+        guard case .failed = coordinator.status else {
+            return XCTFail("Expected integrity failure to stop cleanup")
+        }
+        XCTAssertEqual(coordinator.progress?.activeNoteIDs, [])
+        XCTAssertEqual(coordinator.progress?.cleanupItemCount, 0)
     }
 
     func testCheckingAndReceivingProgressAreIndeterminate() async throws {
@@ -1539,6 +1608,7 @@ private actor PausingBatchTransport: SyncTransport {
     nonisolated let scope: String
     private let base: InMemorySyncTransport
     private var shouldPause = false
+    private var failBatch = false
     private var pausedBatchCount = 0
     private var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
     private var resumeContinuation: CheckedContinuation<Void, Never>?
@@ -1569,6 +1639,7 @@ private actor PausingBatchTransport: SyncTransport {
                 resumeContinuation = continuation
             }
         }
+        if failBatch { throw SyncError.invalidRecord }
         let result = try await base.publishBatch(records)
         published.formUnion(result.acknowledgedIDs)
         return result
@@ -1578,7 +1649,8 @@ private actor PausingBatchTransport: SyncTransport {
         try await base.fetch(after: cursor)
     }
 
-    func startPausing() {
+    func startPausing(failBatch: Bool = false) {
+        self.failBatch = failBatch
         shouldPause = true
         pausedBatchCount = 0
     }
@@ -1729,4 +1801,60 @@ private actor PhasePausingTransport: SyncTransport {
 
 private enum BatchTestError: Error {
     case failed
+}
+
+private actor PausingCleanupTransport: SyncTransport {
+    nonisolated let scope = "cleanup-progress"
+    private let base = InMemorySyncTransport(scope: "cleanup-progress")
+    private let pauseSnapshots: Bool
+    private var cleanupStarted = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var resume: CheckedContinuation<Void, Never>?
+
+    init(pauseSnapshots: Bool = true) {
+        self.pauseSnapshots = pauseSnapshots
+    }
+
+    func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
+        try await base.bootstrap(proposing: record)
+    }
+
+    func publish(_ record: SyncRecord) async throws {
+        try await base.publish(record)
+    }
+
+    func fetch(after cursor: String?) async throws -> SyncPage {
+        try await base.fetch(after: cursor)
+    }
+
+    func purgeDeletedNotes(_ noteIDs: Set<UUID>, notebookID: UUID) async {
+        await pauseCleanup()
+    }
+
+    func cleanupRedundantSnapshots(
+        notebookID: UUID
+    ) async throws -> SyncSnapshotCleanupReport {
+        guard pauseSnapshots else { return SyncSnapshotCleanupReport() }
+        await pauseCleanup()
+        throw SyncError.invalidRecord
+    }
+
+    private func pauseCleanup() async {
+        cleanupStarted = true
+        await withCheckedContinuation { continuation in
+            resume = continuation
+            waiter?.resume()
+            waiter = nil
+        }
+    }
+
+    func waitForCleanup() async {
+        if cleanupStarted { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+
+    func resumeCleanup() {
+        resume?.resume()
+        resume = nil
+    }
 }
