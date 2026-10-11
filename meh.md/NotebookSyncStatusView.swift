@@ -112,6 +112,14 @@ struct NotebookSyncDetailsView: View {
                         .accessibilityIdentifier("note-sync-status")
                     NotebookSyncFailureView(workspace: workspace, now: context.date)
                 }
+                #if DEBUG
+                if workspace.usesSyncStatusAcknowledgements {
+                    Button("Advance fixture phase") {
+                        Task { await workspace.acknowledgeSyncStatusPhase() }
+                    }
+                    .accessibilityIdentifier("notebook-sync-fixture-advance")
+                }
+                #endif
                 if let date = workspace.lastSuccessfulSync {
                     Text("Last synced \(date, format: .relative(presentation: .named))")
                         .font(.caption).foregroundStyle(.secondary)

@@ -579,9 +579,11 @@ public final class NotebookReplica {
     }
 
     public func createNoteInDefaultFolder(
-        name: String, text: String = ""
+        name: String, text: String = "",
+        validateBeforeCreate: (@MainActor @Sendable () throws -> Void)? = nil
     ) async throws -> UUID {
         try await withCatalogWrite {
+            try validateBeforeCreate?()
             guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
             let next = try catalog.fork()
             let note = try NoteDocument(text: text)

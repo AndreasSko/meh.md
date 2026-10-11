@@ -6,6 +6,7 @@ let package = Package(
     name: "MehCore",
     platforms: [.macOS("27.0"), .iOS("27.0")],
     products: [
+        .library(name: "AssistantCore", targets: ["AssistantCore"]),
         .library(name: "NotebookAppModel", targets: ["NotebookAppModel"]),
         .library(name: "NativeEditor", targets: ["NativeEditor"]),
         .library(name: "NoteCore", targets: ["NoteCore"]),
@@ -17,6 +18,8 @@ let package = Package(
         ),
     ],
     targets: [
+        .target(name: "AssistantCore", dependencies: ["NoteCore"]),
+        .testTarget(name: "AssistantCoreTests", dependencies: ["AssistantCore", "NoteCore"]),
         .target(
             name: "NoteCore",
             dependencies: [
@@ -35,6 +38,8 @@ let package = Package(
             dependencies: ["NoteCore"],
             path: "meh.md",
             exclude: [
+                "AssistantController.swift", "AssistantChatView.swift",
+                "AssistantConnectionView.swift", "AssistantBrowserView.swift",
                 "Assets.xcassets", "CloudKitSmokeCheck.swift",
                 "NotebookSyncLabApp.swift",
                 "NotebookBrowserDropInteraction.swift",
@@ -105,6 +110,8 @@ let package = Package(
             dependencies: ["NoteCore"],
             path: "meh.md",
             exclude: [
+                "AssistantController.swift", "AssistantChatView.swift",
+                "AssistantConnectionView.swift", "AssistantBrowserView.swift",
                 "MyApp.swift", "Assets.xcassets",
                 "NotebookUITestFixture.swift",
                 "NotebookView.swift", "NotebookNoteEditor.swift", "NotebookWorkspace.swift",

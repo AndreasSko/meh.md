@@ -72,7 +72,26 @@ extension XCUIApplication {
 
     func openNotebookSettings(timeout: TimeInterval = 15) {
 #if os(iOS)
-        revealNotebookSidebar(timeout: timeout)
+        let menu = buttons["notebook-app-menu"]
+        let directSettings = buttons["notebook-settings"]
+        let editor = textViews["markdown-editor"]
+        // Empty notebooks have Browser Actions but no Files section. Wait
+        // for a usable settings path or note detail before deciding whether
+        // sidebar navigation is needed; the first toolbar button is not
+        // necessarily a Back button.
+        let navigationReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                menu.isHittable || directSettings.isHittable || editor.exists
+            }, object: self
+        )
+        guard XCTWaiter.wait(for: [navigationReady], timeout: timeout)
+                == .completed else {
+            XCTFail("Expected notebook actions or note detail before opening Settings")
+            return
+        }
+        if !menu.isHittable && !directSettings.isHittable {
+            revealNotebookSidebar(timeout: timeout)
+        }
 #endif
         guard let settings = notebookMenuAction(
             identifier: "notebook-settings", timeout: timeout
