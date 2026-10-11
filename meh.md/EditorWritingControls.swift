@@ -14,7 +14,7 @@ struct EditorModeControl: View {
 
     var body: some View {
         Picker("Editor Mode", selection: $mode) {
-            Label("Source", systemImage: "doc.plaintext")
+            Label("Markdown Source", systemImage: "doc.plaintext")
                 .tag(MarkdownEditorMode.source)
                 .accessibilityIdentifier("editor-mode-source")
             Label("Live Preview", systemImage: "text.document")

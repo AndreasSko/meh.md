@@ -208,6 +208,7 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
         app.typeKey("z", modifierFlags: .command)
         XCTAssertTrue(waitForSource(editor) { $0 == self.source })
         app.buttons["notebook-note-actions"].tap()
+        app.buttons["Editor Display"].tap()
         app.buttons["Live Preview"].tap()
         XCTAssertTrue(cellEditor.waitForExistence(timeout: 5))
         XCTAssertEqual(cellEditor.value as? String, "**Coastal walk**")
@@ -345,6 +346,7 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         app.buttons["notebook-note-actions"].tap()
+        app.buttons["Editor Display"].tap()
         app.buttons["Live Preview"].tap()
         editor.tap()
         let fixture = fixtureSource ?? source
@@ -391,7 +393,8 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
         let actions = app.buttons["notebook-note-actions"].firstMatch
         XCTAssertTrue(actions.waitForExistence(timeout: 5))
         actions.tap()
-        let source = app.buttons["Source"].firstMatch
+        app.buttons["Editor Display"].tap()
+        let source = app.buttons["Markdown Source"].firstMatch
         XCTAssertTrue(source.waitForExistence(timeout: 5))
         source.tap()
     }

@@ -580,7 +580,7 @@ private struct NotebookTemplateDestinationSection: View {
         Section("New Note Destination") {
             Picker("Save in", selection: $destination) {
                 Text(inheritedLabel).tag(NotebookTemplateDestination.inherit)
-                Text("Root").tag(NotebookTemplateDestination.root)
+                Text("Top Level").tag(NotebookTemplateDestination.root)
                 ForEach(activeFolders, id: \.item.id) { folder in
                     Text(path(for: folder)).tag(
                         NotebookTemplateDestination.folder(folder.item.id)

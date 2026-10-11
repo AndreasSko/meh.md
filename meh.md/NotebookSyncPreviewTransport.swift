@@ -9,9 +9,14 @@ actor NotebookSyncStatusPreviewTransport: SyncTransport {
     nonisolated let scope: String
     private let base: InMemorySyncTransport
     private let phaseDelay: Duration
+    private let retryDeadline: Date?
     private var receiveActivityHandler: SyncReceiveActivityHandler?
 
-    init(runID: String, phaseDelay: Duration = .seconds(5)) {
+    init(
+        runID: String,
+        phaseDelay: Duration = .seconds(5),
+        retryNotBefore: Date? = nil
+    ) {
         scope = "sync-status-preview-\(runID)"
         base = InMemorySyncTransport(
             scope: scope,
@@ -19,6 +24,7 @@ actor NotebookSyncStatusPreviewTransport: SyncTransport {
             pageSize: 2
         )
         self.phaseDelay = phaseDelay
+        retryDeadline = retryNotBefore
     }
 
     func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
@@ -63,7 +69,7 @@ actor NotebookSyncStatusPreviewTransport: SyncTransport {
         return try await base.cleanupRedundantSnapshots(notebookID: notebookID)
     }
 
-    func retryNotBefore() async -> Date? { nil }
+    func retryNotBefore() async -> Date? { retryDeadline }
 
     private func pause() async throws {
         try await Task.sleep(for: phaseDelay)

@@ -90,7 +90,9 @@ struct NotebookSyncDetailsView: View {
     let workspace: NotebookWorkspace
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
+        TimelineView(.periodic(
+            from: .now, by: workspace.syncRetryNotBefore == nil ? 30 : 1
+        )) { context in
             let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
             VStack(alignment: .leading, spacing: 12) {
                 if presentation.showsActivity {
@@ -108,7 +110,7 @@ struct NotebookSyncDetailsView: View {
                         .font(.headline)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("note-sync-status")
-                    NotebookSyncFailureView(workspace: workspace)
+                    NotebookSyncFailureView(workspace: workspace, now: context.date)
                 }
                 if let date = workspace.lastSuccessfulSync {
                     Text("Last synced \(date, format: .relative(presentation: .named))")
@@ -244,7 +246,7 @@ private struct NotebookSyncFilename: View {
             if let name = file.name { Text(verbatim: name) }
             else { Text("A note") }
             if showsFolder, let folder = file.folder {
-                if folder.isEmpty { Text("Root").font(.caption) }
+                if folder.isEmpty { Text("Top Level").font(.caption) }
                 else { Text(verbatim: folder).font(.caption) }
             }
         }
@@ -273,6 +275,7 @@ private struct NotebookSyncFilesDisclosure: View {
 
 private struct NotebookSyncFailureView: View {
     let workspace: NotebookWorkspace
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -282,7 +285,8 @@ private struct NotebookSyncFailureView: View {
             } else if let failure = workspace.syncFailure {
                 Text(failure.message)
                     .accessibilityIdentifier("sync-failure-explanation")
-                if let hint = failure.actionHint {
+                if let hint = failure.actionHint,
+                   !(workspace.canRetrySync && hint == "Try syncing again.") {
                     Text(hint).foregroundStyle(.secondary)
                 }
                 if workspace.replica?.catalogSnapshot != nil,
@@ -292,10 +296,15 @@ private struct NotebookSyncFailureView: View {
                         .accessibilityIdentifier("sync-local-saving-explanation")
                 }
                 if workspace.canRetrySync {
+                    if let deadline = workspace.syncRetryNotBefore, deadline > now {
+                        Text("Try Again will be available in \(deadline, style: .timer).")
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("sync-retry-countdown")
+                    }
                     Button("Try Again") {
                         Task { await workspace.requestSyncFromStatus() }
                     }
-                    .disabled(workspace.isRefreshing || workspace.syncRetryNotBefore.map { $0 > Date() } == true)
+                    .disabled(workspace.isRefreshing || workspace.syncRetryNotBefore.map { $0 > now } == true)
                     .accessibilityIdentifier("sync-now")
                 }
             } else if workspace.syncSetupError != nil {
@@ -335,9 +344,9 @@ private struct NotebookSyncPresentation {
     var title: LocalizedStringResource {
         guard workspace.usesSync else { return "Sync not enabled" }
         if workspace.isSyncUpdateRequired { return "Update needed to sync" }
-        if retryDeadline != nil { return "Waiting to retry…" }
         if showsActivity { return activity.title }
         if let failure = workspace.syncFailure { return failure.title }
+        if retryDeadline != nil { return "Waiting to retry…" }
         if workspace.syncSetupError != nil { return "Sync needs attention" }
         if case .failed = workspace.sync?.status { return "Sync needs attention" }
         if workspace.notificationRegistrationError != nil { return "Sync notifications unavailable" }

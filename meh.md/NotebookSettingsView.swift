@@ -34,7 +34,7 @@ struct NotebookSettingsView: View {
                         get: { replica.defaultNewNoteParentID },
                         set: { setDefaultNewNoteParentID($0) }
                     )) {
-                        Text("Root").tag(UUID?.none)
+                        Text("Top Level").tag(UUID?.none)
                         ForEach(activeFolders, id: \.item.id) { placement in
                             Text(folderPath(for: placement))
                                 .tag(Optional(placement.item.id))

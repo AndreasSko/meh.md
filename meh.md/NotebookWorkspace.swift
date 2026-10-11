@@ -128,6 +128,9 @@ final class NotebookWorkspace {
     private var notebookTransport: (any SyncTransport)?
     @ObservationIgnored private var transportFactory:
         (@MainActor (String?) async throws -> any SyncTransport)?
+#if DEBUG
+    @ObservationIgnored private var didSeedPreviewRetryFixture = false
+#endif
     @ObservationIgnored private(set) var transportGeneration = UUID()
     private var publisher: NotebookMarkdownPublisher?
     private var backupStore: NotebookMarkdownBackupStore?
@@ -240,6 +243,18 @@ final class NotebookWorkspace {
 
     private var isPreviewSyncStatusFixture: Bool {
         requestedPreviewFixture == .syncStatus
+    }
+
+    private var isPreviewRetryFixture: Bool {
+        isPreviewSyncStatusFixture
+            && ProcessInfo.processInfo.environment["MEH_NOTEBOOK_RETRY_TEST"] == "1"
+    }
+
+    private var previewRetryDelay: TimeInterval {
+        let requested = ProcessInfo.processInfo.environment[
+            "MEH_NOTEBOOK_RETRY_SECONDS"
+        ].flatMap { Int($0) } ?? 12
+        return TimeInterval(min(30, max(3, requested)))
     }
 
     private var isPreviewUpdateRequirementFixture: Bool {
@@ -563,6 +578,19 @@ final class NotebookWorkspace {
                 }
             }
             #if DEBUG
+            if isPreviewRetryFixture, !didSeedPreviewRetryFixture {
+                let retryNotBefore = Date().addingTimeInterval(previewRetryDelay)
+                notebookTransport = NotebookSyncStatusPreviewTransport(
+                    runID: directory.lastPathComponent,
+                    retryNotBefore: retryNotBefore
+                )
+                syncRetryNotBefore = retryNotBefore
+                syncFailure = SyncFailurePresentation(
+                    error: URLError(.timedOut),
+                    retryWillOccurAutomatically: false
+                )
+                didSeedPreviewRetryFixture = true
+            }
             if isPreviewUpdateRequirementFixture {
                 let error = SyncError.updateRequired(requiredVersion: 3)
                 syncHalt = CloudKitSyncHaltStatus(

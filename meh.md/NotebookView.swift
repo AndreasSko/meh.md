@@ -2165,7 +2165,7 @@ struct NotebookView: View {
                     setDefaultNewNoteParentID(isDefault ? nil : placement.item.id)
                 } label: {
                     Label(
-                        isDefault ? "Use Root for New Notes" : "Use for New Notes",
+                        isDefault ? "Use Top Level for New Notes" : "Use for New Notes",
                         systemImage: isDefault ? "folder" : "tray"
                     )
                 }
@@ -2349,7 +2349,7 @@ struct NotebookView: View {
                   session?.isEditingEnabled == true else { return }
             guard let insert = navigation.prepareSnippetInsertion?() else {
                 errorMessage = String(localized:
-                    "Place the cursor in the note before inserting a snippet. For a table cell, switch to Source mode.")
+                    "Place the cursor in the note before inserting a snippet. For a table cell, switch to Markdown Source.")
                 return
             }
             let title = selectedPlacement.map {
