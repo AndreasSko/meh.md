@@ -21,15 +21,16 @@ struct NotebookSyncButton: View {
                 showingDetails = true
                 Task { await workspace.requestSyncFromStatus() }
             } label: {
-                Image(systemName: presentation.showsActivity ? "icloud" : presentation.indicator.symbol)
+                Image(systemName: presentation.activity.fraction != nil
+                      ? "icloud" : presentation.indicator.symbol)
                     .foregroundStyle(presentation.indicatorColor)
                     .frame(width: 32, height: 32)
                     .contentShape(Rectangle())
             }
             .buttonBorderShape(.circle)
             .overlay {
-                if presentation.showsActivity {
-                    NotebookSyncRing(fraction: presentation.activity.fraction)
+                if let fraction = presentation.activity.fraction {
+                    NotebookSyncRing(fraction: fraction)
                 }
             }
             .help(String(localized: presentation.title))
@@ -330,26 +331,22 @@ private struct NotebookSyncPresentation {
 }
 
 private struct NotebookSyncRing: View {
-    let fraction: Double?
+    let fraction: Double
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion || fraction != nil)) { context in
-            let angle = fraction != nil || reduceMotion ? -90
-                : context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6 * 360 - 90
-            Circle()
-                .trim(from: 0, to: max(0.01, fraction ?? 0.23))
-                .stroke(.blue, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
-                .rotationEffect(.degrees(angle))
-                #if os(iOS)
-                .padding(-4)
-                #else
-                .padding(1)
-                #endif
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: fraction)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        Circle()
+            .trim(from: 0, to: max(0.01, fraction))
+            .stroke(.blue, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+            .rotationEffect(.degrees(-90))
+            #if os(iOS)
+            .padding(-4)
+            #else
+            .padding(1)
+            #endif
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: fraction)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

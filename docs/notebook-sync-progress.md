@@ -6,6 +6,10 @@ result, and manual sync. Routine sync progress no longer takes space below
 the writing screen. Markdown-copy failures, deletion-cleanup errors, and
 recovery actions remain visible in the bottom status area.
 
+The button border shows measured progress only when a transfer total is known.
+Checks, receiving without a total, and maintenance use the syncing cloud icon.
+The status popover continues to show its activity indicator during active work.
+
 ## What progress means
 
 - Upload progress counts current saved note revisions acknowledged by the
