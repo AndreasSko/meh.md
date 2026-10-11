@@ -149,6 +149,8 @@ struct NotebookView: View {
     @State private var resumeEditorAfterQuickOpen = false
     @State private var searchLandingPosition: MarkdownEditorPosition?
     @State private var showingImport = false
+    @State private var importingFolder = false
+    @State private var choosingImportSource = false
     @State private var showingSettings = false
     @State private var showingTemplates = false
     @State private var pendingPresentedItemID: UUID?
@@ -940,8 +942,15 @@ struct NotebookView: View {
             Text(missingLink?.destination ?? "")
         }
         .notebookMarkdownImporter(
-            isPresented: $showingImport, replica: replica, onImport: importMarkdown
+            isPresented: $showingImport, choosingFolder: importingFolder,
+            replica: replica, onImport: importMarkdown
         )
+        .confirmationDialog("Import Markdown", isPresented: $choosingImportSource) {
+            Button("Import Files…") { showImport(choosingFolder: false) }
+                .accessibilityIdentifier("notebook-import-files")
+            Button("Import Folder…") { showImport(choosingFolder: true) }
+                .accessibilityIdentifier("notebook-import-folder")
+        }
         .sheet(isPresented: $showingTrash, onDismiss: finishTemplatePresentation) {
             NavigationStack {
                 trashView
@@ -3071,13 +3080,19 @@ struct NotebookView: View {
         NotebookNewNoteButton(
             isEnabled: !busy, hasTemplates: !replica.templates.isEmpty,
             onNewNote: createDefaultNote,
-            onNewFromTemplate: showTemplates
+            onNewFromTemplate: showTemplates,
+            onNewFolder: { createItem(kind: .folder, parentID: nil) }
         )
         .frame(width: 44, height: 44)
         #else
         Menu {
             Button("New Note") { createDefaultNote() }
             templateCreationButton
+            Button {
+                createItem(kind: .folder, parentID: nil)
+            } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
+            }
         } label: {
             Label("New Note", systemImage: "plus")
         } primaryAction: {
@@ -3114,9 +3129,17 @@ struct NotebookView: View {
             sortMenu(parentID: nil, label: "Sort Files Once")
                 .accessibilityIdentifier("notebook-sort-root")
             templateCreationButton
-            Button("New Folder") { createItem(kind: .folder, parentID: nil) }
-            browserUndoActions
+            Button {
+                createItem(kind: .folder, parentID: nil)
+            } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
+            }
+            Button { requestImport() } label: {
+                Label("Import Markdown…", systemImage: "square.and.arrow.down")
+            }
+            .accessibilityIdentifier("notebook-import-browser")
             Divider()
+            browserUndoActions
             if isPhoneLayout {
                 Button { openSettings() } label: {
                     Label("Settings", systemImage: "gearshape")
@@ -3132,6 +3155,23 @@ struct NotebookView: View {
         }
         .disabled(busy)
         .accessibilityIdentifier("notebook-app-menu")
+    }
+
+    private func requestImport() {
+        #if os(iOS)
+        guard !busy else { return }
+        choosingImportSource = true
+        #else
+        showImport(choosingFolder: false)
+        #endif
+    }
+
+    private func showImport(choosingFolder: Bool) {
+        perform {
+            try await flushEditor()
+            importingFolder = choosingFolder
+            showingImport = true
+        }
     }
 
     private func openTrash() {

@@ -8,6 +8,7 @@ struct NotebookNewNoteButton: UIViewRepresentable {
     let hasTemplates: Bool
     let onNewNote: () -> Void
     let onNewFromTemplate: () -> Void
+    let onNewFolder: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -24,7 +25,7 @@ struct NotebookNewNoteButton: UIViewRepresentable {
         button.preferredMenuElementOrder = .fixed
         button.accessibilityLabel = String(localized: "New Note")
         button.accessibilityHint = String(
-            localized: "Touch and hold for new note options."
+            localized: "Touch and hold for note and folder options."
         )
         button.accessibilityIdentifier = "notebook-new-item"
         button.addTarget(context.coordinator, action: #selector(Coordinator.createNote),
@@ -49,6 +50,7 @@ struct NotebookNewNoteButton: UIViewRepresentable {
         coordinator.canCreateFromTemplate = isEnabled && hasTemplates
         coordinator.onNewNote = onNewNote
         coordinator.onNewFromTemplate = onNewFromTemplate
+        coordinator.onNewFolder = onNewFolder
         button.isEnabled = isEnabled
         let attributes: UIMenuElement.Attributes = isEnabled ? [] : .disabled
         button.menu = UIMenu(children: [
@@ -64,8 +66,14 @@ struct NotebookNewNoteButton: UIViewRepresentable {
                      attributes: coordinator.canCreateFromTemplate ? [] : .disabled) { [weak coordinator] _ in
                 coordinator?.createFromTemplate()
             },
+            UIAction(title: String(localized: "New Folder"),
+                     image: UIImage(systemName: "folder.badge.plus"),
+                     identifier: UIAction.Identifier("notebook-menu-new-folder"),
+                     attributes: attributes) { [weak coordinator] _ in
+                coordinator?.createFolder()
+            },
         ])
-        button.accessibilityCustomActions = coordinator.canCreateFromTemplate ? [
+        button.accessibilityCustomActions = [
             UIAccessibilityCustomAction(
                 name: String(localized: "New from Template…")
             ) { [weak coordinator] _ in
@@ -73,7 +81,14 @@ struct NotebookNewNoteButton: UIViewRepresentable {
                 coordinator.createFromTemplate()
                 return true
             },
-        ] : []
+        ].filter { _ in coordinator.canCreateFromTemplate }
+        button.accessibilityCustomActions?.append(UIAccessibilityCustomAction(
+            name: String(localized: "New Folder")
+        ) { [weak coordinator] _ in
+            guard let coordinator, coordinator.isEnabled else { return false }
+            coordinator.createFolder()
+            return true
+        })
     }
 
     @MainActor
@@ -82,6 +97,7 @@ struct NotebookNewNoteButton: UIViewRepresentable {
         var canCreateFromTemplate = false
         var onNewNote: (() -> Void)?
         var onNewFromTemplate: (() -> Void)?
+        var onNewFolder: (() -> Void)?
         var feedback: UIImpactFeedbackGenerator?
 
         @objc func createNote() {
@@ -92,6 +108,11 @@ struct NotebookNewNoteButton: UIViewRepresentable {
         func createFromTemplate() {
             guard canCreateFromTemplate else { return }
             onNewFromTemplate?()
+        }
+
+        func createFolder() {
+            guard isEnabled else { return }
+            onNewFolder?()
         }
 
         @objc func prepareFeedback() { feedback?.prepare() }
