@@ -11,6 +11,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case dragNested = "drag-nested"
     case dragSubtree = "drag-subtree"
     case dragLongList = "drag-long-list"
+    case storageLarge = "storage-large"
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
@@ -46,18 +47,71 @@ enum NotebookUITestFixture: String, CaseIterable {
 
     static func seedIfRequested(
         _ replica: NotebookReplica, isPreview: Bool, directory: URL,
+        documentsDirectory: URL? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) async throws {
         guard let fixture = requested(
             environment: environment, isPreview: isPreview, directory: directory
         ) else { return }
         // Reopening the same run must retain IDs and any scenario edits.
-        guard replica.orderedChildren(parentID: nil).isEmpty else { return }
-        try await fixture.seed(replica)
+        if replica.orderedChildren(parentID: nil).isEmpty {
+            try await fixture.seed(replica)
+        }
+        // Use the real publisher only inside the same explicit preview run.
+        // App-model tests omit this argument and keep all fixture files local.
+        if fixture == .storageLarge, let documentsDirectory {
+            let documents = documentsDirectory.standardizedFileURL
+            let support = directory.standardizedFileURL
+            guard documents.isFileURL, support.isFileURL,
+                  documents.lastPathComponent == support.lastPathComponent,
+                  documents.deletingLastPathComponent().lastPathComponent
+                    == "NotebookPreviewTests",
+                  support.deletingLastPathComponent().lastPathComponent
+                    == "NotebookPreviewTests",
+                  let catalog = replica.catalogSnapshot else { return }
+            let publisher = NotebookMarkdownPublisher(
+                directory: documents.appending(path: "Notebook Copies"))
+            let notes = try await replica.persistedNoteSnapshots()
+            try await publisher.publish(
+                catalog: catalog, placements: replica.placements, notes: notes)
+        }
     }
 
     private func seed(_ replica: NotebookReplica) async throws {
         switch self {
+        case .storageLarge:
+            let field = try await replica.createFolder(name: "Field journals")
+            let coast = try await replica.createFolder(name: "Coastal surveys", parentID: field)
+            let station = try await replica.createFolder(name: "Station logbooks", parentID: field)
+            let destinations = [field, coast, station]
+            for number in 1 ... 320 {
+                let title = String(format: "%03d Fictional observation", number)
+                let paragraph = "Observation \(number): imaginary tide charts, lantern signals, "
+                    + "and migrating paper boats at the fictional Northwind station.\n"
+                // Vary content and history independently: disk-heavy notes need
+                // not have the longest current Markdown source.
+                let repeats = number % 16 == 0 ? 1_000 : 4 + number % 28
+                let source = "# \(title)\n\n" + String(repeating: paragraph, count: repeats)
+                let id = try await replica.createNote(
+                    name: "\(title).md", text: source,
+                    parentID: destinations[(number - 1) % destinations.count])
+                if number % 16 == 0 {
+                    let note = try await replica.openNote(id)
+                    for revision in 1 ... 4 {
+                        try note.replaceAll(with: source + "\nFictional revision \(revision).\n")
+                        try await note.flush()
+                    }
+                }
+            }
+            var trash: [UUID] = []
+            for number in 1 ... 7 {
+                let id = try await replica.createNote(
+                    name: "Discarded fictional draft \(number).md",
+                    text: "# Discarded fictional draft\n\n"
+                        + String(repeating: "Imaginary harbor planning.\n", count: number * 90))
+                trash.append(id)
+            }
+            _ = try await replica.trashItems(trash)
         case .historyRestore:
             let id = try await replica.createNote(
                 name: "Recovery Sketch.md", text: Self.historyOriginalSource)
