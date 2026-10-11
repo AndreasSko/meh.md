@@ -272,6 +272,15 @@ struct NotebookView: View {
         #endif
     }
 
+    private var sidebarTitle: String {
+        if showsSelectionControls && !search.isPresented { return "" }
+        #if os(iOS)
+        // The app name repeats the window identity and crowds a split sidebar.
+        if horizontalSizeClass == .regular { return "" }
+        #endif
+        return "meh.md"
+    }
+
     private var notebookSidebar: some View {
             ZStack {
                 libraryBrowser
@@ -304,7 +313,7 @@ struct NotebookView: View {
                     )
                 }
             }
-            .navigationTitle(showsSelectionControls && !search.isPresented ? "" : "meh.md")
+            .navigationTitle(sidebarTitle)
             #if os(iOS)
             .navigationBarTitleDisplayMode(showsSelectionControls ? .inline : .large)
             #endif
