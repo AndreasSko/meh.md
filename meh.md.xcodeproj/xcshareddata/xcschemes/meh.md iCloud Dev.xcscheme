@@ -41,6 +41,12 @@
                <Test
                   Identifier = "ICloudDevelopmentUITests">
                </Test>
+               <Test
+                  Identifier = "NotebookStorageUITests/testStorageOverviewReopenAndOpenNote">
+               </Test>
+               <Test
+                  Identifier = "NotebookStorageUITests/testEmptyStorageCanCloseAndReopen">
+               </Test>
             </SelectedTests>
          </TestableReference>
       </Testables>

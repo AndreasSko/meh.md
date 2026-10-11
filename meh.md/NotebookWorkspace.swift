@@ -116,6 +116,7 @@ final class NotebookWorkspace {
     let mode: Mode
     let directory: URL
     private let documentsDirectory: URL
+    private let storageBoundary: URL
     #if NOTEBOOK_CLOUD_UI_LAB
     private let cloudUITestScope = NotebookCloudUITestScope(bundle: .main)
     #endif
@@ -158,6 +159,41 @@ final class NotebookWorkspace {
 
     var isPreview: Bool { if case .preview = mode { true } else { false } }
     var backupDirectory: URL { documentsDirectory.appending(path: "Backups") }
+
+    func storageReport(for replica: NotebookReplica) async throws
+        -> NotebookStorageReport {
+        try await replica.flushOpenNotes()
+        try Task.checkCancellation()
+        let placements = replica.placements
+        let byID = Dictionary(uniqueKeysWithValues: placements.map {
+            ($0.item.id, $0)
+        })
+        let documents = placements.filter {
+            $0.item.kind == .note && !$0.item.isPermanentlyDeleted
+        }.map { placement in
+            var components = [placement.displayName]
+            var parentID = placement.parentID
+            var visited = Set<UUID>()
+            while let id = parentID, visited.insert(id).inserted,
+                  let parent = byID[id] {
+                components.insert(parent.displayName, at: 0)
+                parentID = parent.parentID
+            }
+            return NotebookStorageDocument(
+                id: placement.item.id, name: placement.displayName,
+                path: components.joined(separator: " / "),
+                isInTrash: placement.isInTrash
+            )
+        }
+        return try await NotebookStorageReport.scan(
+            trustedBoundary: storageBoundary,
+            notebookDirectory: directory,
+            markdownCopiesDirectory: documentsDirectory.appending(
+                path: "Notebook Copies"
+            ),
+            backupDirectory: backupDirectory, documents: documents
+        )
+    }
     var nextBackupDate: Date? {
         guard backupFrequency != .off else { return nil }
         let due = lastBackup.flatMap {
@@ -210,6 +246,7 @@ final class NotebookWorkspace {
     }
 
     init(preview: Bool = false) {
+        storageBoundary = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         backupFrequency = Self.savedBackupFrequency
         backupRetentionCount = Self.savedBackupRetentionCount
         #if NOTEBOOK_CLOUD_UI_LAB
@@ -312,11 +349,14 @@ final class NotebookWorkspace {
     init(directory: URL, documentsDirectory: URL,
          transport: (any SyncTransport)?,
          automaticSync: Bool, mode: Mode? = nil,
+         storageBoundary: URL? = nil,
          syncSchedule: NotebookSyncSchedule = NotebookSyncSchedule(),
          transportFactory: (@MainActor (String?) async throws -> any SyncTransport)? = nil) {
         self.directory = directory
         self.syncSchedule = syncSchedule
         self.documentsDirectory = documentsDirectory
+        self.storageBoundary = storageBoundary
+            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         self.automaticSync = automaticSync
         self.mode = mode ?? .development(URL(string: "http://127.0.0.1")!, "model-test")
         notebookTransport = transport
@@ -486,12 +526,13 @@ final class NotebookWorkspace {
                 if loaded.catalogSnapshot == nil {
                     if usesSync && !isPreview { try await loaded.createNotebookForSync() }
                     else { try await loaded.createLocalNotebook() }
-                    #if DEBUG
-                    try await NotebookUITestFixture.seedIfRequested(
-                        loaded, isPreview: isPreview, directory: directory
-                    )
-                    #endif
                 }
+                #if DEBUG
+                try await NotebookUITestFixture.seedIfRequested(
+                    loaded, isPreview: isPreview, directory: directory,
+                    documentsDirectory: documentsDirectory
+                )
+                #endif
                 // Fresh and existing notebooks are writable before account
                 // discovery or any network request.
                 replica = loaded

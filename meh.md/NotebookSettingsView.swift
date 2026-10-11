@@ -130,6 +130,17 @@ struct NotebookSettingsView: View {
                     Text("In Files, open \(device) › meh.md. Current notes are in Notebook Copies/Markdown; backups are in Backups. Trash is not included.")
                     #endif
                 }
+                Section {
+                    NavigationLink {
+                        NotebookStorageView(
+                            replica: replica, workspace: workspace,
+                            onOpenNote: onOpenNote
+                        )
+                    } label: {
+                        Label("Storage", systemImage: "internaldrive")
+                    }
+                    .accessibilityIdentifier("notebook-storage-settings")
+                }
                 Section("Local Storage") {
                     Button("Reset All Local Data…", role: .destructive) {
                         confirmingReset = true

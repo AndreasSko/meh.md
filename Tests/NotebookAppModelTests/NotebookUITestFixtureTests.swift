@@ -21,6 +21,7 @@ final class NotebookUITestFixtureTests: XCTestCase {
             let children = replica.orderedChildren(parentID: nil).map(\.item)
             let expected: [String]
             switch fixture {
+            case .storageLarge: expected = ["Field journals"]
             case .historyRestore: expected = ["Recovery Sketch.md"]
             case .writing: expected = ["Fictional field notes.md", "Save boundary.md"]
             case .dragOrder: expected = ["Charlie.md", "Alpha.md", "Bravo.md", "Journeys"]
@@ -32,6 +33,37 @@ final class NotebookUITestFixtureTests: XCTestCase {
                 } + ["Journeys"]
             }
             XCTAssertEqual(children.map(\.name), expected)
+            if fixture == .storageLarge {
+                let activeNotes = replica.placements.filter {
+                    $0.item.kind == .note && !$0.isInTrash
+                }
+                XCTAssertEqual(activeNotes.count, 320)
+                XCTAssertEqual(replica.placements.filter {
+                    $0.item.kind == .note && $0.isInTrash
+                }.count, 7)
+                let large = try XCTUnwrap(activeNotes.first {
+                    $0.item.name.hasPrefix("016 ")
+                })
+                let note = try await replica.openNote(large.item.id)
+                XCTAssertGreaterThan(note.text.utf8.count, 100_000)
+                XCTAssertTrue(note.text.contains("Fictional revision 4."))
+                XCTAssertGreaterThan(try note.historyVersions().count, 1)
+                let wrongRun = root.appending(path: "Documents/NotebookPreviewTests/other")
+                try await NotebookUITestFixture.seedIfRequested(
+                    replica, isPreview: true, directory: directory,
+                    documentsDirectory: wrongRun, environment: environment)
+                XCTAssertFalse(FileManager.default.fileExists(atPath: wrongRun.path))
+                let documents = root.appending(path: "Documents/NotebookPreviewTests/run")
+                try await NotebookUITestFixture.seedIfRequested(
+                    replica, isPreview: true, directory: directory,
+                    documentsDirectory: documents, environment: environment)
+                let copies = documents.appending(path: "Notebook Copies/Markdown")
+                let files = try XCTUnwrap(FileManager.default.enumerator(
+                    at: copies, includingPropertiesForKeys: nil)?.allObjects as? [URL])
+                XCTAssertEqual(files.filter { $0.pathExtension == "md" }.count, 320)
+                XCTAssertEqual(replica.orderedChildren(parentID: nil).map(\.item.id),
+                               children.map(\.id))
+            }
             if fixture == .writing || fixture == .dragOrder {
                 let note = try await replica.openNote(children[fixture == .writing ? 0 : 2].id)
                 XCTAssertEqual(note.text, NotebookUITestFixture.literalSource)
