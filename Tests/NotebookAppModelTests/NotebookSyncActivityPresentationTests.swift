@@ -5,6 +5,20 @@ import XCTest
 
 @MainActor
 final class NotebookSyncActivityPresentationTests: XCTestCase {
+    func testWeightedProgressAppliesToAllActivePhasesAndHidesAfterFailure() {
+        let progress = NotebookSyncProgress(
+            phase: .receiving, receivedRecords: 2, completedNotes: 0,
+            totalNotes: 0, lastProgressAt: Date(), overallFraction: 0.2,
+            waitingSince: Date(timeIntervalSince1970: 10)
+        )
+        let active = NotebookSyncActivityPresentation(isActive: true, progress: progress)
+        XCTAssertEqual(active.fraction, 0.2)
+        XCTAssertEqual(String(localized: active.title), "Waiting for iCloud…")
+        XCTAssertEqual(String(localized: active.detail(at: Date(timeIntervalSince1970: 55))!),
+                       "Waiting for 45 seconds")
+        XCTAssertNil(NotebookSyncActivityPresentation(isActive: false, progress: progress).fraction)
+    }
+
     func testOnlyActiveNoteUploadsHaveAFractionAndFilenames() {
         let id = UUID()
         let upload = progress(phase: .uploadingNotes, ids: [id])

@@ -5,6 +5,19 @@ import XCTest
 
 @MainActor
 final class NotebookReplicaTests: XCTestCase {
+    func testRecordProgressIncludesKnownNoteAndCatalogTotal() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        _ = try await replica.createNote(name: "Fixture.md", text: "fictional")
+        var updates: [(Int, Int)] = []
+        let records = try await replica.records(progress: { updates.append(($0, $1)) })
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(updates.map { $0.0 }, [0, 1, 2])
+        XCTAssertEqual(updates.map { $0.1 }, [2, 2, 2])
+    }
+
     func testLifecycleFlushPersistsAllOpenNotesWithoutSync() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

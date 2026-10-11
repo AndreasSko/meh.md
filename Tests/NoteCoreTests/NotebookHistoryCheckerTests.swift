@@ -5,6 +5,56 @@ import XCTest
 
 @MainActor
 final class NotebookHistoryCheckerTests: XCTestCase {
+    func testProgressUsesCheckpointTotalAndReportsCompletedComparisons() async throws {
+        let checker = NotebookHistoryChecker()
+        let note = try NoteDocument(text: "fictional progress fixture")
+        let record = SyncRecord(snapshot: note.snapshot())
+        let deletedID = UUID()
+        let checkpoints = [record.documentKey: record.snapshot.heads,
+                           "note:\(deletedID.uuidString)": Set<String>()]
+        var updates: [(Int, Int)] = []
+        let contains = try await checker.containsHistory(
+            checkpoints, records: [record], deleted: [deletedID],
+            progress: { updates.append(($0, $1)) }
+        )
+        XCTAssertTrue(contains)
+        XCTAssertEqual(updates.map { $0.0 }, [0, 1, 2])
+        XCTAssertEqual(updates.map { $0.1 }, [2, 2, 2])
+        let decoded = await checker.decodedSnapshotCount
+        XCTAssertEqual(decoded, 1)
+    }
+
+    func testProgressStopsAtFailedComparisonAndThrottlesLargePass() async throws {
+        let checker = NotebookHistoryChecker()
+        let missing = Dictionary(uniqueKeysWithValues: (0..<1_000).map {
+            (String(format: "missing:%04d", $0), Set<String>())
+        })
+        var updates: [(Int, Int)] = []
+        let contains = try await checker.containsHistory(
+            missing, records: [], deleted: [],
+            progress: { updates.append(($0, $1)) }
+        )
+        XCTAssertFalse(contains)
+        XCTAssertEqual(updates.map { $0.0 }, [0, 1])
+        XCTAssertEqual(updates.map { $0.1 }, [1_000, 1_000])
+
+        let ids = (0..<1_000).map { _ in UUID() }
+        let deleted = Dictionary(uniqueKeysWithValues: ids.map {
+            ("note:\($0.uuidString)", Set<String>())
+        })
+        updates.removeAll()
+        let skipped = try await checker.containsHistory(
+            deleted, records: [], deleted: Set(ids),
+            progress: { updates.append(($0, $1)) }
+        )
+        XCTAssertTrue(skipped)
+        XCTAssertEqual(updates.first?.0, 0)
+        XCTAssertEqual(updates.last?.0, 1_000)
+        XCTAssertTrue(updates.allSatisfy { $0.1 == 1_000 })
+        XCTAssertLessThanOrEqual(updates.count, 102)
+        XCTAssertEqual(updates.map { $0.0 }, updates.map { $0.0 }.sorted())
+    }
+
     func testUnchangedSnapshotsReuseHistoryAndChangedNoteIsRechecked() async throws {
         let checker = NotebookHistoryChecker()
         let catalog = try NotebookCatalogDocument()

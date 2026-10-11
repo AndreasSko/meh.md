@@ -56,6 +56,10 @@ final class NotebookWorkspace {
         fileprivate let kind: Kind
     }
 
+    enum SceneActivityPhase: String {
+        case active, inactive, background
+    }
+
     enum Mode {
         case local, preview, cloud
         case development(URL, String)
@@ -131,6 +135,7 @@ final class NotebookWorkspace {
     @ObservationIgnored private var backupRetryNotBefore: Date?
     @ObservationIgnored private var scheduledRefresh: Task<Void, Never>?
     @ObservationIgnored private var syncSchedule = NotebookSyncSchedule()
+    @ObservationIgnored private var startedRefreshAt: ContinuousClock.Instant?
     @ObservationIgnored private let syncClock = ContinuousClock()
     @ObservationIgnored private let syncClockOrigin = ContinuousClock.now
     @ObservationIgnored private var pendingSyncTrigger = "automatic refresh"
@@ -148,6 +153,7 @@ final class NotebookWorkspace {
     // A notification may launch the process without creating a UI scene.
     private var isForeground = false
     @ObservationIgnored private var activeSceneIDs = Set<UUID>()
+    @ObservationIgnored private var sceneActivityPhases: [UUID: SceneActivityPhase] = [:]
     private(set) var notificationRegistrationError: String?
     #if os(iOS)
     private var backgroundExecution: UIBackgroundTaskIdentifier = .invalid
@@ -703,16 +709,33 @@ final class NotebookWorkspace {
     }
 
     func sceneActivityChanged(id: UUID, isActive: Bool) {
-        if isActive {
+        sceneActivityChanged(id: id, phase: isActive ? .active : .inactive)
+    }
+
+    func sceneActivityChanged(id: UUID, phase: SceneActivityPhase) {
+        guard sceneActivityPhases[id] != phase else { return }
+        sceneActivityPhases[id] = phase
+        if phase == .active {
             activeSceneIDs.insert(id)
         } else {
             activeSceneIDs.remove(id)
+        }
+        if usesSync {
+            syncEventLog.record("scene phase changed: " + phase.rawValue, counts: [
+                "active_scenes": activeSceneIDs.count
+            ])
         }
         updateForegroundActivity()
     }
 
     func sceneDidClose(id: UUID) {
+        let wasKnown = sceneActivityPhases.removeValue(forKey: id) != nil
         activeSceneIDs.remove(id)
+        if usesSync, wasKnown {
+            syncEventLog.record("scene closed", counts: [
+                "active_scenes": activeSceneIDs.count
+            ])
+        }
         updateForegroundActivity()
     }
 
@@ -720,6 +743,18 @@ final class NotebookWorkspace {
         let newForeground = !activeSceneIDs.isEmpty
         let changed = isForeground != newForeground
         isForeground = newForeground
+        if changed, newForeground, usesSync, isRefreshing,
+           let startedRefreshAt {
+            let elapsed = startedRefreshAt.duration(to: syncClock.now).components
+            let milliseconds = elapsed.seconds * 1_000
+                + elapsed.attoseconds / 1_000_000_000_000_000
+            let phase = sync?.status == .syncing
+                ? sync?.progress?.phase.rawValue ?? "preparing" : "preparing"
+            syncEventLog.record("foreground resumed unfinished sync: "
+                + phase, counts: [
+                    "elapsed_ms": Int(milliseconds)
+                ])
+        }
         guard !isResetPending, automaticSync, changed else { return }
         if newForeground {
             pendingAccountRecheck = true
@@ -821,6 +856,7 @@ final class NotebookWorkspace {
         plannedRetryUptime = nil
         plannedRetryDelay = nil
         isRefreshing = true
+        startedRefreshAt = syncClock.now
         // The app may enter the background after this exchange starts, so
         // acquire the lease for every refresh that owns the exchange.
         beginBackgroundExecutionIfNeeded()
@@ -828,6 +864,7 @@ final class NotebookWorkspace {
         defer {
             endBackgroundExecution()
             isRefreshing = false
+            startedRefreshAt = nil
             if needsAnotherRefresh {
                 needsAnotherRefresh = false
                 if needsImmediateRefresh {
@@ -995,7 +1032,18 @@ final class NotebookWorkspace {
         backgroundExecution = UIApplication.shared.beginBackgroundTask(
             withName: "Save notebook sync progress"
         ) { [weak self] in
-            Task { @MainActor in self?.endBackgroundExecution() }
+            Task { @MainActor in
+                guard let self, self.backgroundExecution != .invalid else { return }
+                if self.usesSync {
+                    self.syncEventLog.record("background execution lease expired")
+                }
+                self.endBackgroundExecution()
+            }
+        }
+        if usesSync {
+            syncEventLog.record(backgroundExecution == .invalid
+                ? "background execution lease unavailable"
+                : "background execution lease acquired")
         }
         #endif
     }
@@ -1006,6 +1054,7 @@ final class NotebookWorkspace {
         let identifier = backgroundExecution
         backgroundExecution = .invalid
         UIApplication.shared.endBackgroundTask(identifier)
+        if usesSync { syncEventLog.record("background execution lease released") }
         #endif
     }
 

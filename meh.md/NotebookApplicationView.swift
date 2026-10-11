@@ -78,7 +78,14 @@ struct NotebookApplicationView: View {
             #endif
         }
         .onChange(of: scenePhase, initial: true) { _, newPhase in
-            workspace.sceneActivityChanged(id: sceneID, isActive: newPhase == .active)
+            let phase: NotebookWorkspace.SceneActivityPhase
+            switch newPhase {
+            case .active: phase = .active
+            case .inactive: phase = .inactive
+            case .background: phase = .background
+            @unknown default: phase = .inactive
+            }
+            workspace.sceneActivityChanged(id: sceneID, phase: phase)
             if newPhase == .active {
                 Task {
                     await workspace.runDueBackup()

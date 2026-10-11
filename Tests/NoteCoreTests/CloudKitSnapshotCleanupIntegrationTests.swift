@@ -21,6 +21,75 @@ final class CloudKitSnapshotCleanupIntegrationTests: XCTestCase {
         super.tearDown()
     }
 
+    func testRequestStartTelemetryCannotBypassExtendedCooldown() async throws {
+        let fixture = try fixture(edits: 1)
+        let writer = try await seed(fixture)
+        var tip: String?
+        for _ in 0..<30 {
+            let page = try await writer.fetch(after: tip)
+            tip = page.cursor
+            if !page.hasMore { break }
+        }
+        let engine = try XCTUnwrap(server.latestEngine)
+        let capture = CooldownTelemetryCapture()
+        await writer.setDiagnosticsHandler { event, counts in
+            if event == "request_start:fetch.engineFetch",
+               await capture.beginOnce() {
+                await writer.handle(
+                    .didFetchRecordZoneChanges(
+                        zoneID: CKRecordZone.ID(zoneName: CloudKitTransportMode.notebook.zoneName),
+                        error: CKError(.requestRateLimited, userInfo: [
+                            CKErrorRetryAfterKey: 0.15
+                        ])
+                    ), from: engine
+                )
+            }
+            if event == "request_end:fetch.engineFetch" {
+                await capture.complete(counts)
+            }
+        }
+        _ = try await writer.fetch(after: tip)
+        let elapsed = await capture.elapsedMilliseconds
+        let cooldown = await capture.cooldownMilliseconds
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(elapsed), 120)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(cooldown), 120)
+        await writer.setDiagnosticsHandler(nil)
+    }
+
+    func testCleanupProgressUsesKnownWorkAndConfirmedDeletes() async throws {
+        let fixture = try fixture(edits: 8)
+        let writer = try await seed(fixture)
+        let capture = CleanupTelemetryCapture()
+        await writer.setCleanupProgressHandler { await capture.progress($0) }
+        await writer.setDiagnosticsHandler { await capture.event($0, $1) }
+        let report = try await writer.cleanupRedundantSnapshots(
+            notebookID: notebookID
+        )
+        let samples = await capture.samples
+        let verification = samples.filter { $0.stage == .survivorVerification }
+        XCTAssertFalse(verification.isEmpty)
+        XCTAssertEqual(verification.first?.completedCount, 0)
+        XCTAssertEqual(verification.last?.completedCount,
+                       verification.last?.totalCount)
+        XCTAssertEqual(samples.last?.stage, .deletion)
+        XCTAssertEqual(samples.last?.confirmedDeletionCount,
+                       report.deletedSnapshotCount)
+        XCTAssertTrue(samples.allSatisfy {
+            $0.completedCount >= 0 && $0.completedCount <= $0.totalCount
+        })
+        let events = await capture.events
+        XCTAssertTrue(events.contains { $0.0 == "snapshot_cleanup_work_start" })
+        XCTAssertTrue(events.contains {
+            $0.0 == "request_start:snapshotCleanup.readSurvivor"
+        })
+        XCTAssertTrue(events.contains {
+            $0.0 == "request_end:snapshotCleanup.readSurvivor"
+                && $0.1["operation_ms"] != nil
+        })
+        await writer.setCleanupProgressHandler(nil)
+        await writer.setDiagnosticsHandler(nil)
+    }
+
     func testLongEditHistoryReducesFreshJoinTransferAndKeepsHistory() async throws {
         let fixture = try fixture(edits: 32)
         let writer = try await seed(fixture)
@@ -300,6 +369,8 @@ final class CloudKitSnapshotCleanupIntegrationTests: XCTestCase {
         // The writer has durable plans based on its fetched maximal history;
         // the independently published covering record has not arrived yet.
         server.inject(.deleteBeforeNextRead(fixture.notes.last!.id))
+        let telemetry = CleanupTelemetryCapture()
+        await writer.setCleanupProgressHandler { await telemetry.progress($0) }
         do {
             _ = try await writer.cleanupRedundantSnapshots(notebookID: notebookID)
             XCTFail("Unreceived replacement must not authorize cleanup")
@@ -312,6 +383,18 @@ final class CloudKitSnapshotCleanupIntegrationTests: XCTestCase {
         // The first bounded pass discards durable plans whose confirmed
         // survivor has disappeared. The next pass selects the new successor.
         let stale = try await writer.cleanupRedundantSnapshots(notebookID: notebookID)
+        let staleProgress = await telemetry.samples
+        XCTAssertTrue(staleProgress.allSatisfy {
+            $0.confirmedDeletionCount == 0
+        })
+        let verification = staleProgress.filter {
+            $0.stage == .survivorVerification
+        }
+        XCTAssertFalse(verification.isEmpty)
+        XCTAssertEqual(verification.first?.completedCount, 0)
+        XCTAssertEqual(verification.last?.completedCount,
+                       verification.last?.totalCount)
+        await writer.setCleanupProgressHandler(nil)
         XCTAssertEqual(stale.deletedSnapshotCount, 0)
         XCTAssertEqual(server.deletedRecordNames, [])
         XCTAssertTrue(server.recordNames.contains(successor.id))
@@ -488,4 +571,34 @@ private struct CleanupFailureTransport: SyncTransport {
     }
 
     func retryNotBefore() async -> Date? { await base.retryNotBefore() }
+}
+
+private actor CleanupTelemetryCapture {
+    private(set) var samples: [SyncCleanupProgress] = []
+    private(set) var events: [(String, [String: Int])] = []
+
+    func progress(_ value: SyncCleanupProgress) { samples.append(value) }
+    func event(_ name: String, _ counts: [String: Int]) {
+        events.append((name, counts))
+    }
+}
+
+private actor CooldownTelemetryCapture {
+    private var started: ContinuousClock.Instant?
+    private(set) var elapsedMilliseconds: Int?
+    private(set) var cooldownMilliseconds: Int?
+
+    func beginOnce() -> Bool {
+        guard started == nil else { return false }
+        started = .now
+        return true
+    }
+
+    func complete(_ counts: [String: Int]) {
+        guard let started else { return }
+        let duration = started.duration(to: .now).components
+        elapsedMilliseconds = Int(Double(duration.seconds) * 1_000
+            + Double(duration.attoseconds) / 1_000_000_000_000_000)
+        cooldownMilliseconds = counts["cooldown_ms"]
+    }
 }

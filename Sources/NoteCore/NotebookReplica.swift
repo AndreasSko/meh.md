@@ -1522,7 +1522,10 @@ public final class NotebookReplica {
         }
     }
 
-    func records(includeUnlisted: Bool = false) async throws -> [SyncRecord] {
+    func records(
+        includeUnlisted: Bool = false,
+        progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> [SyncRecord] {
         await waitForWrites()
         try await withCatalogWrite {
             try await self.reconcileDeletionLedgerIntoCatalog()
@@ -1538,8 +1541,13 @@ public final class NotebookReplica {
         var records: [SyncRecord] = []
         var nextCache: [UUID: NoteFileStorage.ValidatedSnapshot] = [:]
         var cachedBytes = 0
-        for id in try storedNoteIDs().sorted(by: { $0.uuidString < $1.uuidString })
-        where !deleted.contains(id) && (includeUnlisted || listed.contains(id)) {
+        let ids = try storedNoteIDs().filter {
+            !deleted.contains($0) && (includeUnlisted || listed.contains($0))
+        }.sorted(by: { $0.uuidString < $1.uuidString })
+        let total = ids.count + 1 // The catalog is appended after note bodies.
+        let progressInterval = max(1, (total + 99) / 100)
+        progress?(0, total)
+        for (index, id) in ids.enumerated() {
             let loaded = await noteStorage(id).load(reusing: recordReadCache[id])
             switch loaded.result {
             case .current(let snapshot):
@@ -1555,23 +1563,31 @@ public final class NotebookReplica {
                     nextCache[id] = validated
                     cachedBytes += cost
                 }
-            case .firstLaunch: continue
+            case .firstLaunch: break
             case .recoveryRequired, .blocked: throw NotebookReplicaError.noteUnavailable(id)
+            }
+            let completed = index + 1
+            if completed == 1 || completed.isMultiple(of: progressInterval) {
+                progress?(completed, total)
             }
         }
         // Bodies before metadata reduces missing-content intervals but the
         // receiver must remain correct for either arrival order.
         records.append(SyncRecord(catalog: catalogSnapshot!))
         recordReadCache = nextCache
+        progress?(total, total)
         return records
     }
 
-    func containsHistory(_ checkpoints: [String: Set<String>], deleted: Set<UUID>) async throws
-        -> Bool
-    {
-        let records = try await records(includeUnlisted: true)
+    func containsHistory(
+        _ checkpoints: [String: Set<String>],
+        deleted: Set<UUID>,
+        scanProgress: (@MainActor @Sendable (Int, Int) -> Void)? = nil,
+        progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> Bool {
+        let records = try await records(includeUnlisted: true, progress: scanProgress)
         return try await historyChecker.containsHistory(
-            checkpoints, records: records, deleted: deleted
+            checkpoints, records: records, deleted: deleted, progress: progress
         )
     }
 
