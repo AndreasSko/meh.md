@@ -47,6 +47,16 @@ final class NotebookSyncStatusUITests: XCTestCase {
         )
         XCTAssertEqual(progress.value as? String, "20 percent complete")
         capture(app, name: "After - waiting at 20 percent")
+        let checkingHistory = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Checking iCloud history"),
+            object: status
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [checkingHistory], timeout: 15), .completed,
+            "The receive pass should expose its remote-history check"
+        )
+        XCTAssertEqual(progress.value as? String, "20 percent complete")
+        capture(app, name: "After - checking iCloud history")
         let sending = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label CONTAINS %@", "Sending 3 notes"),
             object: status

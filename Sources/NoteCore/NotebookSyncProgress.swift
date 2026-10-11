@@ -4,6 +4,7 @@ public struct NotebookSyncProgress: Equatable, Sendable {
     public enum Phase: String, Equatable, Sendable {
         case checking
         case receiving
+        case checkingRemoteHistory
         case comparing
         case uploadingNotes
         case uploadingCatalog
@@ -15,7 +16,7 @@ public struct NotebookSyncProgress: Equatable, Sendable {
         var range: ClosedRange<Double> {
             switch self {
             case .checking: 0...0.20
-            case .receiving: 0.20...0.50
+            case .receiving, .checkingRemoteHistory: 0.20...0.50
             case .comparing: 0.50...0.55
             case .uploadingNotes: 0.55...0.78
             case .uploadingCatalog: 0.78...0.80

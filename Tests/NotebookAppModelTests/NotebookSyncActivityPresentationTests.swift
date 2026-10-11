@@ -19,6 +19,28 @@ final class NotebookSyncActivityPresentationTests: XCTestCase {
         XCTAssertNil(NotebookSyncActivityPresentation(isActive: false, progress: progress).fraction)
     }
 
+    func testRemoteHistoryShowsLocalCheckingWithoutInventedCounts() {
+        let local = NotebookSyncProgress(
+            phase: .checkingRemoteHistory, receivedRecords: 0,
+            completedNotes: 0, totalNotes: 0, lastProgressAt: Date(),
+            overallFraction: 0.2
+        )
+        let activity = NotebookSyncActivityPresentation(isActive: true, progress: local)
+        XCTAssertEqual(String(localized: activity.title), "Checking iCloud history…")
+        XCTAssertEqual(activity.fraction, 0.2)
+        XCTAssertNil(activity.detail(at: Date()))
+        XCTAssertNil(activity.hint)
+
+        let waiting = NotebookSyncProgress(
+            phase: .checkingRemoteHistory, receivedRecords: 0,
+            completedNotes: 0, totalNotes: 0, lastProgressAt: Date(),
+            overallFraction: 0.2, waitingSince: Date(timeIntervalSince1970: 10)
+        )
+        let wait = NotebookSyncActivityPresentation(isActive: true, progress: waiting)
+        XCTAssertEqual(String(localized: wait.title), "Waiting for iCloud…")
+        XCTAssertEqual(wait.fraction, 0.2)
+    }
+
     func testOnlyActiveNoteUploadsHaveAFractionAndFilenames() {
         let id = UUID()
         let upload = progress(phase: .uploadingNotes, ids: [id])
@@ -29,7 +51,8 @@ final class NotebookSyncActivityPresentationTests: XCTestCase {
         XCTAssertNil(stale.fraction)
         XCTAssertTrue(stale.activeNoteIDs.isEmpty)
         for phase: NotebookSyncProgress.Phase in [
-            .checking, .receiving, .uploadingCatalog, .cleaningUp, .cleaningUpSnapshots
+            .checking, .checkingRemoteHistory, .receiving, .uploadingCatalog,
+            .cleaningUp, .cleaningUpSnapshots
         ] {
             XCTAssertNil(NotebookSyncActivityPresentation(
                 isActive: true, progress: progress(phase: phase)

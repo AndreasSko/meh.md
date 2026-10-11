@@ -5,10 +5,11 @@ import NoteCore
 /// A per-run in-memory transport for the sync status UI fixture.
 /// Delays expose real coordinator phases long enough for UI automation and
 /// screen recordings to capture them.
-struct NotebookSyncStatusPreviewTransport: SyncTransport {
-    let scope: String
+actor NotebookSyncStatusPreviewTransport: SyncTransport {
+    nonisolated let scope: String
     private let base: InMemorySyncTransport
     private let phaseDelay: Duration
+    private var receiveActivityHandler: SyncReceiveActivityHandler?
 
     init(runID: String, phaseDelay: Duration = .seconds(5)) {
         scope = "sync-status-preview-\(runID)"
@@ -37,7 +38,15 @@ struct NotebookSyncStatusPreviewTransport: SyncTransport {
 
     func fetch(after cursor: String?) async throws -> SyncPage {
         try await pause()
+        await receiveActivityHandler?(.checkingHistory)
+        try await pause()
         return try await base.fetch(after: cursor)
+    }
+
+    func setReceiveActivityHandler(
+        _ handler: SyncReceiveActivityHandler?
+    ) async {
+        receiveActivityHandler = handler
     }
 
     func purgeDeletedNotes(

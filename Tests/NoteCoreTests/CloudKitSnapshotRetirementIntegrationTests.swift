@@ -40,7 +40,22 @@ final class CloudKitSnapshotRetirementIntegrationTests: XCTestCase {
         server.deleteRecord(named: fixture.old.id)
         server.deleteRecord(named: oldCatalog.id)
 
+        let capture = RetirementReceiveCapture()
+        await receiver.setReceiveActivityHandler { await capture.activity($0) }
+        await receiver.setDiagnosticsHandler { await capture.event($0, $1) }
         let received = try await drain(receiver)
+        let activities = await capture.activities
+        XCTAssertEqual(activities.first, .checkingHistory)
+        XCTAssertTrue(activities.contains(.waitingForCloud))
+        XCTAssertEqual(activities.last, .checkingHistory)
+        let events = await capture.events
+        XCTAssertGreaterThan(try XCTUnwrap(events["retirement_scan_end"]?["candidates"]), 0)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(events["retirement_scan_end"]?["duration_ms"]), 0)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(events["retirement_survivor_checked"]?["decode_ms"]), 0)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(events["retirement_survivor_checked"]?["checkpoint_ms"]), 0)
+        XCTAssertEqual(events["retirement_plan_end"]?["unresolved"], 0)
+        await receiver.setReceiveActivityHandler(nil)
+        await receiver.setDiagnosticsHandler(nil)
         XCTAssertTrue(received.records.contains(fixture.latest))
         XCTAssertTrue(received.records.contains(latestCatalog))
         XCTAssertFalse(server.recordNames.contains(fixture.old.id))
@@ -275,4 +290,12 @@ final class CloudKitSnapshotRetirementIntegrationTests: XCTestCase {
         }
         throw SyncError.unavailable("Fake fetch exceeded its page bound")
     }
+}
+
+private actor RetirementReceiveCapture {
+    private(set) var activities: [SyncReceiveActivity] = []
+    private(set) var events: [String: [String: Int]] = [:]
+
+    func activity(_ activity: SyncReceiveActivity) { activities.append(activity) }
+    func event(_ event: String, _ counts: [String: Int]) { events[event] = counts }
 }

@@ -110,6 +110,9 @@ public final class NotebookSyncCoordinator {
                 )
             }
         }
+        await transport.setReceiveActivityHandler { [weak self] activity in
+            await self?.updateReceiveActivity(activity)
+        }
         await transport.setCleanupProgressHandler { [weak self] work in
             await self?.updateCleanupProgress(work)
         }
@@ -139,6 +142,7 @@ public final class NotebookSyncCoordinator {
             )
             status = .failed(failure.localizedDescription)
         }
+        await transport.setReceiveActivityHandler(nil)
         await transport.setCleanupProgressHandler(nil)
         await transport.setDiagnosticsHandler(nil)
     }
@@ -568,6 +572,15 @@ public final class NotebookSyncCoordinator {
             completedUnits: completedUnits ?? (phaseChanged || clearUnits ? nil : previous?.completedUnits),
             totalUnits: totalUnits ?? (phaseChanged || clearUnits ? nil : previous?.totalUnits),
             waitingSince: waiting ? previous?.waitingSince ?? Date() : nil
+        )
+    }
+
+    private func updateReceiveActivity(_ activity: SyncReceiveActivity) {
+        guard inFlight, let phase = progress?.phase,
+              phase == .receiving || phase == .checkingRemoteHistory else { return }
+        updateProgress(
+            phase: .checkingRemoteHistory,
+            waiting: activity == .waitingForCloud, clearUnits: true
         )
     }
 

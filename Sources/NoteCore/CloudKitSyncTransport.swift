@@ -1661,6 +1661,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private var retryThrottle = CloudKitRetryThrottle()
     private var cleanupProgressHandler:
         (@Sendable (SyncCleanupProgress) async -> Void)?
+    private var receiveActivityHandler: SyncReceiveActivityHandler?
     private var diagnosticsHandler:
         (@Sendable (String, [String: Int]) async -> Void)?
     private var publishInProgress = false
@@ -2460,14 +2461,29 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         guard !initial.hasUnexpectedDeletion else {
             throw CloudKitSyncTransportError.unexpectedDeletion
         }
+        await reportReceiveActivity(.checkingHistory)
+        await diagnose("retirement_plan_start", counts: [
+            "unresolved": initial.unresolvedRemoteDeletionRecordIDs.count
+        ])
         try await ensureCanonicalSnapshotIdentity()
+        let noteDeletionStart = ContinuousClock.now
         try await store.update { try $0.resolveRemoteNoteDeletions() }
         let pending = await store.snapshot()
         try assertActive()
+        await diagnose("retirement_note_deletions_checked", counts: [
+            "duration_ms": elapsedMilliseconds(since: noteDeletionStart),
+            "unresolved": pending.unresolvedRemoteDeletionRecordIDs.count
+        ])
         guard !pending.hasUnexpectedDeletion else {
             throw CloudKitSyncTransportError.unexpectedDeletion
         }
+        await diagnose("retirement_scan_start")
+        let scanStart = ContinuousClock.now
         let candidates = try pending.retirementCandidates()
+        await diagnose("retirement_scan_end", counts: [
+            "duration_ms": elapsedMilliseconds(since: scanStart),
+            "candidates": candidates.count
+        ])
         for candidate in candidates {
             try Task.checkCancellation()
             let current = await store.snapshot()
@@ -2479,18 +2495,30 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 ? mode.bootstrapName : candidate.id
             let id = CKRecord.ID(recordName: name, zoneID: zoneID)
             do {
+                await reportReceiveActivity(.waitingForCloud)
                 let cloudRecord = try await cloudRequest(
                     labLabel: "retirement.readSurvivor"
                 ) {
                     try await database.record(for: id)
                 }
+                await reportReceiveActivity(.checkingHistory)
+                let decodeStart = ContinuousClock.now
                 let confirmed = try decode(cloudRecord)
+                let decodeMilliseconds = elapsedMilliseconds(since: decodeStart)
+                let checkpointStart = ContinuousClock.now
                 try await store.update {
                     try $0.resolveSnapshotRetirements(
                         confirmedRecords: [confirmed]
                     )
                 }
+                let remaining = await store.snapshot()
+                await diagnose("retirement_survivor_checked", counts: [
+                    "decode_ms": decodeMilliseconds,
+                    "checkpoint_ms": elapsedMilliseconds(since: checkpointStart),
+                    "unresolved": remaining.unresolvedRemoteDeletionRecordIDs.count
+                ])
             } catch let error as CKError where error.code == .unknownItem {
+                await reportReceiveActivity(.checkingHistory)
                 // A cached replacement may itself have been retired while
                 // this device was offline. Preserve that obligation too.
                 let bootstrapRecordName = mode.bootstrapName
@@ -2507,6 +2535,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         let resolved = await store.snapshot()
         try assertActive()
         try resolved.validateRemoteDeletions()
+        await diagnose("retirement_plan_end", counts: ["unresolved": 0])
     }
 
     public func purgeDeletedNotes(
@@ -2765,6 +2794,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private func ensureCanonicalSnapshotIdentity(notebookID: UUID? = nil) async throws {
         guard mode == .notebook,
               await store.snapshot().canonicalSnapshotID == nil else { return }
+        await reportReceiveActivity(.waitingForCloud)
         try await verifyAccount()
         try await ensureZone()
         let id = CKRecord.ID(recordName: mode.bootstrapName, zoneID: zoneID)
@@ -2789,6 +2819,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             throw SyncError.identityConflict
         }
         try await store.update { try $0.appendToInbox(canonical) }
+        await reportReceiveActivity(.checkingHistory)
     }
 
     public func setCleanupProgressHandler(
@@ -2801,6 +2832,16 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         _ handler: (@Sendable (String, [String: Int]) async -> Void)?
     ) async {
         diagnosticsHandler = handler
+    }
+
+    public func setReceiveActivityHandler(
+        _ handler: SyncReceiveActivityHandler?
+    ) async {
+        receiveActivityHandler = handler
+    }
+
+    private func reportReceiveActivity(_ activity: SyncReceiveActivity) async {
+        await receiveActivityHandler?(activity)
     }
 
     private func reportCleanup(_ progress: SyncCleanupProgress) async {

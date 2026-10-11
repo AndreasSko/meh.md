@@ -7,6 +7,7 @@ final class NotebookSyncProgressMeterTests: XCTestCase {
         XCTAssertNil(meter.advance(phase: .checking))
         XCTAssertEqual(meter.advance(phase: .checking, completion: 0.5), 0.1)
         XCTAssertEqual(meter.advance(phase: .receiving), 0.2)
+        XCTAssertEqual(meter.advance(phase: .checkingRemoteHistory), 0.2)
         XCTAssertEqual(meter.advance(phase: .receiving), 0.2)
     }
 
