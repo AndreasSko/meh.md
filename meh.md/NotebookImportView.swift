@@ -11,11 +11,15 @@ extension View {
     func notebookMarkdownImporter(
         isPresented: Binding<Bool>,
         choosingFolder: Bool = false,
+        suppliedURLs: Binding<[URL]> = .constant([]),
+        stagingDirectory: URL? = nil,
+        isActive: Binding<Bool> = .constant(false),
         replica: NotebookReplica,
         onImport: @escaping (NotebookImportPlan?) async throws -> Void
     ) -> some View {
         modifier(NotebookMarkdownImporter(
             isPresented: isPresented, choosingFolder: choosingFolder,
+            suppliedURLs: suppliedURLs, stagingDirectory: stagingDirectory, isActive: isActive,
             replica: replica, onImport: onImport
         ))
     }
@@ -24,6 +28,9 @@ extension View {
 private struct NotebookMarkdownImporter: ViewModifier {
     @Binding var isPresented: Bool
     let choosingFolder: Bool
+    @Binding var suppliedURLs: [URL]
+    let stagingDirectory: URL?
+    @Binding var isActive: Bool
     let replica: NotebookReplica
     let onImport: (NotebookImportPlan?) async throws -> Void
     @State private var working = false
@@ -32,7 +39,9 @@ private struct NotebookMarkdownImporter: ViewModifier {
     @State private var picking = false
     #endif
     @State private var errorMessage: String?
-    @State private var completionMessage: String?
+    @State private var importTask: Task<Void, Never>?
+    @State private var presentationGeneration = UUID()
+    @State private var isVisible = true
 
     func body(content: Content) -> some View {
         content
@@ -40,7 +49,7 @@ private struct NotebookMarkdownImporter: ViewModifier {
             .interactiveDismissDisabled(working)
             .overlay {
                 if working {
-                    ProgressView("Importing Markdown…")
+                    ProgressView("Importing Files…")
                         .padding(24)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                         .accessibilityIdentifier("notebook-import-progress")
@@ -53,12 +62,14 @@ private struct NotebookMarkdownImporter: ViewModifier {
                     importSelection(.success(urls))
                 } onCancel: {
                     picking = false
+                    isActive = false
                 }
             }
             #endif
             .onChange(of: isPresented, initial: true) { _, presented in
                 guard presented else { return }
                 isPresented = false
+                isActive = true
                 if replica.hasPendingImport {
                     recovering = true
                 } else {
@@ -69,15 +80,25 @@ private struct NotebookMarkdownImporter: ViewModifier {
                     #endif
                 }
             }
+            .onChange(of: suppliedURLs, initial: true) { _, urls in
+                guard !urls.isEmpty else { return }
+                suppliedURLs = []
+                guard !working, !replica.hasPendingImport else {
+                    cleanupStagedSources(urls)
+                    errorMessage = String(localized: "Finish the current import before adding more files.")
+                    return
+                }
+                importSelection(.success(urls))
+            }
             .alert("Interrupted Import", isPresented: $recovering) {
                 Button("Resume Import") { resume() }
                     .accessibilityIdentifier("notebook-resume-import")
                 Button("Set Aside and Choose Again…") { setAsideAndChoose() }
-                Button("Cancel", role: .cancel) {}
+                Button("Cancel", role: .cancel) { isActive = false }
             } message: {
-                Text("Resume the saved copy without selecting the source again. You can also set it aside for recovery and choose new files. Notes already imported keep their edits and placement. Importing the same files again may create duplicates.")
+                Text("Resume the saved copy without selecting the source again. You can also set it aside for recovery and choose new files. Items already imported keep their edits and placement. Importing the same files again may create duplicates.")
             }
-            .alert("Couldn’t Import Markdown", isPresented: Binding(
+            .alert("Couldn’t Import Files", isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
             )) {
@@ -85,33 +106,36 @@ private struct NotebookMarkdownImporter: ViewModifier {
             } message: {
                 Text(errorMessage ?? "")
             }
-            .alert("Import Complete", isPresented: Binding(
-                get: { completionMessage != nil },
-                set: { if !$0 { completionMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(completionMessage ?? "")
+            .onChange(of: working || recovering) { _, active in
+                isActive = active
             }
-    }
-
-    private var markdownType: UTType {
-        UTType(importedAs: "net.daringfireball.markdown", conformingTo: .plainText)
+            .onAppear { isVisible = true }
+            .onDisappear {
+                isVisible = false
+                presentationGeneration = UUID()
+                importTask?.cancel()
+                importTask = nil
+                working = false
+                cleanupStagedSources(suppliedURLs)
+                suppliedURLs = []
+                isActive = false
+            }
     }
 
     #if os(macOS)
     private func chooseOnMac() {
         let panel = NSOpenPanel()
-        panel.title = String(localized: "Import Markdown")
+        panel.title = String(localized: "Import Files")
         panel.prompt = String(localized: "Import")
-        panel.canChooseFiles = true
+        panel.canChooseFiles = !choosingFolder
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         panel.canCreateDirectories = false
         panel.resolvesAliases = false
-        panel.allowedContentTypes = [markdownType, .folder]
+        panel.allowedContentTypes = [.item, .folder]
         let completion: (NSApplication.ModalResponse) -> Void = { response in
             if response == .OK { importSelection(.success(panel.urls)) }
+            else { isActive = false }
         }
         if let window = NSApp.keyWindow {
             panel.beginSheetModal(for: window, completionHandler: completion)
@@ -130,30 +154,69 @@ private struct NotebookMarkdownImporter: ViewModifier {
                 errorMessage = error.localizedDescription
             }
         case .success(let urls):
-            guard !urls.isEmpty, !working else { return }
+            guard !urls.isEmpty, !working, isVisible else {
+                cleanupStagedSources(urls)
+                return
+            }
             working = true
-            Task { @MainActor in
+            let generation = presentationGeneration
+            importTask = Task { @MainActor in
                 let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
                 defer {
                     scoped.forEach { $0.stopAccessingSecurityScopedResource() }
-                    working = false
+                    cleanupStagedSources(urls)
+                    if generation == presentationGeneration {
+                        working = false
+                        importTask = nil
+                    }
                 }
                 do {
-                    let plan = try await NotebookImportScanner().scan(urls: urls)
-                    guard !plan.entries.isEmpty else {
-                        errorMessage = String(localized: "No Markdown files or ordinary folders were found. Hidden items, links, packages, and other file types are skipped.")
+                    let scanner = NotebookImportScanner(
+                        attachmentStore: replica.attachmentStore
+                    )
+                    let plan = try await scanner.scan(urls: urls)
+                    guard !Task.isCancelled, isVisible,
+                          generation == presentationGeneration else {
+                        try? await scanner.discard(plan: plan)
                         return
                     }
-                    try await onImport(plan)
-                    if plan.skippedPaths.isEmpty {
-                        completionMessage = String(localized: "The selected files and folders were added at the top level of your notebook.")
-                    } else {
-                        completionMessage = String(localized: "The selected files and folders were added at the top level of your notebook. \(plan.skippedPaths.count) items were skipped. Only visible Markdown files and ordinary folders are imported; hidden items, links, packages, and other file types are skipped.")
+                    guard !plan.entries.isEmpty else {
+                        try? await scanner.discard(plan: plan)
+                        errorMessage = String(localized: "No visible files or ordinary folders were found. Hidden items, links, and packages are skipped.")
+                        return
                     }
+                    await apply(plan)
                 } catch {
-                    errorMessage = error.localizedDescription
+                    if !Task.isCancelled, isVisible,
+                       generation == presentationGeneration {
+                        errorMessage = error.localizedDescription
+                    }
                 }
             }
+        }
+    }
+
+    private func cleanupStagedSources(_ urls: [URL]) {
+        guard let stagingDirectory else { return }
+        let root = stagingDirectory.standardizedFileURL.path + "/"
+        for url in urls where url.standardizedFileURL.path.hasPrefix(root) {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+    }
+
+    private func apply(_ plan: NotebookImportPlan) async {
+        do {
+            guard isVisible else { throw CancellationError() }
+            try Task.checkCancellation()
+            try await onImport(plan)
+        } catch {
+            if !replica.hasPendingImport {
+                let scanner = NotebookImportScanner(
+                    attachmentStore: replica.attachmentStore
+                )
+                try? await scanner.discard(plan: plan)
+            }
+            if !Task.isCancelled, isVisible { errorMessage = error.localizedDescription }
         }
     }
 
@@ -164,7 +227,6 @@ private struct NotebookMarkdownImporter: ViewModifier {
             defer { working = false }
             do {
                 try await onImport(nil)
-                completionMessage = String(localized: "The interrupted import is complete.")
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -194,11 +256,8 @@ private struct NotebookMarkdownDocumentPicker: UIViewControllerRepresentable {
     let onCancel: () -> Void
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let markdown = UTType(
-            importedAs: "net.daringfireball.markdown", conformingTo: .plainText
-        )
         let picker = UIDocumentPickerViewController(
-            forOpeningContentTypes: choosingFolders ? [.folder] : [markdown],
+            forOpeningContentTypes: choosingFolders ? [.folder] : [.item],
             asCopy: false
         )
         picker.allowsMultipleSelection = !choosingFolders

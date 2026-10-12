@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import NoteCore
 
 /// A local drag captures identity and ancestry, never note contents or paths.
@@ -82,4 +83,64 @@ enum NotebookBrowserDragPlacement {
         }
         return true
     }
+}
+
+/// Item-provider file representations expire as soon as their callback returns.
+/// Copy while the callback owns access; the scanner later validates each item.
+enum NotebookBrowserFileStaging {
+    // Provider and file-coordination callbacks run outside the UI actor.
+    nonisolated static func copy(
+        _ source: URL, into root: URL, preferredName: String? = nil
+    ) throws -> URL {
+        guard source.isFileURL else { throw CocoaError(.fileReadUnsupportedScheme) }
+        var name = preferredName ?? source.lastPathComponent
+        guard !name.isEmpty, name != ".", name != "..",
+              !name.contains("/"), !name.contains("\\"), !name.contains(":"),
+              name.rangeOfCharacter(from: .controlCharacters) == nil else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        let directory = root.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        do {
+            let readAndCopy: (URL) throws -> URL = { coordinatedURL in
+                if preferredName != nil, (name as NSString).pathExtension.isEmpty,
+                   !source.pathExtension.isEmpty,
+                   try coordinatedURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory != true {
+                    name += "." + source.pathExtension
+                }
+                let copy = directory.appendingPathComponent(name)
+                try FileManager.default.copyItem(at: coordinatedURL, to: copy)
+                return copy
+            }
+            #if canImport(Darwin)
+            var coordinationError: NSError?
+            var result: Result<URL, Error>?
+            NSFileCoordinator().coordinate(
+                readingItemAt: source, options: [], error: &coordinationError
+            ) { coordinatedURL in
+                result = Result { try readAndCopy(coordinatedURL) }
+            }
+            if let coordinationError { throw coordinationError }
+            guard let result else { throw CocoaError(.fileReadUnknown) }
+            return try result.get()
+            #else
+            return try readAndCopy(source)
+            #endif
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        }
+    }
+}
+
+@MainActor @Observable
+final class NotebookBrowserDropLifetime {
+    private(set) var generation = UUID()
+    private(set) var isVisible = true
+
+    func appear() { isVisible = true }
+    func disappear() { isVisible = false; generation = UUID() }
+    func accepts(_ expected: UUID) -> Bool { isVisible && generation == expected }
 }

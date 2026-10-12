@@ -62,7 +62,7 @@ def lab_report_path(device, run, phase):
 
 
 def ensure_fresh_phase(report_path, phase):
-    if phase in ("account", "exchange", "publish", "cleanup") and report_path.parent.parent.exists():
+    if phase in ("account", "exchange", "publish", "cleanup", "attachments", "attachments-local") and report_path.parent.parent.exists():
         raise RuntimeError("A fresh lab run ID is required for the initial phase")
     if report_path.exists():
         raise RuntimeError("This lab phase already has a report")
@@ -87,7 +87,8 @@ def main():
     parser.add_argument("simulator", type=uuid.UUID, help="Exact dedicated simulator UDID")
     parser.add_argument("evidence", type=Path)
     parser.add_argument("--phase", choices=[
-        "account", "exchange", "publish", "receive", "edit", "verify", "cleanup"
+        "account", "exchange", "publish", "receive", "edit", "verify", "cleanup",
+        "attachments", "attachments-local", "attachments-download"
     ], required=True)
     parser.add_argument("--allow-development-cloud", action="store_true")
     parser.add_argument(
@@ -99,9 +100,10 @@ def main():
     args = parser.parse_args()
     if not args.allow_development_cloud or not args.dedicated_simulator:
         parser.error("Explicit Development-cloud and dedicated-simulator flags are required")
-    if not 10 <= args.timeout <= 300:
-        parser.error("Timeout must be between 10 and 300 seconds")
-    if args.phase in ("receive", "edit", "verify") and args.run_id is None:
+    maximum_timeout = 1200 if args.phase.startswith("attachments") else 300
+    if not 10 <= args.timeout <= maximum_timeout:
+        parser.error(f"Timeout must be between 10 and {maximum_timeout} seconds")
+    if args.phase in ("receive", "edit", "verify", "attachments-download") and args.run_id is None:
         parser.error("Follow-up phases require the original --run-id")
 
     app = args.app.resolve()

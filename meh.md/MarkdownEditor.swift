@@ -1266,7 +1266,11 @@ struct MarkdownEditor: NSViewRepresentable {
                 x: visibleRect.minX + textView.textContainerInset.width + 1,
                 y: visibleRect.minY + 1
             )
-            let rawAnchor = textView.characterIndexForInsertion(at: point)
+            // Native title space can put the viewport above the text
+            // container. Hit testing there can save a document-end anchor;
+            // anchor the first character that remains visible instead.
+            let rawAnchor = visibleRect.minY < textView.textContainerOrigin.y
+                ? 0 : textView.characterIndexForInsertion(at: point)
             let anchor = source.clampedSelection(
                 NSRange(location: rawAnchor, length: 0)
             ).location

@@ -4,7 +4,7 @@ import Foundation
 /// The data format understood by this release. This is independent of the
 /// record protocol version and is checked before interpreting catalog items.
 public enum NotebookSyncFormat {
-    public static let supportedVersion: UInt64 = 1
+    public static let supportedVersion: UInt64 = 2
 
     public static func requireSupported(_ version: UInt64) throws {
         guard version > 0 else { throw SyncError.invalidRecord }

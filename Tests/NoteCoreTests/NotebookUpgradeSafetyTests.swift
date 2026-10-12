@@ -6,6 +6,57 @@ import XCTest
 
 @MainActor
 final class NotebookUpgradeSafetyTests: XCTestCase {
+    func testSchemaTwoAttachmentMergeKeepsOfflineSchemaOneEdits() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(
+            path: "notebook-format-two-merge-\(UUID().uuidString)"
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let replica = NotebookReplica(directory: directory)
+        try await replica.createLocalNotebook()
+        let noteID = try await replica.createNote(
+            name: "Original.md", text: "original body"
+        )
+        let schemaOne = try XCTUnwrap(replica.catalogSnapshot)
+        let remote = try NotebookCatalogDocument(snapshot: schemaOne)
+        let attachmentID = UUID()
+        let content = try NotebookAttachmentContent(
+            sha256: String(repeating: "a", count: 64), byteCount: 42
+        )
+        try remote.add(id: attachmentID, kind: .attachment,
+                       name: "diagram.pdf", attachment: content)
+        let beforeRecords = try await replica.records()
+        let staleNote = try XCTUnwrap(beforeRecords.first {
+            $0.kind == .note && $0.snapshot.noteID == noteID
+        })
+
+        // These edits were made against schema one while the peer upgraded.
+        try await replica.rename(noteID, to: "Offline.md")
+        let session = try await replica.openNote(noteID)
+        try session.replaceAll(with: "latest offline body")
+        try await session.flush()
+        let offlineHeads = try XCTUnwrap(replica.catalogSnapshot).heads
+
+        try await replica.apply(SyncRecord(catalog: remote.snapshot()))
+        try await replica.apply(staleNote)
+        let merged = try XCTUnwrap(replica.catalogSnapshot)
+        let mergedCatalog = try NotebookCatalogDocument(snapshot: merged)
+        XCTAssertTrue(offlineHeads.isSubset(of: mergedCatalog.historyHeads))
+        let items = try mergedCatalog.items()
+        XCTAssertEqual(items.first { $0.id == noteID }?.name, "Offline.md")
+        XCTAssertEqual(items.first { $0.id == attachmentID }?.attachment,
+                       content)
+        XCTAssertEqual(session.text, "latest offline body")
+
+        let reopened = NotebookReplica(directory: directory)
+        try await reopened.load()
+        let reopenedSession = try await reopened.openNote(noteID)
+        XCTAssertEqual(reopenedSession.text, "latest offline body")
+        XCTAssertEqual(try reopened.attachmentDescriptor(for: attachmentID),
+                       NotebookAttachmentDescriptor(id: attachmentID,
+                                                    content: content))
+    }
+
     func testFutureCatalogPauseKeepsLocalEditsAndCompatibleReplay() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(
             path: "notebook-upgrade-safety-\(UUID().uuidString)"

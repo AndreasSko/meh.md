@@ -118,6 +118,115 @@ final class NotebookImportTests: XCTestCase {
         XCTAssertEqual(decoded.plan, journal.plan)
     }
 
+    func testMixedFolderImportResumesWithoutSourceAndDeletesBytes() async throws {
+        let root = temporaryDirectory()
+        let sourceRoot = temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: sourceRoot)
+        }
+        try FileManager.default.createDirectory(
+            at: sourceRoot.appending(path: "Nested"),
+            withIntermediateDirectories: true
+        )
+        let original = Data((0..<100_000).map { UInt8($0 % 251) })
+        try original.write(to: sourceRoot.appending(path: "Nested/photo.bin"))
+        try Data("# A note".utf8).write(
+            to: sourceRoot.appending(path: "Nested/readme.md")
+        )
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let scanner = NotebookImportScanner(attachmentStore: replica.attachmentStore)
+        let plan = try await scanner.scan(urls: [sourceRoot])
+        let attachment = try XCTUnwrap(plan.entries.first { $0.kind == .attachment })
+        XCTAssertEqual(attachment.parentID,
+            plan.entries.first { $0.name == "Nested" }?.id)
+        XCTAssertEqual(attachment.attachment?.content.byteCount, Int64(original.count))
+        replica.importFaultInjector = { stage in
+            if stage == .journalSaved { throw InjectedFailure.stop }
+        }
+        do {
+            try await replica.importMarkdown(plan)
+            XCTFail("Expected interrupted import")
+        } catch is InjectedFailure {}
+        try FileManager.default.removeItem(at: sourceRoot)
+
+        let restarted = NotebookReplica(directory: root)
+        try await restarted.load()
+        try await restarted.resumePendingImport()
+        let stored = try await restarted.attachmentFileURL(for: attachment.id)
+        XCTAssertEqual(try Data(contentsOf: stored), original)
+        XCTAssertEqual(try restarted.attachmentDescriptor(for: attachment.id),
+            attachment.attachment)
+
+        let destination = try await restarted.createFolder(name: "Moved")
+        try await restarted.rename(attachment.id, to: "renamed.bin")
+        try await restarted.move(attachment.id, to: destination)
+        try await restarted.setTrashed(attachment.id, true)
+        try await restarted.setTrashed(attachment.id, false)
+        let placement = try XCTUnwrap(restarted.placements.first {
+            $0.item.id == attachment.id
+        })
+        XCTAssertEqual(placement.displayName, "renamed.bin")
+        XCTAssertEqual(placement.parentID, destination)
+        XCTAssertFalse(placement.isInTrash)
+        XCTAssertEqual(try Data(contentsOf: stored), original)
+
+        let scratchDirectories = ["attachment-transfers", "attachment-previews"]
+            .map { root.appending(path: "\($0)/\(attachment.id.uuidString)") }
+        for directory in scratchDirectories {
+            try FileManager.default.createDirectory(at: directory,
+                withIntermediateDirectories: true)
+            try original.write(to: directory.appending(path: "copy.bin"))
+        }
+        try await restarted.setTrashed(attachment.id, true)
+        let selection = try restarted.deletionSelection(rootID: attachment.id)
+        try await restarted.permanentlyDelete(selection)
+        do {
+            _ = try await restarted.attachmentFileURL(for: attachment.id)
+            XCTFail("Expected permanent deletion")
+        } catch NotebookReplicaError.permanentlyDeleted {} catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stored.path))
+        for directory in scratchDirectories {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+        }
+    }
+
+    func testMixedFolderScanRemovesPublishedBodyAfterLaterInvalidNote() async throws {
+        let root = temporaryDirectory()
+        let sourceRoot = temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: sourceRoot)
+        }
+        try FileManager.default.createDirectory(
+            at: sourceRoot.appending(path: "Nested"),
+            withIntermediateDirectories: true
+        )
+        try Data([1, 2, 3]).write(
+            to: sourceRoot.appending(path: "Nested/a.bin")
+        )
+        try Data([0xFF]).write(
+            to: sourceRoot.appending(path: "Nested/z.md")
+        )
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let scanner = NotebookImportScanner(attachmentStore: replica.attachmentStore)
+        do {
+            _ = try await scanner.scan(urls: [sourceRoot])
+            XCTFail("Expected invalid Markdown to fail the folder scan")
+        } catch NotebookImportScannerError.invalidUTF8(let path) {
+            XCTAssertTrue(path.hasSuffix("Nested/z.md"))
+        }
+        let attachments = root.appending(path: "attachments")
+        let retained = try FileManager.default.contentsOfDirectory(
+            at: attachments, includingPropertiesForKeys: nil
+        )
+        XCTAssertTrue(retained.isEmpty)
+    }
+
     func testResumePreservesStagedDatesAfterSourceIsRemoved() async throws {
         let root = temporaryDirectory()
         let sourceRoot = temporaryDirectory()

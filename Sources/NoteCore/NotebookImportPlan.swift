@@ -6,6 +6,7 @@ public struct NotebookImportEntry: Codable, Equatable, Sendable {
     public let name: String
     public let parentID: UUID?
     public let text: String?
+    public let attachment: NotebookAttachmentDescriptor?
     public let createdAt: Date?
     public let modifiedAt: Date?
 
@@ -16,13 +17,15 @@ public struct NotebookImportEntry: Codable, Equatable, Sendable {
         parentID: UUID?,
         text: String?,
         createdAt: Date? = nil,
-        modifiedAt: Date? = nil
+        modifiedAt: Date? = nil,
+        attachment: NotebookAttachmentDescriptor? = nil
     ) {
         self.id = id
         self.kind = kind
         self.name = name
         self.parentID = parentID
         self.text = text
+        self.attachment = attachment
         // Keep invalid supplied values visible to plan validation instead of
         // silently turning malformed metadata into an unknown date.
         self.createdAt = createdAt.map { $0.noteTimestamp ?? $0 }
@@ -63,72 +66,107 @@ public enum NotebookImportScannerError: Error, Equatable, Sendable,
 }
 
 public actor NotebookImportScanner {
-    public init() {}
+    private let attachmentStore: NotebookAttachmentStore?
+
+    public init(attachmentStore: NotebookAttachmentStore? = nil) {
+        self.attachmentStore = attachmentStore
+    }
 
     public func scan(urls: [URL]) async throws -> NotebookImportPlan {
         let selections = try selectedSources(from: urls)
         var entries: [NotebookImportEntry] = []
         var skippedPaths: [String] = []
+        var stagedIDs: [UUID] = []
 
-        for selection in selections {
-            try Task.checkCancellation()
-            let name = selection.url.lastPathComponent
-            if shouldSkip(selection.values, name: name) {
-                skippedPaths.append(name)
-                continue
-            }
-            var coordinationError: NSError?
-            var scanningError: Error?
-            // File providers may download or move the source during handoff.
-            // Coordinate the complete read before releasing its scoped URL.
-            NSFileCoordinator().coordinate(
-                readingItemAt: selection.url, options: [], error: &coordinationError
-            ) { coordinatedURL in
-                do {
-                    if selection.values.isDirectory == true {
-                        let folderID = UUID()
-                        try validate(name: name, path: name)
-                        entries.append(
-                            NotebookImportEntry(
-                                id: folderID,
-                                kind: .folder,
-                                name: name,
-                                parentID: nil,
-                                text: nil,
-                                createdAt: selection.values.creationDate,
-                                modifiedAt: selection.values.contentModificationDate
+        do {
+            for selection in selections {
+                try Task.checkCancellation()
+                let name = selection.url.lastPathComponent
+                if Self.shouldSkip(selection.values, name: name) {
+                    skippedPaths.append(name)
+                } else if selection.values.isDirectory == true {
+                    let folderID = UUID()
+                    let attempt: ScanAttempt
+                    if let attachmentStore {
+                        attempt = try await attachmentStore.withCoordinatedRead(
+                            at: selection.url
+                        ) { coordinatedURL, write in
+                            Self.walkRootDirectory(
+                                coordinatedURL, name: name,
+                                folderID: folderID, includeAttachments: true,
+                                write: write
                             )
-                        )
-                        try scanDirectory(
-                            coordinatedURL,
-                            parentID: folderID,
-                            relativePath: name,
-                            entries: &entries,
-                            skippedPaths: &skippedPaths
-                        )
-                    } else if selection.values.isRegularFile == true,
-                        isMarkdown(coordinatedURL)
-                    {
-                        try appendNote(
-                            at: coordinatedURL,
-                            parentID: nil,
-                            relativePath: name,
-                            entries: &entries
-                        )
+                        }
                     } else {
-                        skippedPaths.append(name)
+                        attempt = try coordinatedRootDirectory(
+                            selection.url, name: name, folderID: folderID
+                        )
                     }
-                } catch { scanningError = error }
+                    entries.append(contentsOf: attempt.entries)
+                    skippedPaths.append(contentsOf: attempt.skippedPaths)
+                    stagedIDs.append(contentsOf: attempt.stagedIDs)
+                    if let error = attempt.error { throw error }
+                } else if selection.values.isRegularFile == true,
+                    Self.isMarkdown(selection.url)
+                {
+                    try Self.appendCoordinatedNote(
+                        at: selection.url, parentID: nil,
+                        relativePath: name, entries: &entries
+                    )
+                } else if selection.values.isRegularFile == true,
+                    let attachmentStore
+                {
+                    try Self.validate(name: name, path: name)
+                    let id = UUID()
+                    stagedIDs.append(id)
+                    let imported = try await attachmentStore.withCoordinatedRead(
+                        at: selection.url
+                    ) { coordinatedURL, write in
+                        let descriptor = try write(coordinatedURL, id)
+                        let values = try coordinatedURL.resourceValues(
+                            forKeys: [.creationDateKey, .contentModificationDateKey]
+                        )
+                        return NotebookImportEntry(
+                            id: id, kind: .attachment, name: name,
+                            parentID: nil, text: nil,
+                            createdAt: values.creationDate,
+                            modifiedAt: values.contentModificationDate,
+                            attachment: descriptor
+                        )
+                    }
+                    entries.append(imported)
+                } else {
+                    skippedPaths.append(name)
+                }
             }
-            if let coordinationError { throw coordinationError }
-            if let scanningError { throw scanningError }
-        }
 
-        return NotebookImportPlan(
-            id: UUID(),
-            entries: entries,
-            skippedPaths: skippedPaths
-        )
+            return NotebookImportPlan(
+                id: UUID(),
+                entries: entries,
+                skippedPaths: skippedPaths
+            )
+        } catch {
+            if let attachmentStore {
+                for id in stagedIDs {
+                    // Cleanup must outlive cancellation of this scan task.
+                    try? await Task.detached {
+                        try await attachmentStore.remove(id: id)
+                    }.value
+                }
+            }
+            throw error
+        }
+    }
+
+    /// Release staged content when an import review is canceled.
+    public func discard(plan: NotebookImportPlan) async throws {
+        guard let attachmentStore else { return }
+        for entry in plan.entries where entry.kind == .attachment {
+            let id = entry.id
+            try await Task.detached {
+                try await attachmentStore.remove(id: id)
+            }.value
+        }
     }
 
     private struct SelectedSource {
@@ -163,7 +201,7 @@ public actor NotebookImportScanner {
         }
         let directoryPaths = sources.compactMap { source in
             source.values.isDirectory == true
-                && !shouldSkip(
+                && !Self.shouldSkip(
                     source.values,
                     name: source.url.lastPathComponent
                 )
@@ -183,17 +221,70 @@ public actor NotebookImportScanner {
             .sorted { $0.url.path < $1.url.path }
     }
 
-    private func scanDirectory(
+    private struct ScanAttempt: Sendable {
+        var entries: [NotebookImportEntry] = []
+        var skippedPaths: [String] = []
+        var stagedIDs: [UUID] = []
+        var error: (any Error)?
+    }
+
+    private func coordinatedRootDirectory(
+        _ url: URL, name: String, folderID: UUID
+    ) throws -> ScanAttempt {
+        var coordinationError: NSError?
+        var attempt: ScanAttempt?
+        NSFileCoordinator().coordinate(
+            readingItemAt: url, options: [], error: &coordinationError
+        ) { coordinatedURL in
+            attempt = Self.walkRootDirectory(
+                coordinatedURL, name: name, folderID: folderID,
+                includeAttachments: false,
+                write: { _, _ in throw NotebookAttachmentError.unsupportedSource }
+            )
+        }
+        if let coordinationError { throw coordinationError }
+        guard let attempt else { throw NotebookImportScannerError.invalidName(path: name) }
+        return attempt
+    }
+
+    private static func walkRootDirectory(
+        _ url: URL,
+        name: String,
+        folderID: UUID,
+        includeAttachments: Bool,
+        write: (URL, UUID) throws -> NotebookAttachmentDescriptor
+    ) -> ScanAttempt {
+        var attempt = ScanAttempt()
+        do {
+            try validate(name: name, path: name)
+            let values = try url.resourceValues(forKeys: resourceKeys)
+            attempt.entries.append(NotebookImportEntry(
+                id: folderID, kind: .folder, name: name,
+                parentID: nil, text: nil,
+                createdAt: values.creationDate,
+                modifiedAt: values.contentModificationDate
+            ))
+            try walkDirectory(
+                url, parentID: folderID, relativePath: name,
+                includeAttachments: includeAttachments,
+                write: write, attempt: &attempt
+            )
+        } catch { attempt.error = error }
+        return attempt
+    }
+
+    private static func walkDirectory(
         _ directoryURL: URL,
         parentID: UUID,
         relativePath: String,
-        entries: inout [NotebookImportEntry],
-        skippedPaths: inout [String]
+        includeAttachments: Bool,
+        write: (URL, UUID) throws -> NotebookAttachmentDescriptor,
+        attempt: inout ScanAttempt
     ) throws {
         try Task.checkCancellation()
         let children = try FileManager.default.contentsOfDirectory(
             at: directoryURL,
-            includingPropertiesForKeys: Array(Self.resourceKeys),
+            includingPropertiesForKeys: Array(resourceKeys),
             options: []
         ).sorted { $0.lastPathComponent < $1.lastPathComponent }
 
@@ -201,45 +292,69 @@ public actor NotebookImportScanner {
             try Task.checkCancellation()
             let name = child.lastPathComponent
             let childPath = relativePath + "/" + name
-            let values = try child.resourceValues(forKeys: Self.resourceKeys)
-
+            let values = try child.resourceValues(forKeys: resourceKeys)
             if shouldSkip(values, name: name) {
-                skippedPaths.append(childPath)
+                attempt.skippedPaths.append(childPath)
             } else if values.isDirectory == true {
                 let folderID = UUID()
                 try validate(name: name, path: childPath)
-                entries.append(
-                    NotebookImportEntry(
-                        id: folderID,
-                        kind: .folder,
-                        name: name,
-                        parentID: parentID,
-                        text: nil,
-                        createdAt: values.creationDate,
-                        modifiedAt: values.contentModificationDate
-                    )
-                )
-                try scanDirectory(
-                    child,
-                    parentID: folderID,
-                    relativePath: childPath,
-                    entries: &entries,
-                    skippedPaths: &skippedPaths
+                attempt.entries.append(NotebookImportEntry(
+                    id: folderID, kind: .folder, name: name,
+                    parentID: parentID, text: nil,
+                    createdAt: values.creationDate,
+                    modifiedAt: values.contentModificationDate
+                ))
+                try walkDirectory(
+                    child, parentID: folderID, relativePath: childPath,
+                    includeAttachments: includeAttachments,
+                    write: write, attempt: &attempt
                 )
             } else if values.isRegularFile == true, isMarkdown(child) {
                 try appendNote(
-                    at: child,
-                    parentID: parentID,
-                    relativePath: childPath,
-                    entries: &entries
+                    at: child, parentID: parentID,
+                    relativePath: childPath, entries: &attempt.entries
                 )
+            } else if values.isRegularFile == true, includeAttachments {
+                try validate(name: name, path: childPath)
+                let id = UUID()
+                attempt.stagedIDs.append(id)
+                let descriptor = try write(child, id)
+                attempt.entries.append(NotebookImportEntry(
+                    id: id, kind: .attachment, name: name,
+                    parentID: parentID, text: nil,
+                    createdAt: values.creationDate,
+                    modifiedAt: values.contentModificationDate,
+                    attachment: descriptor
+                ))
             } else {
-                skippedPaths.append(childPath)
+                attempt.skippedPaths.append(childPath)
             }
         }
     }
 
-    private func appendNote(
+    private static func appendCoordinatedNote(
+        at url: URL,
+        parentID: UUID?,
+        relativePath: String,
+        entries: inout [NotebookImportEntry]
+    ) throws {
+        var coordinationError: NSError?
+        var scanningError: Error?
+        NSFileCoordinator().coordinate(
+            readingItemAt: url, options: [], error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                try appendNote(
+                    at: coordinatedURL, parentID: parentID,
+                    relativePath: relativePath, entries: &entries
+                )
+            } catch { scanningError = error }
+        }
+        if let coordinationError { throw coordinationError }
+        if let scanningError { throw scanningError }
+    }
+
+    private static func appendNote(
         at url: URL,
         parentID: UUID?,
         relativePath: String,
@@ -270,7 +385,7 @@ public actor NotebookImportScanner {
         )
     }
 
-    private func validate(name: String, path: String) throws {
+    private static func validate(name: String, path: String) throws {
         do {
             try NotebookName.validate(name)
         } catch {
@@ -278,7 +393,7 @@ public actor NotebookImportScanner {
         }
     }
 
-    private func shouldSkip(
+    private static func shouldSkip(
         _ values: URLResourceValues,
         name: String
     ) -> Bool {
@@ -288,7 +403,7 @@ public actor NotebookImportScanner {
             || values.isPackage == true
     }
 
-    private func isMarkdown(_ url: URL) -> Bool {
+    private static func isMarkdown(_ url: URL) -> Bool {
         let extensionName = url.pathExtension.lowercased()
         return extensionName == "md" || extensionName == "markdown"
     }

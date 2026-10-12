@@ -22,6 +22,7 @@ struct NotebookStorageView: View {
                 Section {
                     Text("Sizes measure notebook files on this device, including copies and backups. They do not measure the app, memory use, or iCloud storage.")
                     Text("File sizes are measured before filesystem compression and may differ from device storage settings.")
+                    Text("Attachment sizes include file contents on this device. Files waiting to download use no local content storage. Manifests and temporary files appear under Other Notebook Files.")
                 }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -72,7 +73,9 @@ private struct NotebookStorageSummary: View {
                     .font(.largeTitle.bold())
                     .accessibilityIdentifier("notebook-storage-total")
                 HStack(alignment: .firstTextBaseline) {
-                    Text("\(report.activeNoteCount) notes")
+                    Text(report.activeNoteCount == 1
+                         ? LocalizedStringKey("1 note")
+                         : LocalizedStringKey("\(report.activeNoteCount) notes"))
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("notebook-storage-note-count")
                     if report.trashNoteCount > 0 {
@@ -81,6 +84,23 @@ private struct NotebookStorageSummary: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.trailing)
+                    }
+                }
+                if report.activeAttachmentCount + report.trashAttachmentCount > 0 {
+                    Text(report.activeAttachmentCount == 1
+                         ? LocalizedStringKey("1 attachment")
+                         : LocalizedStringKey("\(report.activeAttachmentCount) attachments"))
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("notebook-storage-attachment-count")
+                    Text("\(report.residentAttachmentCount) downloaded, including Trash")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if report.trashAttachmentCount > 0 {
+                        Text(report.trashAttachmentCount == 1
+                             ? LocalizedStringKey("1 attachment in Trash")
+                             : LocalizedStringKey("\(report.trashAttachmentCount) attachments in Trash"))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 NotebookStorageBar(
@@ -311,6 +331,7 @@ private extension NotebookStorageCategory {
     var storageTitle: LocalizedStringResource {
         switch self {
         case .notesAndHistory: "Notes & History"
+        case .attachments: "Attachments"
         case .recoveryCopies: "Recovery Copies"
         case .markdownCopies: "Markdown Copies"
         case .backups: "Backups"
@@ -321,6 +342,7 @@ private extension NotebookStorageCategory {
     var storageColor: Color {
         switch self {
         case .notesAndHistory: .blue
+        case .attachments: .green
         case .recoveryCopies: .teal
         case .markdownCopies: .orange
         case .backups: .purple
@@ -331,6 +353,7 @@ private extension NotebookStorageCategory {
     var storageIdentifier: String {
         switch self {
         case .notesAndHistory: "notes-history"
+        case .attachments: "attachments"
         case .recoveryCopies: "recovery"
         case .markdownCopies: "markdown"
         case .backups: "backups"

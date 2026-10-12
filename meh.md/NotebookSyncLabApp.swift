@@ -64,6 +64,7 @@ private struct NotebookSyncLabView: View {
         var accountStatus: Int?
         var measurementsMS: [String: [Double]] = [:]
         var errorCode: String?
+        var errorDescription: String?
         var finishedAt: Date?
         var events: [String: [NotebookSyncEventLog.Entry]] = [:]
         var requestTimingsMS: [String: [String: [Double]]] = [:]
@@ -74,6 +75,26 @@ private struct NotebookSyncLabView: View {
         var cleanup: CleanupMeasurements?
         var notebookID: UUID?
         var notes: [ObservedNote]?
+        var attachments: AttachmentMeasurements?
+        var completedLocalAttachmentCopies: Int?
+        var retryDownloadedBytes: Int64?
+        var retryDownloadedSHA256: String?
+    }
+
+    struct AttachmentMeasurements: Codable {
+        let byteCount: Int64
+        let sha256: String
+        let notebookZone: String
+        let attachmentZone: String
+        let cancelledUploadError: String?
+        let interruptedCoordinatorStatePersisted: Bool
+        let uploadPipelineStartedBeforeStop: Bool
+        let downloadVerified: Bool
+        let cachedReadVerified: Bool
+        let idempotentUploadVerified: Bool
+        let staleUploadRejected: Bool
+        let deletionDownloadRejected: Bool
+        let oldClientRejected: Bool
     }
 
     struct CleanupMeasurements: Codable {
@@ -130,7 +151,7 @@ private struct NotebookSyncLabView: View {
               let runID = UUID(uuidString: rawRun),
               let phase = environment["MEH_SYNC_LAB_PHASE"],
               ["account", "exchange", "offline-join", "offline-ui-seed",
-               "offline-ui-verify", "publish", "receive", "edit", "verify", "cleanup"]
+               "offline-ui-verify", "publish", "receive", "edit", "verify", "cleanup", "attachments", "attachments-local", "attachments-download"]
                 .contains(phase) else {
             update("Stopped: explicit lab launch configuration required")
             return
@@ -144,6 +165,23 @@ private struct NotebookSyncLabView: View {
         let sourceRoot = runRoot.appending(path: "source")
         let receiverRoot = runRoot.appending(path: "receiver")
         var report = Report(runID: runID, phase: phase)
+        // Initial attachment phases must never replace an earlier run's files.
+        // Mac runners read stdout because the app container may be protected.
+        if ["attachments", "attachments-local"].contains(phase),
+           FileManager.default.fileExists(atPath: runRoot.path) {
+            report.status = "failed"
+            report.stage = "fresh_run_required"
+            report.finishedAt = Date()
+            report.errorCode = "LabError.\(LabError.existingFixture.rawValue)"
+            report.errorDescription = "A fresh lab run ID is required."
+            if let output = try? JSONEncoder().encode(report) {
+                FileHandle.standardOutput.write(
+                    Data("SYNC_LAB_REPORT ".utf8) + output + Data("\n".utf8)
+                )
+            }
+            update("Stopped: a fresh lab run ID is required")
+            return
+        }
         var diagnostics: [String: NotebookSyncEventLog] = [:]
         var transports: [String: CloudKitSyncTransport] = [:]
         func save() throws {
@@ -191,7 +229,173 @@ private struct NotebookSyncLabView: View {
             guard account == .available else {
                 throw CloudKitSyncTransportError.accountUnavailable
             }
-            if phase == "cleanup" {
+            if phase.hasPrefix("attachments-download") {
+                let original = runRoot.appending(path: "attachments")
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let prior = try decoder.decode(Report.self,
+                    from: Data(contentsOf: original.appending(path: "report.json")))
+                guard prior.runID == runID, prior.phase == "attachments",
+                      let notebookID = prior.notebookID else { throw LabError.missingFixture }
+                let source = NotebookReplica(directory: original.appending(path: "source"))
+                try await source.load()
+                guard source.catalogSnapshot?.notebookID == notebookID,
+                      let descriptor = try source.attachmentDescriptors().first else {
+                    throw LabError.unexpectedContent
+                }
+                let accountName = try await CKContainer(identifier: container).userRecordID().recordName
+                let files = try await CloudKitAttachmentTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container, expectedUserRecordName: accountName,
+                    runID: runID)
+                let destination = root.appending(path: "Downloaded.bin")
+                try await measure("owned_attachment_download_200MiB") {
+                    try await files.download(descriptor, notebookID: notebookID, to: destination)
+                }
+                try await source.acceptAttachmentFile(at: destination, descriptor: descriptor)
+                _ = try await source.attachmentFileURL(for: descriptor.id)
+                report.retryDownloadedBytes = descriptor.content.byteCount
+                report.retryDownloadedSHA256 = descriptor.content.sha256
+            } else if phase == "attachments-local" {
+                let fixture = root.appending(path: "Fictional-200MiB.bin")
+                FileManager.default.createFile(atPath: fixture.path, contents: nil)
+                let output = try FileHandle(forWritingTo: fixture)
+                let block = Data((0..<(1024 * 1024)).map { UInt8($0 % 251) })
+                for _ in 0..<200 { try output.write(contentsOf: block) }
+                try output.synchronize()
+                try output.close()
+                let store = NotebookAttachmentStore(directory: root.appending(path: "files"))
+                report.completedLocalAttachmentCopies = 0
+                for index in 0..<10 {
+                    try await measure("local_strict_attachment_copy_\(index)") {
+                        let descriptor = try await store.storeCoordinatedFile(
+                            at: fixture, attachmentID: UUID())
+                        _ = try await store.verifiedFileURL(for: descriptor)
+                        try await store.remove(id: descriptor.id)
+                    }
+                    report.completedLocalAttachmentCopies = index + 1
+                }
+            } else if phase == "attachments" {
+                guard !FileManager.default.fileExists(atPath:
+                    root.appending(path: "source").path) else { throw LabError.existingFixture }
+                let source = NotebookReplica(directory: root.appending(path: "source"))
+                let receiver = NotebookReplica(directory: root.appending(path: "receiver"))
+                let writer = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container,
+                    stateDirectory: root.appending(path: "writer-transport"), runID: runID)
+                let reader = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container,
+                    stateDirectory: root.appending(path: "reader-transport"), runID: runID)
+                transports["attachment-writer"] = writer
+                transports["attachment-reader"] = reader
+                let sourceSync = NotebookSyncCoordinator(replica: source, transport: writer)
+                let receiverSync = NotebookSyncCoordinator(replica: receiver, transport: reader)
+                try await measure("attachment_initial_join") {
+                    try await synchronize(sourceSync)
+                    try await synchronize(receiverSync)
+                }
+                let fixture = root.appending(path: "Fictional-200MiB.bin")
+                FileManager.default.createFile(atPath: fixture.path, contents: nil)
+                let output = try FileHandle(forWritingTo: fixture)
+                let block = Data((0..<(1024 * 1024)).map { UInt8($0 % 251) })
+                for _ in 0..<200 { try output.write(contentsOf: block) }
+                try output.synchronize()
+                try output.close()
+                let plan = try await measure("attachment_import_200MiB") {
+                    try await NotebookImportScanner(
+                        attachmentStore: source.attachmentStore).scan(urls: [fixture])
+                }
+                guard let descriptor = plan.entries.first?.attachment else {
+                    throw LabError.missingFixture
+                }
+                try await source.importMarkdown(plan)
+                try await measure("attachment_catalog_publish") {
+                    try await synchronize(sourceSync)
+                    try await synchronize(receiverSync)
+                }
+                guard try receiver.attachmentDescriptor(for: descriptor.id) == descriptor,
+                      let notebookID = source.catalogSnapshot?.notebookID else {
+                    throw LabError.unexpectedContent
+                }
+                report.notebookID = notebookID
+                do {
+                    _ = try await receiver.attachmentFileURL(for: descriptor.id)
+                    throw LabError.unexpectedContent
+                } catch NotebookAttachmentError.missing {
+                    // Catalog exchange alone must never transfer large bytes.
+                }
+                let accountName = try await CKContainer(identifier: container).userRecordID().recordName
+                let files = try await CloudKitAttachmentTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container, expectedUserRecordName: accountName,
+                    runID: runID)
+                let sourceFile = try await source.attachmentFileURL(for: descriptor.id)
+                let firstUpload = try NotebookAttachmentSyncCoordinator(
+                    replica: source, transport: files)
+                let interrupted = Task { await firstUpload.synchronize(force: true) }
+                try await Task.sleep(for: .milliseconds(100))
+                let pipelineStarted = firstUpload.statuses[descriptor.id] == .uploading
+                let persisted = FileManager.default.fileExists(atPath:
+                    source.directory.appending(path: "attachment-sync-state.json").path)
+                firstUpload.stop()
+                await interrupted.value
+                let interruption = firstUpload.errorMessage
+                guard persisted else { throw LabError.missingFixture }
+                // Recreate from the interrupted coordinator's durable state.
+                let resumed = try NotebookAttachmentSyncCoordinator(replica: source, transport: files)
+                defer { resumed.stop() }
+                try await measure("attachment_resume_upload") {
+                    await resumed.synchronize(force: true)
+                    guard resumed.errorMessage == nil,
+                          resumed.statuses[descriptor.id] == .uploaded else {
+                        throw LabError.syncFailed
+                    }
+                }
+                try await measure("attachment_idempotent_upload_retry") {
+                    try await files.upload(descriptor, notebookID: notebookID, from: sourceFile)
+                }
+                let downloads = try NotebookAttachmentSyncCoordinator(replica: receiver, transport: files)
+                defer { downloads.stop() }
+                try await measure("attachment_download_200MiB") {
+                    _ = try await downloads.prepareAttachment(descriptor.id)
+                }
+                // This API verifies an existing file without any transport call.
+                try await measure("attachment_cached_read") {
+                    _ = try await receiver.attachmentFileURL(for: descriptor.id)
+                }
+                var oldRejected = false
+                do {
+                    let old = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                        containerIdentifier: container,
+                        stateDirectory: root.appending(path: "old-client-transport"),
+                        runID: runID, maximumSupportedFormatVersion: 1)
+                    defer { Task { await old.retire() } }
+                    _ = try await drain(old)
+                } catch SyncError.updateRequired(requiredVersion: 2) {
+                    oldRejected = true
+                }
+                guard oldRejected else { throw LabError.unexpectedContent }
+                try await measure("attachment_tombstone") {
+                    try await files.delete(attachmentIDs: [descriptor.id], notebookID: notebookID)
+                }
+                var staleRejected = false
+                do { try await files.upload(descriptor, notebookID: notebookID, from: sourceFile) }
+                catch NotebookAttachmentTransferError.deleted { staleRejected = true }
+                var downloadRejected = false
+                do {
+                    try await files.download(descriptor, notebookID: notebookID,
+                        to: root.appending(path: "deleted-download.bin"))
+                } catch NotebookAttachmentTransferError.deleted { downloadRejected = true }
+                guard staleRejected, downloadRejected else { throw LabError.unexpectedContent }
+                report.attachments = AttachmentMeasurements(
+                    byteCount: descriptor.content.byteCount, sha256: descriptor.content.sha256,
+                    notebookZone: writer.notebookZoneName,
+                    attachmentZone: String(files.scope.split(separator: "/").last ?? ""),
+                    cancelledUploadError: interruption,
+                    interruptedCoordinatorStatePersisted: persisted,
+                    uploadPipelineStartedBeforeStop: pipelineStarted,
+                    downloadVerified: true, cachedReadVerified: true,
+                    idempotentUploadVerified: true, staleUploadRejected: staleRejected,
+                    deletionDownloadRejected: downloadRejected, oldClientRejected: oldRejected)
+            } else if phase == "cleanup" {
                 // Only this fresh run's fictional zone and stores are opened.
                 // Each edit publishes a full-history immutable snapshot.
                 guard !FileManager.default.fileExists(
@@ -594,6 +798,7 @@ private struct NotebookSyncLabView: View {
             report.stage = "complete"
         } catch {
             report.status = "failed"
+            report.errorDescription = error.localizedDescription
             if let labError = error as? LabError {
                 report.errorCode = "LabError.\(labError.rawValue)"
             } else {

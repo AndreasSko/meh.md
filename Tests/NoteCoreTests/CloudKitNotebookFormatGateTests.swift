@@ -72,12 +72,12 @@ final class CloudKitNotebookFormatGateTests: XCTestCase {
         }
     }
 
-    func testCloudKitSnapshotCodecPreservesUpdateRequired() throws {
+    func testCapOneCloudKitCodecRejectsCatalogTwo() throws {
         let notebookID = UUID()
         let seed = try NotebookCatalogDocument(notebookID: notebookID)
             .snapshot()
         let future = try Document(seed.data)
-        let version = NotebookSyncFormat.supportedVersion + 1
+        let version: UInt64 = 2
         try future.put(
             obj: .ROOT, key: "schemaVersion", value: .Uint(version)
         )
@@ -97,7 +97,8 @@ final class CloudKitNotebookFormatGateTests: XCTestCase {
         let payload = directory.appending(path: "snapshot")
         try snapshot.data.write(to: payload)
         let codec = CloudKitRecordCodec(
-            mode: .notebook, zoneID: zone
+            mode: .notebook, zoneID: zone,
+            maximumSupportedFormatVersion: 1
         )
         let record = CKRecord(
             recordType: CloudKitTransportMode.notebook.recordType,

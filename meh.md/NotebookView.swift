@@ -1,6 +1,7 @@
 import Foundation
 import NoteCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if os(macOS)
     import AppKit
@@ -152,6 +153,10 @@ struct NotebookView: View {
     @State private var showingImport = false
     @State private var importingFolder = false
     @State private var choosingImportSource = false
+    @State private var externalDropLifetime = NotebookBrowserDropLifetime()
+    @State private var browserImportActive = false
+    @State private var suppliedImportURLs: [URL] = []
+    @State private var importParentID: UUID?
     @State private var showingSettings = false
     @State private var showingTemplates = false
     @State private var pendingPresentedItemID: UUID?
@@ -161,6 +166,7 @@ struct NotebookView: View {
     @State private var historyBrowser: NoteHistoryBrowserState?
     @State private var isLoadingHistory = false
     @State private var historyLoadTask: Task<Void, Never>?
+    @State private var selectedAttachmentID: UUID?
     @State private var historyLoadID = UUID()
     @AppStorage("editor.fontSize", store: NotebookEditorPreferences.store)
     private var editorFontSize = 17.0
@@ -389,7 +395,30 @@ struct NotebookView: View {
 
     private var notebookDetail: some View {
             Group {
-                if let session, let selectedID {
+                if let selectedAttachmentID,
+                   let placement = replica.placements.first(where: {
+                       $0.item.id == selectedAttachmentID
+                   }) {
+                    NotebookAttachmentView(
+                        placement: placement,
+                        replica: replica,
+                        prepareFile: { id in
+                            if let workspace {
+                                return try await workspace.prepareAttachment(id)
+                            }
+                            return try await replica.attachmentFileURL(for: id)
+                        },
+                        rename: { beginRenaming(placement) },
+                        move: { beginMoving([placement.item.id],
+                                            fromTrash: placement.isInTrash) },
+                        trash: { changeTrash(placement, trashed: true) },
+                        restore: { changeTrash(placement, trashed: false) },
+                        transferStatus: workspace?.attachmentTransfers?
+                            .statuses[selectedAttachmentID],
+                        transferError: workspace?.attachmentErrorMessage
+                    )
+                    .id(selectedAttachmentID)
+                } else if let session, let selectedID {
                     VStack(spacing: 0) {
                         if !session.isEditingEnabled,
                            let placement = selectedPlacement {
@@ -718,23 +747,28 @@ struct NotebookView: View {
     #if os(iOS)
     private func compactLinkScreen(_ route: NotebookLinkRoute?,
                                    isCurrent: Bool) -> some View {
-        let title = route.flatMap { route in
+        let routePlacement = route.flatMap { route in
             replica.placements.first { $0.item.id == route.noteID }
-        }.map { NotebookNoteName.title(from: $0.displayName) } ?? ""
+        }
+        let title = routePlacement.map {
+            $0.item.kind == .attachment
+                ? $0.displayName : NotebookNoteName.title(from: $0.displayName)
+        } ?? ""
         // Opening the incoming session can publish before the route changes.
         // A departing screen must keep its own preview throughout that gap.
         let showsLiveEditor = isCurrent && route?.noteID == selectedID
         let showsHistory = showsLiveEditor && historyBrowser != nil
+        let showsLiveAttachment = isCurrent && route?.noteID == selectedAttachmentID
         let isRestoring = session?.isEditingEnabled == true
             && (route.map { restoringLinkRouteID == $0.id } ?? false)
         return ZStack {
-            if showsLiveEditor {
+            if showsLiveEditor || showsLiveAttachment {
                 notebookDetail
                     .opacity(isRestoring ? 0 : 1)
                     .allowsHitTesting(!isRestoring)
             }
             if let route, let preview = linkVisitPreviews[route.id],
-               !showsLiveEditor || isRestoring {
+               !(showsLiveEditor || showsLiveAttachment) || isRestoring {
                 NotebookPreviousLinkView(
                     text: preview.text, position: preview.position, title: title,
                     viewportInsets: preview.viewportInsets, titleHeight: preview.titleHeight,
@@ -744,7 +778,7 @@ struct NotebookView: View {
                     mode: editorMode
                 )
                 .transition(.identity)
-            } else if !showsLiveEditor {
+            } else if !(showsLiveEditor || showsLiveAttachment) {
                 Color(uiColor: .systemBackground)
             }
         }
@@ -912,6 +946,7 @@ struct NotebookView: View {
             navigationState.refreshAvailability()
             if previous?.notebookID != current?.notebookID {
                 browserDrag.reset()
+                selectedAttachmentID = nil
                 search.clear()
                 links.clear()
                 resetLinkJourney()
@@ -928,6 +963,12 @@ struct NotebookView: View {
                 browserRedo = nil
             } else {
                 browserSelection.prune(to: activeBrowserIDs)
+                if let selectedAttachmentID,
+                   !replica.placements.contains(where: {
+                       $0.item.id == selectedAttachmentID
+                   }) {
+                    self.selectedAttachmentID = nil
+                }
             }
         }
         .onChange(of: replica.linkMaintenanceIssueMessage) { _, message in
@@ -950,7 +991,9 @@ struct NotebookView: View {
             if selection == nil { handlePendingQuickAction() }
         }
         #endif
+        .onAppear { externalDropLifetime.appear() }
         .onDisappear {
+            externalDropLifetime.disappear()
             browserDrag.reset()
             historyLoadTask?.cancel()
             rememberEditorPosition()
@@ -1021,7 +1064,12 @@ struct NotebookView: View {
         )
         .notebookMarkdownImporter(
             isPresented: $showingImport, choosingFolder: importingFolder,
-            replica: replica, onImport: importMarkdown
+            suppliedURLs: $suppliedImportURLs,
+            stagingDirectory: (workspace ?? NotebookWorkspace.shared).incomingFileStagingDirectory,
+            isActive: $browserImportActive,
+            replica: replica, onImport: { plan in
+                try await importMarkdown(plan, parentID: importParentID)
+            }
         )
         .confirmationDialog("Import Markdown", isPresented: $choosingImportSource) {
             Button("Import Files…") { showImport(choosingFolder: false) }
@@ -1699,8 +1747,48 @@ struct NotebookView: View {
     }
 
     private func browserDropInteraction() -> NotebookBrowserDropInteraction {
-        NotebookBrowserDropInteraction(
+        let generation = externalDropLifetime.generation
+        return NotebookBrowserDropInteraction(
             state: browserDrag,
+            stagingDirectory: (workspace ?? NotebookWorkspace.shared).incomingFileStagingDirectory,
+            acceptsExternalCompletion: { externalDropLifetime.accepts(generation) },
+            resolveExternal: { point in
+                guard !busy, !browserImportActive, !showingImport,
+                      suppliedImportURLs.isEmpty, editingID == nil, browserDrag.drag == nil,
+                      browserDropViewportFrame.contains(point),
+                      point.y >= browserDrag.filesHeaderFrame.minY else { return nil }
+                for row in visibleActiveRows {
+                    guard let frame = browserDrag.rowFrame(for: row.id),
+                          frame.contains(point),
+                          let placement = replica.placements.first(where: {
+                              $0.item.id == row.id && !$0.isInTrash
+                          }) else { continue }
+                    let fraction = (point.y - frame.minY) / frame.height
+                    let parentID = placement.item.kind == .folder
+                        && fraction > 0.25 && fraction < 0.75
+                        ? placement.item.id : placement.item.parentID
+                    return NotebookBrowserExternalDropTarget(parentID: parentID)
+                }
+                return NotebookBrowserExternalDropTarget(parentID: nil)
+            },
+            importExternal: { urls, target in
+                guard externalDropLifetime.accepts(generation),
+                      !browserImportActive, suppliedImportURLs.isEmpty else {
+                    let root = (workspace ?? NotebookWorkspace.shared)
+                        .incomingFileStagingDirectory.standardizedFileURL.path + "/"
+                    for url in urls where url.standardizedFileURL.path.hasPrefix(root) {
+                        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+                    }
+                    if externalDropLifetime.accepts(generation) {
+                        errorMessage = String(localized: "Finish the current import before adding more files.")
+                    }
+                    return
+                }
+                browserImportActive = true
+                importParentID = target.parentID
+                suppliedImportURLs = urls
+            },
+            externalFailure: { error in errorMessage = error.localizedDescription },
             resolve: { point in
                 guard !busy, editingID == nil, let drag = browserDrag.drag,
                       drag.notebookID == replica.catalogSnapshot?.notebookID else { return nil }
@@ -1890,7 +1978,12 @@ struct NotebookView: View {
             },
             onOpenNote: { id in
                 showingTrash = false
-                perform { try await selectNote(id) }
+                if replica.placements.first(where: { $0.item.id == id })?
+                    .item.kind == .attachment {
+                    perform { try await selectAttachment(id) }
+                } else {
+                    perform { try await selectNote(id) }
+                }
             }
         )
     }
@@ -1972,20 +2065,20 @@ struct NotebookView: View {
                             .accessibilityIdentifier("notebook-sidebar-title-" + row.id.uuidString)
                     } icon: {
                         Image(systemName: placement.item.kind == .folder
-                            ? (replica.defaultNewNoteParentID == row.id ? "tray" : "folder")
-                            : "note.text")
+                            && replica.defaultNewNoteParentID == row.id
+                            ? "tray" : icon(for: placement.item.kind))
                     }
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                         #if os(macOS)
                         .simultaneousGesture(TapGesture().onEnded {
-                            guard placement.item.kind == .note,
+                            guard placement.item.kind != .folder,
                                   !selectingItems, !busy,
                                   NSEvent.modifierFlags.intersection([.command, .shift]).isEmpty
                             else { return }
                             // List owns range/toggle selection. A plain click also
-                            // opens the note, including an already selected row.
+                            // opens the item, including an already selected row.
                             browserSelection.selectOnly(row.id)
                             activateSidebarRow(placement)
                         })
@@ -2021,8 +2114,7 @@ struct NotebookView: View {
                 highlightedFileID == row.id ? "Revealed in Files" : ""
             )
             .accessibilityIdentifier(
-                (placement.item.kind == .note
-                    ? "notebook-sidebar-note-" : "notebook-sidebar-folder-") + row.id.uuidString)
+                rowIdentifier(for: placement.item.kind) + row.id.uuidString)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 if !selectingItems, editingID == nil {
                     Button(role: .destructive) { trashItems([row.id]) } label: {
@@ -2048,7 +2140,11 @@ struct NotebookView: View {
             if placement.item.kind == .folder {
                 toggleFolder(placement.item.id)
             } else {
-                try await selectNote(placement.item.id)
+                switch placement.item.kind {
+                case .note: try await selectNote(placement.item.id)
+                case .attachment: try await selectAttachment(placement.item.id)
+                case .folder: break
+                }
             }
         }
     }
@@ -2107,6 +2203,41 @@ struct NotebookView: View {
             createItem(kind: .folder, parentID: parentID, position: position)
         }
             .disabled(busy)
+        browserImportButtons(parentID: parentID)
+    }
+
+    @ViewBuilder
+    private func browserImportButtons(parentID: UUID?) -> some View {
+        Button("Import Files…") {
+            showBrowserImport(choosingFolder: false, parentID: parentID)
+        }
+        .disabled(busy)
+        .accessibilityIdentifier("notebook-import-files")
+        Button("Import Folder…") {
+            showBrowserImport(choosingFolder: true, parentID: parentID)
+        }
+        .disabled(busy)
+        .accessibilityIdentifier("notebook-import-folder")
+    }
+
+    private var browserImportParentID: UUID? {
+        let ids = browserSelection.orderedIDs(in: activeBrowserOrder)
+        guard ids.count == 1, let placement = replica.placements.first(where: {
+            $0.item.id == ids[0] && !$0.isInTrash
+        }) else { return nil }
+        return creationParent(for: placement)
+    }
+
+    private func showBrowserImport(choosingFolder: Bool) {
+        showBrowserImport(choosingFolder: choosingFolder,
+                          parentID: browserImportParentID)
+    }
+
+    private func showBrowserImport(choosingFolder: Bool, parentID: UUID?) {
+        guard !busy, !browserImportActive else { return }
+        importParentID = parentID
+        importingFolder = choosingFolder
+        showingImport = true
     }
 
     private func contextualCreationPosition(
@@ -2302,6 +2433,8 @@ struct NotebookView: View {
                 createdFolderID = try await replica.createFolder(
                     name: "Untitled Folder", parentID: parentID,
                     position: position)
+            case .attachment:
+                break
             }
         } onSuccess: {
             if startsWriting {
@@ -2617,9 +2750,11 @@ struct NotebookView: View {
 
     private func deletionMessage(_ selection: NotebookDeletionSelection) -> String {
         let notes = selection.items.filter { $0.kind == .note }.count
-        let folders = selection.items.count - notes
+        let files = selection.items.filter { $0.kind == .attachment }.count
+        let folders = selection.items.filter { $0.kind == .folder }.count
         let counts = [
             notes > 0 ? "\(notes) \(notes == 1 ? "note" : "notes")" : nil,
+            files > 0 ? "\(files) \(files == 1 ? "file" : "files")" : nil,
             folders > 0 ? "\(folders) \(folders == 1 ? "folder" : "folders")" : nil,
         ].compactMap { $0 }.joined(separator: " and ")
         let names = selection.items.prefix(5).map(\.name).joined(separator: ", ")
@@ -2748,6 +2883,10 @@ struct NotebookView: View {
             try await flushEditor()
             browserUndo = try await replica.trashItems(ids)
             browserRedo = nil
+            if let selectedAttachmentID, ids.contains(selectedAttachmentID) {
+                self.selectedAttachmentID = nil
+                preferredCompactColumn = .sidebar
+            }
             browserSelection.clear()
             selectingItems = false
         }, onCompletion: onCompletion)
@@ -2995,6 +3134,8 @@ struct NotebookView: View {
             begin: beginBrowserDrag
         ))
         .overlay(NotebookBrowserAppKitDropSurface(interaction: browserDropInteraction()))
+        .onDrop(of: [UTType.fileURL],
+                delegate: NotebookBrowserAppKitFileDrop(interaction: browserDropInteraction()))
         #endif
         #if os(iOS)
         // Keep a small buffer above the floating controls, including in
@@ -3173,7 +3314,9 @@ struct NotebookView: View {
             isEnabled: !busy, hasTemplates: !replica.templates.isEmpty,
             onNewNote: createDefaultNote,
             onNewFromTemplate: showTemplates,
-            onNewFolder: { createItem(kind: .folder, parentID: nil) }
+            onNewFolder: { createItem(kind: .folder, parentID: nil) },
+            onImportFiles: { showBrowserImport(choosingFolder: false) },
+            onImportFolder: { showBrowserImport(choosingFolder: true) }
         )
         .frame(width: 44, height: 44)
         #else
@@ -3185,6 +3328,7 @@ struct NotebookView: View {
             } label: {
                 Label("New Folder", systemImage: "folder.badge.plus")
             }
+            browserImportButtons(parentID: browserImportParentID)
         } label: {
             Label("New Note", systemImage: "plus")
         } primaryAction: {
@@ -3261,6 +3405,7 @@ struct NotebookView: View {
     private func showImport(choosingFolder: Bool) {
         perform {
             try await flushEditor()
+            importParentID = nil
             importingFolder = choosingFolder
             showingImport = true
         }
@@ -4009,6 +4154,7 @@ struct NotebookView: View {
         _ id: UUID, revealDetail: Bool = true, searchVisit: Bool = false,
         linkVisit: Bool = false
     ) async throws {
+        selectedAttachmentID = nil
         if id != selectedID {
             try await flushEditor()
             searchDestinationID = nil
@@ -4041,6 +4187,39 @@ struct NotebookView: View {
         if selectedID == id, !linkVisit { resetLinkJourney() }
         if revealDetail, preferredCompactColumn != .detail {
             preferredCompactColumn = .detail
+        }
+    }
+
+    private func selectAttachment(_ id: UUID) async throws {
+        try await flushEditor()
+        guard replica.placements.contains(where: {
+            $0.item.id == id && $0.item.kind == .attachment
+        }) else { return }
+        selectedAttachmentID = id
+        #if os(iOS)
+        if usesCompactLinkNavigation {
+            resetLinkJourney()
+            let route = NotebookLinkRoute(noteID: id)
+            linkRootRoute = route
+            activeLinkRouteID = route.id
+        }
+        #endif
+        preferredCompactColumn = .detail
+    }
+
+    private func icon(for kind: NotebookItemKind) -> String {
+        switch kind {
+        case .folder: "folder"
+        case .note: "note.text"
+        case .attachment: "doc"
+        }
+    }
+
+    private func rowIdentifier(for kind: NotebookItemKind) -> String {
+        switch kind {
+        case .folder: "notebook-sidebar-folder-"
+        case .note: "notebook-sidebar-note-"
+        case .attachment: "notebook-sidebar-attachment-"
         }
     }
 

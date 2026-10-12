@@ -13,6 +13,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case dragSubtree = "drag-subtree"
     case dragLongList = "drag-long-list"
     case storageLarge = "storage-large"
+    case attachmentBrowser = "attachment-browser"
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
@@ -80,6 +81,48 @@ enum NotebookUITestFixture: String, CaseIterable {
 
     private func seed(_ replica: NotebookReplica) async throws {
         switch self {
+        case .attachmentBrowser:
+            let folder = try await replica.createFolder(name: "Attachments Demo")
+            _ = try await replica.createNote(
+                name: "Notes.md", text: Self.literalSource, parentID: folder)
+            let sources = replica.directory.appending(path: "Fictional Sources")
+            try FileManager.default.createDirectory(
+                at: sources, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: sources) }
+            let stream = "BT /F1 24 Tf 50 140 Td (Fictional diagram) Tj ET"
+            let objects = [
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 240] "
+                    + "/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                "<< /Length \(stream.utf8.count) >>\nstream\n\(stream)\nendstream"
+            ]
+            var pdf = "%PDF-1.4\n"
+            var offsets = [0]
+            for (index, object) in objects.enumerated() {
+                offsets.append(pdf.utf8.count)
+                pdf += "\(index + 1) 0 obj\n\(object)\nendobj\n"
+            }
+            let xref = pdf.utf8.count
+            pdf += "xref\n0 6\n0000000000 65535 f \n"
+            for offset in offsets.dropFirst() {
+                pdf += String(format: "%010d 00000 n \n", offset)
+            }
+            pdf += "trailer\n<< /Size 6 /Root 1 0 R >>\n"
+                + "startxref\n\(xref)\n%%EOF\n"
+            let pdfURL = sources.appending(path: "Diagram.pdf")
+            let binaryURL = sources.appending(path: "Discarded sample.bin")
+            try Data(pdf.utf8).write(to: pdfURL)
+            try Data(repeating: 0xA5, count: 4096).write(to: binaryURL)
+            let plan = try await NotebookImportScanner(
+                attachmentStore: replica.attachmentStore)
+                .scan(urls: [pdfURL, binaryURL])
+            try await replica.importMarkdown(plan)
+            for entry in plan.entries { try await replica.move(entry.id, to: folder) }
+            if let discarded = plan.entries.first(where: {
+                $0.name == "Discarded sample.bin"
+            }) { _ = try await replica.trashItems([discarded.id]) }
         case .storageLarge:
             let field = try await replica.createFolder(name: "Field journals")
             let coast = try await replica.createFolder(name: "Coastal surveys", parentID: field)

@@ -61,4 +61,49 @@ final class NotebookBrowserOrderingTests: XCTestCase {
         ))
     }
 
+    func testProviderCopySurvivesExpiredSourceAndPreservesName() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let provider = root.appendingPathComponent("Provider")
+        try FileManager.default.createDirectory(at: provider, withIntermediateDirectories: true)
+        let source = provider.appendingPathComponent("Fictional report.bin")
+        let bytes = Data([0, 255, 1, 2])
+        try bytes.write(to: source)
+        let staged = try NotebookBrowserFileStaging.copy(
+            source, into: root.appendingPathComponent("Incoming")
+        )
+        try FileManager.default.removeItem(at: provider)
+        XCTAssertEqual(staged.lastPathComponent, "Fictional report.bin")
+        XCTAssertEqual(try Data(contentsOf: staged), bytes)
+    }
+
+    func testFailedProviderCopyLeavesNoPartialSelection() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertThrowsError(try NotebookBrowserFileStaging.copy(
+            root.appendingPathComponent("Missing.pdf"), into: root
+        ))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [])
+    }
+
+    func testProviderTemporaryNameUsesDisplayedNameAndKeepsExtension() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("provider-random-123.pdf")
+        let bytes = Data([0, 255, 7, 3])
+        try bytes.write(to: source)
+        let staged = try NotebookBrowserFileStaging.copy(
+            source, into: root.appendingPathComponent("Incoming"),
+            preferredName: "Fictional report"
+        )
+        try FileManager.default.removeItem(at: source)
+        XCTAssertEqual(staged.lastPathComponent, "Fictional report.pdf")
+        XCTAssertEqual(try Data(contentsOf: staged), bytes)
+        XCTAssertThrowsError(try NotebookBrowserFileStaging.copy(
+            staged, into: root.appendingPathComponent("Incoming"),
+            preferredName: "../escaped.pdf"
+        ))
+    }
+
 }

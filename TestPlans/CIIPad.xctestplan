@@ -37,7 +37,8 @@
         "UIReleasePolishUITests/testNoteMenusExposeTemplatesAndEditorDisplay",
         "UIReleasePolishUITests/testPlusContextActionCreatesFolder",
         "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow",
-        "UIReleasePolishUITests/testLongNoteTitleRemainsAccessibleInTheToolbar"
+        "UIReleasePolishUITests/testLongNoteTitleRemainsAccessibleInTheToolbar",
+        "NotebookAttachmentBrowserUITests/testMixedFolderAndQuickLook"
       ]
     }
   ],

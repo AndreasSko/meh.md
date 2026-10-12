@@ -21,6 +21,7 @@ errors fail the measurement instead of presenting incomplete totals.
 | Category | Files counted |
 | --- | --- |
 | Notes & History | Current saved files for catalog notes, including Trash |
+| Attachments | Downloaded content for catalog attachments, including Trash |
 | Recovery Copies | Previous files and retained note/catalog quarantines |
 | Markdown Copies | All regular files under Notebook Copies |
 | Backups | All regular files under Backups |
@@ -30,6 +31,17 @@ Per-note sizes include their current file and retained recovery files. Shared
 Markdown copies, backups, catalog data, and sync data are counted separately.
 Active-note counts exclude Trash and permanent deletions; Trash has its own
 count. Orphan files contribute to the total without appearing as named notes.
+
+Attachment counts distinguish active files, files in Trash, and downloaded
+files on this device. Trash includes attachments inside a trashed folder.
+Remote attachments whose bytes have not been downloaded contribute to the
+item counts but use no local content bytes. Empty downloaded files still count
+as downloaded. Permanently deleted attachments are excluded from these counts.
+
+Only the resident content of catalog attachments belongs to Attachments.
+Manifests, import staging, quarantines, and retained orphan content belong to
+Other Notebook Files. These files still contribute to the total. Equal files
+with different attachment identities each occupy their own local storage.
 
 The current Markdown and its history share a compressed Automerge document.
 Subtracting the current Markdown's UTF-8 size would not measure history:

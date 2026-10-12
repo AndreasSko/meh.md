@@ -46,7 +46,12 @@
         "UIReleasePolishUITests/testNoteContextActionCreatesFolderBesideTheNote",
         "UIReleasePolishUITests/testNoteMenusExposeTemplatesAndEditorDisplay",
         "UIReleasePolishUITests/testPlusContextActionCreatesFolder",
-        "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow"
+        "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow",
+        "NotebookAttachmentBrowserUITests/testLongPressImportsAndNormalTapCreatesNote",
+        "NotebookAttachmentBrowserUITests/testMixedFolderAndQuickLook",
+        "NotebookAttachmentBrowserUITests/testStorageCountsRealAttachmentFiles",
+        "NotebookAttachmentBrowserUITests/testAttachmentBackupTogglePersistsAndBackUpNowCompletes",
+        "NotebookAttachmentUITests/testImportedFileOpensAndPreviewsWithoutEditingItsBytes"
       ]
     }
   ],
