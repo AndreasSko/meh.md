@@ -78,10 +78,12 @@ struct NotebookNativeDisclosureButton: NSViewRepresentable {
     /// Overrides only the value presentation, not native tracking or AX press.
     @MainActor
     final class NativeDisclosureButton: NSButton {
-        private var isExpanded = false
+        // Configuring an image-only button can install a non-nil blank image.
+        // An unset state ensures the first update assigns the actual chevron.
+        private var isExpanded: Bool?
 
         override func accessibilityValue() -> Any? {
-            isExpanded ? "Expanded" : "Collapsed"
+            isExpanded == true ? "Expanded" : "Collapsed"
         }
 
         func updateExpansion(_ expanded: Bool, notifying: Bool) {
