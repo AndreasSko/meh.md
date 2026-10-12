@@ -17,15 +17,32 @@ enum NotebookRecentPreview {
             )
             var rendered = ""
             var previousBlock: PresentationIntent?
+            var hasPreviousText = false
             for run in attributed.runs {
                 let block = run.presentationIntent
-                if previousBlock != nil,
-                   block != previousBlock,
-                   rendered.last?.isWhitespace == false {
-                    rendered.append(" ")
+                let text = String(attributed[run.range].characters)
+                guard !text.isEmpty else { continue }
+
+                if text.allSatisfy(\.isWhitespace) {
+                    // A whitespace-only run that changes intent represents an
+                    // empty block; keep it out so it cannot create duplicate
+                    // separators around the next non-empty block.
+                    if block == previousBlock {
+                        rendered.append(contentsOf: text)
+                    }
+                    continue
                 }
-                rendered.append(contentsOf: attributed[run.range].characters)
+
+                if hasPreviousText, block != previousBlock {
+                    if rendered.last?.isWhitespace == true {
+                        rendered.append("· ")
+                    } else {
+                        rendered.append(" · ")
+                    }
+                }
+                rendered.append(contentsOf: text)
                 previousBlock = block
+                hasPreviousText = true
             }
             plainText = rendered
         } catch {
