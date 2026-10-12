@@ -21,6 +21,8 @@ public struct NotebookSyncRetryPolicy: Sendable {
 
     public static func isTransient(_ error: any Error) -> Bool {
         if error is CancellationError { return false }
+        // Local storage may recover before the next synchronization attempt.
+        if error is LocalNoteSaveFailure { return true }
         if let error = error as? SyncError {
             switch error {
             case .unavailable, .localSaveRequired: return true

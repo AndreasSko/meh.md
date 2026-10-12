@@ -3,6 +3,16 @@ import XCTest
 @testable import NoteCore
 
 final class NotebookSyncRetryPolicyTests: XCTestCase {
+    func testLocalSaveFailuresRemainRetryable() {
+        var policy = NotebookSyncRetryPolicy()
+        let now = Date(timeIntervalSince1970: 100)
+        let failure = LocalNoteSaveFailure(
+            underlyingError: CocoaError(.fileWriteOutOfSpace)
+        )
+        XCTAssertEqual(policy.retryDate(for: failure, now: now),
+                       now.addingTimeInterval(5))
+    }
+
     func testBackoffCapsAndSuccessResets() {
         var policy = NotebookSyncRetryPolicy()
         let now = Date(timeIntervalSince1970: 100)

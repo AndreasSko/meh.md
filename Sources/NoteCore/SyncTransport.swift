@@ -305,6 +305,23 @@ extension SyncTransport {
     }
 }
 
+/// A failed durable note write, distinct from waiting for a local save.
+public struct LocalNoteSaveFailure: Error, LocalizedError {
+    public let underlyingError: any Error
+
+    public init(underlyingError: any Error) {
+        self.underlyingError = underlyingError
+    }
+
+    public var errorDescription: String? {
+        if let localized = underlyingError as? LocalizedError,
+           let description = localized.errorDescription {
+            return description
+        }
+        return String(describing: underlyingError)
+    }
+}
+
 public enum SyncError: Error, Equatable, LocalizedError {
     case invalidRecord
     case identityConflict

@@ -2,6 +2,23 @@ import XCTest
 @testable import NotebookAppModel
 
 final class NotebookSyncIndicatorTests: XCTestCase {
+    func testAppManagedLocalSaveWaitUsesNeutralCloud() {
+        let waiting = indicator(paused: true, pending: true, waitingForSave: true)
+        XCTAssertEqual(waiting, .waiting)
+        XCTAssertEqual(waiting.symbol, "icloud")
+        XCTAssertEqual(indicator(waitingForSave: true), .waiting)
+        XCTAssertEqual(indicator(syncing: true, waitingForSave: true), .syncing)
+    }
+
+    func testRealErrorsAndDisabledSyncOverrideLocalSaveWait() {
+        XCTAssertEqual(
+            indicator(paused: true, error: true, waitingForSave: true), .failed
+        )
+        XCTAssertEqual(
+            indicator(enabled: false, paused: true, waitingForSave: true), .disabled
+        )
+    }
+
     func testPendingChangesAreNotAnError() {
         XCTAssertEqual(indicator(pending: true), .syncing)
         XCTAssertEqual(indicator(), .synced)
@@ -35,11 +52,13 @@ final class NotebookSyncIndicatorTests: XCTestCase {
         syncing: Bool = false,
         paused: Bool = false,
         error: Bool = false,
-        pending: Bool = false
+        pending: Bool = false,
+        waitingForSave: Bool = false
     ) -> NotebookSyncIndicator {
         NotebookSyncIndicator(
             isEnabled: enabled, isSyncing: syncing, isRetryPaused: paused,
-            hasError: error, hasPendingChanges: pending
+            hasError: error, hasPendingChanges: pending,
+            isWaitingForLocalSave: waitingForSave
         )
     }
 }

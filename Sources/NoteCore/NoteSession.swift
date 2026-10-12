@@ -77,6 +77,7 @@ public final class NoteSession {
         revision: Data, snapshot: NoteSnapshot
     )?
     @ObservationIgnored private var persistedHeads: Set<String>?
+    @ObservationIgnored private var lastSaveFailure: LocalNoteSaveFailure?
     @ObservationIgnored private var saveTask: Task<Void, Never>?
     @ObservationIgnored private var delayedSaveTask: Task<Void, Never>?
     @ObservationIgnored private var scheduledSaveID = 0
@@ -119,6 +120,7 @@ public final class NoteSession {
             resumeOperationWaiters()
         }
         status = .loading
+        lastSaveFailure = nil
         document = nil
         cachedHistoryReader = nil
         editorRevision = nil
@@ -193,6 +195,7 @@ public final class NoteSession {
         persistedHeads = nil
         persistedSnapshot = nil
         text = ""
+        lastSaveFailure = nil
     }
 
     public func replaceText(
@@ -424,6 +427,7 @@ public final class NoteSession {
         while let task = saveTask { await task.value }
         guard case .saved = status,
               let persistedHeads, document?.heads == persistedHeads else {
+            if let lastSaveFailure { throw lastSaveFailure }
             throw SyncError.localSaveRequired
         }
     }
@@ -458,6 +462,7 @@ public final class NoteSession {
         persistedHeads: Set<String>?
     ) throws {
         self.document = document
+        lastSaveFailure = nil
         cachedHistoryReader = nil
         editorIdentity = Data(UUID().uuidString.utf8)
         editorRevision = editorIdentity + document.editorHeads
@@ -530,8 +535,10 @@ public final class NoteSession {
             document.heads != persistedHeads
         {
             guard let snapshot = currentSnapshot else { break }
+            lastSaveFailure = nil
             do {
                 try await storage.save(snapshot)
+                lastSaveFailure = nil
                 persistedHeads = snapshot.heads
                 persistedSnapshot = snapshot
                 if document.heads == persistedHeads {
@@ -540,6 +547,7 @@ public final class NoteSession {
                     status = .saving
                 }
             } catch {
+                lastSaveFailure = LocalNoteSaveFailure(underlyingError: error)
                 status = .saveFailed(message: Self.message(for: error))
                 break
             }

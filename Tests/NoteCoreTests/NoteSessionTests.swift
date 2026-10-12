@@ -77,7 +77,9 @@ final class NoteSessionTests: XCTestCase {
                 version, expectedHeads: original.heads
             )
             XCTFail("Save failure must be reported")
-        } catch SyncError.localSaveRequired {
+        } catch let failure as LocalNoteSaveFailure {
+            XCTAssertEqual(failure.underlyingError as? ControlledStorageError,
+                           .injected)
             XCTAssertEqual(session.text, "before")
             XCTAssertNotEqual(session.currentSnapshot?.heads, original.heads)
             XCTAssertEqual(session.persistedSnapshot, original)
@@ -458,7 +460,10 @@ final class NoteSessionTests: XCTestCase {
         do {
             try await session.flush()
             XCTFail("Duplicate reception must not acknowledge an unsaved revision")
-        } catch { }
+        } catch let failure as LocalNoteSaveFailure {
+            XCTAssertEqual(failure.underlyingError as? ControlledStorageError,
+                           .injected)
+        }
         guard case .saveFailed = session.status else {
             return XCTFail("Failed persistence must remain visible")
         }
@@ -468,6 +473,20 @@ final class NoteSessionTests: XCTestCase {
         }
         try await session.flush()
         XCTAssertEqual(session.persistedSnapshot, pending)
+        XCTAssertEqual(session.status, .saved)
+        // A completed retry must not leave a stale failure for later flushes.
+        try await session.flush()
+    }
+
+    func testFlushWithoutLoadedNoteReportsSaveRequired() async throws {
+        let initial = try NoteDocument(text: "initial").snapshot()
+        let session = NoteSession(
+            storage: ControlledStorage(loadResult: .current(initial))
+        )
+        do {
+            try await session.flush()
+            XCTFail("An unloaded note cannot acknowledge a durable save")
+        } catch SyncError.localSaveRequired { }
     }
 
     func testMatchingClaimedHeadsDoNotBypassRemoteValidation() async throws {
