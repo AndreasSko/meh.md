@@ -59,6 +59,30 @@ final class CloudKitSnapshotCleanupTests: XCTestCase {
         XCTAssertEqual(Set(plans.map(\.survivorID)), [merged.id])
     }
 
+    func testCancelledDiscoveryAndProofStopBeforePersistingPlans() async throws {
+        let original = try state(chain())
+        let plans = try original.proposedSnapshotCleanupPlans()
+        let discovery = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try original.proposedSnapshotCleanupPlans()
+        }
+        do {
+            _ = try await discovery.value
+            XCTFail("Cancelled discovery must yield to new sync work")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        let proof = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            var changed = original
+            try changed.persistSnapshotCleanupPlans(plans)
+            return changed
+        }
+        do {
+            _ = try await proof.value
+            XCTFail("Cancelled proof must leave cleanup intentions unchanged")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(original.pendingSnapshotCleanup.isEmpty)
+    }
+
     func testOutboxAndDeletionEvidenceExcludeBothRoles() throws {
         let records = try chain()
         for excluded in [records[0], records[2]] {

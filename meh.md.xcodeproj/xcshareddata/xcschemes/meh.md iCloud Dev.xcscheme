@@ -47,6 +47,9 @@
                <Test
                   Identifier = "NotebookStorageUITests/testEmptyStorageCanCloseAndReopen">
                </Test>
+               <Test
+                  Identifier = "NotebookStorageUITests/testStorageCleanupControlsAndPreserveNote">
+               </Test>
             </SelectedTests>
          </TestableReference>
       </Testables>

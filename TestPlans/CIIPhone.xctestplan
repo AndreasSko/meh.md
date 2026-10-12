@@ -29,6 +29,7 @@
         "EditorScrollTypingUITests/testPreviewTypingAndListReturnKeepInsertionVisible",
         "NotebookStorageUITests/testStorageOverviewReopenAndOpenNote",
         "NotebookStorageUITests/testEmptyStorageCanCloseAndReopen",
+        "NotebookStorageUITests/testStorageCleanupControlsAndPreserveNote",
         "LargeNoteHistoryUITests/testLargeHistoryCanCloseWhileIndexingAndBrowseWithoutChangingNote",
         "NoteHistoryUITests/testRestoreAsNewNoteKeepsOriginalCurrentText",
         "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",

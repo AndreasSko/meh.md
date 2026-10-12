@@ -142,9 +142,48 @@ public final class NotebookSyncCoordinator {
             )
             status = .failed(failure.localizedDescription)
         }
+        await transport.endExchange()
         await transport.setReceiveActivityHandler(nil)
         await transport.setCleanupProgressHandler(nil)
         await transport.setDiagnosticsHandler(nil)
+        await diagnosticLog?.flush()
+    }
+
+    /// Reads only local transport metadata; it never discovers cleanup plans.
+    public func snapshotMaintenanceStatus() async throws -> SyncSnapshotMaintenanceStatus? {
+        guard let notebookID = try loadState().notebookID else { return nil }
+        return try await transport.snapshotMaintenanceStatus(notebookID: notebookID)
+    }
+
+    /// Optional maintenance owns no sync progress or successful-exchange state.
+    /// The workspace cancels and awaits this task before starting another sync.
+    public func cleanupSnapshots() async throws -> SyncSnapshotCleanupReport {
+        guard !inFlight, case .exchanged = status,
+              let notebookID = try loadState().notebookID else {
+            throw SyncError.unavailable("Sync notes before cleaning up iCloud copies.")
+        }
+        try Task.checkCancellation()
+        inFlight = true
+        defer { inFlight = false }
+        await transport.setDiagnosticsHandler { [weak diagnosticLog] event, counts in
+            await diagnosticLog?.record(event, counts: counts)
+        }
+        diagnosticLog?.record("snapshot_maintenance_start")
+        do {
+            let report = try await transport.cleanupRedundantSnapshots(notebookID: notebookID)
+            diagnosticLog?.record("snapshot_maintenance_end", counts: [
+                "deleted": report.deletedSnapshotCount,
+                "compressedBytes": report.deletedCompressedPayloadBytes,
+            ])
+            await transport.setDiagnosticsHandler(nil)
+            await diagnosticLog?.flush()
+            return report
+        } catch {
+            diagnosticLog?.record("snapshot_maintenance_error:" + NotebookSyncEventLog.errorCode(error))
+            await transport.setDiagnosticsHandler(nil)
+            await diagnosticLog?.flush()
+            throw error
+        }
     }
 
     private func namedOversizedError(_ error: any Error) -> any Error {
@@ -236,6 +275,7 @@ public final class NotebookSyncCoordinator {
             try save(state)
         }
 
+        try await transport.beginExchange()
         var replayedInvalidCursor = false
         var pages = 0
         updateProgress(phase: .receiving, waiting: true)
@@ -419,43 +459,6 @@ public final class NotebookSyncCoordinator {
             }
         }
         if let oversizedError { throw oversizedError }
-        updateProgress(phase: .cleaningUpSnapshots)
-        diagnosticLog?.record("snapshot_cleanup_start")
-        do {
-            let report = try await transport.cleanupRedundantSnapshots(
-                notebookID: notebookID
-            )
-            diagnosticLog?.record("snapshot_cleanup_end", counts: [
-                "deleted": report.deletedSnapshotCount,
-                "compressedBytes": report.deletedCompressedPayloadBytes,
-            ])
-        } catch {
-            // Maintenance must not turn an acknowledged exchange into a
-            // failure on a transient CloudKit outage. Integrity failures and
-            // local write failures still stop the exchange.
-            try Task.checkCancellation()
-            let retryable: Bool
-            if let transportError = error as? CloudKitSyncTransportError {
-                switch transportError {
-                case .accountUnavailable, .uploadNotAcknowledged:
-                    retryable = true
-                default:
-                    retryable = false
-                }
-            } else if let cloudError = error as? CKError {
-                retryable = [.networkUnavailable, .networkFailure,
-                             .serviceUnavailable, .requestRateLimited,
-                             .zoneBusy, .serverResponseLost]
-                    .contains(cloudError.code)
-            } else {
-                retryable = false
-            }
-            guard retryable else { throw error }
-            diagnosticLog?.record(
-                "snapshot_cleanup_retry:" + NotebookSyncEventLog.errorCode(error)
-            )
-        }
-
         updateProgress(phase: .finalizing)
         diagnosticLog?.record("final_scan_start")
         let current = try await replica.records(progress: { [weak self] completed, total in

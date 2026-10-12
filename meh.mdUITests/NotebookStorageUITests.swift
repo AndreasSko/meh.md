@@ -83,6 +83,47 @@ final class NotebookStorageUITests: XCTestCase {
 #endif
     }
 
+    /// Local fixture verifies presentation and navigation, not CloudKit deletion.
+    @MainActor
+    func testStorageCleanupControlsAndPreserveNote() throws {
+#if os(macOS)
+        throw XCTSkip("Cleanup controls run on iPhone")
+#else
+        continueAfterFailure = false
+        let app = makeApp(fixture: "storage-large")
+        app.launchEnvironment["MEH_STORAGE_CLEANUP_FIXTURE"] = "1"
+        defer { app.terminate() }
+        app.launch()
+        openSettings(app)
+        openStorage(app)
+        XCTAssertEqual(app.staticTexts["notebook-storage-note-count"].label, "320 notes")
+        XCTAssertTrue(app.staticTexts["7 in Trash"].exists)
+        let cleanup = app.buttons["notebook-storage-cleanup"]
+        reveal(cleanup, in: app)
+        XCTAssertTrue(cleanup.isEnabled)
+        XCTAssertTrue(element("notebook-storage-last-cleanup", in: app).label.contains("Never"))
+        capture(app, "After — fictional Storage cleanup controls")
+        cleanup.tap()
+        let finished = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"), object: cleanup)
+        XCTAssertEqual(XCTWaiter.wait(for: [finished], timeout: 15), .completed)
+        XCTAssertFalse(element("notebook-storage-last-cleanup", in: app).label.contains("Never"))
+        XCTAssertTrue(element("notebook-storage-last-cleanup", in: app).exists)
+        capture(app, "After — fictional cleanup completed")
+        let row = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "notebook-storage-note-"
+        )).firstMatch
+        reveal(row, in: app)
+        row.tap()
+        let open = app.buttons["notebook-storage-open-note"]
+        reveal(open, in: app)
+        open.tap()
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        XCTAssertTrue((editor.value as? String ?? "").contains("fictional Northwind station"))
+#endif
+    }
+
     @MainActor
     func testEmptyStorageCanCloseAndReopen() throws {
 #if os(macOS)

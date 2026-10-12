@@ -413,14 +413,13 @@ final class CloudKitSnapshotCleanupIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    func testMaintenanceErrorsClassifyAfterAcknowledgedDurableExchange() async throws {
-        let cases: [(CloudKitSyncTransportError, Bool)] = [
-            (.accountUnavailable, true),
-            (.uploadNotAcknowledged, true),
-            (.unexpectedDeletion, false),
+    func testMaintenanceFailuresNeverUndoAcknowledgedDurableExchange() async throws {
+        let failures: [CloudKitSyncTransportError] = [
+            .accountUnavailable,
+            .uploadNotAcknowledged,
+            .unexpectedDeletion,
         ]
-        for (index, entry) in cases.enumerated() {
-            let (failure, recoverable) = entry
+        for (index, failure) in failures.enumerated() {
             let device = "classification-\(index)"
             let transport = try await CloudKitSyncTransport.makeNotebook(
                 services: server.services,
@@ -429,7 +428,10 @@ final class CloudKitSnapshotCleanupIntegrationTests: XCTestCase {
             )
             let localDirectory = root.appending(path: "\(device)-notebook")
             let replica = NotebookReplica(directory: localDirectory)
-            await NotebookSyncCoordinator(replica: replica, transport: transport).synchronize()
+            let initialCoordinator = NotebookSyncCoordinator(
+                replica: replica, transport: transport
+            )
+            await initialCoordinator.synchronize()
             let text = "Fictional durable classification edit \(index)"
             let noteID = try await replica.createNote(name: "classification-\(index).md", text: text)
             let coordinator = NotebookSyncCoordinator(
@@ -437,17 +439,25 @@ final class CloudKitSnapshotCleanupIntegrationTests: XCTestCase {
                 transport: CleanupFailureTransport(base: transport, failure: failure)
             )
             await coordinator.synchronize()
-            if recoverable {
-                if case .exchanged = coordinator.status { } else {
-                    XCTFail("Recoverable maintenance must preserve successful exchange: \(failure)")
-                }
-                XCTAssertNil(coordinator.lastError)
-            } else {
-                if case .failed = coordinator.status { } else {
-                    XCTFail("Integrity failure must fail synchronization")
-                }
-                XCTAssertEqual(coordinator.lastError as? CloudKitSyncTransportError, failure)
+            if case .exchanged = coordinator.status { } else {
+                XCTFail("The note exchange should succeed before maintenance: \(failure)")
             }
+            XCTAssertNil(coordinator.lastError)
+            let exchangedStatus = coordinator.status
+            let syncStateURL = localDirectory.appending(
+                path: "notebook-sync-state.json"
+            )
+            let acknowledgedState = try Data(contentsOf: syncStateURL)
+            do {
+                _ = try await coordinator.cleanupSnapshots()
+                XCTFail("Expected optional maintenance failure: \(failure)")
+            } catch {
+                XCTAssertEqual(error as? CloudKitSyncTransportError, failure)
+            }
+            XCTAssertEqual(coordinator.status, exchangedStatus)
+            XCTAssertNil(coordinator.lastError)
+            XCTAssertNil(coordinator.progress)
+            XCTAssertEqual(try Data(contentsOf: syncStateURL), acknowledgedState)
             let reopened = NotebookReplica(directory: localDirectory)
             try await reopened.load()
             let durable = try await reopened.openNote(noteID)
@@ -545,6 +555,14 @@ private struct CleanupFailureTransport: SyncTransport {
     let base: CloudKitSyncTransport
     let failure: CloudKitSyncTransportError
     var scope: String { base.scope }
+
+    func beginExchange() async throws {
+        try await base.beginExchange()
+    }
+
+    func endExchange() async {
+        await base.endExchange()
+    }
 
     func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
         try await base.bootstrap(proposing: record)

@@ -43,9 +43,24 @@ A cancellable utility task then measures file metadata without decoding note
 bodies or indexing history. Reopening Storage repeats the measurement. It is a
 point-in-time estimate: saves, sync, or backups can change files during a scan.
 
-Storage has no deletion controls. Viewing or reopening a report preserves
-saved note content and history. Open Note uses the existing presentation path,
-which checks that the selected note is still active before opening it.
+Viewing or reopening a report preserves saved note content and history. Open
+Note uses the existing presentation path, which checks that the selected note
+is still active before opening it.
+
+## iCloud copies
+
+Cloud notebooks also show Clean Up iCloud Copies and Last Cleanup. Cleanup
+removes only redundant remote sync snapshots after proving a survivor retains
+their complete history. It does not clear note history or local replay data.
+It receives and publishes pending changes first, then runs separately from
+the sync indicator. New edits or sync requests interrupt maintenance.
+
+Automatic cleanup is opportunistic after a successful exchange: ten eligible
+copies for a document, 16 MiB of estimated redundant payloads, or a 24-hour
+backstop. It stays quiet in the writing screen. Manual cleanup bypasses those
+thresholds; failures appear in Storage and leave successful sync status alone.
+Last Cleanup records a successfully completed pass, including a checked pass
+that finds no redundant copies. Large queues can need several bounded passes.
 
 ## Clearing history later
 
