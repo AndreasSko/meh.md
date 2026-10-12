@@ -152,6 +152,8 @@ struct NotebookView: View {
     @State private var showingImport = false
     @State private var importingFolder = false
     @State private var choosingImportSource = false
+    @State private var choosingWelcomeImportSource = false
+    @State private var pendingWelcomePresentation = false
     @State private var showingSettings = false
     @State private var showingTemplates = false
     @State private var pendingPresentedItemID: UUID?
@@ -1028,6 +1030,16 @@ struct NotebookView: View {
             Button("Import Folder…") { showImport(choosingFolder: true) }
                 .accessibilityIdentifier("notebook-import-folder")
         }
+        .confirmationDialog("Import Markdown", isPresented: $choosingWelcomeImportSource) {
+            Button("Import Files…") {
+                importingFolder = false
+                showingImport = true
+            }
+            Button("Import Folder…") {
+                importingFolder = true
+                showingImport = true
+            }
+        }
         .sheet(isPresented: $showingTrash, onDismiss: finishTemplatePresentation) {
             NavigationStack {
                 trashView
@@ -1055,7 +1067,11 @@ struct NotebookView: View {
                                  workspace: workspace ?? NotebookWorkspace.shared,
                                  onImport: importMarkdown,
                                  beforeExport: flushEditor,
-                                 onOpenNote: openReusableSource)
+                                 onOpenNote: openReusableSource,
+                                 onShowWelcome: {
+                                     pendingWelcomePresentation = true
+                                     showingSettings = false
+                                 })
         }
         .sheet(item: $sharedImport, onDismiss: finishSharedImport) { request in
             NotebookSharedImportView(plan: request.plan, replica: replica) { parentID in
@@ -1070,7 +1086,10 @@ struct NotebookView: View {
             else { presentSharedImport() }
         }
         .onChange(of: busy) { _, busy in
-            if !busy { presentSharedImport() }
+            if !busy {
+                presentSharedImport()
+                handleWelcomeChoice()
+            }
         }
         .onChange(of: replica.hasPendingImport) { _, pending in
             if !pending { presentSharedImport() }
@@ -1104,9 +1123,13 @@ struct NotebookView: View {
             resetLinkJourney()
             if selectedID != nil { preferredCompactColumn = .detail }
             busy = false
+            handleWelcomeChoice()
             #if os(iOS)
             handlePendingQuickAction()
             #endif
+        }
+        .onChange(of: workspace?.welcome.requestID, initial: true) { _, _ in
+            handleWelcomeChoice()
         }
         .task(id: navigationState.recentNoteIDs) {
             await navigationState.loadRecentSessions()
@@ -2362,6 +2385,35 @@ struct NotebookView: View {
         createItem(kind: .note, parentID: nil, usesDefaultDestination: true)
     }
 
+    private func handleWelcomeChoice() {
+        guard restoredNavigation, !busy,
+              let workspace,
+              let choice = workspace.welcome.takeChoice(for: sceneID) else { return }
+        switch choice {
+        case .newNote:
+            createItem(kind: .note, parentID: nil,
+                       usesDefaultDestination: true, startsWriting: true)
+        case .examples:
+            perform {
+                try await flushEditor()
+                let id = try await workspace.welcome.installExamples(in: replica)
+                if let parent = replica.placements.first(where: { $0.item.id == id })?.parentID {
+                    expandedIDs.insert(parent)
+                }
+                reveal(id)
+                try await selectNote(id)
+                workspace.contentDidSave(trigger: "example notes added")
+            }
+        case .importNotes:
+            #if os(iOS)
+            choosingWelcomeImportSource = true
+            #else
+            importingFolder = false
+            showingImport = true
+            #endif
+        }
+    }
+
     private func showTemplates() {
         perform {
             try await flushEditor()
@@ -2451,6 +2503,11 @@ struct NotebookView: View {
     }
 
     private func finishTemplatePresentation() {
+        if pendingWelcomePresentation {
+            pendingWelcomePresentation = false
+            workspace?.welcome.show(in: sceneID)
+            return
+        }
         openPendingPresentedItem()
         #if os(iOS)
         awaitingQuickActionSheetDismissal = false
