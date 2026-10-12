@@ -36,6 +36,7 @@ final class CloudKitStatePerformanceTests: XCTestCase {
         let fixture = try makeFixture(
             noteCount: noteCount, revisionsPerNote: revisionsPerNote
         )
+        var migrationSamples: [Double] = []
         var engineSamples: [Double] = []
         var noOpSamples: [Double] = []
         var appendSamples: [Double] = []
@@ -43,6 +44,8 @@ final class CloudKitStatePerformanceTests: XCTestCase {
         var validationSamples: [Double] = []
         var encodingSamples: [Double] = []
         var diskSamples: [Int] = []
+        var payloadSamples: [Int] = []
+        var totalDiskSamples: [Int] = []
 
         for repetition in 0..<repetitions {
             let directory = FileManager.default.temporaryDirectory
@@ -81,7 +84,14 @@ final class CloudKitStatePerformanceTests: XCTestCase {
             )
             let engineStart = clock.now
             try await store.update { $0.engineState = engineState }
-            engineSamples.append(milliseconds(since: engineStart))
+            migrationSamples.append(milliseconds(since: engineStart))
+
+            let warmStart = clock.now
+            try await store.update {
+                $0.engineState = Data(repeating: 255, count: 2_048)
+            }
+            engineSamples.append(milliseconds(since: warmStart))
+            try await store.update { $0.engineState = engineState }
 
             let noOpStart = clock.now
             try await store.update { $0.engineState = engineState }
@@ -107,12 +117,16 @@ final class CloudKitStatePerformanceTests: XCTestCase {
             XCTAssertEqual(durable.inbox.count, fixture.recordCount + 1)
             XCTAssertEqual(durable.inbox.last, fixture.nextRecord)
             diskSamples.append(try fileSize(at: stateURL))
+            let totalBytes = try totalFileBytes(in: directory)
+            totalDiskSamples.append(totalBytes)
+            payloadSamples.append(totalBytes - diskSamples.last!)
         }
 
         for (phase, samples) in [
             ("state_validation", validationSamples),
             ("state_json_encoding", encodingSamples),
-            ("engine_state_update", engineSamples),
+            ("first_metadata_update_legacy_migration", migrationSamples),
+            ("warm_engine_state_update", engineSamples),
             ("engine_state_no_op", noOpSamples),
             ("append_one_character_snapshot", appendSamples),
             ("durable_reopen", reopenSamples),
@@ -131,8 +145,11 @@ final class CloudKitStatePerformanceTests: XCTestCase {
                 "note_snapshot_bytes": fixture.noteSnapshotBytes,
                 "catalog_snapshot_bytes": fixture.catalogSnapshotBytes,
                 "snapshot_bytes": fixture.totalSnapshotBytes,
-                "on_disk_bytes": diskSamples[0],
-                "on_disk_bytes_samples": diskSamples,
+                "manifest_bytes": diskSamples[0],
+                "manifest_bytes_samples": diskSamples,
+                "retained_payload_file_bytes": payloadSamples[0],
+                "total_store_bytes": totalDiskSamples[0],
+                "total_store_bytes_samples": totalDiskSamples,
                 "samples_ms": samples,
                 "median_ms": percentile(sorted, 0.5),
                 "p95_ms": percentile(sorted, 0.95),
@@ -221,6 +238,20 @@ final class CloudKitStatePerformanceTests: XCTestCase {
     private func percentile(_ sorted: [Double], _ fraction: Double) -> Double {
         let rank = Int(ceil(fraction * Double(sorted.count)))
         return sorted[max(0, rank - 1)]
+    }
+
+    private func totalFileBytes(in directory: URL) throws -> Int {
+        let files = FileManager.default.enumerator(
+            at: directory, includingPropertiesForKeys: [.isRegularFileKey]
+        )!
+        var total = 0
+        for case let file as URL in files {
+            if try file.resourceValues(forKeys: [.isRegularFileKey])
+                .isRegularFile == true {
+                total += try fileSize(at: file)
+            }
+        }
+        return total
     }
 
     private func fileSize(at url: URL) throws -> Int {

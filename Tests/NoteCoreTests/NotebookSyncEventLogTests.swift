@@ -13,7 +13,7 @@ final class NotebookSyncEventLogTests: XCTestCase {
         super.tearDown()
     }
 
-    func testPersistsOnlyNewestFiveHundredEntriesAndClears() throws {
+    func testPersistsOnlyNewestFiveHundredEntriesAndClears() async throws {
         let root = directory()
         let log = NotebookSyncEventLog(directory: root)
         for index in 0..<505 {
@@ -22,17 +22,64 @@ final class NotebookSyncEventLogTests: XCTestCase {
 
         XCTAssertEqual(log.entries.count, 500)
         XCTAssertEqual(log.entries.first?.counts["index"], 5)
+        await log.flush()
         let reopened = NotebookSyncEventLog(directory: root)
         XCTAssertEqual(reopened.entries, log.entries)
         XCTAssertTrue(reopened.exportText.contains("index=504"))
 
         reopened.clear()
+        await reopened.flush()
         XCTAssertTrue(reopened.entries.isEmpty)
         XCTAssertTrue(NotebookSyncEventLog(directory: root).entries.isEmpty)
     }
 
+    func testBurstWritesAreCoalescedAndFlushPersistsLatestSnapshot() async {
+        let root = directory()
+        let writeCount = LockedCounter()
+        let log = NotebookSyncEventLog(directory: root) { data, url in
+            writeCount.increment()
+            try SyncFileIO.replace(data, at: url)
+        }
+        for index in 0..<505 {
+            log.record("event", counts: ["index": index])
+        }
+
+        await log.flush()
+
+        XCTAssertEqual(writeCount.value, 1)
+        let reopened = NotebookSyncEventLog(directory: root)
+        XCTAssertEqual(reopened.entries.count, 500)
+        XCTAssertEqual(reopened.entries.first?.counts["index"], 5)
+        XCTAssertEqual(reopened.entries.last?.counts["index"], 504)
+    }
+
+    func testClearDuringQueuedWriteCannotBeUndoneByOldSnapshot() async {
+        let root = directory()
+        let started = expectation(description: "first write started")
+        let release = DispatchSemaphore(value: 0)
+        let firstWrite = LockedCounter()
+        let log = NotebookSyncEventLog(directory: root) { data, url in
+            if firstWrite.incrementAndGet() == 1 {
+                started.fulfill()
+                release.wait()
+            }
+            try SyncFileIO.replace(data, at: url)
+        }
+        log.record("old")
+        let firstFlush = Task { await log.flush() }
+        await fulfillment(of: [started], timeout: 5)
+
+        log.clear()
+        let clearFlush = Task { await log.flush() }
+        release.signal()
+        await firstFlush.value
+        await clearFlush.value
+
+        XCTAssertTrue(NotebookSyncEventLog(directory: root).entries.isEmpty)
+    }
+
     func testCorruptOrUnwritableLogNeverThrowsAndReportsPersistenceError()
-        throws
+        async throws
     {
         let corruptRoot = directory()
         try FileManager.default.createDirectory(
@@ -53,6 +100,7 @@ final class NotebookSyncEventLogTests: XCTestCase {
         let blocked = NotebookSyncEventLog(directory: blockedRoot)
         blocked.record("pass_start")
         XCTAssertEqual(blocked.entries.count, 1)
+        await blocked.flush()
         XCTAssertTrue(blocked.persistenceError)
     }
 
@@ -94,5 +142,21 @@ final class NotebookSyncEventLogTests: XCTestCase {
         )
         roots.append(root)
         return root
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+
+    func increment() { _ = incrementAndGet() }
+
+    func incrementAndGet() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
     }
 }

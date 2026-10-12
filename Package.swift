@@ -78,6 +78,7 @@ let package = Package(
             ],
             sources: [
                 "NotebookWorkspace.swift",
+                "NotebookSnapshotMaintenancePolicy.swift",
                 "NotebookUITestFixture.swift",
                 "NotebookSyncPreviewTransport.swift",
                 "NotebookIncomingImportRequests.swift",
@@ -108,6 +109,7 @@ let package = Package(
                 "MyApp.swift", "Assets.xcassets",
                 "NotebookUITestFixture.swift",
                 "NotebookView.swift", "NotebookNoteEditor.swift", "NotebookWorkspace.swift",
+                "NotebookSnapshotMaintenancePolicy.swift",
                 "NotebookSyncPreviewTransport.swift",
                 "NotebookBrowserDropInteraction.swift", "NotebookBrowserDrag.swift",
                 "NotebookBrowserNativeUIKitDrop.swift",

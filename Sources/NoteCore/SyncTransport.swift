@@ -149,6 +149,30 @@ public struct SyncSnapshotCleanupReport: Sendable, Equatable {
     }
 }
 
+/// Cheap local maintenance information, scoped to the transport's account.
+/// Bytes estimate redundant compressed copies, not provider quota usage.
+public struct SyncSnapshotMaintenanceStatus: Sendable, Equatable {
+    public let lastSuccessfulCleanup: Date?
+    public let maximumSnapshotsPerDocument: Int
+    public let retainedSnapshotBytes: Int
+    public let hasPendingCleanup: Bool
+    public let hasNewSnapshotsSinceLastCleanup: Bool
+
+    public init(
+        lastSuccessfulCleanup: Date? = nil,
+        maximumSnapshotsPerDocument: Int = 0,
+        retainedSnapshotBytes: Int = 0,
+        hasPendingCleanup: Bool = false,
+        hasNewSnapshotsSinceLastCleanup: Bool = true
+    ) {
+        self.lastSuccessfulCleanup = lastSuccessfulCleanup
+        self.maximumSnapshotsPerDocument = maximumSnapshotsPerDocument
+        self.retainedSnapshotBytes = retainedSnapshotBytes
+        self.hasPendingCleanup = hasPendingCleanup
+        self.hasNewSnapshotsSinceLastCleanup = hasNewSnapshotsSinceLastCleanup
+    }
+}
+
 /// Distinguishes local receive verification from awaiting a cloud response.
 public enum SyncReceiveActivity: Equatable, Sendable {
     case checkingHistory, waitingForCloud
@@ -186,6 +210,10 @@ public typealias SyncReceiveActivityHandler = @Sendable (SyncReceiveActivity) as
 public protocol SyncTransport: Sendable {
     /// Stable account + container + workspace scope; never a credential.
     var scope: String { get }
+    /// Share account and read-format checks only within one explicit exchange.
+    /// Publication must still fence the current remote format independently.
+    func beginExchange() async throws
+    func endExchange() async
     /// Atomically create the canonical seed if absent, otherwise return it.
     /// The canonical seed must also be discoverable through fetch.
     func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord
@@ -204,6 +232,9 @@ public protocol SyncTransport: Sendable {
     func cleanupRedundantSnapshots(
         notebookID: UUID
     ) async throws -> SyncSnapshotCleanupReport
+    func snapshotMaintenanceStatus(
+        notebookID: UUID
+    ) async throws -> SyncSnapshotMaintenanceStatus?
     func setReceiveActivityHandler(
         _ handler: SyncReceiveActivityHandler?
     ) async
@@ -218,6 +249,12 @@ public protocol SyncTransport: Sendable {
 }
 
 extension SyncTransport {
+    public func beginExchange() async throws {}
+    public func endExchange() async {}
+
+    public func snapshotMaintenanceStatus(
+        notebookID: UUID
+    ) async throws -> SyncSnapshotMaintenanceStatus? { nil }
     public func publishBatch(
         _ records: [SyncRecord]
     ) async throws -> SyncBatchResult {

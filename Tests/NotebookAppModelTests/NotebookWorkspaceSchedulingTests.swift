@@ -484,6 +484,121 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         XCTAssertEqual(operations, baseline)
     }
 
+    func testManualCleanupReceivesFirstAndNewSyncWaitsForCancellation() async throws {
+        let transport = RecordingTransport(scope: "fictional-maintenance")
+        await transport.enableMaintenance()
+        let workspace = makeWorkspace(transport: transport, automaticSync: false)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        try await waitUntil { await MainActor.run {
+            workspace.snapshotMaintenanceStatus != nil
+        } }
+        let firstFetchCount = await transport.fetchCount
+        await workspace.requestCloudCopyCleanup()
+        try await waitUntil { await transport.cleanupStarted }
+        let manualFetchCount = await transport.fetchCount
+        XCTAssertGreaterThan(manualFetchCount, firstFetchCount)
+        XCTAssertTrue(workspace.isCleaningCloudCopies)
+        XCTAssertFalse(workspace.isSyncing)
+
+        await workspace.refresh(manual: true, trigger: "fictional incoming edit")
+        let events = await transport.maintenanceEvents
+        let cancellation = try XCTUnwrap(events.firstIndex(of: "cleanup cancelled"))
+        let resumedFetch = try XCTUnwrap(events.lastIndex(of: "fetch"))
+        XCTAssertLessThan(cancellation, resumedFetch)
+        XCTAssertNil(workspace.cloudCleanupError)
+        XCTAssertNil(workspace.syncFailure)
+        workspace.localStorageResetWasScheduled()
+    }
+
+    func testManualCleanupSurvivesSyncPreemptionUntilCompleted() async throws {
+        let transport = RecordingTransport(scope: "resumed-maintenance")
+        await transport.enableMaintenance()
+        let workspace = makeWorkspace(transport: transport, automaticSync: false)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        try await waitUntil { await MainActor.run {
+            workspace.snapshotMaintenanceStatus != nil
+        } }
+        await workspace.requestCloudCopyCleanup()
+        try await waitUntil { await transport.cleanupStarted }
+        await transport.allowNextCleanupToComplete()
+
+        await workspace.refresh(manual: true, trigger: "preempt manual cleanup")
+        try await waitUntil { await transport.cleanupCompletionCount == 1 }
+        try await waitUntil { await MainActor.run {
+            !workspace.isCleaningCloudCopies
+        } }
+        let starts = await transport.cleanupStartCount
+        XCTAssertEqual(starts, 2)
+        await workspace.refresh(manual: true)
+        let finalStarts = await transport.cleanupStartCount
+        XCTAssertEqual(finalStarts, 2, "A completed manual request is consumed")
+        XCTAssertNil(workspace.cloudCleanupError)
+        workspace.localStorageResetWasScheduled()
+    }
+
+    func testAccountNotificationCancelsMaintenanceWithAutomaticSyncOff()
+        async throws {
+        let transport = RecordingTransport(scope: "account-maintenance")
+        await transport.enableMaintenance()
+        let workspace = makeWorkspace(transport: transport, automaticSync: false)
+        workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        await workspace.start()
+        try await waitUntil { await MainActor.run {
+            workspace.snapshotMaintenanceStatus != nil
+        } }
+        await workspace.requestCloudCopyCleanup()
+        try await waitUntil { await transport.cleanupStarted }
+        let previousFetches = await transport.fetchCount
+
+        workspace.cloudAccountAvailabilityChanged()
+
+        XCTAssertNil(workspace.snapshotMaintenanceStatus)
+        try await waitUntil {
+            await transport.maintenanceEvents.contains("cleanup cancelled")
+        }
+        try await waitUntil { await MainActor.run {
+            !workspace.isCleaningCloudCopies
+        } }
+        let fetches = await transport.fetchCount
+        XCTAssertEqual(fetches, previousFetches,
+                       "Opt-out still prevents an automatic account refresh")
+        XCTAssertNil(workspace.snapshotMaintenanceStatus)
+        XCTAssertNil(workspace.cloudCleanupError)
+        workspace.localStorageResetWasScheduled()
+    }
+
+    func testLeavingForegroundCancelsManualCleanupEvenWithAutomaticSyncOff()
+        async throws {
+        let transport = RecordingTransport(scope: "background-maintenance")
+        await transport.enableMaintenance()
+        let workspace = makeWorkspace(transport: transport, automaticSync: false)
+        let scene = UUID()
+        workspace.sceneActivityChanged(id: scene, isActive: true)
+        await workspace.start()
+        try await waitUntil { await MainActor.run {
+            workspace.snapshotMaintenanceStatus != nil
+        } }
+        await workspace.requestCloudCopyCleanup()
+        try await waitUntil { await transport.cleanupStarted }
+
+        workspace.sceneActivityChanged(id: scene, phase: .background)
+        try await waitUntil {
+            await transport.maintenanceEvents.contains("cleanup cancelled")
+        }
+        try await waitUntil { await MainActor.run {
+            !workspace.isCleaningCloudCopies
+        } }
+        XCTAssertNil(workspace.cloudCleanupError)
+        await transport.allowNextCleanupToComplete()
+        workspace.sceneActivityChanged(id: scene, isActive: true)
+        try await waitUntil { await transport.cleanupCompletionCount == 1 }
+        let starts = await transport.cleanupStartCount
+        XCTAssertEqual(starts, 2, "Foreground resumes the authorized manual request")
+        workspace.localStorageResetWasScheduled()
+    }
+
     private func makeWorkspace(
         transport: any SyncTransport,
         automaticSync: Bool = true,
@@ -556,6 +671,42 @@ private actor RecordingTransport: HaltableSyncTransport {
         base = InMemorySyncTransport(scope: scope)
     }
 
+    private var maintenanceEnabled = false
+    private(set) var cleanupStarted = false
+    private(set) var cleanupStartCount = 0
+    private(set) var cleanupCompletionCount = 0
+    private var nextCleanupCompletes = false
+    func allowNextCleanupToComplete() { nextCleanupCompletes = true }
+    private(set) var maintenanceEvents: [String] = []
+    func enableMaintenance() { maintenanceEnabled = true }
+
+    func snapshotMaintenanceStatus(notebookID: UUID) async throws
+        -> SyncSnapshotMaintenanceStatus? {
+        guard maintenanceEnabled else { return nil }
+        return SyncSnapshotMaintenanceStatus(
+            lastSuccessfulCleanup: Date(), maximumSnapshotsPerDocument: 2,
+            retainedSnapshotBytes: 1, hasPendingCleanup: true
+        )
+    }
+
+    func cleanupRedundantSnapshots(notebookID: UUID) async throws
+        -> SyncSnapshotCleanupReport {
+        cleanupStarted = true
+        cleanupStartCount += 1
+        maintenanceEvents.append("cleanup started")
+        if nextCleanupCompletes {
+            nextCleanupCompletes = false
+            cleanupCompletionCount += 1
+            return SyncSnapshotCleanupReport()
+        }
+        do { try await Task.sleep(for: .seconds(30)) }
+        catch {
+            maintenanceEvents.append("cleanup cancelled")
+            throw error
+        }
+        return SyncSnapshotCleanupReport()
+    }
+
     func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
         bootstrapCount += 1
         return try await base.bootstrap(proposing: record)
@@ -573,6 +724,7 @@ private actor RecordingTransport: HaltableSyncTransport {
 
     func fetch(after cursor: String?) async throws -> SyncPage {
         fetchCount += 1
+        maintenanceEvents.append("fetch")
         if shouldPauseFetch {
             shouldPauseFetch = false
             await withCheckedContinuation { pausedFetch = $0 }

@@ -20,8 +20,10 @@ extension CloudKitTransportState {
         let groups = Dictionary(grouping: selected, by: CleanupIdentity.init)
         var result: [CloudKitSnapshotCleanupPlan] = []
         for records in groups.values where records.count > 1 {
+            try Task.checkCancellation()
             var histories: [String: Set<String>] = [:]
             for record in records {
+                try Task.checkCancellation()
                 histories[record.id] = try cleanupHistory(record)
             }
             // Descending rank ensures the first covering record is maximal.
@@ -34,9 +36,11 @@ extension CloudKitTransportState {
             }
             var victims: Set<String> = []
             for victim in ranked {
+                try Task.checkCancellation()
                 let victimHistory = histories[victim.id]!
-                if let survivor = ranked.first(where: {
-                    !victims.contains($0.id)
+                if let survivor = try ranked.first(where: {
+                    try Task.checkCancellation()
+                    return !victims.contains($0.id)
                         && cleanupCovers(
                             victim: victim, history: victimHistory,
                             survivor: $0, survivorHistory: histories[$0.id]!)
@@ -55,6 +59,7 @@ extension CloudKitTransportState {
         let victims = Set(plans.map(\.victimID))
         let proofs = try snapshotCleanupRecords(for: plans)
         for plan in plans {
+            try Task.checkCancellation()
             guard !victims.contains(plan.survivorID),
                   pendingSnapshotCleanup[plan.survivorID] == nil,
                   proofs[plan.victimID]?.survivor.id == plan.survivorID
@@ -73,6 +78,7 @@ extension CloudKitTransportState {
         var histories: [String: Set<String>] = [:]
         var result: [String: (victim: SyncRecord, survivor: SyncRecord)] = [:]
         for plan in plans {
+            try Task.checkCancellation()
             guard let victim = records[plan.victimID],
                   let survivor = records[plan.survivorID],
                   cleanupPairEligible(victim: victim, survivor: survivor) else { continue }

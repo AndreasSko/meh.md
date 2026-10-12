@@ -42,22 +42,39 @@ acknowledged exchange into a sync failure.
 
 ## Scope and cost
 
-Normal notebook synchronization runs cleanup after uploads and permanent note
-purges. After the one-time bootstrap identity backfill, empty passes make no
-account or zone requests. Successive exchanges continue the bounded queue.
-Discovery considers every eligible document so a large earlier group cannot
-hide later groups.
+Normal notebook synchronization finishes receiving, publishing, and saving
+checkpoints before optional snapshot maintenance begins. Maintenance waits
+for two idle seconds after an exchange and yields to edits or another sync.
+On iOS it runs only while the app is in the foreground. It does not keep the
+sync indicator active or change an acknowledged exchange into a failure.
 
-History parsing is cached within each discovery or proof pass. Comparisons
+Cleanup is due when a document has at least ten eligible copies, estimated
+redundant compressed payloads reach 16 MiB, or the last successful pass was
+at least 24 hours ago. The byte estimate subtracts the largest copy in each
+document group; it is not an iCloud quota measurement. The daily backstop is
+opportunistic after exchanges, not a guaranteed background wakeup. Unchanged
+incomparable copies wait for the daily backstop instead of repeating history
+discovery after every edit. Pending work remains durable across cancellation.
+
+Settings > Storage offers Clean Up iCloud Copies and the last successful
+cleanup time. A manual request exchanges notes first, then bypasses the idle
+delay and threshold. Errors appear there without replacing successful sync
+status. Account changes and local resets discard stale presentation state.
+Discovery considers every eligible document so a large earlier group cannot
+hide later groups. Each maintenance pass still deletes at most 100 records.
+
+History parsing is cached within each discovery or proof pass. Cancellation
+is checked between parsing and comparison steps. Comparisons
 never cross document boundaries. A document with many incomparable snapshots
 can still require quadratic subset comparisons during initial discovery; the
 100-record limit bounds cloud deletion work, not discovery CPU or memory.
 
-Local inbox payloads, generations, and cursor positions are retained. This PR
-reduces cloud copies and fresh-join transfer, not local replay storage or the
-size of each surviving full-history document. Local inbox compaction remains
-separate work. Device registration and old-build compatibility gates are
-outside this rollout's scope, as agreed for #34.
+Local inbox payloads, generations, and cursor positions are retained. Payloads
+are stored separately from the transport checkpoint so metadata updates do
+not rewrite every snapshot. This reduces repeated writes, not retained local
+replay bytes or the size of each surviving full-history document. Local inbox
+compaction remains separate work. Device registration and old-build
+compatibility gates are outside this rollout's scope, as agreed for #34.
 
 ## Verification
 
@@ -98,3 +115,11 @@ retained all 32 past versions plus the current body. These are fixture results,
 not a general latency or quota guarantee.
 
 [evidence]: benchmarks/snapshot-cleanup-2026-10-10.json
+
+The 2026-10-12 signed Mac iCloud Dev lab repeated this check in a fresh UUID
+Development zone: 26 received snapshots became 2, 15,977 compressed bytes
+became 1,308, and all 24 past versions matched exactly. This validates the
+remote cleanup executor with the new local checkpoint format. It does not
+measure physical iPhone responsiveness, push delivery, or the Storage button's
+production account integration. The latter has deterministic workspace
+cancellation tests and separate fictional iPhone UI coverage.

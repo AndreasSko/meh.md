@@ -103,6 +103,101 @@ final class NotebookWorkspace {
     private(set) var backupError: String?
     private(set) var lastBackup: NotebookMarkdownBackup?
     private(set) var isBackingUp = false
+    private(set) var snapshotMaintenanceStatus: SyncSnapshotMaintenanceStatus?
+    private(set) var isCleaningCloudCopies = false
+    private(set) var cloudCleanupError: String?
+    @ObservationIgnored private var snapshotMaintenanceTask: Task<Void, Never>?
+    @ObservationIgnored private var snapshotMaintenanceTaskID: UUID?
+    @ObservationIgnored private var manualSnapshotCleanupRequested = false
+
+    var canCleanCloudCopies: Bool {
+        snapshotMaintenanceStatus != nil && !isResetPending && !isLoading
+            && !isCleaningCloudCopies && !isSyncUpdateRequired && canRetrySync
+            && syncHalt == nil && previousConnectivity != .unsatisfied
+            && (syncRetryNotBefore.map { $0 <= Date() } ?? true)
+    }
+
+    func requestCloudCopyCleanup() async {
+        guard canCleanCloudCopies else { return }
+        cloudCleanupError = nil
+        #if DEBUG
+        if isPreviewCloudCleanupFixture {
+            isCleaningCloudCopies = true
+            defer { isCleaningCloudCopies = false }
+            try? await Task.sleep(for: .milliseconds(300))
+            snapshotMaintenanceStatus = SyncSnapshotMaintenanceStatus(
+                lastSuccessfulCleanup: Date(), maximumSnapshotsPerDocument: 1,
+                retainedSnapshotBytes: 0, hasPendingCleanup: false
+            )
+            return
+        }
+        #endif
+        manualSnapshotCleanupRequested = true
+        // Receive and publish any pending edits before deleting redundant copies.
+        await refresh(manual: true, trigger: "storage cleanup request")
+    }
+
+    private func cancelSnapshotMaintenance() {
+        snapshotMaintenanceTask?.cancel()
+    }
+
+    private func scheduleSnapshotMaintenance() {
+        #if os(iOS)
+        guard isForeground else { return }
+        #endif
+        guard snapshotMaintenanceTask == nil, !isResetPending,
+              !isSyncUpdateRequired, syncHalt == nil,
+              syncFailure == nil, !needsAnotherRefresh,
+              scheduledRefresh == nil, let coordinator = sync,
+              case .exchanged = coordinator.status else { return }
+        let generation = transportGeneration
+        let manual = manualSnapshotCleanupRequested
+        let taskID = UUID()
+        snapshotMaintenanceTaskID = taskID
+        snapshotMaintenanceTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                // Only the owner may release the task and presentation state.
+                // Reset or transport replacement can invalidate an older pass.
+                if self.snapshotMaintenanceTaskID == taskID {
+                    self.isCleaningCloudCopies = false
+                    self.snapshotMaintenanceTask = nil
+                    self.snapshotMaintenanceTaskID = nil
+                }
+            }
+            do {
+                let currentStatus = try await coordinator.snapshotMaintenanceStatus()
+                try Task.checkCancellation()
+                guard self.transportGeneration == generation else { return }
+                self.snapshotMaintenanceStatus = currentStatus
+                guard let status = currentStatus else { return }
+                let due = NotebookSnapshotMaintenancePolicy.isDue(status)
+                guard manual || due else { return }
+                if !manual { try await Task.sleep(for: .seconds(2)) }
+                try Task.checkCancellation()
+                guard !self.isRefreshing, !self.needsAnotherRefresh,
+                      self.scheduledRefresh == nil,
+                      self.transportGeneration == generation,
+                      self.canCleanCloudCopies,
+                      case .exchanged = coordinator.status else { return }
+                self.isCleaningCloudCopies = true
+                _ = try await coordinator.cleanupSnapshots()
+                try Task.checkCancellation()
+                let completedStatus = try await coordinator.snapshotMaintenanceStatus()
+                try Task.checkCancellation()
+                guard self.transportGeneration == generation else { return }
+                self.snapshotMaintenanceStatus = completedStatus
+                self.manualSnapshotCleanupRequested = false
+                self.cloudCleanupError = nil
+            } catch is CancellationError {
+                // Sync and edits preempt maintenance without presenting a failure.
+            } catch {
+                if !Task.isCancelled && self.transportGeneration == generation {
+                    self.cloudCleanupError = error.localizedDescription
+                }
+            }
+        }
+    }
     var backupFrequency: NotebookBackupFrequency = .daily
     var backupRetentionCount = 14
     private(set) var isLoading = false
@@ -239,6 +334,11 @@ final class NotebookWorkspace {
             environment: ProcessInfo.processInfo.environment,
             isPreview: isPreview, directory: directory
         )
+    }
+
+    private var isPreviewCloudCleanupFixture: Bool {
+        isPreview && requestedPreviewFixture == .storageLarge
+            && ProcessInfo.processInfo.environment["MEH_STORAGE_CLEANUP_FIXTURE"] == "1"
     }
 
     private var isPreviewSyncStatusFixture: Bool {
@@ -396,7 +496,10 @@ final class NotebookWorkspace {
         self.transportFactory = transportFactory
     }
 
-    isolated deinit { accountAvailabilityTask?.cancel() }
+    isolated deinit {
+        accountAvailabilityTask?.cancel()
+        snapshotMaintenanceTask?.cancel()
+    }
 
     private static let backupFrequencyKey = "meh.md.backupFrequency"
     private static let backupRetentionKey = "meh.md.backupRetentionCount"
@@ -578,6 +681,12 @@ final class NotebookWorkspace {
                 }
             }
             #if DEBUG
+            if isPreviewCloudCleanupFixture {
+                snapshotMaintenanceStatus = SyncSnapshotMaintenanceStatus(
+                    lastSuccessfulCleanup: nil, maximumSnapshotsPerDocument: 10,
+                    retainedSnapshotBytes: 100, hasPendingCleanup: true
+                )
+            }
             if isPreviewRetryFixture, !didSeedPreviewRetryFixture {
                 let retryNotBefore = Date().addingTimeInterval(previewRetryDelay)
                 notebookTransport = NotebookSyncStatusPreviewTransport(
@@ -659,6 +768,7 @@ final class NotebookWorkspace {
     private var syncTime: Duration { syncClockOrigin.duration(to: syncClock.now) }
 
     func noteDidEdit() {
+        cancelSnapshotMaintenance()
         guard !isResetPending, automaticSync, usesSync else { return }
         syncSchedule.noteEdited(at: syncTime)
         armScheduledRefresh()
@@ -679,6 +789,10 @@ final class NotebookWorkspace {
     func localStorageResetWasScheduled() {
         guard !isResetPending else { return }
         isResetPending = true
+        cancelSnapshotMaintenance()
+        snapshotMaintenanceStatus = nil
+        cloudCleanupError = nil
+        manualSnapshotCleanupRequested = false
         lastSuccessfulSync = nil
         publicationRetryPending = false
         replica?.suspendLocalEditsForPendingReset()
@@ -702,6 +816,7 @@ final class NotebookWorkspace {
     }
 
     private func scheduleRefresh(trigger: String, notBefore: Date? = nil) {
+        cancelSnapshotMaintenance()
         guard !isResetPending else { return }
         if isSyncUpdateRequired {
             Task { await publishCopies() }
@@ -754,6 +869,11 @@ final class NotebookWorkspace {
             ])
         }
         updateForegroundActivity()
+        #if os(iOS)
+        if phase == .background {
+            Task { await syncEventLog.flush() }
+        }
+        #endif
     }
 
     func sceneDidClose(id: UUID) {
@@ -783,8 +903,18 @@ final class NotebookWorkspace {
                     "elapsed_ms": Int(milliseconds)
                 ])
         }
+        if changed, !newForeground { cancelSnapshotMaintenance() }
+        if changed, newForeground, !isResetPending, !automaticSync,
+           manualSnapshotCleanupRequested {
+            // A requested cleanup remains authorized across suspension even
+            // when ordinary automatic sync is turned off. Receive first again.
+            Task { await refresh(manual: true, trigger: "resume requested cleanup") }
+        }
         guard !isResetPending, automaticSync, changed else { return }
         if newForeground {
+            cancelSnapshotMaintenance()
+            snapshotMaintenanceStatus = nil
+            cloudCleanupError = nil
             pendingAccountRecheck = true
             requestAutomaticRefresh(trigger: "foreground activation")
         } else {
@@ -845,7 +975,11 @@ final class NotebookWorkspace {
     }
 
     func cloudAccountAvailabilityChanged() {
-        guard !isResetPending, automaticSync else { return }
+        guard !isResetPending else { return }
+        cancelSnapshotMaintenance()
+        snapshotMaintenanceStatus = nil
+        cloudCleanupError = nil
+        guard automaticSync else { return }
         pendingAccountRecheck = true
         searchScopeGeneration += 1
         syncEventLog.record("iCloud account availability changed")
@@ -884,6 +1018,10 @@ final class NotebookWorkspace {
         plannedRetryUptime = nil
         plannedRetryDelay = nil
         isRefreshing = true
+        let maintenance = snapshotMaintenanceTask
+        cancelSnapshotMaintenance()
+        await maintenance?.value
+        guard !isResetPending else { isRefreshing = false; return }
         startedRefreshAt = syncClock.now
         // The app may enter the background after this exchange starts, so
         // acquire the lease for every refresh that owns the exchange.
@@ -893,6 +1031,7 @@ final class NotebookWorkspace {
             endBackgroundExecution()
             isRefreshing = false
             startedRefreshAt = nil
+            if !needsAnotherRefresh { scheduleSnapshotMaintenance() }
             if needsAnotherRefresh {
                 needsAnotherRefresh = false
                 if needsImmediateRefresh {
@@ -1066,6 +1205,7 @@ final class NotebookWorkspace {
                     self.syncEventLog.record("background execution lease expired")
                 }
                 self.endBackgroundExecution()
+                await self.syncEventLog.flush()
             }
         }
         if usesSync {
@@ -1154,6 +1294,8 @@ final class NotebookWorkspace {
             // Invalidate hints before suspending; old callbacks cannot start a
             // pass against the replacement coordinator.
             transportGeneration = UUID()
+            snapshotMaintenanceStatus = nil
+            cloudCleanupError = nil
             publicationRetryPending = false
             cloudActivityTask?.cancel()
             cloudActivityTask = nil

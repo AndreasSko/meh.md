@@ -887,24 +887,79 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.progress)
     }
 
-    func testSnapshotCleanupHasItsOwnPhaseAndClearsOnFailure() async throws {
+    func testSnapshotCleanupRunsSeparatelyAndKeepsExchangeState() async throws {
+        let transport = PausingCleanupTransport(failSnapshots: false)
+        let coordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: directory()), transport: transport
+        )
+        await coordinator.synchronize()
+        assertExchanged(coordinator.status)
+        XCTAssertNil(coordinator.progress)
+        let cleanupCountBefore = await transport.snapshotCleanupCount()
+        XCTAssertEqual(cleanupCountBefore, 0)
+
+        let cleanup = Task { try await coordinator.cleanupSnapshots() }
+        await transport.waitForCleanup()
+        assertExchanged(coordinator.status)
+        XCTAssertNil(coordinator.progress)
+        await transport.resumeCleanup()
+        let report = try await cleanup.value
+        XCTAssertEqual(report.deletedSnapshotCount, 0)
+        assertExchanged(coordinator.status)
+        XCTAssertNil(coordinator.progress)
+        XCTAssertNil(coordinator.lastError)
+    }
+
+    func testSnapshotCleanupFailurePreservesExchangeStateAndLastError() async throws {
         let transport = PausingCleanupTransport()
         let coordinator = NotebookSyncCoordinator(
             replica: NotebookReplica(directory: directory()), transport: transport
         )
-        let synchronization = Task { await coordinator.synchronize() }
+        await coordinator.synchronize()
+        let exchangedStatus = coordinator.status
+
+        let cleanup = Task { try await coordinator.cleanupSnapshots() }
         await transport.waitForCleanup()
-        let progress = try XCTUnwrap(coordinator.progress)
-        XCTAssertEqual(progress.phase, .cleaningUpSnapshots)
-        XCTAssertTrue(progress.activeNoteIDs.isEmpty)
-        XCTAssertEqual(progress.cleanupItemCount, 0)
+        assertExchanged(coordinator.status)
+        XCTAssertNil(coordinator.progress)
         await transport.resumeCleanup()
-        await synchronization.value
-        guard case .failed = coordinator.status else {
-            return XCTFail("Expected integrity failure to stop cleanup")
+        do {
+            _ = try await cleanup.value
+            XCTFail("Expected snapshot cleanup failure")
+        } catch {
+            XCTAssertEqual(error as? SyncError, .invalidRecord)
         }
-        XCTAssertEqual(coordinator.progress?.activeNoteIDs, [])
-        XCTAssertEqual(coordinator.progress?.cleanupItemCount, 0)
+
+        XCTAssertEqual(coordinator.status, exchangedStatus)
+        XCTAssertNil(coordinator.progress)
+        XCTAssertNil(coordinator.lastError)
+    }
+
+    func testExchangeScopeBalancesAfterSuccessAndFetchFailure() async throws {
+        let successfulTransport = PausingCleanupTransport(pauseSnapshots: false)
+        let successfulCoordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: directory()),
+            transport: successfulTransport
+        )
+        await successfulCoordinator.synchronize()
+        let successfulCounts = await successfulTransport.exchangeCounts()
+        XCTAssertEqual(successfulCounts.begin, 1)
+        XCTAssertEqual(successfulCounts.end, 1)
+
+        let failingTransport = PausingCleanupTransport(
+            pauseSnapshots: false, failFetch: true
+        )
+        let failingCoordinator = NotebookSyncCoordinator(
+            replica: NotebookReplica(directory: directory()),
+            transport: failingTransport
+        )
+        await failingCoordinator.synchronize()
+        guard case .failed = failingCoordinator.status else {
+            return XCTFail("Expected fetch failure")
+        }
+        let failingCounts = await failingTransport.exchangeCounts()
+        XCTAssertEqual(failingCounts.begin, 1)
+        XCTAssertEqual(failingCounts.end, 1)
     }
 
     func testCheckingAndReceivingProgressAreIndeterminate() async throws {
@@ -1984,12 +2039,33 @@ private actor PausingCleanupTransport: SyncTransport {
     nonisolated let scope = "cleanup-progress"
     private let base = InMemorySyncTransport(scope: "cleanup-progress")
     private let pauseSnapshots: Bool
+    private let failSnapshots: Bool
+    private let failFetch: Bool
     private var cleanupStarted = false
+    private var snapshotCleanups = 0
+    private var beginCount = 0
+    private var endCount = 0
     private var waiter: CheckedContinuation<Void, Never>?
     private var resume: CheckedContinuation<Void, Never>?
 
-    init(pauseSnapshots: Bool = true) {
+    init(
+        pauseSnapshots: Bool = true,
+        failSnapshots: Bool = true,
+        failFetch: Bool = false
+    ) {
         self.pauseSnapshots = pauseSnapshots
+        self.failSnapshots = failSnapshots
+        self.failFetch = failFetch
+    }
+
+    func beginExchange() async throws {
+        beginCount += 1
+        try await base.beginExchange()
+    }
+
+    func endExchange() async {
+        endCount += 1
+        await base.endExchange()
     }
 
     func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
@@ -2001,7 +2077,8 @@ private actor PausingCleanupTransport: SyncTransport {
     }
 
     func fetch(after cursor: String?) async throws -> SyncPage {
-        try await base.fetch(after: cursor)
+        if failFetch { throw SyncError.invalidCursor }
+        return try await base.fetch(after: cursor)
     }
 
     func purgeDeletedNotes(_ noteIDs: Set<UUID>, notebookID: UUID) async {
@@ -2011,9 +2088,16 @@ private actor PausingCleanupTransport: SyncTransport {
     func cleanupRedundantSnapshots(
         notebookID: UUID
     ) async throws -> SyncSnapshotCleanupReport {
-        guard pauseSnapshots else { return SyncSnapshotCleanupReport() }
-        await pauseCleanup()
-        throw SyncError.invalidRecord
+        snapshotCleanups += 1
+        if pauseSnapshots { await pauseCleanup() }
+        if failSnapshots { throw SyncError.invalidRecord }
+        return SyncSnapshotCleanupReport()
+    }
+
+    func snapshotCleanupCount() -> Int { snapshotCleanups }
+
+    func exchangeCounts() -> (begin: Int, end: Int) {
+        (beginCount, endCount)
     }
 
     private func pauseCleanup() async {

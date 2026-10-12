@@ -156,6 +156,7 @@ final class CloudKitSnapshotCleanupDeletionRaceTests: XCTestCase {
             XCTFail("Permanent deletion must converge: \(coordinator.status)")
             return
         }
+        _ = try await coordinator.cleanupSnapshots()
         XCTAssertTrue(try replica.deletedIDs.contains(fixture.noteID))
         XCTAssertFalse(replica.placements.contains { $0.item.id == fixture.noteID })
         XCTAssertFalse(FileManager.default.fileExists(

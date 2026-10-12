@@ -264,6 +264,7 @@ final class NotebookOfflineJoinTests: XCTestCase {
             try await cloudBody.flush()
             await remoteSync.synchronize()
             assertSuccess(remoteSync)
+            _ = try await remoteSync.cleanupSnapshots()
         }
         XCTAssertTrue(server.deletedRecordNames.contains(obsolete.id))
         let cloudSnapshot = cloudBody.currentSnapshot

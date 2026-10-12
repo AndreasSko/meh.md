@@ -46,9 +46,7 @@ final class CloudKitCanonicalCleanupIntegrationTests: XCTestCase {
         server.deleteRecord(named: older.id)
         try await drain(device)
         let stateURL = root.appending(path: "device/cloudkit-sync-state.json")
-        let retired = try JSONDecoder().decode(
-            CloudKitTransportState.self, from: Data(contentsOf: stateURL)
-        )
+        let retired = try decodeCloudKitDiskState(at: stateURL)
         XCTAssertTrue(retired.remoteDeletedSnapshotIDs.contains(older.id))
         XCTAssertFalse(retired.remoteDeletedSnapshotIDs.contains(canonical.id))
         XCTAssertTrue(retired.unresolvedRemoteDeletionRecordIDs.isEmpty)
@@ -123,9 +121,7 @@ final class CloudKitCanonicalCleanupIntegrationTests: XCTestCase {
             device = try await open("device", root: root, server: server)
             if falseAbsence {
                 _ = try await device.fetch(after: nil)
-                let recovered = try JSONDecoder().decode(
-                    CloudKitTransportState.self, from: Data(contentsOf: file)
-                )
+                let recovered = try decodeCloudKitDiskState(at: file)
                 XCTAssertFalse(recovered.remoteDeletedSnapshotIDs.contains(canonical.id))
                 XCTAssertFalse(recovered.unresolvedRemoteDeletionRecordIDs.contains(canonical.id))
                 XCTAssertTrue(recovered.remoteDeletedSnapshotIDs.contains(unrelatedAbsentID))

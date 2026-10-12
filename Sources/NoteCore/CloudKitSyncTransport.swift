@@ -42,12 +42,14 @@ struct CloudKitTransportState: Codable, Equatable {
     var inboxGeneration: UUID
     var engineState: Data?
     var canonicalSnapshotID: String?
-    private var inboxSlots: [SyncRecord?]
+    fileprivate var inboxSlots: [SyncRecord?]
     var outbox: [String: SyncRecord]
     var deletedNoteIDs: Set<UUID>
     var purgedRecordIDs: Set<String>
     var pendingRemoteDeletionIDs: Set<String>
     var pendingSnapshotCleanup: [String: CloudKitSnapshotCleanupPlan]
+    var lastSuccessfulSnapshotCleanupAt: Date?
+    var lastSnapshotCleanupInboxCount: Int?
     var scannedDeletedNoteIDs: Set<UUID>
     var unresolvedRemoteDeletionRecordIDs: Set<String>
     var remoteDeletedSnapshotIDs: Set<String>
@@ -86,10 +88,12 @@ struct CloudKitTransportState: Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case diskFormatVersion
         case accountRecordName, zoneName, protocolVersion, inboxGeneration
         case engineState, canonicalSnapshotID, inbox, outbox, deletedNoteIDs, purgedRecordIDs
         case pendingRemoteDeletionIDs, scannedDeletedNoteIDs
-        case pendingSnapshotCleanup
+        case pendingSnapshotCleanup, lastSuccessfulSnapshotCleanupAt
+        case lastSnapshotCleanupInboxCount
         case unresolvedRemoteDeletionRecordIDs
         case remoteDeletedSnapshotIDs
         case hasUnexpectedDeletion, retryNotBefore
@@ -108,8 +112,18 @@ struct CloudKitTransportState: Codable, Equatable {
         canonicalSnapshotID = try values.decodeIfPresent(
             String.self, forKey: .canonicalSnapshotID
         )
-        inboxSlots = try values.decode([SyncRecord?].self, forKey: .inbox)
-        outbox = try values.decode([String: SyncRecord].self, forKey: .outbox)
+        if let disk = decoder.userInfo[CloudKitStateDiskStorage.contextKey]
+            as? CloudKitStateDiskStorage {
+            inboxSlots = try values.decode(
+                [CloudKitStateDiskStorage.Reference?].self, forKey: .inbox
+            ).map { try $0.map { try disk.record(for: $0) } }
+            outbox = try values.decode(
+                [String: CloudKitStateDiskStorage.Reference].self, forKey: .outbox
+            ).mapValues { try disk.record(for: $0) }
+        } else {
+            inboxSlots = try values.decode([SyncRecord?].self, forKey: .inbox)
+            outbox = try values.decode([String: SyncRecord].self, forKey: .outbox)
+        }
         deletedNoteIDs = try values.decodeIfPresent(
             Set<UUID>.self, forKey: .deletedNoteIDs
         ) ?? []
@@ -123,6 +137,12 @@ struct CloudKitTransportState: Codable, Equatable {
             [String: CloudKitSnapshotCleanupPlan].self,
             forKey: .pendingSnapshotCleanup
         ) ?? [:]
+        lastSuccessfulSnapshotCleanupAt = try values.decodeIfPresent(
+            Date.self, forKey: .lastSuccessfulSnapshotCleanupAt
+        )
+        lastSnapshotCleanupInboxCount = try values.decodeIfPresent(
+            Int.self, forKey: .lastSnapshotCleanupInboxCount
+        )
         scannedDeletedNoteIDs = try values.decodeIfPresent(
             Set<UUID>.self, forKey: .scannedDeletedNoteIDs
         ) ?? []
@@ -160,8 +180,20 @@ struct CloudKitTransportState: Codable, Equatable {
         try values.encode(inboxGeneration, forKey: .inboxGeneration)
         try values.encodeIfPresent(engineState, forKey: .engineState)
         try values.encodeIfPresent(canonicalSnapshotID, forKey: .canonicalSnapshotID)
-        try values.encode(inboxSlots, forKey: .inbox)
-        try values.encode(outbox, forKey: .outbox)
+        if let disk = encoder.userInfo[CloudKitStateDiskStorage.contextKey]
+            as? CloudKitStateDiskStorage {
+            try values.encode(CloudKitStateDiskStorage.formatVersion, forKey: .diskFormatVersion)
+            try values.encode(
+                inboxSlots.map { try $0.map { try disk.reference(for: $0) } },
+                forKey: .inbox
+            )
+            try values.encode(
+                outbox.mapValues { try disk.reference(for: $0) }, forKey: .outbox
+            )
+        } else {
+            try values.encode(inboxSlots, forKey: .inbox)
+            try values.encode(outbox, forKey: .outbox)
+        }
         try values.encode(deletedNoteIDs, forKey: .deletedNoteIDs)
         try values.encode(purgedRecordIDs, forKey: .purgedRecordIDs)
         try values.encode(
@@ -169,6 +201,12 @@ struct CloudKitTransportState: Codable, Equatable {
             forKey: .pendingRemoteDeletionIDs
         )
         try values.encode(pendingSnapshotCleanup, forKey: .pendingSnapshotCleanup)
+        try values.encodeIfPresent(
+            lastSuccessfulSnapshotCleanupAt, forKey: .lastSuccessfulSnapshotCleanupAt
+        )
+        try values.encodeIfPresent(
+            lastSnapshotCleanupInboxCount, forKey: .lastSnapshotCleanupInboxCount
+        )
         try values.encode(
             scannedDeletedNoteIDs, forKey: .scannedDeletedNoteIDs
         )
@@ -184,6 +222,7 @@ struct CloudKitTransportState: Codable, Equatable {
     }
 
     var inbox: [SyncRecord] { inboxSlots.compactMap { $0 } }
+    var inboxPositionCount: Int { inboxSlots.count }
 
     mutating func appendToInbox(_ record: SyncRecord) throws {
         try CloudKitSnapshotSizeLimit.validate(record)
@@ -332,24 +371,22 @@ struct CloudKitTransportState: Codable, Equatable {
             + (!previouslyUnexpected && hasUnexpectedDeletion ? 1 : 0)
     }
 
-    mutating func resolveRemoteNoteDeletions() throws {
+    mutating func resolveRemoteNoteDeletions(
+        permanentMarkers: (SyncRecord) throws -> Set<UUID> = catalogPermanentMarkers
+    ) throws {
         unresolvedRemoteDeletionRecordIDs.subtract(purgedRecordIDs)
-        guard !unresolvedRemoteDeletionRecordIDs.isEmpty else { return }
-        let permanentlyDeletedIDs = try inbox.reduce(
-            into: Set<UUID>()
-        ) { result, record in
-            guard record.kind == .catalog,
-                  let snapshot = record.catalogSnapshot else { return }
-            let catalog = try NotebookCatalogDocument(snapshot: snapshot)
-            result.formUnion(try catalog.items().lazy.filter {
-                $0.isPermanentlyDeleted
-            }.map(\.id))
+        let unresolvedNotes = inbox.filter {
+            $0.kind == .note && unresolvedRemoteDeletionRecordIDs.contains($0.id)
         }
-        let resolvedRecordIDs = Set(inbox.lazy.filter { record in
-            record.kind == .note
-                && permanentlyDeletedIDs.contains(record.snapshot.noteID)
+        guard !unresolvedNotes.isEmpty else { return }
+        var permanentlyDeletedIDs = Set<UUID>()
+        for record in inbox where record.kind == .catalog {
+            try Task.checkCancellation()
+            permanentlyDeletedIDs.formUnion(try permanentMarkers(record))
+        }
+        unresolvedRemoteDeletionRecordIDs.subtract(unresolvedNotes.lazy.filter {
+            permanentlyDeletedIDs.contains($0.snapshot.noteID)
         }.map(\.id))
-        unresolvedRemoteDeletionRecordIDs.subtract(resolvedRecordIDs)
     }
 
     func validateRemoteDeletions() throws {
@@ -458,9 +495,17 @@ struct CloudKitTransportState: Codable, Equatable {
 
 actor CloudKitTransportStateStore {
     private let fileURL: URL
+    private let diskStorage: CloudKitStateDiskStorage
     private let protocolVersion: Int
     private var state: CloudKitTransportState
     private var isRetired = false
+    private var markerCache = CloudKitRecordEvidenceCache<Set<UUID>>()
+    private var lastMarkerInbox: [SyncRecord?]?
+    private var lastMarkerUnresolved: Set<String>?
+    private var lastMarkerPurged: Set<String>?
+    private var historyCache = CloudKitRecordEvidenceCache<Set<String>>(
+        maximumEntries: 256, maximumPayloadBytes: 64 * 1_024 * 1_024
+    )
     nonisolated let writeHealth = CloudKitWriteHealth()
     private let writeState: @Sendable (Data, URL) throws -> Void
 
@@ -493,13 +538,11 @@ actor CloudKitTransportStateStore {
         )
         self.protocolVersion = protocolVersion
         self.writeState = writeState ?? SyncFileIO.replace
+        diskStorage = CloudKitStateDiskStorage(directory: directory)
         fileURL = directory.appendingPathComponent("cloudkit-sync-state.json")
         if FileManager.default.fileExists(atPath: fileURL.path) {
             do {
-                state = try JSONDecoder().decode(
-                    CloudKitTransportState.self,
-                    from: Data(contentsOf: fileURL)
-                )
+                state = try diskStorage.decode(Data(contentsOf: fileURL)).state
             } catch {
                 throw CloudKitSyncTransportError.corruptState
             }
@@ -519,7 +562,7 @@ actor CloudKitTransportStateStore {
                 zoneName: zoneName,
                 protocolVersion: protocolVersion
             )
-            try self.writeState(JSONEncoder().encode(state), fileURL)
+            try self.writeState(diskStorage.encode(state), fileURL)
         }
     }
 
@@ -527,7 +570,95 @@ actor CloudKitTransportStateStore {
 
     /// Revokes writes on this instance before a replacement opens the same
     /// state file. An update already executing in this actor finishes first.
-    func retire() { isRetired = true }
+    func retire() {
+        isRetired = true
+        markerCache.removeAll()
+        historyCache.removeAll()
+        lastMarkerInbox = nil
+        lastMarkerUnresolved = nil
+        lastMarkerPurged = nil
+    }
+
+    func resolveRemoteNoteDeletions() throws {
+        if let failure = writeHealth.failure { throw failure }
+        guard !isRetired else { throw CloudKitRetiredTransportError() }
+        if lastMarkerInbox == state.inboxSlots,
+           lastMarkerUnresolved == state.unresolvedRemoteDeletionRecordIDs,
+           lastMarkerPurged == state.purgedRecordIDs { return }
+        var cache = markerCache
+        cache.retain(recordIDs: Set(state.inbox.lazy.filter {
+            $0.kind == .catalog
+        }.map(\.id)))
+        defer { markerCache = cache }
+        try update { state in
+            try state.resolveRemoteNoteDeletions { record in
+                try cache.value(for: record, compute: catalogPermanentMarkers)
+            }
+        }
+        lastMarkerInbox = state.inboxSlots
+        lastMarkerUnresolved = state.unresolvedRemoteDeletionRecordIDs
+        lastMarkerPurged = state.purgedRecordIDs
+    }
+
+    func retirementCandidates() throws -> [SyncRecord] {
+        var cache = historyCache
+        defer { historyCache = cache }
+        return try state.retirementCandidates { record in
+            try cache.value(for: record, compute: snapshotHistoryChangeHashes)
+        }
+    }
+
+    func resolveSnapshotRetirements(confirmedRecords: [SyncRecord]) throws {
+        var cache = historyCache
+        defer { historyCache = cache }
+        try update { state in
+            try state.resolveSnapshotRetirements(confirmedRecords: confirmedRecords) {
+                try cache.value(for: $0, compute: snapshotHistoryChangeHashes)
+            }
+        }
+    }
+
+    func snapshotMaintenanceStatus(notebookID: UUID) -> SyncSnapshotMaintenanceStatus {
+        var counts: [String: Int] = [:]
+        var groupBytes: [String: Int] = [:]
+        var maximumBytes: [String: Int] = [:]
+        for record in state.inbox where record.notebookID == notebookID {
+            guard record.protocolVersion == 2,
+                  record.id != state.canonicalSnapshotID,
+                  !state.remoteDeletedSnapshotIDs.contains(record.id),
+                  !state.unresolvedRemoteDeletionRecordIDs.contains(record.id),
+                  !state.purgedRecordIDs.contains(record.id),
+                  state.outbox[record.id] == nil else { continue }
+            let key = record.kind.rawValue + record.snapshot.noteID.uuidString
+            counts[key, default: 0] += 1
+            groupBytes[key, default: 0] += record.snapshot.data.count
+            maximumBytes[key] = max(maximumBytes[key] ?? 0, record.snapshot.data.count)
+        }
+        return SyncSnapshotMaintenanceStatus(
+            lastSuccessfulCleanup: state.lastSuccessfulSnapshotCleanupAt,
+            maximumSnapshotsPerDocument: counts.values.max() ?? 0,
+            retainedSnapshotBytes: counts.keys.reduce(0) { total, key in
+                total + (groupBytes[key]! - maximumBytes[key]!)
+            },
+            hasPendingCleanup: !state.pendingSnapshotCleanup.isEmpty
+                || counts.values.contains { $0 > 1 },
+            hasNewSnapshotsSinceLastCleanup: state.lastSnapshotCleanupInboxCount.map {
+                state.inboxPositionCount > $0
+            } ?? true
+        )
+    }
+
+    func proposedSnapshotCleanupPlans() throws -> [CloudKitSnapshotCleanupPlan] {
+        try Task.checkCancellation()
+        return try state.proposedSnapshotCleanupPlans()
+    }
+
+    func snapshotCleanupRecords(for plans: [CloudKitSnapshotCleanupPlan]) throws
+        -> [String: (victim: SyncRecord, survivor: SyncRecord)] {
+        try Task.checkCancellation()
+        return try state.snapshotCleanupRecords(for: plans)
+    }
+
 
     func update<Result: Sendable>(
         _ body: (inout CloudKitTransportState) throws -> Result
@@ -540,9 +671,11 @@ actor CloudKitTransportStateStore {
         // writers were rejected above. Identical state is already durable.
         if next == state { return result }
         try next.validate(expectedProtocolVersion: protocolVersion, reusing: state)
-        let data = try JSONEncoder().encode(next)
         do {
+            let data = try diskStorage.encode(next)
             try writeState(data, fileURL)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             let failure = CloudKitStateWriteFailure(
                 underlyingError: error
@@ -552,6 +685,7 @@ actor CloudKitTransportStateStore {
             throw failure
         }
         state = next
+        diskStorage.didCommit(next)
         return result
     }
 
@@ -601,8 +735,8 @@ actor CloudKitEventCommitter {
                 try current.validateRemoteDeletions()
                 return
             }
+            try await store.resolveRemoteNoteDeletions()
             try await store.update { state in
-                try state.resolveRemoteNoteDeletions()
                 if !allowUnresolvedSnapshots || state.hasUnexpectedDeletion {
                     try state.validateRemoteDeletions()
                 }
@@ -1669,6 +1803,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private let activityChannel: CloudKitSyncActivityChannel
     private var activityTracker = CloudKitSyncActivityTracker()
     private var bootstrapValidationCache = CloudKitBootstrapValidationCache()
+    private var exchangeActive = false
+    private var exchangeAccountVerified = false
+    private var exchangeNotebookGate: CloudKitNotebookFormatGate?
     #if DEBUG
     private var labRequestTimingSamples: [String: [Double]]?
     #endif
@@ -2423,6 +2560,34 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         )
     }
 
+    public func beginExchange() async throws {
+        exchangeActive = false
+        exchangeAccountVerified = false
+        exchangeNotebookGate = nil
+        try await assertHealthy()
+        exchangeActive = true
+        do {
+            try await verifyAccount()
+            if mode == .notebook { _ = try await currentNotebookGate() }
+        } catch {
+            await endExchange()
+            throw error
+        }
+    }
+
+    public func endExchange() async {
+        exchangeActive = false
+        exchangeAccountVerified = false
+        exchangeNotebookGate = nil
+    }
+
+    public func snapshotMaintenanceStatus(notebookID: UUID) async throws
+        -> SyncSnapshotMaintenanceStatus? {
+        guard mode == .notebook else { return nil }
+        try assertActive()
+        return await store.snapshotMaintenanceStatus(notebookID: notebookID)
+    }
+
     public func fetch(after cursor: String?) async throws -> SyncPage {
         try await assertHealthy()
         try await verifyAccount()
@@ -2467,7 +2632,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         ])
         try await ensureCanonicalSnapshotIdentity()
         let noteDeletionStart = ContinuousClock.now
-        try await store.update { try $0.resolveRemoteNoteDeletions() }
+        try await store.resolveRemoteNoteDeletions()
         let pending = await store.snapshot()
         try assertActive()
         await diagnose("retirement_note_deletions_checked", counts: [
@@ -2479,7 +2644,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         }
         await diagnose("retirement_scan_start")
         let scanStart = ContinuousClock.now
-        let candidates = try pending.retirementCandidates()
+        let candidates = try await store.retirementCandidates()
         await diagnose("retirement_scan_end", counts: [
             "duration_ms": elapsedMilliseconds(since: scanStart),
             "candidates": candidates.count
@@ -2506,11 +2671,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 let confirmed = try decode(cloudRecord)
                 let decodeMilliseconds = elapsedMilliseconds(since: decodeStart)
                 let checkpointStart = ContinuousClock.now
-                try await store.update {
-                    try $0.resolveSnapshotRetirements(
-                        confirmedRecords: [confirmed]
-                    )
-                }
+                try await store.resolveSnapshotRetirements(
+                    confirmedRecords: [confirmed]
+                )
                 let remaining = await store.snapshot()
                 await diagnose("retirement_survivor_checked", counts: [
                     "decode_ms": decodeMilliseconds,
@@ -2550,8 +2713,12 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         await acquirePublishLease()
         defer { releasePublishLease() }
         try await assertHealthy()
-        _ = try await currentNotebookGate()
         var state = await store.snapshot()
+        if noteIDs.isSubset(of: state.deletedNoteIDs),
+           noteIDs.isSubset(of: state.scannedDeletedNoteIDs),
+           state.pendingRemoteDeletionIDs.isEmpty,
+           state.unresolvedRemoteDeletionRecordIDs.isEmpty { return }
+        _ = try await currentNotebookGate()
         guard state.inbox.contains(where: {
             $0.kind == .catalog && $0.notebookID == notebookID
         }) else { throw SyncError.identityConflict }
@@ -2645,8 +2812,13 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         guard initial.inbox.contains(where: {
             $0.kind == .catalog && $0.notebookID == notebookID
         }) else { throw SyncError.identityConflict }
-        let proposals = try initial.proposedSnapshotCleanupPlans()
+        try Task.checkCancellation()
+        let proposals = try await store.proposedSnapshotCleanupPlans()
         if proposals.isEmpty && initial.pendingSnapshotCleanup.isEmpty {
+            try await store.update {
+                $0.lastSuccessfulSnapshotCleanupAt = Date()
+                $0.lastSnapshotCleanupInboxCount = initial.inboxPositionCount
+            }
             return SyncSnapshotCleanupReport()
         }
         try await store.update { try $0.persistSnapshotCleanupPlans(proposals) }
@@ -2654,10 +2826,13 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         let plans = Array(planned.pendingSnapshotCleanup.values.sorted {
             $0.victimID < $1.victimID
         }.prefix(100))
-        let proofs = try planned.snapshotCleanupRecords(for: plans)
+        try Task.checkCancellation()
+        let proofs = try await store.snapshotCleanupRecords(for: plans)
         guard !proofs.isEmpty else {
             try await store.update { state in
                 for plan in plans { state.dropSnapshotCleanup(plan) }
+                state.lastSuccessfulSnapshotCleanupAt = Date()
+                state.lastSnapshotCleanupInboxCount = initial.inboxPositionCount
             }
             return SyncSnapshotCleanupReport()
         }
@@ -2784,6 +2959,11 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         ])
         for error in failures { await observeRetryAfter(error) }
         if let failure = failures.first { throw failure }
+        try Task.checkCancellation()
+        try await store.update {
+            $0.lastSuccessfulSnapshotCleanupAt = Date()
+            $0.lastSnapshotCleanupInboxCount = initial.inboxPositionCount
+        }
         return report
     }
 
@@ -2897,6 +3077,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     /// this state directory. Cancellation is advisory: CK may still deliver
     /// callbacks, all of which are ignored by this retired instance.
     public func retire() async {
+        exchangeActive = false
+        exchangeAccountVerified = false
+        exchangeNotebookGate = nil
         guard !isRetired else {
             await store.retire()
             return
@@ -2941,6 +3124,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     }
 
     private func verifyAccount() async throws {
+        try assertActive()
+        if exchangeActive && exchangeAccountVerified { return }
         let status = try await cloudRequest(labLabel: "verifyAccount.accountStatus") {
             try await account.accountStatus()
         }
@@ -2960,6 +3145,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             latchFailure(SyncError.scopeChanged)
             throw SyncError.scopeChanged
         }
+        if exchangeActive { exchangeAccountVerified = true }
     }
 
     private func cloudRequest<T>(
@@ -3096,6 +3282,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     }
 
     private func latchFailure(_ error: any Error) {
+        exchangeActive = false
+        exchangeAccountVerified = false
+        exchangeNotebookGate = nil
         if error as? SyncError == .scopeChanged {
             delegateFailure = error
         } else if delegateFailure == nil {
@@ -3173,6 +3362,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
 
     private func currentNotebookGate() async throws ->
         CloudKitNotebookFormatGate {
+        if exchangeActive, let gate = exchangeNotebookGate { return gate }
         let id = CKRecord.ID(
             recordName: mode.bootstrapName, zoneID: zoneID
         )
@@ -3189,6 +3379,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         do {
             let gate = try CloudKitNotebookFormatGate.read(record)
             try gate.requireSupported()
+            if exchangeActive { exchangeNotebookGate = gate }
             return gate
         } catch {
             latchFailure(error)
@@ -3707,6 +3898,9 @@ extension CloudKitSyncTransport {
                     }
                 }
             case let .accountChange(change):
+                exchangeActive = false
+                exchangeAccountVerified = false
+                exchangeNotebookGate = nil
                 switch change {
                 case let .signIn(currentUser)
                     where currentUser == expectedUserRecordID:

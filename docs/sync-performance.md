@@ -44,7 +44,8 @@ generation and initial store opening are excluded from the measured operations.
 These are warm filesystem measurements, not cold disk or physical-device data.
 
 The JSON output includes every sample, median, nearest-rank p95, snapshot
-bytes, durable state-file bytes, and retained record counts. With seven
+bytes, manifest bytes, retained payload bytes, total disk bytes, and retained
+record counts. With seven
 samples, p95 is the maximum sample; it is descriptive rather than a
 population estimate.
 
@@ -52,7 +53,8 @@ Measured phases:
 
 - Full state validation, including snapshot decoding and hashes.
 - Full state JSON encoding.
-- Updating only the CloudKit engine-state payload with a durable write.
+- The first changed engine-state update, including legacy payload migration.
+- A later metadata-only engine-state update with a durable manifest write.
 - Repeating that exact engine-state update without changing any data.
 - Appending one additional character-edit snapshot with a durable write.
 - Reopening the state store and fully validating its persisted contents.
@@ -146,6 +148,65 @@ The benchmark can be rerun from the harness commit for a baseline, then from
 either optimization commit with the same parameters. Do not compare results
 while running builds or other CPU-intensive work. No CloudKit requests or
 physical-device acceptance checks were performed in this investigation.
+
+## Separate immutable payloads from checkpoints
+
+Local disk format 1 stores each exact SyncRecord in a SHA-256 named payload
+file and keeps references in the checkpoint manifest. Cloud records and
+exported SyncRecords retain their existing format. Opening legacy state is
+read-only; its first changed commit writes and flushes payload files before
+atomically replacing the manifest. Later metadata commits reuse exact record
+references. Inbox slots, generations, issued cursors, outbox records, and
+deleted replay payloads are preserved.
+
+Reopening verifies payload digests, record identity, notebook scope, and all
+existing state invariants. Missing or corrupt payloads and unknown local disk
+versions fail closed. A failed manifest replacement leaves the earlier state
+usable and can leave harmless unused payload files. No automatic local
+compaction or disk-space reduction is claimed. The initial migration and full
+startup validation remain measurable costs.
+
+Deletion checks now derive permanent-deletion markers only when unresolved
+note bodies need them. Exact catalog evidence is cached for the lifetime of
+the store; unchanged callback and post-fetch checks reuse the same result.
+Full-history retirement evidence has a bounded process-local cache, while
+remote survivor reads still prove that a covering record currently exists.
+Account and canonical-format reads are reused only within an explicit
+exchange. Publication still uses its live canonical compare-and-swap fence,
+and account events, failures, or exchange completion invalidate that scope.
+
+The event log keeps its latest 500 entries immediately available in memory,
+coalesces writes, and flushes serially on a utility queue. Sync completion and
+iOS background boundaries request a durable flush. A crash can lose events
+since the last flush; diagnostic persistence never acknowledges note data.
+
+The [2026-10-12 measurements][maintenance-evidence] use macOS 27.0.1 arm64,
+Xcode 27, Swift 6.4, Debug builds, and three serial offline samples. With 120
+fictional notes and 20 retained revisions per note:
+
+| Operation | Main baseline | Payload separation |
+| --- | ---: | ---: |
+| Warm metadata update | 21.21 ms | 10.37 ms |
+| Append one snapshot | 21.49 ms | 11.67 ms |
+| First changed update | 21.00 ms | 779.19 ms |
+| Full durable reopen | 534.28 ms | 701.51 ms |
+| Total retained disk bytes | 2,058,008 | 2,429,993 |
+
+The first changed update includes one-time migration. Reopening reads and
+verifies individual payload files, so startup is slower in this fixture. The
+manifest falls to 377,958 bytes, but retained files increase total storage by
+18.1%; smaller manifests must not be reported as saved local storage.
+
+For 267 fictional items across 30 catalog snapshots, a catalog-only deletion
+check falls from 1,961 ms to 0.059 ms because no note bodies need tombstones.
+An unresolved note still needs its first catalog scan: 2,062 ms versus 1,916
+ms. Identical subsequent evidence avoids repeating the baseline's roughly
+2,045 ms scan; near-zero cached samples chiefly demonstrate skipped work.
+These are Mac microbenchmarks, not a physical iPhone profile or a guaranteed
+cross-device sync speedup. The fixtures use generated Automerge actor IDs and
+are semantically equivalent, not byte-identical.
+
+[maintenance-evidence]: benchmarks/sync-maintenance-2026-10-12.json
 
 ## Scope and next layers
 

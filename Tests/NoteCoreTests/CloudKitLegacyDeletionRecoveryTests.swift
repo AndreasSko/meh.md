@@ -469,7 +469,7 @@ final class CloudKitLegacyDeletionRecoveryTests: XCTestCase {
     /// Encode that old layout; keep its acknowledged inbox and engine token.
     private func saveLegacyHalt(halted: Bool = true) throws -> CloudKitTransportState {
         var json = try XCTUnwrap(JSONSerialization.jsonObject(
-            with: Data(contentsOf: stateURL)) as? [String: Any])
+            with: JSONEncoder().encode(state())) as? [String: Any])
         json.removeValue(forKey: "completedSyncStateMigrations")
         json.removeValue(forKey: "remoteDeletionHaltReason")
         json.removeValue(forKey: "canonicalSnapshotID")
@@ -482,7 +482,7 @@ final class CloudKitLegacyDeletionRecoveryTests: XCTestCase {
     private var stateURL: URL { root.appending(path: "receiver/cloudkit-sync-state.json") }
     private var backupURL: URL { root.appending(path: "receiver/cloudkit-sync-state.before-legacy-recovery-v1.json") }
     private func state() throws -> CloudKitTransportState {
-        try JSONDecoder().decode(CloudKitTransportState.self, from: Data(contentsOf: stateURL))
+        try decodeCloudKitDiskState(at: stateURL)
     }
     private func open(_ name: String, services: CloudKitServices? = nil) async throws
         -> CloudKitSyncTransport {
