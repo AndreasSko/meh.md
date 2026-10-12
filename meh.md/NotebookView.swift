@@ -1172,6 +1172,22 @@ struct NotebookView: View {
         #endif
     }
 
+    private var sidebarDisclosureWidth: CGFloat {
+        #if os(macOS)
+        12
+        #else
+        20
+        #endif
+    }
+
+    private var sidebarDisclosureSpacing: CGFloat {
+        #if os(macOS)
+        0
+        #else
+        6
+        #endif
+    }
+
     private var selectedPlacement: NotebookPlacement? {
         replica.placements.first { $0.item.id == selectedID }
     }
@@ -1358,7 +1374,13 @@ struct NotebookView: View {
     }
 
     private var sidebarSectionInsets: EdgeInsets {
+        #if os(macOS)
+        // AppKit already supplies the outer list margin. Keep room for the
+        // disclosure control without adding the touch layout's extra inset.
+        EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
+        #else
         EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)
+        #endif
     }
 
     private var recentSectionInsets: EdgeInsets {
@@ -1933,7 +1955,7 @@ struct NotebookView: View {
     @ViewBuilder
     private func sidebarRow(_ row: NotebookSidebarRow) -> some View {
         if let placement = replica.placements.first(where: { $0.item.id == row.id }) {
-            HStack(spacing: 6) {
+            HStack(spacing: sidebarDisclosureSpacing) {
                 if placement.item.kind == .folder {
                     #if os(macOS)
                     NotebookNativeDisclosureButton(
@@ -1942,7 +1964,7 @@ struct NotebookView: View {
                         identifier: "notebook-disclosure-" + row.id.uuidString,
                         action: { toggleFolder(row.id) }
                     )
-                    .frame(width: 20, height: sidebarRowHeight)
+                    .frame(width: sidebarDisclosureWidth, height: sidebarRowHeight)
                     #else
                     Button { toggleFolder(row.id) } label: {
                         disclosureIcon(expanded: expandedIDs.contains(row.id))
@@ -1954,7 +1976,7 @@ struct NotebookView: View {
                     .accessibilityIdentifier("notebook-disclosure-" + row.id.uuidString)
                     #endif
                 } else {
-                    Color.clear.frame(width: 20, height: 1)
+                    Color.clear.frame(width: sidebarDisclosureWidth, height: 1)
                 }
                 if editingID == row.id {
                     inlineNameField(for: row.id)
@@ -2970,6 +2992,18 @@ struct NotebookView: View {
                 .background(NotebookBrowserAppKitScrollReader(state: browserDrag))
                 #endif
             }
+            #if os(macOS)
+            // Keep clearance in the list's actual content so AppKit can
+            // scroll the last row above the floating controls.
+            Color.clear
+                .frame(height: 96)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .selectionDisabled()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            #endif
         }
         .listStyle(.plain)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
@@ -3023,8 +3057,6 @@ struct NotebookView: View {
                 browserToolbarWasHidden = false
             }
         }
-        #else
-        .contentMargins(.bottom, 120, for: .scrollContent)
         #endif
         .scrollContentBackground(.hidden)
         .background(NotebookSidebarPalette.background)
