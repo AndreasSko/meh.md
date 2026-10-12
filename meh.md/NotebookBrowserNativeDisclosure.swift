@@ -50,7 +50,7 @@ struct NotebookNativeDisclosureButton: NSViewRepresentable {
         context: Context
     ) -> CGSize? {
         let height = proposal.height.map { $0.isFinite ? max(28, $0) : 28 } ?? 28
-        return CGSize(width: 20, height: height)
+        return CGSize(width: proposal.width ?? 20, height: height)
     }
 
     static func dismantleNSView(
