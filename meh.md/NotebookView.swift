@@ -564,6 +564,7 @@ struct NotebookView: View {
                                     navigation: editorNavigation,
                                     isEnabled: session.isEditingEnabled
                                         && !busy
+                                        && detailEditingID != selectedID
                                 )
                             }
                             #endif

@@ -24,6 +24,7 @@
       },
       "parallelizable": false,
       "selectedTests": [
+        "MacFormattingUITests",
         "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
