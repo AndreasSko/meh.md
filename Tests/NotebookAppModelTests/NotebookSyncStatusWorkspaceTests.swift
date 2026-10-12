@@ -6,6 +6,98 @@ import XCTest
 
 @MainActor
 final class NotebookSyncStatusWorkspaceTests: XCTestCase {
+    func testLocalSaveWaitClearsThroughScheduledRetry() async throws {
+        let transport = StatusWorkspaceTransport(scope: "local-wait")
+        let workspace = makeWorkspace(
+            root: temporaryRoot(), transport: transport, automaticSync: true
+        )
+        await workspace.start()
+        let sceneID = UUID()
+        workspace.sceneActivityChanged(id: sceneID, isActive: true)
+        defer {
+            workspace.localStorageResetWasScheduled()
+            workspace.sceneDidClose(id: sceneID)
+        }
+        try await waitUntil { !workspace.isRefreshing }
+        await transport.failFetches(with: SyncError.localSaveRequired, count: 1)
+
+        await workspace.requestSyncFromStatus()
+
+        XCTAssertTrue(workspace.syncFailure?.isWaitingForLocalSave == true)
+        XCTAssertTrue(workspace.isWaitingForLocalSave(at: Date()))
+        XCTAssertNotNil(workspace.syncRetryNotBefore)
+        let failedFetchCount = await transport.fetchCount
+        try await waitUntil(timeout: .seconds(8)) {
+            let fetchCount = await transport.fetchCount
+            return workspace.syncFailure == nil && !workspace.isRefreshing
+                && fetchCount > failedFetchCount
+        }
+        XCTAssertNil(workspace.syncWaitStartedAt)
+    }
+
+    func testRepeatedLocalWaitRetainsGraceStartUntilRecovery() async throws {
+        let transport = StatusWorkspaceTransport(scope: "repeated-wait")
+        let workspace = makeWorkspace(
+            root: temporaryRoot(), transport: transport, automaticSync: true
+        )
+        await workspace.start()
+        let sceneID = UUID()
+        workspace.sceneActivityChanged(id: sceneID, isActive: true)
+        defer {
+            workspace.localStorageResetWasScheduled()
+            workspace.sceneDidClose(id: sceneID)
+        }
+        try await waitUntil { !workspace.isRefreshing }
+        await transport.failFetches(with: SyncError.localSaveRequired, count: 2)
+        await workspace.requestSyncFromStatus()
+        let started = try XCTUnwrap(workspace.syncWaitStartedAt)
+        let failedFetchCount = await transport.fetchCount
+
+        try await waitUntil(timeout: .seconds(8)) {
+            await transport.fetchCount > failedFetchCount && !workspace.isRefreshing
+        }
+
+        XCTAssertEqual(workspace.syncWaitStartedAt, started)
+        XCTAssertTrue(workspace.isWaitingForLocalSave(at: started.addingTimeInterval(59)))
+        XCTAssertFalse(workspace.isWaitingForLocalSave(at: started.addingTimeInterval(60)))
+        XCTAssertFalse(workspace.isWaitingForLocalSave(at: started.addingTimeInterval(61)))
+        try await waitUntil(timeout: .seconds(13)) {
+            workspace.syncFailure == nil && !workspace.isRefreshing
+        }
+        XCTAssertNil(workspace.syncWaitStartedAt)
+    }
+
+    func testRealSaveFailureWarnsImmediatelyWithAutomaticRetry() async throws {
+        let transport = StatusWorkspaceTransport(scope: "disk-full")
+        let workspace = makeWorkspace(
+            root: temporaryRoot(), transport: transport, automaticSync: true
+        )
+        await workspace.start()
+        let sceneID = UUID()
+        workspace.sceneActivityChanged(id: sceneID, isActive: true)
+        defer {
+            workspace.localStorageResetWasScheduled()
+            workspace.sceneDidClose(id: sceneID)
+        }
+        try await waitUntil { !workspace.isRefreshing }
+        await transport.failFetches(
+            with: LocalNoteSaveFailure(underlyingError: POSIXError(.ENOSPC)),
+            count: 1
+        )
+
+        await workspace.requestSyncFromStatus()
+
+        let failure = try XCTUnwrap(workspace.syncFailure)
+        XCTAssertEqual(String(localized: failure.title), "Device storage is full")
+        XCTAssertFalse(failure.isWaitingForLocalSave)
+        XCTAssertFalse(workspace.isWaitingForLocalSave(at: Date()))
+        XCTAssertNil(workspace.syncWaitStartedAt)
+        XCTAssertNotNil(workspace.syncRetryNotBefore)
+        try await waitUntil(timeout: .seconds(8)) {
+            workspace.syncFailure == nil && !workspace.isRefreshing
+        }
+    }
+
     func testSuccessfulTimestampSurvivesRelaunchForSameScopeAndNotebook() async throws {
         let root = temporaryRoot()
         let store = InMemorySyncStore()
@@ -129,12 +221,13 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
 
     private func makeWorkspace(
         root: URL,
-        transport: any SyncTransport
+        transport: any SyncTransport,
+        automaticSync: Bool = false
     ) -> NotebookWorkspace {
         NotebookWorkspace(
             directory: root.appending(path: "Notebook"),
             documentsDirectory: root.appending(path: "Documents"),
-            transport: transport, automaticSync: false,
+            transport: transport, automaticSync: automaticSync,
             mode: .development(URL(string: "http://127.0.0.1")!, "status-test")
         )
     }
@@ -172,6 +265,8 @@ private actor StatusWorkspaceTransport: SyncTransport {
     private let base: InMemorySyncTransport
     private(set) var fetchCount = 0
     private var failFetch = false
+    private var injectedError: (any Error)?
+    private var failuresRemaining = 0
     private var pauseFetch = false
     private var pausedFetch: CheckedContinuation<Void, Never>?
 
@@ -183,6 +278,10 @@ private actor StatusWorkspaceTransport: SyncTransport {
     var isFetchPaused: Bool { pausedFetch != nil }
 
     func failNextFetch() { failFetch = true }
+    func failFetches(with error: any Error, count: Int) {
+        injectedError = error
+        failuresRemaining = count
+    }
     func pauseNextFetch() { pauseFetch = true }
     func resumeFetch() {
         pausedFetch?.resume()
@@ -199,6 +298,10 @@ private actor StatusWorkspaceTransport: SyncTransport {
 
     func fetch(after cursor: String?) async throws -> SyncPage {
         fetchCount += 1
+        if failuresRemaining > 0, let injectedError {
+            failuresRemaining -= 1
+            throw injectedError
+        }
         if failFetch {
             failFetch = false
             throw SyncError.unavailable("Temporary test failure")

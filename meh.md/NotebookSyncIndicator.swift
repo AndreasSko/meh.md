@@ -3,17 +3,20 @@ import NoteCore
 
 /// Stable toolbar states keep idle and waiting distinct from active work.
 nonisolated enum NotebookSyncIndicator: Equatable {
-    case synced, syncing, failed, disabled
+    case synced, syncing, waiting, failed, disabled
 
     init(
         isEnabled: Bool,
         isSyncing: Bool,
         isRetryPaused: Bool,
         hasError: Bool,
-        hasPendingChanges: Bool
+        hasPendingChanges: Bool,
+        isWaitingForLocalSave: Bool = false
     ) {
         if !isEnabled {
             self = .disabled
+        } else if isWaitingForLocalSave && !hasError {
+            self = isSyncing && !isRetryPaused ? .syncing : .waiting
         } else if isRetryPaused {
             self = .failed
         } else if isSyncing {
@@ -29,7 +32,7 @@ nonisolated enum NotebookSyncIndicator: Equatable {
 
     var symbol: String {
         switch self {
-        case .synced: "icloud"
+        case .synced, .waiting: "icloud"
         case .syncing: "arrow.triangle.2.circlepath.icloud"
         case .disabled: "icloud.slash"
         case .failed: "exclamationmark.icloud"

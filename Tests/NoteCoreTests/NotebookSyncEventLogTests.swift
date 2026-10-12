@@ -124,6 +124,21 @@ final class NotebookSyncEventLogTests: XCTestCase {
         XCTAssertFalse(codes.joined().contains(identifier.uuidString))
     }
 
+    func testNoteWriteFailureKeepsDiagnosticCauseWithoutFilePaths() {
+        let secret = "/private/user/secret-note.md"
+        let underlying = NSError(
+            domain: NSPOSIXErrorDomain, code: Int(ENOSPC),
+            userInfo: [NSFilePathErrorKey: secret]
+        )
+        let code = NotebookSyncEventLog.errorCode(
+            LocalNoteSaveFailure(underlyingError: underlying)
+        )
+        XCTAssertEqual(
+            code, "LocalNoteSaveFailure." + NotebookSyncEventLog.errorCode(underlying)
+        )
+        XCTAssertFalse(code.contains(secret))
+    }
+
     func testStorageFailureKeepsDiagnosticCauseWithoutFilePaths() {
         let secret = "/private/user/secret-note.md"
         let error = CloudKitStateWriteFailure(underlyingError: NSError(

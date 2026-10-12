@@ -96,6 +96,7 @@ final class NotebookWorkspace {
     private(set) var errorMessage: String?
     private(set) var syncSetupError: String?
     private(set) var syncFailure: SyncFailurePresentation?
+    private(set) var syncWaitStartedAt: Date?
     private(set) var syncHalt: CloudKitSyncHaltStatus?
     private(set) var syncUpdateRequiredVersion: UInt64?
     private(set) var copyError: String?
@@ -327,6 +328,30 @@ final class NotebookWorkspace {
     }
     var isSyncUpdateRequired: Bool {
         syncUpdateRequiredVersion != nil || syncHalt?.reason == .updateRequired
+    }
+
+    /// Repeated retries must not restart the grace period for an unresolved
+    /// local save prerequisite. Actual write failures never get this grace.
+    func isWaitingForLocalSave(at now: Date) -> Bool {
+        guard syncFailure?.isWaitingForLocalSave == true,
+              let syncWaitStartedAt else { return false }
+        return now.timeIntervalSince(syncWaitStartedAt) < 60
+    }
+
+    private func recordSyncFailure(
+        _ error: any Error, retryWillOccurAutomatically: Bool,
+        at now: Date = Date()
+    ) {
+        let presentation = SyncFailurePresentation(
+            error: error,
+            retryWillOccurAutomatically: retryWillOccurAutomatically
+        )
+        if presentation.isWaitingForLocalSave {
+            if syncWaitStartedAt == nil { syncWaitStartedAt = now }
+        } else {
+            syncWaitStartedAt = nil
+        }
+        syncFailure = presentation
     }
     #if DEBUG
     private var requestedPreviewFixture: NotebookUITestFixture? {
@@ -687,6 +712,27 @@ final class NotebookWorkspace {
                     retainedSnapshotBytes: 100, hasPendingCleanup: true
                 )
             }
+            if isPreviewSyncStatusFixture,
+               let state = ProcessInfo.processInfo.environment[
+                "MEH_NOTEBOOK_SYNC_SAVE_STATE"
+               ], ["waiting", "failed", "prolonged"].contains(state),
+               !didSeedPreviewRetryFixture {
+                let now = Date()
+                let deadline = now.addingTimeInterval(120)
+                notebookTransport = NotebookSyncStatusPreviewTransport(
+                    runID: directory.lastPathComponent,
+                    retryNotBefore: deadline
+                )
+                syncRetryNotBefore = deadline
+                let error: any Error = state == "failed"
+                    ? LocalNoteSaveFailure(underlyingError: POSIXError(.ENOSPC))
+                    : SyncError.localSaveRequired
+                recordSyncFailure(error, retryWillOccurAutomatically: true)
+                if state == "prolonged" {
+                    syncWaitStartedAt = now.addingTimeInterval(-61)
+                }
+                didSeedPreviewRetryFixture = true
+            }
             if isPreviewRetryFixture, !didSeedPreviewRetryFixture {
                 let retryNotBefore = Date().addingTimeInterval(previewRetryDelay)
                 notebookTransport = NotebookSyncStatusPreviewTransport(
@@ -694,8 +740,8 @@ final class NotebookWorkspace {
                     retryNotBefore: retryNotBefore
                 )
                 syncRetryNotBefore = retryNotBefore
-                syncFailure = SyncFailurePresentation(
-                    error: URLError(.timedOut),
+                recordSyncFailure(
+                    URLError(.timedOut),
                     retryWillOccurAutomatically: false
                 )
                 didSeedPreviewRetryFixture = true
@@ -707,8 +753,8 @@ final class NotebookWorkspace {
                     underlyingError: error,
                     isRecoverable: false
                 )
-                syncFailure = SyncFailurePresentation(
-                    error: error, retryWillOccurAutomatically: false
+                recordSyncFailure(
+                    error, retryWillOccurAutomatically: false
                 )
                 recordUpdateRequirement(from: error)
             }
@@ -1131,12 +1177,13 @@ final class NotebookWorkspace {
                         scheduleRefresh(trigger: "scheduled retry", notBefore: deadline)
                     }
                 }
-                syncFailure = SyncFailurePresentation(
-                    error: failure,
+                recordSyncFailure(
+                    failure,
                     retryWillOccurAutomatically: automaticSync && plannedRetryDate != nil
                 )
             } else {
                 syncFailure = nil
+                syncWaitStartedAt = nil
                 syncUpdateRequiredVersion = nil
                 retryPolicy.reset()
                 plannedRetryDate = nil
@@ -1414,8 +1461,8 @@ final class NotebookWorkspace {
             syncHalt = halt
             if let failure = halt?.underlyingError ?? failure {
                 recordUpdateRequirement(from: failure)
-                syncFailure = SyncFailurePresentation(
-                    error: failure,
+                recordSyncFailure(
+                    failure,
                     // A failed activity does not schedule an app retry. Do
                     // not infer an engine retry from an arbitrary error code.
                     retryWillOccurAutomatically: false
@@ -1461,8 +1508,8 @@ final class NotebookWorkspace {
         await updateRetryDeadline()
         guard !isResetPending, automaticSync, !isSyncUpdateRequired,
               generation == transportGeneration else { return }
-        syncFailure = SyncFailurePresentation(
-            error: failure, retryWillOccurAutomatically: true
+        recordSyncFailure(
+            failure, retryWillOccurAutomatically: true
         )
         scheduleRefresh(trigger: "cloud publication retry", notBefore: syncRetryNotBefore)
     }

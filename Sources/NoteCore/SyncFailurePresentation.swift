@@ -19,6 +19,9 @@ public struct SyncFailurePresentation: Equatable, Sendable {
     public let message: LocalizedStringResource
     public let actionHint: LocalizedStringResource?
     public let retryDisposition: RetryDisposition
+    /// A local durability prerequisite with an app-managed retry, not a
+    /// confirmed write failure. Persistent waits still need visible attention.
+    public let isWaitingForLocalSave: Bool
 
     public init(
         error: any Error,
@@ -29,6 +32,8 @@ public struct SyncFailurePresentation: Equatable, Sendable {
         message = failure.message
         retryDisposition = failure.disposition == .automatic
             && !retryWillOccurAutomatically ? .manual : failure.disposition
+        isWaitingForLocalSave = failure.isWaitingForLocalSave
+            && retryWillOccurAutomatically
         if failure.disposition == .automatic {
             actionHint = retryWillOccurAutomatically
                 ? "Sync will retry automatically."
@@ -43,18 +48,21 @@ public struct SyncFailurePresentation: Equatable, Sendable {
         let message: LocalizedStringResource
         let actionHint: LocalizedStringResource?
         let disposition: RetryDisposition
+        let isWaitingForLocalSave: Bool
         var isUnknown: Bool { title == SyncFailurePresentation.unknownFailure.title }
 
         init(
             _ title: LocalizedStringResource,
             _ message: LocalizedStringResource,
             actionHint: LocalizedStringResource? = nil,
-            disposition: RetryDisposition = .manual
+            disposition: RetryDisposition = .manual,
+            isWaitingForLocalSave: Bool = false
         ) {
             self.title = title
             self.message = message
             self.actionHint = actionHint
             self.disposition = disposition
+            self.isWaitingForLocalSave = isWaitingForLocalSave
         }
     }
 
@@ -68,6 +76,18 @@ public struct SyncFailurePresentation: Equatable, Sendable {
         visited: Set<ObjectIdentifier>
     ) -> Failure {
         guard depth < 12 else { return unknownFailure }
+
+        if let failure = error as? LocalNoteSaveFailure {
+            let cause = classify(
+                failure.underlyingError, depth: depth + 1, visited: visited
+            )
+            guard cause.isUnknown || cause.isWaitingForLocalSave else { return cause }
+            return Failure(
+                "Changes could not be saved",
+                "The app could not save changes on this device. Sync will wait until saving succeeds.",
+                actionHint: "Try again. If saving keeps failing, open Settings → Diagnostics for details."
+            )
+        }
 
         if error is NotebookOfflineJoinInterrupted {
             return Failure(
@@ -111,9 +131,10 @@ public struct SyncFailurePresentation: Equatable, Sendable {
                 )
             case .localSaveRequired:
                 return Failure(
-                    "Save before syncing",
-                    "This note needs to be saved on this device before it can sync.",
-                    actionHint: "Save the note, then try syncing again."
+                    "Waiting to sync",
+                    "Sync will continue when changes are saved on this device.",
+                    disposition: .automatic,
+                    isWaitingForLocalSave: true
                 )
             case .invalidRecord, .disconnectedHistory, .identityConflict,
                  .invalidCursor:

@@ -4,6 +4,50 @@ import XCTest
 @testable import NoteCore
 
 final class SyncFailurePresentationTests: XCTestCase {
+    func testLocalSavePrerequisiteExplainsAutomaticContinuation() {
+        let presentation = SyncFailurePresentation(
+            error: SyncError.localSaveRequired,
+            retryWillOccurAutomatically: true
+        )
+        XCTAssertEqual(String(localized: presentation.title), "Waiting to sync")
+        XCTAssertTrue(presentation.isWaitingForLocalSave)
+        XCTAssertEqual(presentation.retryDisposition, .automatic)
+        XCTAssertEqual(
+            String(localized: presentation.actionHint!),
+            "Sync will retry automatically."
+        )
+        XCTAssertFalse(String(localized: presentation.message).contains("Save the note"))
+    }
+
+    func testLocalSaveWaitDoesNotPromiseAutomaticRetryWhenDisabled() {
+        let presentation = SyncFailurePresentation(
+            error: SyncError.localSaveRequired,
+            retryWillOccurAutomatically: false
+        )
+        XCTAssertFalse(presentation.isWaitingForLocalSave)
+        XCTAssertEqual(presentation.retryDisposition, .manual)
+        XCTAssertEqual(String(localized: presentation.actionHint!), "Try syncing again.")
+    }
+
+    func testActualNoteWriteFailureAlwaysNeedsAttention() {
+        let errors: [(any Error, String)] = [
+            (POSIXError(.ENOSPC), "Device storage is full"),
+            (CocoaError(.fileWriteOutOfSpace), "Device storage is full"),
+            (POSIXError(.EACCES), "Sync data could not be saved"),
+            (NSError(domain: "test-write", code: 1), "Changes could not be saved"),
+            (SyncError.localSaveRequired, "Changes could not be saved"),
+        ]
+        for (error, expectedTitle) in errors {
+            let presentation = SyncFailurePresentation(
+                error: LocalNoteSaveFailure(underlyingError: error),
+                retryWillOccurAutomatically: true
+            )
+            XCTAssertEqual(String(localized: presentation.title), expectedTitle)
+            XCTAssertFalse(presentation.isWaitingForLocalSave)
+            XCTAssertNotNil(presentation.actionHint)
+        }
+    }
+
     func testNewerNotebookRequiresAppUpdateWithoutRetryGuidance() {
         let presentation = SyncFailurePresentation(
             error: SyncError.updateRequired(requiredVersion: 3),

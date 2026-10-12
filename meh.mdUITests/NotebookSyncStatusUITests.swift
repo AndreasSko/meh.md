@@ -1,6 +1,51 @@
 import XCTest
 
 final class NotebookSyncStatusUITests: XCTestCase {
+    func testPendingSaveWaitsWithoutManualSaveInstructions() throws {
+        let app = makeSaveFixture(state: "waiting")
+        app.launch()
+        XCTAssertTrue(app.buttons["notebook-sync-details"].waitForExistence(timeout: 30))
+        capture(app, name: "After - neutral waiting toolbar")
+        app.openSyncDetails()
+        let status = app.staticTexts["note-sync-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        XCTAssertEqual(status.label, "Waiting to sync")
+        XCTAssertFalse(app.buttons["sync-now"].exists)
+        XCTAssertFalse(app.staticTexts["sync-retry-countdown"].exists)
+        XCTAssertFalse(app.staticTexts["sync-failure-explanation"].exists)
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(
+            format: "label CONTAINS[c] %@", "Save before syncing"
+        )).firstMatch.exists)
+        capture(app, name: "After - waiting to sync")
+        app.terminate()
+    }
+
+    func testSaveFailureKeepsStorageWarningAndRetry() throws {
+        let app = makeSaveFixture(state: "failed")
+        app.launch()
+        app.openSyncDetails()
+        let status = app.staticTexts["note-sync-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        XCTAssertEqual(status.label, "Device storage is full")
+        XCTAssertTrue(app.staticTexts["sync-failure-explanation"].exists)
+        XCTAssertTrue(app.buttons["sync-now"].exists)
+        capture(app, name: "After - actionable device storage warning")
+        app.terminate()
+    }
+
+    func testProlongedSaveWaitExplainsAutomaticRetry() throws {
+        let app = makeSaveFixture(state: "prolonged")
+        app.launch()
+        app.openSyncDetails()
+        let status = app.staticTexts["note-sync-status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        XCTAssertEqual(status.label, "Sync is still waiting")
+        XCTAssertTrue(app.staticTexts["sync-failure-explanation"].exists)
+        XCTAssertTrue(app.buttons["sync-now"].exists)
+        capture(app, name: "After - prolonged save wait")
+        app.terminate()
+    }
+
     func testNotebookNavigationAllowsToolbarPopoversToReopen() throws {
         let app = makeFixture()
         app.launch()
@@ -258,6 +303,10 @@ final class NotebookSyncStatusUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "\(name) - hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
     }
 
     private func assertStatusClosed(_ status: XCUIElement) {
@@ -274,6 +323,12 @@ final class NotebookSyncStatusUITests: XCTestCase {
         let runID = "sync-status-\(UUID().uuidString)"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = runID
         app.launchEnvironment["MEH_NOTEBOOK_TEST_FIXTURE"] = "sync-status"
+        return app
+    }
+
+    private func makeSaveFixture(state: String) -> XCUIApplication {
+        let app = makeFixture()
+        app.launchEnvironment["MEH_NOTEBOOK_SYNC_SAVE_STATE"] = state
         return app
     }
 }

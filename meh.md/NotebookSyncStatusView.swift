@@ -290,6 +290,10 @@ private struct NotebookSyncFailureView: View {
             if workspace.isSyncUpdateRequired {
                 Text("Update meh.md to resume iCloud sync. You can keep editing your notes on this device.")
                     .accessibilityIdentifier("sync-update-required")
+            } else if workspace.isWaitingForLocalSave(at: now),
+                      let failure = workspace.syncFailure {
+                Text(failure.message)
+                    .accessibilityIdentifier("sync-wait-explanation")
             } else if let failure = workspace.syncFailure {
                 Text(failure.message)
                     .accessibilityIdentifier("sync-failure-explanation")
@@ -297,7 +301,8 @@ private struct NotebookSyncFailureView: View {
                    !(workspace.canRetrySync && hint == "Try syncing again.") {
                     Text(hint).foregroundStyle(.secondary)
                 }
-                if workspace.replica?.catalogSnapshot != nil,
+                if !failure.isWaitingForLocalSave,
+                   workspace.replica?.catalogSnapshot != nil,
                    workspace.replica?.localEditsSuspended == false {
                     Text("Notes stay on this device while sync is unavailable.")
                         .foregroundStyle(.secondary)
@@ -353,7 +358,12 @@ private struct NotebookSyncPresentation {
         guard workspace.usesSync else { return "Sync not enabled" }
         if workspace.isSyncUpdateRequired { return "Update needed to sync" }
         if showsActivity { return activity.title }
-        if let failure = workspace.syncFailure { return failure.title }
+        if let failure = workspace.syncFailure {
+            if failure.isWaitingForLocalSave && !workspace.isWaitingForLocalSave(at: now) {
+                return "Sync is still waiting"
+            }
+            return failure.title
+        }
         if retryDeadline != nil { return "Waiting to retry…" }
         if workspace.syncSetupError != nil { return "Sync needs attention" }
         if case .failed = workspace.sync?.status { return "Sync needs attention" }
@@ -369,18 +379,21 @@ private struct NotebookSyncPresentation {
         let pending: Bool
         if case .pending = workspace.sync?.status { pending = true }
         else { pending = false }
+        let waitingForSave = workspace.isWaitingForLocalSave(at: now)
         return NotebookSyncIndicator(
             isEnabled: workspace.usesSync, isSyncing: workspace.isSyncing,
             isRetryPaused: retryDeadline != nil || workspace.isSyncUpdateRequired,
-            hasError: workspace.isSyncUpdateRequired || failed || workspace.syncSetupError != nil
+            hasError: workspace.isSyncUpdateRequired || (failed && !waitingForSave)
+                || (workspace.syncSetupError != nil && !waitingForSave)
                 || workspace.notificationRegistrationError != nil,
-            hasPendingChanges: pending
+            hasPendingChanges: pending,
+            isWaitingForLocalSave: waitingForSave
         )
     }
 
     var indicatorColor: Color {
         switch indicator {
-        case .synced, .syncing: .primary
+        case .synced, .syncing, .waiting: .primary
         case .failed: .orange
         case .disabled: .secondary
         }
