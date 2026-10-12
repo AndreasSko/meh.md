@@ -106,7 +106,10 @@ final class NotebookSyncStatusUITests: XCTestCase {
     }
 
     func testToolbarOpensStatusAndShowsActiveFilesDuringSync() throws {
+        continueAfterFailure = false
         let app = makeFixture()
+        app.launchEnvironment["MEH_SYNC_TEST_ACKNOWLEDGEMENTS"] = "1"
+        defer { app.terminate() }
         app.launch()
         XCTAssertTrue(
             app.buttons["notebook-sync-details"].waitForExistence(timeout: 30),
@@ -156,13 +159,19 @@ final class NotebookSyncStatusUITests: XCTestCase {
         )
         XCTAssertEqual(
             XCTWaiter.wait(
-                for: [timerAdvanced, checkingHistory], timeout: 15,
-                enforceOrder: true
+                for: [timerAdvanced], timeout: 15
             ), .completed,
             "The waiting timer should advance before remote-history checking"
         )
+        let advance = app.buttons["notebook-sync-fixture-advance"]
+        XCTAssertTrue(advance.exists)
+        advance.tap()
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [checkingHistory], timeout: 15), .completed
+        )
         XCTAssertEqual(progress.value as? String, "20 percent complete")
         capture(app, name: "After - checking iCloud history")
+        advance.tap()
         let sending = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label CONTAINS %@", "Sending 3 notes"),
             object: status
@@ -208,6 +217,7 @@ final class NotebookSyncStatusUITests: XCTestCase {
         capture(app, name: "After - progress without opening status")
         app.buttons["notebook-sync-details"].tap()
         XCTAssertTrue(status.waitForExistence(timeout: 5))
+        advance.tap()
         let synced = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label == %@", "Synced with iCloud"),
             object: status

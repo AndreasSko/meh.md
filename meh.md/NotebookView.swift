@@ -2,6 +2,10 @@ import Foundation
 import NoteCore
 import SwiftUI
 
+#if CHATGPT_POC && os(iOS)
+import AssistantCore
+#endif
+
 #if os(macOS)
     import AppKit
 #else
@@ -250,6 +254,80 @@ struct NotebookView: View {
 
     private var selectedID: UUID? { navigationState.selectedID }
     private var session: NoteSession? { navigationState.selectedSession }
+#if CHATGPT_POC && os(iOS)
+    private var assistantNotebookID: UUID {
+        replica.catalogSnapshot?.notebookID ?? .assistantUnavailableNotebook
+    }
+
+    private var assistantTools: AssistantToolContext {
+        let expectedReplica = replica
+        let expectedWorkspace = workspace
+        let expectedNotebookID = assistantNotebookID
+        let expectedGeneration = workspace?.searchScopeGeneration
+        let tools = NotebookAssistantTools(
+            replica: replica,
+            notebookID: expectedNotebookID,
+            isActive: {
+                guard expectedReplica.catalogSnapshot?.notebookID
+                        == expectedNotebookID,
+                      expectedWorkspace?.isResetPending != true,
+                      expectedWorkspace?.searchScopeGeneration
+                        == expectedGeneration else { return false }
+                if let expectedWorkspace {
+                    return expectedWorkspace.replica === expectedReplica
+                }
+                return true
+            },
+            didWrite: {
+                expectedWorkspace?.contentDidSave(
+                    trigger: "assistant note tool"
+                )
+            }
+        )
+        return tools.context
+    }
+
+    private var assistantScopeGeneration: Int {
+        workspace?.searchScopeGeneration ?? 0
+    }
+
+    private var assistantChatAvailable: Bool {
+        replica.catalogSnapshot != nil && !busy && !showingSettings
+            && !showingTrash && !showingImport && !showingTemplates
+            && !showingTextSize && !search.showingQuickOpen
+            && workspace?.isResetPending != true && !unrecordedEdit
+            && historyBrowser == nil && !isLoadingHistory
+            && !showingBacklinks && movingIDs.isEmpty
+            && deletionSelection == nil
+    }
+
+    private func prepareEditorForAssistant() -> Bool {
+        guard editorNavigation.prepareToLeave?() != false,
+              !unrecordedEdit else {
+            errorMessage = NotebookNavigationError.unrecordedEdit.localizedDescription
+            editorNavigation.resumeEditing?()
+            return false
+        }
+        rememberEditorPosition()
+        return true
+    }
+
+    private func openAssistantNote(_ reference: AssistantNoteReference) {
+        guard reference.notebookID == replica.catalogSnapshot?.notebookID,
+              replica.placements.contains(where: {
+                  $0.item.id == reference.noteID && !$0.isInTrash
+                      && !$0.item.isPermanentlyDeleted
+              }) else { return }
+        perform {
+            guard reference.notebookID == replica.catalogSnapshot?.notebookID,
+                  replica.placements.contains(where: {
+                      $0.item.id == reference.noteID && !$0.isInTrash
+                          && !$0.item.isPermanentlyDeleted
+                  }) else { return }
+            try await selectNote(reference.noteID)
+        }
+    }
+#endif
     private var expandedIDs: Set<UUID> {
         get { navigationState.expandedFolderIDs }
         nonmutating set { navigationState.expandedFolderIDs = newValue }
@@ -327,6 +405,20 @@ struct NotebookView: View {
                     )
                 }
             }
+            #if CHATGPT_POC && os(iOS)
+            .modifier(AssistantNotebookModifier(
+                assistant: AssistantController.shared,
+                isAvailable: assistantChatAvailable
+                    && (!isPhoneLayout || preferredCompactColumn == .sidebar)
+                    && !search.isPresented,
+                notebookID: assistantNotebookID,
+                scopeGeneration: assistantScopeGeneration,
+                tools: assistantTools,
+                prepareForChat: prepareEditorForAssistant,
+                resumeEditor: { editorNavigation.resumeEditing?() },
+                openNote: openAssistantNote
+            ))
+            #endif
             .searchable(text: $search.query, isPresented: $search.isPresented,
                         placement: .toolbar, prompt: "Search all notes")
             .searchFocused($searchFocused)
@@ -702,7 +794,23 @@ struct NotebookView: View {
             NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
                 notebookSidebar
             } detail: {
+                #if CHATGPT_POC
                 notebookDetail
+                    .modifier(AssistantNotebookModifier(
+                        assistant: AssistantController.shared,
+                        isAvailable: assistantChatAvailable && isPhoneLayout
+                            && preferredCompactColumn == .detail
+                            && selectedID != nil,
+                        notebookID: assistantNotebookID,
+                        scopeGeneration: assistantScopeGeneration,
+                        tools: assistantTools,
+                        prepareForChat: prepareEditorForAssistant,
+                        resumeEditor: { editorNavigation.resumeEditing?() },
+                        openNote: openAssistantNote
+                    ))
+                #else
+                notebookDetail
+                #endif
             }
         }
         #else
@@ -726,7 +834,7 @@ struct NotebookView: View {
         let showsHistory = showsLiveEditor && historyBrowser != nil
         let isRestoring = session?.isEditingEnabled == true
             && (route.map { restoringLinkRouteID == $0.id } ?? false)
-        return ZStack {
+        let content = ZStack {
             if showsLiveEditor {
                 notebookDetail
                     .opacity(isRestoring ? 0 : 1)
@@ -735,8 +843,9 @@ struct NotebookView: View {
             if let route, let preview = linkVisitPreviews[route.id],
                !showsLiveEditor || isRestoring {
                 NotebookPreviousLinkView(
-                    text: preview.text, position: preview.position, title: title,
-                    viewportInsets: preview.viewportInsets, titleHeight: preview.titleHeight,
+                    text: preview.text, position: preview.position,
+                    title: title, viewportInsets: preview.viewportInsets,
+                    titleHeight: preview.titleHeight,
                     viewportOriginY: preview.viewportOriginY,
                     titleFont: editorTitleFont,
                     fontSize: editorFontSize, fontFamily: editorFontFamily,
@@ -747,12 +856,32 @@ struct NotebookView: View {
                 Color(uiColor: .systemBackground)
             }
         }
-        // Editor previews manage their own bar insets. History uses a SwiftUI
-        // heading, which must stay below the status and navigation bars.
-        // Keep editor geometry fixed when a link preview is removed.
-        .ignoresSafeArea(.container,
-                         edges: showsHistory ? .bottom : [.top, .bottom])
+        // Keep editor and preview pixels edge-to-edge. History keeps its
+        // SwiftUI heading below the system bars.
+        .ignoresSafeArea(
+            .container,
+            edges: showsHistory ? .bottom : [.top, .bottom]
+        )
         .animation(nil, value: isRestoring)
+        return Group {
+            #if CHATGPT_POC && os(iOS)
+            GeometryReader { _ in content }
+                .modifier(AssistantNotebookModifier(
+                    assistant: AssistantController.shared,
+                    isAvailable: assistantChatAvailable && isPhoneLayout
+                        && isCurrent && selectedID != nil
+                        && route?.noteID == selectedID,
+                    notebookID: assistantNotebookID,
+                    scopeGeneration: assistantScopeGeneration,
+                    tools: assistantTools,
+                    prepareForChat: prepareEditorForAssistant,
+                    resumeEditor: { editorNavigation.resumeEditing?() },
+                    openNote: openAssistantNote
+                ))
+            #else
+            content
+            #endif
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

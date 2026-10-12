@@ -25,6 +25,19 @@ struct NotebookSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                #if CHATGPT_POC && os(iOS)
+                Section("AI") {
+                    NavigationLink {
+                        AssistantConnectionView(assistant: AssistantController.shared)
+                            .modifier(AssistantBrowserModifier(
+                                assistant: AssistantController.shared
+                            ))
+                    } label: {
+                        Label("ChatGPT", systemImage: "sparkles")
+                    }
+                    .accessibilityIdentifier("assistant-settings")
+                }
+                #endif
                 Section {
                     Picker("Destination", selection: Binding(
                         get: { replica.defaultNewNoteParentID },

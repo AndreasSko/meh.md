@@ -1,0 +1,86 @@
+name: Private assistant proof of concept
+
+on:
+  pull_request:
+    paths:
+      - "Sources/AssistantCore/**"
+      - "Tests/AssistantCoreTests/**"
+      - "Sources/NoteCore/NotebookReplica.swift"
+      - "meh.md/Assistant*.swift"
+      - "meh.md/NotebookSettingsView.swift"
+      - "meh.md/NotebookView.swift"
+      - "meh.mdUITests/AssistantUITests.swift"
+      - "meh.md.xcodeproj/**"
+      - "Package.swift"
+      - ".github/workflows/assistant-poc.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: assistant-poc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Assistant authentication, tools, and transport
+    runs-on: xcode-27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Test authentication, HTTP, tools, and local storage
+        run: |
+          set -o pipefail
+          swift test --filter AssistantCoreTests 2>&1 | tee assistant-core.log
+      - name: Preserve results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: assistant-core-${{ github.run_id }}
+          path: assistant-core.log
+
+  iphone:
+    name: Assistant iPhone chat and notebook tools
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Create isolated, task-owned simulator
+        id: simulator
+        run: |
+          runtime=$(xcrun simctl list runtimes -j | python3 -c \
+            'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and r["name"] == "iOS 27.0"))')
+          udid=$(xcrun simctl create "meh.md Assistant CI $GITHUB_RUN_ID" \
+            com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro "$runtime")
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+      - name: Exercise private iCloud Dev chat with fictional local data
+        env:
+          SIMULATOR_ID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -o pipefail
+          xcodebuild -project meh.md.xcodeproj -scheme 'meh.md iCloud Dev' \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath "$RUNNER_TEMP/assistant-build" \
+            -resultBundlePath "$RUNNER_TEMP/assistant-ui.xcresult" \
+            -parallel-testing-enabled NO \
+            -collect-test-diagnostics never \
+            -only-testing:meh.mdUITests/AssistantUITests \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee assistant-ui.log
+      - name: Preserve screenshots, hierarchy, and test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: assistant-iphone-${{ github.run_id }}
+          path: |
+            assistant-ui.log
+            ${{ runner.temp }}/assistant-ui.xcresult
+      - name: Remove only this job's simulator
+        if: always() && steps.simulator.outputs.udid != ''
+        env:
+          SIMULATOR_ID: ${{ steps.simulator.outputs.udid }}
+        run: xcrun simctl delete "$SIMULATOR_ID"

@@ -241,6 +241,17 @@ final class NotebookWorkspace {
         )
     }
 
+    var usesSyncStatusAcknowledgements: Bool {
+        isPreviewSyncStatusFixture
+            && ProcessInfo.processInfo.environment["MEH_SYNC_TEST_ACKNOWLEDGEMENTS"] == "1"
+    }
+
+    func acknowledgeSyncStatusPhase() async {
+        guard usesSyncStatusAcknowledgements else { return }
+        await (notebookTransport as? NotebookSyncStatusPreviewTransport)?
+            .acknowledgePhase()
+    }
+
     private var isPreviewSyncStatusFixture: Bool {
         requestedPreviewFixture == .syncStatus
     }
@@ -1200,7 +1211,8 @@ final class NotebookWorkspace {
 #if DEBUG
             case .preview where isPreviewSyncStatusFixture:
                 transport = NotebookSyncStatusPreviewTransport(
-                    runID: directory.lastPathComponent
+                    runID: directory.lastPathComponent,
+                    usesAcknowledgements: usesSyncStatusAcknowledgements
                 )
 #endif
             default: return

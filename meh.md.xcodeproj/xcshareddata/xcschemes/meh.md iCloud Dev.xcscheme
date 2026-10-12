@@ -39,6 +39,9 @@
             </BuildableReference>
             <SelectedTests>
                <Test
+                  Identifier = "AssistantUITests">
+               </Test>
+               <Test
                   Identifier = "ICloudDevelopmentUITests">
                </Test>
                <Test

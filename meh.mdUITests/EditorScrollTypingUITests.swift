@@ -76,10 +76,20 @@ final class EditorScrollTypingUITests: XCTestCase {
     }
 
     private func tapReturn(in app: XCUIApplication) {
-        let key = app.buttons.matching(NSPredicate(
+        let keyboard = app.keyboards.firstMatch
+        let key = keyboard.buttons.matching(NSPredicate(
             format: "label IN %@", ["Return", "return"]
         )).firstMatch
-        XCTAssertTrue(key.exists)
+        let visibleReturn = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                keyboard.exists && keyboard.frame.intersects(app.frame)
+                    && key.exists && key.isHittable
+            }, object: keyboard
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [visibleReturn], timeout: 5), .completed,
+            "Return must be available on the visible software keyboard"
+        )
         key.tap()
     }
 
@@ -145,6 +155,11 @@ final class EditorScrollTypingUITests: XCTestCase {
             if target != nil { break }
             editor.swipeUp()
         }
+        // Observe the viewport produced by the last permitted swipe too.
+        // The search otherwise misses a target first revealed by swipe 25.
+        if target == nil {
+            target = try textRects("TARGET", in: app, editor: editor).first
+        }
         for _ in 0..<4 {
             guard let current = target else { break }
             if lowerBand.contains(current.midY) { break }
@@ -196,7 +211,28 @@ final class EditorScrollTypingUITests: XCTestCase {
         print("Cold focus \(mode): inserted \(inserted) on source line \(insertionLine)")
         if checkEndReturn {
             editor.typeKey(.downArrow, modifierFlags: .command)
+            // Reveal the end paragraph before the focus-restoring tap.
+            // Do not scroll or retap after Return: its visibility is tested.
+            try alignEndMarker(
+                marker: "Close the fictional journal.",
+                in: app, editor: editor
+            )
+            // Hardware-key injection can dismiss the software keyboard.
+            // Restore it with a real tap at the final paragraph end before
+            // testing the software Return key; exact bytes still verify
+            // both the end selection and the actual newline insertion.
+            let finalLine = try requireText(
+                "Close the fictional journal.", in: app, editor: editor,
+                last: true
+            )
+            app.coordinate(withNormalizedOffset: .zero).withOffset(
+                CGVector(
+                    dx: min(editor.frame.maxX - 8, finalLine.maxX + 8),
+                    dy: finalLine.midY
+                )
+            ).tap()
             tapReturn(in: app)
+            XCTAssertEqual(editor.value as? String, expected + "\n")
             var suffix = "\n"
             for letter in "finish" { suffix += tapLetter(String(letter), in: app) }
             try assertVisibleInsertion(expected + suffix, in: app,
@@ -248,12 +284,13 @@ final class EditorScrollTypingUITests: XCTestCase {
     }
 
     private func alignEndMarker(
+        marker text: String = "TARGET",
         in app: XCUIApplication, editor: XCUIElement
     ) throws {
         let keyboard = app.keyboards.firstMatch
         for _ in 0..<5 {
             let visible = unobscuredEditor(editor, in: app, keyboard: keyboard)
-            let marker = try textRects("TARGET", in: app, editor: editor).last
+            let marker = try textRects(text, in: app, editor: editor).last
             let delta = marker.map { visible.midY - $0.midY }
                 ?? -visible.height * 0.5
             if let marker,
