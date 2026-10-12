@@ -58,6 +58,15 @@ struct NotebookWindowValue: Codable, Hashable {
 @MainActor @Observable final class NotebookMenuState {
     var newNoteRequest = 0
     var settingsRequest = 0
+    var newFolderRequest = 0
+    var newWindowRequest = 0
+    var importRequest = 0
+    var exportRequest = 0
+    var moveRequest = 0
+    var trashRequest = 0
+    var canManageSelection = false
+    var canExport = false
+    var canOpenWindow = false
     var isAvailable = false
 }
 
@@ -73,6 +82,26 @@ struct NotebookMenuCommands: Commands {
             Button("New Note") { menu?.newNoteRequest += 1 }
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(menu?.isAvailable != true)
+            Button("New Folder") { menu?.newFolderRequest += 1 }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(menu?.isAvailable != true)
+            Button("New Window") { menu?.newWindowRequest += 1 }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+                .disabled(menu?.isAvailable != true || menu?.canOpenWindow != true)
+            Divider()
+            Button("Import Markdown…") { menu?.importRequest += 1 }
+                .disabled(menu?.isAvailable != true)
+            Button("Export All Notes…") { menu?.exportRequest += 1 }
+                .disabled(menu?.isAvailable != true || menu?.canExport != true)
+        }
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            Button("Move Selected…") { menu?.moveRequest += 1 }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(menu?.canManageSelection != true)
+            Button("Move Selected to Trash") { menu?.trashRequest += 1 }
+                .keyboardShortcut(.delete, modifiers: .command)
+                .disabled(menu?.canManageSelection != true)
         }
         CommandGroup(replacing: .appSettings) {
             Button("Settings…") { menu?.settingsRequest += 1 }

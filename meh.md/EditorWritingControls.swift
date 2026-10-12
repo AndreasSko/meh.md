@@ -14,7 +14,7 @@ struct EditorModeControl: View {
 
     var body: some View {
         Picker("Editor Mode", selection: $mode) {
-            Label("Source", systemImage: "doc.plaintext")
+            Label("Markdown Source", systemImage: "doc.plaintext")
                 .tag(MarkdownEditorMode.source)
                 .accessibilityIdentifier("editor-mode-source")
             Label("Live Preview", systemImage: "text.document")
@@ -326,7 +326,7 @@ private struct EditorMacFormattingRow: View {
             .padding(.horizontal, 4)
             .frame(height: EditorMacFormattingMetrics.rowHeight, alignment: .center)
         }
-        .scrollIndicators(.never)
+        .scrollIndicators(.visible)
         .accessibilityIdentifier("editor-formatting-commands")
     }
 }
@@ -1059,9 +1059,11 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         layout.minimumInteritemSpacing = 12
         layout.sectionInset = UIEdgeInsets(top: 3, left: 12, bottom: 3, right: 12)
 
-        let view = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        let view = KeyboardToolbarCollectionView(
+            frame: .zero, collectionViewLayout: layout
+        )
         view.backgroundColor = .clear
-        view.showsHorizontalScrollIndicator = false
+        view.showsHorizontalScrollIndicator = true
         view.contentInsetAdjustmentBehavior = .never
         view.decelerationRate = .fast
         view.dragInteractionEnabled = true
@@ -1071,6 +1073,10 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         view.dropDelegate = context.coordinator
         view.register(KeyboardToolbarCell.self, forCellWithReuseIdentifier: "command")
         view.accessibilityIdentifier = "editor-keyboard-toolbar"
+        context.coordinator.installOverflowCues(in: view)
+        view.didLayout = { [weak coordinator = context.coordinator] in
+            coordinator?.updateOverflowCues()
+        }
         context.coordinator.collectionView = view
         context.coordinator.update(
             navigation: navigation,
@@ -1106,6 +1112,8 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         private var commands: [KeyboardCommandDefinition]
         private var needsReloadAfterDrag = false
         private var dragItemFrames: [(index: Int, frame: CGRect)] = []
+        private var leadingOverflowCue: KeyboardToolbarOverflowCue?
+        private var trailingOverflowCue: KeyboardToolbarOverflowCue?
 
         init(
             navigation: MarkdownEditorNavigation,
@@ -1139,6 +1147,66 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             } else {
                 collectionView?.reloadData()
             }
+        }
+
+        func installOverflowCues(in collectionView: UICollectionView) {
+            let leading = KeyboardToolbarOverflowCue(edge: .leading)
+            let trailing = KeyboardToolbarOverflowCue(edge: .trailing)
+            leading.translatesAutoresizingMaskIntoConstraints = false
+            trailing.translatesAutoresizingMaskIntoConstraints = false
+            collectionView.addSubview(leading)
+            collectionView.addSubview(trailing)
+            NSLayoutConstraint.activate([
+                leading.leadingAnchor.constraint(
+                    equalTo: collectionView.frameLayoutGuide.leadingAnchor
+                ),
+                leading.topAnchor.constraint(
+                    equalTo: collectionView.frameLayoutGuide.topAnchor, constant: 3
+                ),
+                leading.bottomAnchor.constraint(
+                    equalTo: collectionView.frameLayoutGuide.bottomAnchor,
+                    constant: -3
+                ),
+                leading.widthAnchor.constraint(equalToConstant: 12),
+                trailing.trailingAnchor.constraint(
+                    equalTo: collectionView.frameLayoutGuide.trailingAnchor
+                ),
+                trailing.topAnchor.constraint(
+                    equalTo: collectionView.frameLayoutGuide.topAnchor, constant: 3
+                ),
+                trailing.bottomAnchor.constraint(
+                    equalTo: collectionView.frameLayoutGuide.bottomAnchor,
+                    constant: -3
+                ),
+                trailing.widthAnchor.constraint(equalToConstant: 12),
+            ])
+            leading.isHidden = true
+            trailing.isHidden = true
+            leadingOverflowCue = leading
+            trailingOverflowCue = trailing
+        }
+
+        func updateOverflowCues() {
+            guard let collectionView else { return }
+            let minimumOffset = -collectionView.adjustedContentInset.left
+            let maximumOffset = max(
+                minimumOffset,
+                collectionView.contentSize.width - collectionView.bounds.width
+                    + collectionView.adjustedContentInset.right
+            )
+            let offset = collectionView.contentOffset.x
+            let isRightToLeft = collectionView.effectiveUserInterfaceLayoutDirection
+                == .rightToLeft
+            let canScrollTowardLeading = isRightToLeft
+                ? offset < maximumOffset - 1 : offset > minimumOffset + 1
+            let canScrollTowardTrailing = isRightToLeft
+                ? offset > minimumOffset + 1 : offset < maximumOffset - 1
+            leadingOverflowCue?.isHidden = !canScrollTowardLeading
+            trailingOverflowCue?.isHidden = !canScrollTowardTrailing
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            updateOverflowCues()
         }
 
         func collectionView(
@@ -1479,6 +1547,59 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
                 KeyboardCommandDefinition.all.first { $0.id == id }
             }
         }
+    }
+}
+
+private final class KeyboardToolbarCollectionView: UICollectionView {
+    var didLayout: (() -> Void)?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        didLayout?()
+    }
+}
+
+private final class KeyboardToolbarOverflowCue: UIView {
+    enum Edge {
+        case leading
+        case trailing
+    }
+
+    private let edge: Edge
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    init(edge: Edge) {
+        self.edge = edge
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        isAccessibilityElement = false
+        accessibilityElementsHidden = true
+        updateGradient()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func traitCollectionDidChange(
+        _ previousTraitCollection: UITraitCollection?
+    ) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        updateGradient()
+    }
+
+    private func updateGradient() {
+        guard let gradient = layer as? CAGradientLayer else { return }
+        let isRightToLeft = effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let colorIsAtStart: Bool
+        switch edge {
+        case .leading: colorIsAtStart = !isRightToLeft
+        case .trailing: colorIsAtStart = isRightToLeft
+        }
+        let cueColor = UIColor.systemBackground.withAlphaComponent(0.55).cgColor
+        let clear = UIColor.clear.cgColor
+        gradient.colors = colorIsAtStart ? [cueColor, clear] : [clear, cueColor]
+        gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1, y: 0.5)
     }
 }
 

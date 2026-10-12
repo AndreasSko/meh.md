@@ -28,7 +28,16 @@
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
         "NotebookDragUITests/testSelectedNotesDragTogetherAndKeepTheirSource",
-        "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote"
+        "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote",
+        "UIReleasePolishUITests/testEmptyLibraryCanCreateAndEditItsFirstNote",
+        "UIReleasePolishUITests/testEmptyLibraryImportOpensPickerAndCanCancel",
+        "UIReleasePolishUITests/testBrowserActionsExposeSettingsImportAndCreateAnotherNote",
+        "UIReleasePolishUITests/testFormattingCommandChangesTheNoteSource",
+        "UIReleasePolishUITests/testNoteContextActionCreatesFolderBesideTheNote",
+        "UIReleasePolishUITests/testNoteMenusExposeTemplatesAndEditorDisplay",
+        "UIReleasePolishUITests/testPlusContextActionCreatesFolder",
+        "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow",
+        "UIReleasePolishUITests/testLongNoteTitleRemainsAccessibleInTheToolbar"
       ]
     }
   ],

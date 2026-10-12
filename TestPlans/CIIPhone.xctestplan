@@ -38,7 +38,15 @@
         "NotebookSyncStatusUITests/testSettingsContainsTheSyncEventLog",
         "NotebookSyncStatusUITests/testNotebookNavigationAllowsToolbarPopoversToReopen",
         "NotebookSyncStatusUITests/testToolbarOpensStatusAndShowsActiveFilesDuringSync",
-        "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote"
+        "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote",
+        "UIReleasePolishUITests/testEmptyLibraryCanCreateAndEditItsFirstNote",
+        "UIReleasePolishUITests/testEmptyLibraryImportOpensPickerAndCanCancel",
+        "UIReleasePolishUITests/testBrowserActionsExposeSettingsImportAndCreateAnotherNote",
+        "UIReleasePolishUITests/testFormattingCommandChangesTheNoteSource",
+        "UIReleasePolishUITests/testNoteContextActionCreatesFolderBesideTheNote",
+        "UIReleasePolishUITests/testNoteMenusExposeTemplatesAndEditorDisplay",
+        "UIReleasePolishUITests/testPlusContextActionCreatesFolder",
+        "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow"
       ]
     }
   ],

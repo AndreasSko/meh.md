@@ -148,7 +148,10 @@ struct NotebookView: View {
     @State private var quickOpenDidNavigate = false
     @State private var resumeEditorAfterQuickOpen = false
     @State private var searchLandingPosition: MarkdownEditorPosition?
+    @State private var showingExport = false
     @State private var showingImport = false
+    @State private var importingFolder = false
+    @State private var choosingImportSource = false
     @State private var showingSettings = false
     @State private var showingTemplates = false
     @State private var pendingPresentedItemID: UUID?
@@ -254,12 +257,18 @@ struct NotebookView: View {
     #if os(macOS)
     private var menuAvailable: Bool {
         !busy && !search.showingQuickOpen && !showingSettings
-            && !showingTrash && !showingImport && !showingTextSize
+            && !showingTrash && !showingImport && !showingExport
+            && !choosingImportSource && !showingTextSize
             && movingIDs.isEmpty && deletionSelection == nil
             && errorMessage == nil && sharedImportID == nil
             && !showingBacklinks && linkInsertion == nil
             && linkChoices.isEmpty && missingLink == nil
             && workspace?.isResetPending != true
+    }
+    private var canManageMenuSelection: Bool {
+        menuAvailable && browserFocused && editingID == nil
+            && detailEditingID == nil && !search.isPresented
+            && !browserSelection.isEmpty
     }
     #endif
     private var syncToolbarPlacement: ToolbarItemPlacement {
@@ -270,9 +279,41 @@ struct NotebookView: View {
         #endif
     }
 
+    private var isLibraryEmpty: Bool {
+        !replica.placements.contains {
+            !$0.isInTrash && !$0.item.isPermanentlyDeleted
+        }
+    }
+
+    private var emptyLibraryView: some View {
+        NotebookEmptyLibraryView(
+            onStartWriting: {
+                createItem(kind: .note, parentID: nil,
+                           usesDefaultDestination: true, startsWriting: true)
+            },
+            onImportMarkdown: requestImport
+        )
+        .disabled(busy)
+    }
+
+    private var sidebarTitle: String {
+        if showsSelectionControls && !search.isPresented { return "" }
+        #if os(iOS)
+        // The app name repeats the window identity and crowds a split sidebar.
+        if horizontalSizeClass == .regular { return "" }
+        #endif
+        return "meh.md"
+    }
+
     private var notebookSidebar: some View {
             ZStack {
-                libraryBrowser
+                Group {
+                    if isPhoneLayout && isLibraryEmpty {
+                        emptyLibraryView
+                    } else {
+                        libraryBrowser
+                    }
+                }
                     .opacity(search.isPresented ? 0 : 1)
                     .allowsHitTesting(!search.isPresented)
                     .accessibilityHidden(search.isPresented)
@@ -302,7 +343,7 @@ struct NotebookView: View {
                     )
                 }
             }
-            .navigationTitle(showsSelectionControls && !search.isPresented ? "" : "meh.md")
+            .navigationTitle(sidebarTitle)
             #if os(iOS)
             .navigationBarTitleDisplayMode(showsSelectionControls ? .inline : .large)
             #endif
@@ -565,19 +606,20 @@ struct NotebookView: View {
                                     .disabled(!session.isEditingEnabled || busy)
                                     .accessibilityIdentifier("notebook-version-history")
                                     Divider()
-                                    EditorModeControl(
-                                        mode: editorModeBinding,
-                                        isEnabled: session.isEditingEnabled
-                                            && !busy
-                                    )
-                                    Divider()
-                                    Button {
-                                        showingTextSize = true
-                                    } label: {
-                                        Label(
-                                            "Font & Text Size…",
-                                            systemImage: "textformat.size"
+                                    Menu {
+                                        EditorModeControl(
+                                            mode: editorModeBinding,
+                                            isEnabled: session.isEditingEnabled && !busy
                                         )
+                                        Divider()
+                                        Button {
+                                            showingTextSize = true
+                                        } label: {
+                                            Label("Font & Text Size…",
+                                                  systemImage: "textformat.size")
+                                        }
+                                    } label: {
+                                        Label("Editor Display", systemImage: "textformat")
                                     }
                                     Divider()
                                     actions(
@@ -604,6 +646,8 @@ struct NotebookView: View {
                             }
                         }
                     }
+                } else if isLibraryEmpty {
+                    emptyLibraryView
                 } else {
                     ContentUnavailableView {
                         Label("Select a note", systemImage: "note.text")
@@ -783,6 +827,39 @@ struct NotebookView: View {
         .onChange(of: menuAvailable, initial: true) { _, available in
             menu.isAvailable = available
         }
+        .onChange(of: canManageMenuSelection, initial: true) { _, available in
+            menu.canManageSelection = available
+        }
+        .onChange(of: isLibraryEmpty, initial: true) { _, empty in
+            menu.canExport = !empty
+        }
+        .onChange(of: supportsMultipleWindows, initial: true) { _, supported in
+            menu.canOpenWindow = supported
+        }
+        .onChange(of: menu.newFolderRequest) { _, _ in
+            guard menuAvailable else { return }
+            createItem(kind: .folder, parentID: nil)
+        }
+        .onChange(of: menu.newWindowRequest) { _, _ in
+            guard menuAvailable, supportsMultipleWindows else { return }
+            openWindow(id: "notebook", value: NotebookWindowValue())
+        }
+        .onChange(of: menu.importRequest) { _, _ in
+            guard menuAvailable else { return }
+            requestImport()
+        }
+        .onChange(of: menu.exportRequest) { _, _ in
+            guard menuAvailable, !isLibraryEmpty else { return }
+            showingExport = true
+        }
+        .onChange(of: menu.moveRequest) { _, _ in
+            guard canManageMenuSelection else { return }
+            beginMoving(browserSelection.orderedIDs(in: activeBrowserOrder))
+        }
+        .onChange(of: menu.trashRequest) { _, _ in
+            guard canManageMenuSelection else { return }
+            trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+        }
         .onChange(of: menu.newNoteRequest) { _, _ in
             guard menuAvailable else { return }
             createDefaultNote()
@@ -938,9 +1015,19 @@ struct NotebookView: View {
         } message: {
             Text(missingLink?.destination ?? "")
         }
-        .notebookMarkdownImporter(
-            isPresented: $showingImport, replica: replica, onImport: importMarkdown
+        .notebookMarkdownExporter(
+            isPresented: $showingExport, replica: replica, beforeExport: flushEditor
         )
+        .notebookMarkdownImporter(
+            isPresented: $showingImport, choosingFolder: importingFolder,
+            replica: replica, onImport: importMarkdown
+        )
+        .confirmationDialog("Import Markdown", isPresented: $choosingImportSource) {
+            Button("Import Files…") { showImport(choosingFolder: false) }
+                .accessibilityIdentifier("notebook-import-files")
+            Button("Import Folder…") { showImport(choosingFolder: true) }
+                .accessibilityIdentifier("notebook-import-folder")
+        }
         .sheet(isPresented: $showingTrash, onDismiss: finishTemplatePresentation) {
             NavigationStack {
                 trashView
@@ -1425,7 +1512,8 @@ struct NotebookView: View {
         ) { _ in
             setRecentHidden(true, for: id)
         })
-        menuActions.append(UIAction(
+        var reusableActions: [UIMenuElement] = []
+        reusableActions.append(UIAction(
             title: replica.isTemplateSource(id)
                 ? String(localized: "Stop Using as Template")
                 : String(localized: "Use as Template"),
@@ -1434,7 +1522,7 @@ struct NotebookView: View {
         ) { _ in
             setTemplateSource(id, enabled: !replica.isTemplateSource(id))
         })
-        menuActions.append(UIAction(
+        reusableActions.append(UIAction(
             title: replica.isSnippetSource(id)
                 ? String(localized: "Stop Using as Snippet")
                 : String(localized: "Use as Snippet"),
@@ -1443,6 +1531,11 @@ struct NotebookView: View {
         ) { _ in
             setSnippetSource(id, enabled: !replica.isSnippetSource(id))
         })
+        menuActions.append(UIMenu(
+            title: String(localized: "Templates & Snippets"),
+            image: UIImage(systemName: "doc.on.doc"),
+            children: reusableActions
+        ))
         menuActions.append(UIAction(
             title: String(localized: "Move to Trash"),
             attributes: .destructive
@@ -2047,28 +2140,32 @@ struct NotebookView: View {
         }
         if allowsRename { Button("Rename…") { beginRenaming(placement) } }
         if !placement.isInTrash {
-            let registered = replica.isTemplateSource(placement.item.id)
-            let title: LocalizedStringKey = placement.item.kind == .folder
-                ? (registered ? "Stop Using as Template Folder" : "Use as Template Folder")
-                : (registered ? "Stop Using as Template" : "Use as Template")
-            Button {
-                setTemplateSource(placement.item.id, enabled: !registered)
+            Menu {
+                let registered = replica.isTemplateSource(placement.item.id)
+                let title: LocalizedStringKey = placement.item.kind == .folder
+                    ? (registered ? "Stop Using as Template Folder" : "Use as Template Folder")
+                    : (registered ? "Stop Using as Template" : "Use as Template")
+                Button {
+                    setTemplateSource(placement.item.id, enabled: !registered)
+                } label: {
+                    Label(title, systemImage: "doc.on.doc")
+                }
+                .disabled(busy)
+                .accessibilityIdentifier("notebook-use-as-template-\(placement.item.id)")
+                let snippetRegistered = replica.isSnippetSource(placement.item.id)
+                let snippetTitle: LocalizedStringKey = placement.item.kind == .folder
+                    ? (snippetRegistered ? "Stop Using as Snippet Folder" : "Use as Snippet Folder")
+                    : (snippetRegistered ? "Stop Using as Snippet" : "Use as Snippet")
+                Button {
+                    setSnippetSource(placement.item.id, enabled: !snippetRegistered)
+                } label: {
+                    Label(snippetTitle, systemImage: "text.badge.plus")
+                }
+                .disabled(busy)
+                .accessibilityIdentifier("notebook-use-as-snippet-\(placement.item.id)")
             } label: {
-                Label(title, systemImage: "doc.on.doc")
+                Label("Templates & Snippets", systemImage: "doc.on.doc")
             }
-            .disabled(busy)
-            .accessibilityIdentifier("notebook-use-as-template-\(placement.item.id)")
-            let snippetRegistered = replica.isSnippetSource(placement.item.id)
-            let snippetTitle: LocalizedStringKey = placement.item.kind == .folder
-                ? (snippetRegistered ? "Stop Using as Snippet Folder" : "Use as Snippet Folder")
-                : (snippetRegistered ? "Stop Using as Snippet" : "Use as Snippet")
-            Button {
-                setSnippetSource(placement.item.id, enabled: !snippetRegistered)
-            } label: {
-                Label(snippetTitle, systemImage: "text.badge.plus")
-            }
-            .disabled(busy)
-            .accessibilityIdentifier("notebook-use-as-snippet-\(placement.item.id)")
         }
         Button("Move…") {
             beginMoving([placement.item.id], fromTrash: placement.isInTrash)
@@ -2111,7 +2208,7 @@ struct NotebookView: View {
                     setDefaultNewNoteParentID(isDefault ? nil : placement.item.id)
                 } label: {
                     Label(
-                        isDefault ? "Use Root for New Notes" : "Use for New Notes",
+                        isDefault ? "Use Top Level for New Notes" : "Use for New Notes",
                         systemImage: isDefault ? "folder" : "tray"
                     )
                 }
@@ -2168,7 +2265,7 @@ struct NotebookView: View {
     private func createItem(
         kind: NotebookItemKind, parentID: UUID?,
         position: NotebookCreationPosition = .append,
-        usesDefaultDestination: Bool = false
+        usesDefaultDestination: Bool = false, startsWriting: Bool = false
     ) {
         var createdFolderID: UUID?
         perform {
@@ -2191,19 +2288,33 @@ struct NotebookView: View {
                         name: name, parentID: parentID, position: position))
                 reveal(id)
                 try await selectNote(id)
-                detailEditingID = id
-                detailOriginalName = name
-                detailProposedTitle = NotebookNoteName.title(from: name)
-                detailTitleHeight = 32
-                detailTitleFocusRequest = NotebookTitleFocusRequest(
-                    noteID: id, selectsAll: true
-                )
+                if !startsWriting {
+                    detailEditingID = id
+                    detailOriginalName = name
+                    detailProposedTitle = NotebookNoteName.title(from: name)
+                    detailTitleHeight = 32
+                    detailTitleFocusRequest = NotebookTitleFocusRequest(
+                        noteID: id, selectsAll: true
+                    )
+                }
             case .folder:
                 createdFolderID = try await replica.createFolder(
                     name: "Untitled Folder", parentID: parentID,
                     position: position)
             }
         } onSuccess: {
+            if startsWriting {
+                // This explicit visit owns focus, rather than the ordinary
+                // position-restoration task that also waits for attachment.
+                let incoming = editorNavigation
+                let noteID = selectedID
+                incoming.hasExplicitVisitDestination = true
+                incoming.whenAttached { [weak incoming] in
+                    guard let incoming, incoming === editorNavigation,
+                          selectedID == noteID else { return }
+                    incoming.focusEditor?()
+                }
+            }
             guard let id = createdFolderID else { return }
             navigationState.isTreeExpanded = true
             reveal(id)
@@ -2281,7 +2392,7 @@ struct NotebookView: View {
                   session?.isEditingEnabled == true else { return }
             guard let insert = navigation.prepareSnippetInsertion?() else {
                 errorMessage = String(localized:
-                    "Place the cursor in the note before inserting a snippet. For a table cell, switch to Source mode.")
+                    "Place the cursor in the note before inserting a snippet. For a table cell, switch to Markdown Source.")
                 return
             }
             let title = selectedPlacement.map {
@@ -3060,13 +3171,19 @@ struct NotebookView: View {
         NotebookNewNoteButton(
             isEnabled: !busy, hasTemplates: !replica.templates.isEmpty,
             onNewNote: createDefaultNote,
-            onNewFromTemplate: showTemplates
+            onNewFromTemplate: showTemplates,
+            onNewFolder: { createItem(kind: .folder, parentID: nil) }
         )
         .frame(width: 44, height: 44)
         #else
         Menu {
             Button("New Note") { createDefaultNote() }
             templateCreationButton
+            Button {
+                createItem(kind: .folder, parentID: nil)
+            } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
+            }
         } label: {
             Label("New Note", systemImage: "plus")
         } primaryAction: {
@@ -3103,9 +3220,17 @@ struct NotebookView: View {
             sortMenu(parentID: nil, label: "Sort Files Once")
                 .accessibilityIdentifier("notebook-sort-root")
             templateCreationButton
-            Button("New Folder") { createItem(kind: .folder, parentID: nil) }
-            browserUndoActions
+            Button {
+                createItem(kind: .folder, parentID: nil)
+            } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
+            }
+            Button { requestImport() } label: {
+                Label("Import Markdown…", systemImage: "square.and.arrow.down")
+            }
+            .accessibilityIdentifier("notebook-import-browser")
             Divider()
+            browserUndoActions
             if isPhoneLayout {
                 Button { openSettings() } label: {
                     Label("Settings", systemImage: "gearshape")
@@ -3121,6 +3246,23 @@ struct NotebookView: View {
         }
         .disabled(busy)
         .accessibilityIdentifier("notebook-app-menu")
+    }
+
+    private func requestImport() {
+        #if os(iOS)
+        guard !busy else { return }
+        choosingImportSource = true
+        #else
+        showImport(choosingFolder: false)
+        #endif
+    }
+
+    private func showImport(choosingFolder: Bool) {
+        perform {
+            try await flushEditor()
+            importingFolder = choosingFolder
+            showingImport = true
+        }
     }
 
     private func openTrash() {

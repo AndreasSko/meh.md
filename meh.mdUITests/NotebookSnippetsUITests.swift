@@ -471,6 +471,7 @@ final class NotebookSnippetsUITests: XCTestCase {
     private func markSnippet(_ id: String, named name: String,
                              in app: XCUIApplication, isFolder: Bool = false) {
         fileTitle(name, in: app).press(forDuration: 1)
+        openTemplatesAndSnippetsSubmenu(in: app)
         let identified = app.buttons["notebook-use-as-snippet-" + id]
         let label = isFolder ? "Use as Snippet Folder" : "Use as Snippet"
         let action = identified.waitForExistence(timeout: 1)
@@ -482,11 +483,18 @@ final class NotebookSnippetsUITests: XCTestCase {
     private func markTemplate(_ id: String, named name: String,
                               in app: XCUIApplication) {
         fileTitle(name, in: app).press(forDuration: 1)
+        openTemplatesAndSnippetsSubmenu(in: app)
         let identified = app.buttons["notebook-use-as-template-" + id]
         let action = identified.waitForExistence(timeout: 1) ? identified
             : app.buttons["Use as Template"].firstMatch
         XCTAssertTrue(action.waitForExistence(timeout: 5))
         action.tap()
+    }
+
+    private func openTemplatesAndSnippetsSubmenu(in app: XCUIApplication) {
+        let submenu = app.buttons["Templates & Snippets"].firstMatch
+        XCTAssertTrue(submenu.waitForExistence(timeout: 5))
+        submenu.tap()
     }
 
     private func openSnippetSettings(_ app: XCUIApplication) {

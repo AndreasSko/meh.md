@@ -18,6 +18,7 @@ final class MarkdownTableUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         app.buttons["notebook-note-actions"].tap()
+        app.buttons["Editor Display"].tap()
         app.buttons["Live Preview"].tap()
         editor.tap()
         editor.typeText("A fictional coastal itinerary.")
@@ -54,6 +55,7 @@ final class MarkdownTableUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         app.buttons["notebook-note-actions"].tap()
+        app.buttons["Editor Display"].tap()
         app.buttons["Live Preview"].tap()
         editor.tap()
         editor.typeText("A fictional coastal itinerary.")
@@ -129,6 +131,7 @@ final class MarkdownTableUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         app.buttons["notebook-note-actions"].tap()
+        app.buttons["Editor Display"].tap()
         app.buttons["Live Preview"].tap()
         editor.tap()
         let source = """

@@ -395,6 +395,9 @@ final class NotebookTemplatesUITests: XCTestCase {
     private func markTemplate(_ id: String, named name: String,
                               in app: XCUIApplication) {
         fileTitle(name, in: app).press(forDuration: 1)
+        let submenu = app.buttons["Templates & Snippets"].firstMatch
+        XCTAssertTrue(submenu.waitForExistence(timeout: 5))
+        submenu.tap()
         let identified = app.buttons["notebook-use-as-template-" + id]
         let action = identified.waitForExistence(timeout: 1) ? identified
             : app.buttons.matching(NSPredicate(

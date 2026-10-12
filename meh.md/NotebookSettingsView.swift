@@ -17,11 +17,7 @@ struct NotebookSettingsView: View {
     @State private var importing = false
     @State private var choosingImportSource = false
     @State private var importingFolder = false
-    @State private var saving = false
-    @State private var preparing = false
-    @State private var document: MarkdownExportDocument?
-    @State private var exported = false
-    @State private var errorMessage: String?
+    @State private var exporting = false
     @State private var destinationError: String?
     @State private var updatingDefaultDestination = false
     @State private var showingSyncEventLog = false
@@ -34,7 +30,7 @@ struct NotebookSettingsView: View {
                         get: { replica.defaultNewNoteParentID },
                         set: { setDefaultNewNoteParentID($0) }
                     )) {
-                        Text("Root").tag(UUID?.none)
+                        Text("Top Level").tag(UUID?.none)
                         ForEach(activeFolders, id: \.item.id) { placement in
                             Text(folderPath(for: placement))
                                 .tag(Optional(placement.item.id))
@@ -80,11 +76,10 @@ struct NotebookSettingsView: View {
                             }
                         }
                         #endif
-                    Button("Export All Notes…") { exportAll() }
+                    Button("Export All Notes…") { exporting = true }
                         .accessibilityIdentifier("notebook-export")
-                    if preparing { ProgressView("Preparing Markdown…") }
                 }
-                .disabled(preparing || saving)
+                .disabled(exporting)
                 Section {
                     Picker("Frequency", selection: Binding(
                         get: { workspace.backupFrequency },
@@ -109,7 +104,7 @@ struct NotebookSettingsView: View {
                             }
                         }
                     }
-                    .disabled(workspace.isBackingUp || preparing || saving)
+                    .disabled(workspace.isBackingUp || exporting)
                     .accessibilityIdentifier("notebook-backup-now")
                     if let lastBackup = workspace.lastBackup {
                         LabeledContent("Last backup",
@@ -147,7 +142,7 @@ struct NotebookSettingsView: View {
                         confirmingReset = true
                     }
                     .foregroundStyle(.red)
-                    .disabled(preparing || saving || resetScheduled)
+                    .disabled(exporting || resetScheduled)
                     Text("Removes local notes, settings, and sync data on the next launch. Unsynced changes will be lost. iCloud data and backups are kept.")
                         .font(.footnote)
                 }
@@ -167,14 +162,14 @@ struct NotebookSettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
-                        .disabled(preparing || saving)
+                        .disabled(exporting)
                 }
             }
         }
         #if os(macOS)
         .frame(width: 480, height: 460)
         #endif
-        .interactiveDismissDisabled(preparing || saving)
+        .interactiveDismissDisabled(exporting)
         .sheet(isPresented: $showingSyncEventLog) {
             NotebookSyncEventLogView(log: workspace.syncEventLog)
         }
@@ -203,33 +198,9 @@ struct NotebookSettingsView: View {
             isPresented: $importing, choosingFolder: importingFolder,
             replica: replica, onImport: onImport
         )
-        .fileExporter(isPresented: $saving, document: document,
-                      contentType: .folder, defaultFilename: "meh.md Export") { result in
-            document = nil
-            switch result {
-            case .success:
-                exported = true
-            case .failure(let error):
-                let cocoaError = error as NSError
-                if cocoaError.domain != NSCocoaErrorDomain
-                    || cocoaError.code != CocoaError.userCancelled.rawValue {
-                    errorMessage = error.localizedDescription
-                }
-            }
-        }
-        .alert("Export Complete", isPresented: $exported) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("All notes were exported as Markdown.")
-        }
-        .alert("Couldn’t Export Notes", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
-        }
+        .notebookMarkdownExporter(
+            isPresented: $exporting, replica: replica, beforeExport: beforeExport
+        )
         .alert("Couldn’t Change Destination", isPresented: Binding(
             get: { destinationError != nil },
             set: { if !$0 { destinationError = nil } }
@@ -282,32 +253,4 @@ struct NotebookSettingsView: View {
         }
     }
 
-    private func exportAll() {
-        guard !preparing, !saving else { return }
-        preparing = true
-        Task { @MainActor in
-            defer { preparing = false }
-            do {
-                try await beforeExport()
-                try await replica.flushOpenNotes()
-                let placements = replica.placements
-                let linkNotes = replica.linkNotes
-                let notes = try await replica.persistedNoteSnapshots()
-                let activeIDs = Set(placements.filter { !$0.isInTrash }.map { $0.item.id })
-                document = MarkdownExportDocument(wrapper: try NotebookMarkdownExport.makeWrapper(
-                    placements: placements, notes: notes, selectedIDs: activeIDs,
-                    originalLinkNotes: linkNotes
-                ))
-                saving = true
-            } catch { errorMessage = error.localizedDescription }
-        }
-    }
-}
-
-private struct MarkdownExportDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.folder] }
-    let wrapper: FileWrapper
-    init(wrapper: FileWrapper) { self.wrapper = wrapper }
-    init(configuration: ReadConfiguration) throws { wrapper = configuration.file }
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { wrapper }
 }
