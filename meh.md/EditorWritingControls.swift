@@ -81,6 +81,7 @@ final class EditorSnippetMenuState {
 private struct EditorSnippetMenu: View {
     let navigation: MarkdownEditorNavigation
     var didCommit: (() -> Void)?
+    var labelSize: CGSize?
 
     var body: some View {
         Menu {
@@ -98,6 +99,7 @@ private struct EditorSnippetMenu: View {
             }
         } label: {
             Label("Insert Snippet", systemImage: "text.badge.plus")
+                .frame(width: labelSize?.width, height: labelSize?.height)
         }
         .disabled(!navigation.snippetMenu.isEnabled)
         .accessibilityIdentifier("editor-snippet-menu")
@@ -220,15 +222,14 @@ struct EditorWritingControls: View {
 }
 
 #if os(macOS)
-/// Keep Mac controls at regular desktop density, with a little row padding.
+/// Give every Mac formatting control the same comfortable hit area.
 @MainActor
 private enum EditorMacFormattingMetrics {
-    static let itemHeight: CGFloat = {
-        let button = NSButton(title: "H1", target: nil, action: nil)
-        button.bezelStyle = .rounded
-        button.controlSize = .regular
-        return ceil(button.intrinsicContentSize.height) + 4
-    }()
+    static let itemHeight: CGFloat = 28
+    static let itemWidth: CGFloat = 32
+    static let itemSpacing: CGFloat = 2
+    static let horizontalPadding: CGFloat = 6
+    static let itemSize = CGSize(width: itemWidth, height: itemHeight)
     static var rowHeight: CGFloat { itemHeight + 8 }
     static var labelHeight: CGFloat { itemHeight - 8 }
 }
@@ -298,7 +299,7 @@ private struct EditorMacFormattingPopover: View {
                 )
             }
         }
-        .frame(width: 368, height: EditorMacFormattingMetrics.rowHeight)
+        .frame(width: 368)
         .controlSize(.regular)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("editor-formatting-popover")
@@ -312,22 +313,117 @@ private struct EditorMacFormattingRow: View {
     let showHeadings: () -> Void
 
     var body: some View {
-        ScrollView(.horizontal) {
-            HStack(alignment: .center, spacing: 4) {
+        EditorMacFormattingScroller(documentWidth: documentWidth) {
+            HStack(alignment: .center, spacing: EditorMacFormattingMetrics.itemSpacing) {
                 ForEach(KeyboardCommandDefinition.all) { definition in
                     EditorMacFormattingChoice(
                         definition: definition, navigation: navigation,
                         select: select, didCommit: didCommit,
                         showHeadings: showHeadings
                     )
-                    .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
+                    .frame(width: EditorMacFormattingMetrics.itemWidth,
+                           height: EditorMacFormattingMetrics.itemHeight)
                 }
             }
-            .padding(.horizontal, 4)
-            .frame(height: EditorMacFormattingMetrics.rowHeight, alignment: .center)
+            .padding(.horizontal, EditorMacFormattingMetrics.horizontalPadding)
+            .frame(height: EditorMacFormattingMetrics.rowHeight)
+            .fixedSize(horizontal: true, vertical: false)
+            .controlSize(.regular)
         }
-        .scrollIndicators(.visible)
+        .frame(height: EditorMacFormattingMetrics.rowHeight)
         .accessibilityIdentifier("editor-formatting-commands")
+    }
+
+    private var documentWidth: CGFloat {
+        let count = CGFloat(KeyboardCommandDefinition.all.count)
+        return count * EditorMacFormattingMetrics.itemWidth
+            + (count - 1) * EditorMacFormattingMetrics.itemSpacing
+            + 2 * EditorMacFormattingMetrics.horizontalPadding
+    }
+}
+
+/// Own the scroll view so wheel handling stays inside this formatting row.
+private struct EditorMacFormattingScroller<Content: View>: NSViewRepresentable {
+    let documentWidth: CGFloat
+    @ViewBuilder let content: () -> Content
+
+    func makeNSView(context: Context) -> EditorMacFormattingScrollView {
+        let scroll = EditorMacFormattingScrollView()
+        let host = NSHostingView(rootView: content())
+        // The controls have fixed cells. Keep the native document at that
+        // width; disabling hosting autosizing also disables fittingSize.
+        host.sizingOptions = []
+        host.setFrameSize(NSSize(
+            width: documentWidth, height: EditorMacFormattingMetrics.rowHeight
+        ))
+        scroll.documentView = host
+        return scroll
+    }
+
+    func updateNSView(_ scroll: EditorMacFormattingScrollView, context: Context) {
+        guard let host = scroll.documentView as? NSHostingView<Content> else { return }
+        let offset = scroll.contentView.bounds.origin
+        host.rootView = content()
+        host.setFrameSize(NSSize(
+            width: documentWidth, height: EditorMacFormattingMetrics.rowHeight
+        ))
+        scroll.tile()
+        scroll.contentView.scroll(to: offset)
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+}
+
+final class EditorMacFormattingScrollView: NSScrollView {
+    private var positionedInitialContent = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        drawsBackground = false
+        borderType = .noBorder
+        hasHorizontalScroller = false
+        hasVerticalScroller = false
+        horizontalScrollElasticity = .automatic
+        verticalScrollElasticity = .none
+        horizontalLineScroll = EditorMacFormattingMetrics.itemWidth
+        setAccessibilityIdentifier("editor-formatting-commands")
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layout() {
+        super.layout()
+        // AppKit can retain the trailing edge while the zero-sized bridge
+        // mounts. Start at Bold once the popover has its real viewport.
+        guard !positionedInitialContent, documentView != nil,
+              contentView.bounds.width > 0 else { return }
+        positionedInitialContent = true
+        contentView.scroll(to: .zero)
+        reflectScrolledClipView(contentView)
+    }
+
+    override func tile() {
+        super.tile()
+        guard let documentView else { return }
+        documentView.setFrameSize(NSSize(
+            width: documentView.frame.width, height: contentView.bounds.height
+        ))
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        // Keep horizontal gestures on their own axis; a regular mouse wheel
+        // supplies only a vertical delta, which moves across the same row.
+        let input = event.scrollingDeltaX != 0
+            ? event.scrollingDeltaX : event.scrollingDeltaY
+        guard input != 0, let documentView else {
+            super.scrollWheel(with: event)
+            return
+        }
+        let delta = input
+            * (event.hasPreciseScrollingDeltas ? 1 : horizontalLineScroll)
+        let maximum = max(0, documentView.frame.width - contentView.bounds.width)
+        let offset = min(maximum, max(0, contentView.bounds.minX - delta))
+        contentView.scroll(to: NSPoint(x: offset, y: 0))
+        reflectScrolledClipView(contentView)
     }
 }
 
@@ -342,26 +438,30 @@ private struct EditorMacFormattingChoice: View {
         Group {
             if definition.command == .heading {
                 Button(action: showHeadings) {
-                    Text(verbatim: "H").font(.system(size: 18))
-                        .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
+                    Text(verbatim: "H").font(.system(size: 16))
+                        .frame(width: EditorMacFormattingMetrics.itemWidth,
+                               height: EditorMacFormattingMetrics.itemHeight)
                 }
                 .disabled(!navigation.headingCommands.isEnabled)
                 .accessibilityIdentifier("editor-command-heading")
             } else if definition.command == .insertTable {
-                EditorTableMenu(navigation: navigation, didCommit: didCommit)
+                EditorTableMenu(navigation: navigation, didCommit: didCommit,
+                               labelSize: EditorMacFormattingMetrics.itemSize)
                     .menuIndicator(.hidden)
             } else if let command = definition.command {
                 Button { select(command) } label: {
                     Image(systemName: definition.image)
-                        .frame(width: 32, height: EditorMacFormattingMetrics.itemHeight)
+                        .frame(width: EditorMacFormattingMetrics.itemWidth,
+                               height: EditorMacFormattingMetrics.itemHeight)
                 }
                 .accessibilityIdentifier(command.accessibilityIdentifier)
             } else {
-                EditorSnippetMenu(navigation: navigation, didCommit: didCommit)
+                EditorSnippetMenu(navigation: navigation, didCommit: didCommit,
+                                 labelSize: EditorMacFormattingMetrics.itemSize)
                     .menuIndicator(.hidden)
             }
         }
-        .font(.system(size: 18))
+        .font(.system(size: 16))
         .labelStyle(.iconOnly)
         .buttonStyle(.borderless)
         .help(Text(definition.title))
@@ -486,6 +586,25 @@ private struct EditorHeadingStylePicker: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        HStack(alignment: .center, spacing: 4) {
+            ForEach(HeadingCommandDefinition.all) { definition in
+                EditorHeadingHorizontalChoice(
+                    definition: definition,
+                    font: definition.previewFont(
+                        bodyFont: state.bodyFont,
+                        interfacePointSize: interfacePointSize
+                    ),
+                    selected: state.level == definition.command.headingLevel
+                ) { select(definition.command) }
+                .frame(width: choiceWidth(definition), height: controlHeight)
+            }
+        }
+        .padding(.horizontal, 4)
+        .disabled(!state.isEnabled)
+        .frame(width: width, height: EditorMacFormattingMetrics.rowHeight)
+        .accessibilityIdentifier("editor-heading-style-picker")
+        #else
         ScrollViewReader { scroll in
             ScrollView(.horizontal) {
                 HStack(alignment: .center, spacing: 4) {
@@ -530,6 +649,7 @@ private struct EditorHeadingStylePicker: View {
         .disabled(!state.isEnabled)
         .frame(width: width, height: controlHeight + 8)
         .accessibilityIdentifier("editor-heading-style-picker")
+        #endif
     }
 
     private func choiceWidth(_ definition: HeadingCommandDefinition) -> CGFloat {
@@ -855,6 +975,7 @@ private struct TableDeletionConfirmation: ViewModifier {
 private struct EditorTableMenu: View {
     let navigation: MarkdownEditorNavigation
     var didCommit: (() -> Void)?
+    var labelSize: CGSize?
     @State private var pendingDeletion: PendingTableDeletion?
 
     var body: some View {
@@ -896,6 +1017,7 @@ private struct EditorTableMenu: View {
             }
         } label: {
             Label("Table", systemImage: "tablecells")
+                .frame(width: labelSize?.width, height: labelSize?.height)
         }
         .accessibilityIdentifier("editor-table-menu")
         .modifier(TableDeletionConfirmation(pending: $pendingDeletion))

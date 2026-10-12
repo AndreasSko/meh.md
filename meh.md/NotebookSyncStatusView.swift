@@ -39,13 +39,21 @@ struct NotebookSyncButton: View {
             .accessibilityLabel("Sync with iCloud")
             .accessibilityValue(presentation.accessibilityValue)
             .accessibilityHint(presentation.showsActivity ? "Show current sync activity" : "Sync now and show status")
-            .popover(isPresented: $showingDetails) {
+            .popover(isPresented: $showingDetails, arrowEdge: preferredPopoverEdge) {
                 NotebookSyncDetailsView(workspace: workspace)
                     .presentationCompactAdaptation(.popover)
                     .onDisappear { showingDetails = false }
             }
             .onDisappear { showingDetails = false }
         }
+    }
+
+    private var preferredPopoverEdge: Edge {
+        #if os(macOS)
+        .bottom
+        #else
+        .top
+        #endif
     }
 
 }
