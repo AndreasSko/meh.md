@@ -274,6 +274,104 @@ final class NotebookSyncStatusUITests: XCTestCase {
         app.terminate()
     }
 
+#if os(iOS)
+    func testNoteNavigationAfterClosingSyncRecoversToolbarPresentation() throws {
+        continueAfterFailure = false
+        let app = makeFixture()
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["notebook-sync-details"].waitForExistence(timeout: 30))
+        let notes = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "notebook-sidebar-note-"
+        ))
+        XCTAssertTrue(notes.firstMatch.waitForExistence(timeout: 10))
+        let noteFrame = notes.firstMatch.frame
+        let noteTap = app.coordinate(withNormalizedOffset: CGVector(
+            dx: noteFrame.midX / app.frame.width,
+            dy: noteFrame.midY / app.frame.height
+        ))
+        let anchorMaxY = app.buttons["notebook-sync-details"].frame.maxY
+        app.openSyncDetails()
+        capture(app, name: "Note navigation - compact sync before atomic note taps")
+        noteTap.doubleTap()
+        let editor = app.textViews["markdown-editor"]
+        // UIKit may consume the double tap as one popover dismissal.
+        // Retry navigation immediately, without waiting for the editor first.
+        if !editor.exists { noteTap.tap() }
+        capture(app, name: "Note navigation - immediately after note navigation")
+        XCTAssertTrue(editor.waitForExistence(timeout: 10),
+                      "Note navigation should recover immediately after status dismissal")
+        capture(app, name: "Note navigation - note editor after atomic taps")
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10))
+        Thread.sleep(forTimeInterval: 2)
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        let status = app.staticTexts["note-sync-status"]
+        capture(app, name: "Note navigation - foreground native presentation")
+        assertStatusClosed(status)
+        app.revealNotebookSidebar()
+        app.openSyncDetails()
+        capture(app, name: "Note navigation - compact sync reopens")
+        XCTAssertLessThan(status.frame.minY, anchorMaxY + 200)
+        closeBrowserSyncDetails(app)
+        app.openNotebookSettings(timeout: 5)
+        capture(app, name: "Note navigation - Settings opens after return")
+        app.navigationBars["Settings"].buttons["Done"].tap()
+        let dismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Settings"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+    }
+
+    func testAutomaticSyncRecoversAfterExtendedBackground() throws {
+        continueAfterFailure = false
+        let app = makeFixture()
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        app.openSyncDetails()
+        capture(app, name: "Automatic lifecycle - compact sync before background")
+        closeBrowserSyncDetails(app)
+        let controlCenterStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.01))
+        let controlCenterEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.6))
+        controlCenterStart.press(forDuration: 0.1, thenDragTo: controlCenterEnd)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        capture(springboard, name: "Automatic lifecycle - Control Center")
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        assertStatusClosed(app.staticTexts["note-sync-status"])
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10))
+        Thread.sleep(forTimeInterval: 25)
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        let status = app.staticTexts["note-sync-status"]
+        assertStatusClosed(status)
+        XCTAssertTrue(app.buttons["notebook-sync-details"].isHittable)
+        capture(app, name: "Automatic lifecycle - returned browser")
+        let anchorMaxY = app.buttons["notebook-sync-details"].frame.maxY
+        app.openSyncDetails()
+        XCTAssertLessThan(status.frame.minY, anchorMaxY + 200,
+                          "Automatic foreground sync should preserve compact presentation")
+        capture(app, name: "Automatic lifecycle - reopened compact sync")
+        closeBrowserSyncDetails(app)
+        for reopen in 1...2 {
+            app.openNotebookSettings(timeout: 5)
+            capture(app, name: "Automatic lifecycle - reopened Settings \(reopen)")
+            app.navigationBars["Settings"].buttons["Done"].tap()
+            let dismissed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == false"),
+                object: app.navigationBars["Settings"]
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        }
+    }
+
+#endif
+
     func testSettingsContainsTheSyncEventLog() throws {
         let app = makeFixture()
         app.launch()
@@ -296,6 +394,11 @@ final class NotebookSyncStatusUITests: XCTestCase {
         )
         XCTAssertTrue(app.buttons["notebook-sync-event-log-copy"].exists)
         app.terminate()
+    }
+
+    private func closeBrowserSyncDetails(_ app: XCUIApplication) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+        assertStatusClosed(app.staticTexts["note-sync-status"])
     }
 
     private func capture(_ app: XCUIApplication, name: String) {
