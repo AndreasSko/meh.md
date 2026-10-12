@@ -36,6 +36,8 @@
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
         "NotebookDragUITests/testSelectedNotesDragTogetherAndKeepTheirSource",
+        "NotebookSyncStatusUITests/testAutomaticSyncRecoversAfterExtendedBackground",
+        "NotebookSyncStatusUITests/testNoteNavigationAfterClosingSyncRecoversToolbarPresentation",
         "NotebookSyncStatusUITests/testSettingsContainsTheSyncEventLog",
         "NotebookSyncStatusUITests/testNotebookNavigationAllowsToolbarPopoversToReopen",
         "NotebookSyncStatusUITests/testToolbarOpensStatusAndShowsActiveFilesDuringSync",

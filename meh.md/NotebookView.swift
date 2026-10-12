@@ -153,6 +153,7 @@ struct NotebookView: View {
     @State private var importingFolder = false
     @State private var choosingImportSource = false
     @State private var showingSettings = false
+    @State private var showingSyncDetails = false
     @State private var showingTemplates = false
     @State private var pendingPresentedItemID: UUID?
     @State private var showingTrash = false
@@ -352,7 +353,10 @@ struct NotebookView: View {
                 if !showingTrash {
                     if let workspace, !showsSelectionControls {
                         ToolbarItem(placement: syncToolbarPlacement) {
-                            NotebookSyncButton(workspace: workspace)
+                            NotebookSyncButton(
+                                workspace: workspace,
+                                showingDetails: $showingSyncDetails
+                            )
                         }
                     }
                     if showsSelectionControls && !search.isPresented {

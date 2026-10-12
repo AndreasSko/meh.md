@@ -8,44 +8,30 @@ import UIKit
 
 struct NotebookSyncButton: View {
     let workspace: NotebookWorkspace
-    @State private var showingDetails = false
+    @Binding var showingDetails: Bool
 
     var body: some View {
-        // Only a retry countdown depends on the clock; otherwise the
-        // toolbar button redraws when the workspace changes.
-        TimelineView(.animation(
-            minimumInterval: 1, paused: workspace.syncRetryNotBefore == nil
-        )) { context in
-            let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
-            Button {
-                showingDetails.toggle()
-                guard showingDetails else { return }
-                Task { await workspace.requestSyncFromStatus() }
-            } label: {
-                Image(systemName: presentation.activity.fraction != nil
-                      ? "icloud" : presentation.indicator.symbol)
-                    .foregroundStyle(presentation.indicatorColor)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonBorderShape(.circle)
-            .overlay {
-                if let fraction = presentation.activity.fraction {
-                    NotebookSyncRing(fraction: fraction)
-                }
-            }
-            .help(String(localized: presentation.title))
-            .accessibilityIdentifier("notebook-sync-details")
-            .accessibilityLabel("Sync with iCloud")
-            .accessibilityValue(presentation.accessibilityValue)
-            .accessibilityHint(presentation.showsActivity ? "Show current sync activity" : "Sync now and show status")
-            .popover(isPresented: $showingDetails, arrowEdge: preferredPopoverEdge) {
-                NotebookSyncDetailsView(workspace: workspace)
-                    .presentationCompactAdaptation(.popover)
-                    .onDisappear { showingDetails = false }
-            }
-            .onDisappear { showingDetails = false }
+        // The native presenter belongs to the button. Its label and progress
+        // use the clock without generating or rehosting the presentation.
+        Button {
+            showingDetails.toggle()
+            guard showingDetails else { return }
+            Task { await workspace.requestSyncFromStatus() }
+        } label: {
+            NotebookSyncButtonLabel(workspace: workspace)
         }
+        .buttonBorderShape(.circle)
+        .overlay {
+            NotebookSyncButtonProgress(workspace: workspace)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("notebook-sync-details")
+        .accessibilityLabel("Sync with iCloud")
+        .popover(isPresented: $showingDetails, arrowEdge: preferredPopoverEdge) {
+            NotebookSyncDetailsView(workspace: workspace)
+                .presentationCompactAdaptation(.popover)
+        }
+        .onDisappear { showingDetails = false }
     }
 
     private var preferredPopoverEdge: Edge {
@@ -55,7 +41,43 @@ struct NotebookSyncButton: View {
         .top
         #endif
     }
+}
 
+private struct NotebookSyncButtonLabel: View {
+    let workspace: NotebookWorkspace
+
+    var body: some View {
+        TimelineView(.animation(
+            minimumInterval: 1, paused: workspace.syncRetryNotBefore == nil
+        )) { context in
+            let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
+            Image(systemName: presentation.activity.fraction != nil
+                  ? "icloud" : presentation.indicator.symbol)
+                .foregroundStyle(presentation.indicatorColor)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+                .help(String(localized: presentation.title))
+                .accessibilityValue(presentation.accessibilityValue)
+                .accessibilityHint(presentation.showsActivity ? "Show current sync activity" : "Sync now and show status")
+        }
+    }
+}
+
+private struct NotebookSyncButtonProgress: View {
+    let workspace: NotebookWorkspace
+
+    var body: some View {
+        TimelineView(.animation(
+            minimumInterval: 1, paused: workspace.syncRetryNotBefore == nil
+        )) { context in
+            let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
+            if let fraction = presentation.activity.fraction {
+                NotebookSyncRing(fraction: fraction)
+            }
+        }
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+    }
 }
 
 struct NotebookWorkspaceStatusView: View {
