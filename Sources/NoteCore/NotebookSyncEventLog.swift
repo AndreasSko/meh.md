@@ -15,9 +15,35 @@ public final class NotebookSyncEventLog {
     public private(set) var persistenceError = false
     @ObservationIgnored private let fileURL: URL
     @ObservationIgnored private let maximumEntries = 500
+    @ObservationIgnored private let writer: NotebookSyncEventLogWriter
+    @ObservationIgnored private var generation: UInt64 = 0
+    @ObservationIgnored private var scheduledWrite: Task<Void, Never>?
+
+    private static let writeDelay: Duration = .milliseconds(500)
 
     public init(directory: URL) {
         fileURL = directory.appending(path: "notebook-sync-events.json")
+        writer = NotebookSyncEventLogWriter()
+        do {
+            let decoded = try JSONDecoder().decode(
+                [Entry].self,
+                from: Data(contentsOf: fileURL)
+            )
+            entries = Array(decoded.suffix(maximumEntries))
+        } catch CocoaError.fileReadNoSuchFile {
+            entries = []
+        } catch {
+            entries = []
+            persistenceError = true
+        }
+    }
+
+    init(
+        directory: URL,
+        write: @escaping @Sendable (Data, URL) throws -> Void
+    ) {
+        fileURL = directory.appending(path: "notebook-sync-events.json")
+        writer = NotebookSyncEventLogWriter(write: write)
         do {
             let decoded = try JSONDecoder().decode(
                 [Entry].self,
@@ -51,12 +77,35 @@ public final class NotebookSyncEventLog {
         if entries.count > maximumEntries {
             entries.removeFirst(entries.count - maximumEntries)
         }
-        persist()
+        scheduleWrite()
     }
 
     public func clear() {
         entries = []
-        persist()
+        scheduleWrite()
+    }
+
+    /// Waits until the latest event-log snapshot has been durably replaced.
+    public func flush() async {
+        scheduledWrite?.cancel()
+        scheduledWrite = nil
+        while true {
+            let currentGeneration = generation
+            let data: Data
+            do {
+                data = try JSONEncoder().encode(entries)
+            } catch {
+                persistenceError = true
+                return
+            }
+            let succeeded = await writer.write(
+                data, at: fileURL, generation: currentGeneration
+            )
+            if generation == currentGeneration {
+                persistenceError = !succeeded
+                return
+            }
+        }
     }
 
     public static func errorCode(_ error: any Error) -> String {
@@ -123,11 +172,58 @@ public final class NotebookSyncEventLog {
         return "\(typeName).\((error as NSError).code)"
     }
 
-    private func persist() {
-        do {
-            try SyncFileIO.replace(JSONEncoder().encode(entries), at: fileURL)
-        } catch {
-            persistenceError = true
+    private func scheduleWrite() {
+        generation &+= 1
+        scheduledWrite?.cancel()
+        scheduledWrite = Task { [weak self] in
+            do {
+                try await Task.sleep(for: Self.writeDelay)
+                await self?.flush()
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.markPersistenceError()
+            }
         }
     }
+
+    private func markPersistenceError() {
+        persistenceError = true
+    }
+}
+
+/// Serializes atomic file replacements away from the main actor.
+private final class NotebookSyncEventLogWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(
+        label: "meh.notebook-sync-event-log-writer",
+        qos: .utility
+    )
+    private let writeFile: @Sendable (Data, URL) throws -> Void
+
+    init(write: @escaping @Sendable (Data, URL) throws -> Void = {
+        try SyncFileIO.replace($0, at: $1)
+    }) {
+        writeFile = write
+    }
+
+    func write(_ data: Data, at url: URL, generation: UInt64) async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                guard generation >= latestGeneration else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                latestGeneration = generation
+                do {
+                    try writeFile(data, url)
+                    continuation.resume(returning: true)
+                } catch {
+                    continuation.resume(returning: false)
+                }
+            }
+        }
+    }
+
+    // Accessed only by the serial utility queue.
+    private var latestGeneration: UInt64 = 0
 }
