@@ -1,0 +1,664 @@
+{
+  "baseline_revision": "3e77a1037f53a45ddc94823747f6e5f2b24968d4",
+  "candidate": "sync-first-maintenance working tree",
+  "catalog": {
+    "baseline": [
+      {
+        "catalogItemsPerSnapshot": 267,
+        "catalogs": 1,
+        "durationsMilliseconds": [
+          132.295375,
+          94.864417,
+          92.797333
+        ],
+        "scenario": "one_unresolved_note_no_markers",
+        "snapshotsBytes": 22584,
+        "unresolvedCountAfter": 1
+      },
+      {
+        "catalogItemsPerSnapshot": 267,
+        "catalogs": 10,
+        "durationsMilliseconds": [
+          1003.252375,
+          765.442625,
+          680.850916
+        ],
+        "scenario": "one_unresolved_note_no_markers",
+        "snapshotsBytes": 226068,
+        "unresolvedCountAfter": 1
+      },
+      {
+        "catalogItemsPerSnapshot": 267,
+        "catalogs": 30,
+        "durationsMilliseconds": [
+          2062.470375,
+          2048.530875,
+          2044.362208
+        ],
+        "scenario": "one_unresolved_note_no_markers",
+        "snapshotsBytes": 684218,
+        "unresolvedCountAfter": 1
+      },
+      {
+        "catalogItemsPerSnapshot": 267,
+        "catalogs": 30,
+        "durationsMilliseconds": [
+          1961.103959,
+          1884.045458,
+          2023.716083
+        ],
+        "scenario": "catalog_only_unresolved_id",
+        "snapshotsBytes": 682427,
+        "unresolvedCountAfter": 1
+      },
+      {
+        "catalogItemsPerSnapshot": 267,
+        "catalogs": 30,
+        "durationsMilliseconds": [
+          0.009834,
+          0.001417,
+          0.001042
+        ],
+        "scenario": "no_unresolved_ids_prefilter",
+        "snapshotsBytes": 682427,
+        "unresolvedCountAfter": 0
+      }
+    ],
+    "candidate": [
+      {
+        "catalogItemsPerSnapshot": 267,
+        "catalogs": 1,
+        "durationsMilliseconds": [
+          61.467666,
+          0.001417,
+          0.000375
+        ],
+        "scenario": "one_unresolved_note_no_markers",
+        "snapshotsBytes": 22601,
+        "unresolvedCountAfter": 1
+      },
+      {
+        "catalogItemsPerSnapshot": 267,
+        "catalogs": 10,
+        "durationsMilliseconds": [
+          639.916833,
+          0.00125,
+          0.000333
+        ],
+        "scenario": "one_unresolved_note_no_markers",
+        "snapshotsBytes": 226187,
+        "unresolvedCountAfter": 1
+      },
+      {
+        "catalogItemsPerSnapshot": 267,
+        "catalogs": 30,
+        "durationsMilliseconds": [
+          1916.4685,
+          0.001625,
+          0.000333
+        ],
+        "scenario": "one_unresolved_note_no_markers",
+        "snapshotsBytes": 682400,
+        "unresolvedCountAfter": 1
+      },
+      {
+        "catalogItemsPerSnapshot": 267,
+        "catalogs": 30,
+        "durationsMilliseconds": [
+          0.059167,
+          0.000625,
+          0.000334
+        ],
+        "scenario": "catalog_only_unresolved_id",
+        "snapshotsBytes": 682389,
+        "unresolvedCountAfter": 1
+      },
+      {
+        "catalogItemsPerSnapshot": 267,
+        "catalogs": 30,
+        "durationsMilliseconds": [
+          0.053,
+          0.000625,
+          0.000291
+        ],
+        "scenario": "no_unresolved_ids_prefilter",
+        "snapshotsBytes": 682389,
+        "unresolvedCountAfter": 0
+      }
+    ]
+  },
+  "date": "2026-10-12",
+  "environment": {
+    "architecture": "arm64",
+    "configuration": "Debug",
+    "execution": "serial offline SwiftPM probes; fictional data",
+    "os": "macOS 27.0.1 (26A434)",
+    "swift": "6.4",
+    "xcode": "27.0 (27A266a)"
+  },
+  "limits": [
+    "Microbenchmarks on Mac; no physical iPhone CPU profile or end-to-end latency guarantee.",
+    "Three samples; fixtures are semantically equivalent, not byte-identical Automerge actors.",
+    "First metadata update includes one-time durable payload migration.",
+    "Total retained disk bytes increase; payload separation is not local compaction.",
+    "Catalog timing excludes the initial migration and measures repeated identical evidence."
+  ],
+  "live_cleanup": {
+    "binary_sha256": "218a1cdef79bed07cdad020de086f8da940a543f768b88b1e9864212f7b2d0f8",
+    "cleanup": {
+      "compressedBytesAfter": 1308,
+      "compressedBytesBefore": 15977,
+      "deletedCompressedBytes": 14669,
+      "deletedSnapshots": 24,
+      "preservedPastVersions": 24,
+      "snapshotsAfter": 2,
+      "snapshotsBefore": 26
+    },
+    "measurementsMS": {
+      "account_status": [
+        10.856458
+      ],
+      "cleanup_delete": [
+        1714.6979999999999
+      ],
+      "cleanup_fixture_upload": [
+        4042.858834
+      ],
+      "cleanup_fresh_fetch_after": [
+        1535.422542
+      ],
+      "cleanup_fresh_fetch_before": [
+        2235.540125
+      ],
+      "cleanup_writer_transport": [
+        43.61725
+      ]
+    },
+    "runID": "2D90D078-2045-479A-B307-65C58F1EB798",
+    "scope": "Signed Mac iCloud Dev lab; fresh fictional Development zone; no phone or push latency guarantee",
+    "stage": "complete",
+    "status": "passed"
+  },
+  "state": {
+    "baseline": [
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4987,
+        "fixture_version": 1,
+        "manifest_bytes": 2058008,
+        "manifest_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ],
+        "median_ms": 515.690292,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 517.132625,
+        "phase": "state_validation",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 0,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          515.690292,
+          517.132625,
+          503.236917
+        ],
+        "snapshot_bytes": 955507,
+        "total_store_bytes": 2058008,
+        "total_store_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4987,
+        "fixture_version": 1,
+        "manifest_bytes": 2058008,
+        "manifest_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ],
+        "median_ms": 15.214209,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 16.528042,
+        "phase": "state_json_encoding",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 0,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          15.214209,
+          15.085041,
+          16.528042
+        ],
+        "snapshot_bytes": 955507,
+        "total_store_bytes": 2058008,
+        "total_store_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4987,
+        "fixture_version": 1,
+        "manifest_bytes": 2058008,
+        "manifest_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ],
+        "median_ms": 20.994833,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 21.087041,
+        "phase": "first_metadata_update_legacy_migration",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 0,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          21.087041,
+          20.994833,
+          20.213875
+        ],
+        "snapshot_bytes": 955507,
+        "total_store_bytes": 2058008,
+        "total_store_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4987,
+        "fixture_version": 1,
+        "manifest_bytes": 2058008,
+        "manifest_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ],
+        "median_ms": 21.211458,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 21.408334,
+        "phase": "warm_engine_state_update",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 0,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          21.211458,
+          20.249292,
+          21.408334
+        ],
+        "snapshot_bytes": 955507,
+        "total_store_bytes": 2058008,
+        "total_store_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4987,
+        "fixture_version": 1,
+        "manifest_bytes": 2058008,
+        "manifest_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ],
+        "median_ms": 0.009375,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 0.011042,
+        "phase": "engine_state_no_op",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 0,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          0.011042,
+          0.009375,
+          0.007708
+        ],
+        "snapshot_bytes": 955507,
+        "total_store_bytes": 2058008,
+        "total_store_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4987,
+        "fixture_version": 1,
+        "manifest_bytes": 2058008,
+        "manifest_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ],
+        "median_ms": 21.492708,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 22.38725,
+        "phase": "append_one_character_snapshot",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 0,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          22.38725,
+          21.492708,
+          21.44675
+        ],
+        "snapshot_bytes": 955507,
+        "total_store_bytes": 2058008,
+        "total_store_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4987,
+        "fixture_version": 1,
+        "manifest_bytes": 2058008,
+        "manifest_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ],
+        "median_ms": 534.275083,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 542.185125,
+        "phase": "durable_reopen",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 0,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          542.185125,
+          528.237125,
+          534.275083
+        ],
+        "snapshot_bytes": 955507,
+        "total_store_bytes": 2058008,
+        "total_store_bytes_samples": [
+          2058008,
+          2058008,
+          2058008
+        ]
+      }
+    ],
+    "candidate": [
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4964,
+        "fixture_version": 1,
+        "manifest_bytes": 377958,
+        "manifest_bytes_samples": [
+          377958,
+          377958,
+          377958
+        ],
+        "median_ms": 483.563583,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 536.950959,
+        "phase": "state_validation",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 2052035,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          536.950959,
+          483.563583,
+          482.558625
+        ],
+        "snapshot_bytes": 955484,
+        "total_store_bytes": 2429993,
+        "total_store_bytes_samples": [
+          2429993,
+          2429993,
+          2429993
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4964,
+        "fixture_version": 1,
+        "manifest_bytes": 377958,
+        "manifest_bytes_samples": [
+          377958,
+          377958,
+          377958
+        ],
+        "median_ms": 14.80275,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 14.976334,
+        "phase": "state_json_encoding",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 2052035,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          14.80275,
+          14.750458,
+          14.976334
+        ],
+        "snapshot_bytes": 955484,
+        "total_store_bytes": 2429993,
+        "total_store_bytes_samples": [
+          2429993,
+          2429993,
+          2429993
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4964,
+        "fixture_version": 1,
+        "manifest_bytes": 377958,
+        "manifest_bytes_samples": [
+          377958,
+          377958,
+          377958
+        ],
+        "median_ms": 779.186333,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 1224.383125,
+        "phase": "first_metadata_update_legacy_migration",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 2052035,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          1224.383125,
+          779.186333,
+          721.773333
+        ],
+        "snapshot_bytes": 955484,
+        "total_store_bytes": 2429993,
+        "total_store_bytes_samples": [
+          2429993,
+          2429993,
+          2429993
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4964,
+        "fixture_version": 1,
+        "manifest_bytes": 377958,
+        "manifest_bytes_samples": [
+          377958,
+          377958,
+          377958
+        ],
+        "median_ms": 10.37325,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 10.777667,
+        "phase": "warm_engine_state_update",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 2052035,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          10.777667,
+          10.37325,
+          9.73475
+        ],
+        "snapshot_bytes": 955484,
+        "total_store_bytes": 2429993,
+        "total_store_bytes_samples": [
+          2429993,
+          2429993,
+          2429993
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4964,
+        "fixture_version": 1,
+        "manifest_bytes": 377958,
+        "manifest_bytes_samples": [
+          377958,
+          377958,
+          377958
+        ],
+        "median_ms": 0.006084,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 0.006625,
+        "phase": "engine_state_no_op",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 2052035,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          0.006084,
+          0.006625,
+          0.006
+        ],
+        "snapshot_bytes": 955484,
+        "total_store_bytes": 2429993,
+        "total_store_bytes_samples": [
+          2429993,
+          2429993,
+          2429993
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4964,
+        "fixture_version": 1,
+        "manifest_bytes": 377958,
+        "manifest_bytes_samples": [
+          377958,
+          377958,
+          377958
+        ],
+        "median_ms": 11.673,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 13.278167,
+        "phase": "append_one_character_snapshot",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 2052035,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          13.278167,
+          11.673,
+          11.071959
+        ],
+        "snapshot_bytes": 955484,
+        "total_store_bytes": 2429993,
+        "total_store_bytes_samples": [
+          2429993,
+          2429993,
+          2429993
+        ]
+      },
+      {
+        "benchmark": "cloudkit_state_retained_history",
+        "catalog_snapshot_bytes": 4964,
+        "fixture_version": 1,
+        "manifest_bytes": 377958,
+        "manifest_bytes_samples": [
+          377958,
+          377958,
+          377958
+        ],
+        "median_ms": 701.509917,
+        "note_count": 120,
+        "note_snapshot_bytes": 950520,
+        "note_snapshot_count": 2400,
+        "p95_ms": 707.137875,
+        "phase": "durable_reopen",
+        "protocol_version": 2,
+        "repetitions": 3,
+        "retained_payload_file_bytes": 2052035,
+        "retained_record_count": 2401,
+        "revisions_per_note": 20,
+        "samples_ms": [
+          707.137875,
+          701.509917,
+          676.498792
+        ],
+        "snapshot_bytes": 955484,
+        "total_store_bytes": 2429993,
+        "total_store_bytes_samples": [
+          2429993,
+          2429993,
+          2429993
+        ]
+      }
+    ]
+  }
+}

@@ -164,9 +164,8 @@ final class CloudKitSyncEngineTests: XCTestCase {
         XCTAssertNotNil(result.error)
         XCTAssertEqual(engine.sendChangesCount - previousSends, 1)
         XCTAssertFalse(server.recordNames.contains(note.id))
-        let state = try JSONDecoder().decode(CloudKitTransportState.self,
-            from: Data(contentsOf: root.appending(path: "top-level-real-failure")
-                .appending(path: "cloudkit-sync-state.json")))
+        let state = try decodeCloudKitDiskState(at: root.appending(path: "top-level-real-failure")
+                .appending(path: "cloudkit-sync-state.json"))
         XCTAssertEqual(state.outbox[note.id], note)
         await transport.retire()
     }
@@ -189,9 +188,8 @@ final class CloudKitSyncEngineTests: XCTestCase {
         XCTAssertEqual(result.error as? SyncError,
                        .updateRequired(requiredVersion: future))
         XCTAssertFalse(server.recordNames.contains(note.id))
-        let state = try JSONDecoder().decode(CloudKitTransportState.self,
-            from: Data(contentsOf: root.appending(path: "top-level-future-format")
-                .appending(path: "cloudkit-sync-state.json")))
+        let state = try decodeCloudKitDiskState(at: root.appending(path: "top-level-future-format")
+                .appending(path: "cloudkit-sync-state.json"))
         XCTAssertEqual(state.outbox[note.id], note)
         await transport.retire()
     }
@@ -214,9 +212,8 @@ final class CloudKitSyncEngineTests: XCTestCase {
         XCTAssertEqual(engine.sendChangesCount - previousSends,
                        CloudKitSyncTransport.maximumCanonicalPublicationAttempts)
         XCTAssertFalse(server.recordNames.contains(note.id))
-        let state = try JSONDecoder().decode(CloudKitTransportState.self,
-            from: Data(contentsOf: root.appending(path: "bounded-canonical-race")
-                .appending(path: "cloudkit-sync-state.json")))
+        let state = try decodeCloudKitDiskState(at: root.appending(path: "bounded-canonical-race")
+                .appending(path: "cloudkit-sync-state.json"))
         XCTAssertEqual(state.outbox[note.id], note)
         let halt = await transport.haltStatus()
         XCTAssertNil(halt)
@@ -303,9 +300,8 @@ final class CloudKitSyncEngineTests: XCTestCase {
         for note in deleted {
             XCTAssertFalse(server.recordNames.contains(note.id))
         }
-        let state = try JSONDecoder().decode(CloudKitTransportState.self,
-            from: Data(contentsOf: root.appending(path: "cleanup-device")
-                .appending(path: "cloudkit-sync-state.json")))
+        let state = try decodeCloudKitDiskState(at: root.appending(path: "cleanup-device")
+                .appending(path: "cloudkit-sync-state.json"))
         XCTAssertTrue(state.pendingRemoteDeletionIDs.isEmpty)
         let halt = await transport.haltStatus()
         XCTAssertNil(halt)
@@ -337,9 +333,8 @@ final class CloudKitSyncEngineTests: XCTestCase {
             [note.id, CloudKitTransportMode.notebook.bootstrapName])
         let halt = await restarted.haltStatus()
         XCTAssertNil(halt)
-        let state = try JSONDecoder().decode(CloudKitTransportState.self,
-            from: Data(contentsOf: root.appending(path: "background-device")
-                .appending(path: "cloudkit-sync-state.json")))
+        let state = try decodeCloudKitDiskState(at: root.appending(path: "background-device")
+                .appending(path: "cloudkit-sync-state.json"))
         XCTAssertTrue(state.outbox.isEmpty)
         let received = try await fetchAll(restarted).records
         XCTAssertEqual(received.first { $0.id == note.id }, note)
@@ -660,9 +655,8 @@ final class CloudKitSyncEngineTests: XCTestCase {
         await fulfillment(of: [hint], timeout: 2)
         consumer.cancel()
         XCTAssertFalse(server.recordNames.contains(note.id))
-        let state = try JSONDecoder().decode(CloudKitTransportState.self,
-            from: Data(contentsOf: root.appending(path: "scheduled-cas")
-                .appending(path: "cloudkit-sync-state.json")))
+        let state = try decodeCloudKitDiskState(at: root.appending(path: "scheduled-cas")
+                .appending(path: "cloudkit-sync-state.json"))
         XCTAssertEqual(state.outbox[note.id], note)
         engine.sendsAreScheduled = false
         let recovered = try await restarted.publishBatch([note])

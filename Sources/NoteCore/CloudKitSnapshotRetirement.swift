@@ -12,9 +12,11 @@ extension CloudKitTransportState {
         }
         var histories: [String: Set<String>] = [:]
         for record in deleted {
+            try Task.checkCancellation()
             histories[record.id] = try historyHashes(record)
         }
         return try inbox.filter { candidate in
+            try Task.checkCancellation()
             guard !remoteDeletedSnapshotIDs.contains(candidate.id),
                   !unresolvedRemoteDeletionRecordIDs.contains(candidate.id) else {
                 return false
@@ -39,6 +41,7 @@ extension CloudKitTransportState {
         guard protocolVersion == 2 else { return }
         var covered: Set<String> = []
         for confirmed in confirmedRecords {
+            try Task.checkCancellation()
             try confirmed.validate()
             // Confirmation is useful only for an exact buffered record that
             // has not itself been deleted during the remote read. Rebuilding
