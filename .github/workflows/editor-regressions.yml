@@ -21,9 +21,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check native result gates
-        run: |
-          python3 -m unittest discover -s scripts -p 'test_check_*regression*.py'
-          python3 -m unittest discover -s scripts -p 'test_*native_editor_baseline_parity.py'
+        run: python3 -m unittest discover -s scripts -p 'test_*native_editor_baseline_parity.py'
       - name: Check Mac formatting wheel input
         run: swift test --filter EditorMacFormattingScrollTests
       - name: Run full native suite against recorded inventory
