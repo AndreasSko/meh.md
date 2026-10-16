@@ -219,7 +219,7 @@ final class CloudKitSyncActivityTests: XCTestCase {
     }
 
     func testFetchedCommitReportsOnlyNewDurableRecords() async throws {
-        let directory = temporaryDirectory()
+        let directory = createdTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let record = try SyncRecord(
             catalog: NotebookCatalogDocument().snapshot()
@@ -248,7 +248,7 @@ final class CloudKitSyncActivityTests: XCTestCase {
     }
 
     func testRepeatedSendAcknowledgementProducesNoNewActivity() async throws {
-        let directory = temporaryDirectory()
+        let directory = createdTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let notebookID = UUID()
         let record = SyncRecord(
@@ -278,7 +278,7 @@ final class CloudKitSyncActivityTests: XCTestCase {
     func testFetchCompletionReconcilesDeletionAfterCatalogArrives()
         async throws
     {
-        let directory = temporaryDirectory()
+        let directory = createdTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let notebookID = UUID()
         let note = try NoteDocument(text: "removed")
@@ -328,7 +328,7 @@ final class CloudKitSyncActivityTests: XCTestCase {
         XCTAssertTrue(state.unresolvedRemoteDeletionRecordIDs.isEmpty)
     }
 
-    private func temporaryDirectory() -> URL {
+    private func createdTemporaryDirectory() -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(

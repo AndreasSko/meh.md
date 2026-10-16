@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -27,8 +28,7 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
     }
 
     func testFolderMovePreservesLiteralWikiAndMarkdownLinks() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let target = try await replica.createNote(name: "Target.md", text: "# Heading")
@@ -53,8 +53,7 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
     }
 
     func testUnrelatedRenameLeavesExistingLinkTextUnchanged() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let target = try await replica.createNote(name: "Target.md", text: "body")
@@ -75,8 +74,7 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
     }
 
     func testSourceEditDuringMoveIsPreserved() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let target = try await replica.createNote(name: "Target.md", text: "body")
@@ -95,8 +93,7 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
     }
 
     func testTargetRenameResolvesPreservedLiteralLinks() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let target = try await replica.createNote(name: "Target.md", text: "# Heading")
@@ -117,8 +114,7 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
     }
 
     func testSourceFolderMoveResolvesPreservedOutboundMarkdownPath() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let target = try await replica.createNote(name: "Target.md", text: "body")
@@ -140,8 +136,7 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
     }
 
     func testMoveUndoResolvesOriginalLiteralPaths() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let folder = try await replica.createFolder(name: "Folder")
@@ -171,8 +166,7 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
     }
 
     func testImportedRootPathAndScopeAreExposedBySynchronousLinkNotes() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let importedRoot = UUID()
@@ -204,8 +198,7 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
     }
 
     func testSelectedTopLevelMarkdownFilesCanLinkAcrossOneImportBatch() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let firstID = UUID()
@@ -232,8 +225,7 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
     }
 
     func testUnavailableBodyIsNotPresentedAsEmptyAndNameCollisionsUseMaterializedNames() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let unavailable = try await replica.createNote(name: "Lost.md", text: "body")

@@ -1,13 +1,13 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
 @MainActor
 final class NotebookReplicaTests: XCTestCase {
     func testRecordProgressIncludesKnownNoteAndCatalogTotal() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         _ = try await replica.createNote(name: "Fixture.md", text: "fictional")
@@ -19,8 +19,7 @@ final class NotebookReplicaTests: XCTestCase {
     }
 
     func testLifecycleFlushPersistsAllOpenNotesWithoutSync() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let first = try await replica.createNote(name: "First.md", text: "first")
@@ -45,8 +44,7 @@ final class NotebookReplicaTests: XCTestCase {
     }
 
     func testUnlistedBodyIsCheckpointedButNotUploaded() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try NoteDocument(text: "not yet linked")
@@ -84,8 +82,7 @@ final class NotebookReplicaTests: XCTestCase {
     }
 
     func testConcurrentOpeningAndDownloadShareOneSession() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let id = try await replica.createNote(name: "Note.md", text: "base")
@@ -104,8 +101,7 @@ final class NotebookReplicaTests: XCTestCase {
     }
 
     func testTrashWaitingForCatalogWriteKeepsThatWrite() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let renamed = try await replica.createNote(name: "Draft.md", text: "draft")

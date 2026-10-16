@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -119,8 +120,7 @@ final class NotebookSearchTests: XCTestCase {
 @MainActor
 final class NotebookSearchCorpusTests: XCTestCase {
     func testCorpusUsesLiveTextBuildsPathAndExcludesTrash() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let folder = try await replica.createFolder(name: "Projects")
@@ -143,8 +143,7 @@ final class NotebookSearchCorpusTests: XCTestCase {
     }
 
     func testUnavailableBodyKeepsTitleSearchableWithoutBodyMatches() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Damaged.md", text: "content")
@@ -161,8 +160,7 @@ final class NotebookSearchCorpusTests: XCTestCase {
     }
 
     func testRemoteChangeToUnopenedNoteInvalidatesRevision() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Remote.md", text: "before")

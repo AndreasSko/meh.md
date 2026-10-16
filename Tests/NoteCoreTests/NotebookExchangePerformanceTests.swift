@@ -1,6 +1,7 @@
 import Foundation
 @testable import NoteCore
 import XCTest
+import TestSupport
 
 /// Opt-in Release benchmark using only fictional, local notebook files.
 @MainActor
@@ -33,7 +34,6 @@ final class NotebookExchangePerformanceTests: XCTestCase {
         repetitions: Int
     ) async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let fixture = root.appending(path: "fixture")
         let fixtureBytes = try await makeFixture(
             at: fixture, noteCount: noteCount, revisions: revisions
@@ -318,12 +318,6 @@ final class NotebookExchangePerformanceTests: XCTestCase {
         UUID(uuidString: String(
             format: "00000000-0000-4000-8000-%012x", index + 1
         ))!
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(
-            path: "MehExchangeBenchmark-\(UUID().uuidString)"
-        )
     }
 }
 

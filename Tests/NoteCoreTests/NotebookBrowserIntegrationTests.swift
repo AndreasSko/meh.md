@@ -1,13 +1,13 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
 @MainActor
 final class NotebookBrowserIntegrationTests: XCTestCase {
     func testNewNotesUseSyncedDefaultAndRootAfterFolderTrash() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let rootNote = try await replica.createNoteInDefaultFolder(name: "First.md")
@@ -28,8 +28,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
     }
 
     func testNewNoteWaitsForDestinationChangeBeforeChoosingFolder() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let inbox = try await replica.createFolder(name: "Inbox")
@@ -53,8 +52,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
     }
 
     func testDefaultNewNoteFolderSyncsBetweenReplicas() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let left = NotebookReplica(directory: root.appending(path: "left"))
         let right = NotebookReplica(directory: root.appending(path: "right"))
         try await left.createLocalNotebook()
@@ -75,8 +73,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
     }
 
     func testDownloadWaitsForConcurrentCatalogWrite() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let source = NotebookReplica(directory: root.appending(path: "source"))
         try await source.createLocalNotebook()
         let note = try await source.createNote(name: "Remote.md", text: "remote text")
@@ -108,8 +105,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
     }
 
     func testRenameWaitsForConcurrentCatalogWrite() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Before.md")
@@ -141,8 +137,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
     }
 
     func testNoOpMoveDoesNotRotateDurableCatalog() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Already last.md")
@@ -156,8 +151,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
     }
 
     func testBatchMoveKeepsSubtreeBodiesAndUndoAcrossRename() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let folder = try await replica.createFolder(name: "Moons")
@@ -191,8 +185,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
     }
 
     func testBatchTrashAndUndoPreserveChildTrashAndEditedContent() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let folder = try await replica.createFolder(name: "Expedition")
@@ -211,8 +204,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
     }
 
     func testInvalidBatchAndStaleUndoLeaveCatalogUnchanged() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let first = try await replica.createFolder(name: "First")

@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 import NoteCore
 
 @testable import NotebookAppModel
@@ -7,8 +8,7 @@ import NoteCore
 @MainActor
 final class NotebookLinkStateTests: XCTestCase {
     func testSwitchingBacklinkTargetClearsRowsBeforeLoading() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = temporaryDirectory()
         let replica = NotebookReplica(directory: directory)
         try await replica.createLocalNotebook()
         let first = try await replica.createNote(name: "First.md", text: "First")
@@ -30,8 +30,7 @@ final class NotebookLinkStateTests: XCTestCase {
     }
 
     func testAuthoringRefreshDoesNotReplaceDisplayedBacklinks() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = temporaryDirectory()
         let replica = NotebookReplica(directory: directory)
         try await replica.createLocalNotebook()
         let target = try await replica.createNote(name: "Project.md", text: "Project")

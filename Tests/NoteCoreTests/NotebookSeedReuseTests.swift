@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -7,7 +8,6 @@ import XCTest
 final class NotebookSeedReuseTests: XCTestCase {
     func testRepeatedSeedSkipsCatalogWriteOnlyWithMatchingDurableCopies() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         _ = try await replica.createNote(name: "Note.md")
@@ -35,7 +35,6 @@ final class NotebookSeedReuseTests: XCTestCase {
 
     func testFailedAcceptSeedDoesNotCreateReusableCache() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let seed = SyncRecord(catalog: try XCTUnwrap(replica.catalogSnapshot))
@@ -57,7 +56,6 @@ final class NotebookSeedReuseTests: XCTestCase {
 
     func testMetadataChangesInvalidateReuseAndKeepInboxAndRecents() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Note.md")
@@ -86,7 +84,6 @@ final class NotebookSeedReuseTests: XCTestCase {
 
     func testValidCatalogRollbackRepairsDiskAndKeepsNewerInboxMetadata() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let inbox = try await replica.createFolder(name: "Inbox")
@@ -122,7 +119,6 @@ final class NotebookSeedReuseTests: XCTestCase {
 
     func testForgedSeedWithReusedRecordIDIsRejectedWithoutChangingReplica() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let seed = SyncRecord(catalog: try XCTUnwrap(replica.catalogSnapshot))
@@ -157,7 +153,6 @@ final class NotebookSeedReuseTests: XCTestCase {
 
     func testCorruptCurrentCatalogFallsBackToExistingStorageError() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let seed = SyncRecord(catalog: try XCTUnwrap(replica.catalogSnapshot))
@@ -203,7 +198,6 @@ final class NotebookSeedReuseTests: XCTestCase {
 
     func testMissingCurrentCatalogFallsBackAndRestoresIt() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let seed = SyncRecord(catalog: try XCTUnwrap(replica.catalogSnapshot))
@@ -222,7 +216,6 @@ final class NotebookSeedReuseTests: XCTestCase {
 
     func testCorruptPreviousCatalogCopyInvalidatesReuseAndIsReplaced() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let seed = SyncRecord(catalog: try XCTUnwrap(replica.catalogSnapshot))
@@ -244,7 +237,6 @@ final class NotebookSeedReuseTests: XCTestCase {
     func testNewDeletionLedgerIDIsMergedBeforeSeedPersistence() async throws {
         for previousState in ["matching", "corrupt", "missing"] {
             let root = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: root) }
             let replica = NotebookReplica(directory: root)
             try await replica.createLocalNotebook()
             let note = try await replica.createNote(name: "Note.md")
@@ -295,7 +287,6 @@ final class NotebookSeedReuseTests: XCTestCase {
 
     func testAcceptSeedWaitsForAnInFlightCatalogWrite() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let inbox = try await replica.createFolder(name: "Inbox")
@@ -321,12 +312,6 @@ final class NotebookSeedReuseTests: XCTestCase {
         try await write.value
         try await accept.value
         XCTAssertEqual(replica.defaultNewNoteParentID, inbox)
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(
-            path: "NotebookSeedReuseTests-\(UUID().uuidString)"
-        )
     }
 }
 

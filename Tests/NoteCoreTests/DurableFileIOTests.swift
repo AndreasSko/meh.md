@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -9,7 +10,6 @@ final class DurableFileIOTests: XCTestCase {
 
     func testExistingFileRejectsBeforeCallbackWithoutChangingIt() throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
@@ -46,7 +46,6 @@ final class DurableFileIOTests: XCTestCase {
 
     func testBeforeSyncFailurePropagates() throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(
             at: root, withIntermediateDirectories: true
         )
@@ -63,11 +62,5 @@ final class DurableFileIOTests: XCTestCase {
         }
         XCTAssertEqual(callbackCount, 1)
         XCTAssertEqual(try Data(contentsOf: file), Data("staged".utf8))
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(
-            path: "DurableFileIOTests-\(UUID().uuidString)"
-        )
     }
 }

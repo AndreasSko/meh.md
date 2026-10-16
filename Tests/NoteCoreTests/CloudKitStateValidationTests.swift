@@ -1,12 +1,12 @@
 import Foundation
 @testable import NoteCore
 import XCTest
+import TestSupport
 
 final class CloudKitStateValidationTests: XCTestCase {
     @MainActor
     func testOpeningStoreLeavesMainActorBeforeDiskWork() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = try await CloudKitTransportStateStore.open(
             directory: directory, accountRecordName: "account", zoneName: "zone",
             writeState: { data, url in
@@ -25,7 +25,6 @@ final class CloudKitStateValidationTests: XCTestCase {
 
     func testChangedInboxPayloadOrHeadsCannotReuseValidation() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let original = try makeRecord(text: "trusted inbox record")
         let store = try CloudKitTransportStateStore(
             directory: directory, accountRecordName: "account", zoneName: "zone"
@@ -73,7 +72,6 @@ final class CloudKitStateValidationTests: XCTestCase {
 
     func testChangedOutboxKindAndKeyCannotReuseValidation() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let notebookID = UUID()
         let original = try makeRecord(
             text: "trusted outbox record", notebookID: notebookID
@@ -108,7 +106,6 @@ final class CloudKitStateValidationTests: XCTestCase {
 
     func testStructuralRulesStillApplyToTrustedRecords() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let notebookID = UUID()
         let noteID = UUID()
         let record = try makeRecord(
@@ -131,7 +128,6 @@ final class CloudKitStateValidationTests: XCTestCase {
 
     func testFailedWriteKeepsPreviouslyValidatedHistory() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let original = try makeRecord(text: "history before write failure")
         let initial = try CloudKitTransportStateStore(
             directory: directory, accountRecordName: "account", zoneName: "zone"
@@ -164,7 +160,6 @@ final class CloudKitStateValidationTests: XCTestCase {
 
     func testStartupFullyValidatesPersistedHistory() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let original = try makeRecord(text: "saved record")
         let store = try CloudKitTransportStateStore(
             directory: directory, accountRecordName: "account", zoneName: "zone"
@@ -236,11 +231,5 @@ final class CloudKitStateValidationTests: XCTestCase {
         json["inbox"] = slots
         let data = try JSONSerialization.data(withJSONObject: json)
         return try JSONDecoder().decode(CloudKitTransportState.self, from: data)
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent(
-            "CloudKitStateValidationTests-\(UUID().uuidString)"
-        )
     }
 }

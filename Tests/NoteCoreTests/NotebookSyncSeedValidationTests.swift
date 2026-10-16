@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -8,7 +9,6 @@ final class NotebookSyncSeedValidationTests: XCTestCase {
     func testRejectedBootstrapSeedsLeaveFreshCheckpointUntouched() async throws {
         for fault in SeedFault.allCases {
             let root = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: root) }
             let canonical = SyncRecord(catalog: try NotebookCatalogDocument().snapshot())
             let rejected = try fault.apply(to: canonical)
             let transport = SeedValidationTransport(seed: rejected)
@@ -33,7 +33,6 @@ final class NotebookSyncSeedValidationTests: XCTestCase {
     func testRejectedBootstrapSeedsPreserveWarmCheckpointAndCatalog() async throws {
         for fault in SeedFault.allCases {
             let root = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: root) }
             let canonical = SyncRecord(catalog: try NotebookCatalogDocument().snapshot())
             let transport = SeedValidationTransport(seed: canonical)
             let replica = NotebookReplica(directory: root)
@@ -70,7 +69,6 @@ final class NotebookSyncSeedValidationTests: XCTestCase {
 
     func testExactAcceptedSeedReusesCatalogAfterDurableAcceptance() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let seed = SyncRecord(catalog: try NotebookCatalogDocument().snapshot())
         let transport = SeedValidationTransport(seed: seed)
         let replica = NotebookReplica(directory: root)
@@ -93,7 +91,6 @@ final class NotebookSyncSeedValidationTests: XCTestCase {
 
     func testFailedCatalogPersistenceRetriesBeforeFetchOrCheckpoint() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let seed = SyncRecord(catalog: try NotebookCatalogDocument().snapshot())
         let transport = SeedValidationTransport(seed: seed)
         let replica = NotebookReplica(directory: root)
@@ -123,7 +120,6 @@ final class NotebookSyncSeedValidationTests: XCTestCase {
 
     func testFailedWarmCatalogPersistenceRetriesFullPath() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let initial = try NotebookCatalogDocument()
         let initialSeed = SyncRecord(catalog: initial.snapshot())
         let transport = SeedValidationTransport(seed: initialSeed)
@@ -220,11 +216,6 @@ final class NotebookSyncSeedValidationTests: XCTestCase {
             from: Data(contentsOf: root.appending(path: "notebook-sync-state.json"))
         )
         return SeedCheckpoint(state)
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(
-            path: "NotebookSyncSeedValidationTests-\(UUID().uuidString)")
     }
 }
 

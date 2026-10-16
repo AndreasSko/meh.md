@@ -1,20 +1,11 @@
 import CloudKit
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
 final class CloudKitNotebookRecordTests: XCTestCase {
-    override func tearDown() {
-        for url in temporaryDirectories {
-            try? FileManager.default.removeItem(at: url)
-        }
-        temporaryDirectories = []
-        super.tearDown()
-    }
-
-    private var temporaryDirectories: [URL] = []
-
     func testLegacyRecordRetainsV1ShapeAndRoundTrips() throws {
         let value = try noteRecord(text: "legacy", notebookID: nil)
         let fixture = try encoded(value, mode: .legacy)
@@ -243,13 +234,5 @@ final class CloudKitNotebookRecordTests: XCTestCase {
                 line: line
             )
         }
-    }
-
-    private func temporaryDirectory() -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "CloudKitNotebookRecordTests-\(UUID().uuidString)"
-        )
-        temporaryDirectories.append(url)
-        return url
     }
 }

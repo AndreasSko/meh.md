@@ -1,6 +1,7 @@
 import Automerge
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -35,7 +36,6 @@ final class NotebookRecoveredOrderingTests: XCTestCase {
 
     func testRootSortIgnoresRecoveredDisplayItems() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let zulu = try catalog.add(kind: .folder, name: "Zulu")
         let alpha = try catalog.add(kind: .folder, name: "Alpha")
@@ -155,11 +155,5 @@ final class NotebookRecoveredOrderingTests: XCTestCase {
         in catalog: NotebookCatalogDocument
     ) throws -> NotebookItem {
         try XCTUnwrap(catalog.items().first { $0.id == id })
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(
-            path: "NotebookRecoveredOrderingTests-\(UUID().uuidString)"
-        )
     }
 }

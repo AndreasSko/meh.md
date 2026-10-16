@@ -1,11 +1,11 @@
 import Foundation
 import XCTest
+import TestSupport
 @testable import NoteCore
 
 final class NotebookMarkdownBackupStoreTests: XCTestCase {
     func testBackupPreservesMarkdownTreeAndExcludesTrash() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let folder = try catalog.add(kind: .folder, name: "Projects")
         try catalog.add(kind: .folder, name: "Empty", parentID: folder)
@@ -44,7 +44,6 @@ final class NotebookMarkdownBackupStoreTests: XCTestCase {
 
     func testRetentionOnlyRemovesOlderOwnedCompletedBackupsAfterSuccess() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "Persisted")
         try catalog.add(id: note.noteID, kind: .note, name: "Note")
@@ -83,12 +82,6 @@ final class NotebookMarkdownBackupStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: second.url.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: third.url.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: userFolder.path))
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(
-            path: "NotebookMarkdownBackupStoreTests-\(UUID().uuidString)"
-        )
     }
 }
 

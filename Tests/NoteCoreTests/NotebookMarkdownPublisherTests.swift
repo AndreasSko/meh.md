@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -8,7 +9,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
 
     func testPublishesNestedActiveNotesAsExactUTF8Markdown() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let folder = try catalog.add(kind: .folder, name: "Projects")
         let note = try NoteDocument(text: "# Draft\n\nLiteral 👋\n")
@@ -35,7 +35,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
 
     func testPreservesMarkdownExtension() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "body")
         try catalog.add(
@@ -66,7 +65,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
         async throws
     {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         var notes: [NoteSnapshot] = []
         var expectedNames: [String] = []
@@ -101,7 +99,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
 
     func testFitsMultibyteStemAtCharacterBoundary() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "unicode")
         let grapheme = "e\u{301}"
@@ -131,7 +128,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
 
     func testTruncationCollisionUsesStableIdentifierSuffix() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let firstID = UUID(
             uuidString: "11111111-1111-1111-1111-111111111111"
@@ -181,7 +177,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
 
     func testUnchangedPublishDoesNotReplaceHierarchy() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "unchanged")
         try catalog.add(id: note.noteID, kind: .note, name: "Note.md")
@@ -212,7 +207,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
 
     func testPublishesDatesAndSecondPublishIsStable() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let createdAt = Date(timeIntervalSince1970: 1_600_000_000.123)
         let modifiedAt = Date(timeIntervalSince1970: 1_700_000_000.456)
         let note = try NoteDocument(
@@ -265,7 +259,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
         async throws
     {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let noteID = UUID()
         let original = try NoteDocument(
             noteID: noteID,
@@ -319,7 +312,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
         async throws
     {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "persisted")
         try catalog.add(id: note.noteID, kind: .note, name: "Note.md")
@@ -372,7 +364,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
         async throws
     {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "body")
         try catalog.add(id: note.noteID, kind: .note, name: "Old.md")
@@ -429,7 +420,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
 
     func testMissingNoteFailsBeforeReplacingExistingExport() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let existing = try NoteDocument(text: "preserved")
         try catalog.add(
@@ -465,7 +455,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
         async throws
     {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let publisher = NotebookMarkdownPublisher(directory: root)
         try await publisher.publish(
@@ -488,7 +477,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
 
     func testTrashedNoteIsRemovedFromOwnedExport() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "temporary")
         try catalog.add(id: note.noteID, kind: .note, name: "Note.md")
@@ -516,7 +504,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
     func testRestartRecoversEveryDurableReplacementBoundary() async throws {
         for stoppedStage in NotebookMarkdownPublishStage.allCases {
             let root = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: root) }
             let catalog = try NotebookCatalogDocument()
             let note = try NoteDocument(text: "old")
             try catalog.add(id: note.noteID, kind: .note, name: "Note.md")
@@ -562,7 +549,6 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
     func testPermanentDeletionRemovesCopiesAndInterruptedGenerations() async throws {
         for stoppedStage in NotebookMarkdownPublishStage.allCases {
             let root = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: root) }
             let catalog = try NotebookCatalogDocument()
             let deleted = try NoteDocument(text: "body to remove")
             let survivor = try NoteDocument(text: "keep this")
@@ -607,10 +593,8 @@ final class NotebookMarkdownPublisherTests: XCTestCase {
         }
     }
 
-    private func temporaryDirectory(create: Bool = false) -> URL {
-        let url = FileManager.default.temporaryDirectory.appending(
-            path: "NotebookMarkdownPublisherTests-\(UUID().uuidString)"
-        )
+    private func temporaryDirectory(create: Bool) -> URL {
+        let url = temporaryDirectory()
         if create {
             try! FileManager.default.createDirectory(
                 at: url,

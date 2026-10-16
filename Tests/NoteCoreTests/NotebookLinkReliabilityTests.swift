@@ -1,13 +1,13 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
 @MainActor
 final class NotebookLinkReliabilityTests: XCTestCase {
     func testConcurrentOfflineRenamesPreserveLiteralLinksWhenBodiesMerge() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let firstURL = root.appending(path: "first")
         let secondURL = root.appending(path: "second")
         let first = NotebookReplica(directory: firstURL)
@@ -46,8 +46,7 @@ final class NotebookLinkReliabilityTests: XCTestCase {
 
     func testInterruptedCatalogSavePublishesStructureAndHistoryTogether() async throws {
         for stage in [NotebookLinkLocationStage.beforeCatalogSave, .catalogSaved] {
-            let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-            defer { try? FileManager.default.removeItem(at: root) }
+            let root = temporaryDirectory()
             let replica = NotebookReplica(directory: root)
             try await replica.createLocalNotebook()
             let target = try await replica.createNote(name: "Target.md", text: "target")
@@ -81,8 +80,7 @@ final class NotebookLinkReliabilityTests: XCTestCase {
     }
 
     func testRemoteRenameAcceptsOfflineNewLinksAndPreservesRemoteText() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let firstURL = root.appending(path: "first")
         let secondURL = root.appending(path: "second")
         let first = NotebookReplica(directory: firstURL)
@@ -123,8 +121,7 @@ final class NotebookLinkReliabilityTests: XCTestCase {
     }
 
     func testReusedTargetPathProducesChooserInsteadOfRedirectingOldLink() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let original = try await replica.createNote(name: "Target.md", text: "old target")
@@ -146,8 +143,7 @@ final class NotebookLinkReliabilityTests: XCTestCase {
     }
 
     func testMovingSourceAcrossImportedRootsDoesNotChooseSameNameTarget() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let firstRoot = UUID(), secondRoot = UUID()
@@ -178,8 +174,7 @@ final class NotebookLinkReliabilityTests: XCTestCase {
     }
 
     func testConcurrentSourceAndTargetMovesPreserveRelativeRelationship() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let firstURL = root.appending(path: "first"), secondURL = root.appending(path: "second")
         let first = NotebookReplica(directory: firstURL)
         try await first.createLocalNotebook()
@@ -207,8 +202,7 @@ final class NotebookLinkReliabilityTests: XCTestCase {
     }
 
     func testHistoricalDottedWikiTitleStillResolvesAfterRename() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let target = try await replica.createNote(name: "Budget 2026.10", text: "budget")
@@ -221,8 +215,7 @@ final class NotebookLinkReliabilityTests: XCTestCase {
     }
 
     func testLinksAuthoredAtBothConcurrentNamesResolveAfterOneExchange() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let firstURL = root.appending(path: "first"), secondURL = root.appending(path: "second")
         let first = NotebookReplica(directory: firstURL)
         try await first.createLocalNotebook()

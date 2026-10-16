@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -9,7 +10,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testBatchRestorePreservesFoldersAndUnselectedTrash() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let parent = try await replica.createFolder(name: "Parent")
@@ -35,7 +35,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testBatchRestoreChildOfRetainedTrashReturnsToRoot() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let folder = try await replica.createFolder(name: "Folder")
@@ -56,7 +55,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testInvalidBatchRestoreDoesNotRestoreAnyItems() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let trash = try await replica.createNote(name: "Trash.md")
@@ -75,7 +73,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testBatchDeletionDeduplicatesSubtreesAndKeepsUnselectedTrash() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let folder = try await replica.createFolder(name: "Folder")
@@ -97,7 +94,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testBatchDeletionRefusesAllWhenOneItemWasRestored() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let first = try await replica.createNote(name: "First.md")
@@ -120,7 +116,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testSubtreeDeletesOnlyConfirmedTrashIdentities() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let folder = try await replica.createFolder(name: "Folder")
@@ -167,7 +162,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testSelectionRefusesAnItemRestoredAfterConfirmation() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Note.md", text: "keep")
@@ -191,7 +185,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testInterruptedCatalogMarkerReconcilesBeforePublishing() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Note.md", text: "delete")
@@ -225,7 +218,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testCleanupFailureKeepsMarkerAndCanBeRetried() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Note.md", text: "delete")
@@ -254,7 +246,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testCleanupScrubsRetainedImportWithoutDeletingUnknownChild() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let folder = try await replica.createFolder(name: "Imported")
@@ -322,7 +313,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testCleanupDiscardsCorruptOwnedImportTemporaryFiles() throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let recoveryDirectory = root.appending(path: "import-recovery")
         try FileManager.default.createDirectory(
             at: recoveryDirectory,
@@ -351,7 +341,6 @@ final class NotebookDeletionTests: XCTestCase {
     func testCleanupRetainsCorruptDurableImportJournals() throws {
         for retainedRecovery in [false, true] {
             let root = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: root) }
             let storage = NotebookImportStorage(directory: root)
             let journalURL: URL
             if retainedRecovery {
@@ -393,7 +382,6 @@ final class NotebookDeletionTests: XCTestCase {
 
     func testCatalogRecoveryCannotRollBackDeletionLedger() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Note.md", text: "delete")
@@ -420,9 +408,5 @@ final class NotebookDeletionTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(recovered.items().first {
             $0.id == note
         }).isPermanentlyDeleted)
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     }
 }

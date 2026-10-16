@@ -1,6 +1,7 @@
 import Foundation
 import NoteCore
 import XCTest
+import TestSupport
 @testable import NotebookAppModel
 
 @MainActor
@@ -69,8 +70,7 @@ final class NotebookSyncActivityPresentationTests: XCTestCase {
     }
 
     func testResolutionRetainsUnknownIDsAndDisambiguatesDuplicateNames() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let directory = temporaryDirectory()
         let replica = NotebookReplica(directory: directory)
         try await replica.load()
         try await replica.createLocalNotebook()

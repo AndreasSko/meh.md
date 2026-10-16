@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 @testable import NotebookAppModel
 
 @MainActor
@@ -13,7 +14,7 @@ final class NotebookIncomingImportTests: XCTestCase {
         try bytes.write(to: file)
         let requests = NotebookIncomingImportRequests()
         requests.receive(file)
-        await waitForReading(requests)
+        try await waitForReading(requests)
         let request = try XCTUnwrap(requests.requests.first)
         XCTAssertEqual(request.plan.entries.first?.name, "Shared.md")
         XCTAssertEqual(try Data(contentsOf: file), bytes)
@@ -29,16 +30,12 @@ final class NotebookIncomingImportTests: XCTestCase {
         try Data("not Markdown".utf8).write(to: file)
         let requests = NotebookIncomingImportRequests()
         requests.receive(file)
-        await waitForReading(requests)
+        try await waitForReading(requests)
         XCTAssertTrue(requests.requests.isEmpty)
         XCTAssertNotNil(requests.errorMessage)
     }
 
-    private func waitForReading(_ requests: NotebookIncomingImportRequests) async {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while requests.readingCount > 0 && ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        XCTAssertEqual(requests.readingCount, 0)
+    private func waitForReading(_ requests: NotebookIncomingImportRequests) async throws {
+        try await waitUntil { requests.readingCount == 0 }
     }
 }
