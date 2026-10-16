@@ -934,9 +934,6 @@ struct NotebookView: View {
                 browserSelection.prune(to: activeBrowserIDs)
             }
         }
-        .onChange(of: replica.linkMaintenanceIssueMessage) { _, message in
-            if let message { errorMessage = message }
-        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active {
                 browserDrag.reset()
@@ -968,10 +965,7 @@ struct NotebookView: View {
                 get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
             )
         ) {
-            Button("OK", role: .cancel) {
-                errorMessage = nil
-                replica.acknowledgeLinkMaintenanceIssue()
-            }
+            Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
         }

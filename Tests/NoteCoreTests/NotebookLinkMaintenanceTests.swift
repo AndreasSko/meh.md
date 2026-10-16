@@ -90,7 +90,6 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
         try await replica.move(target, to: folder)
 
         XCTAssertEqual(session.text, "[[Target]]\nnewer local text")
-        XCTAssertNil(replica.linkMaintenanceIssueMessage)
         let corpus = try await replica.linkCorpus()
         XCTAssertEqual(corpus.texts[target], "body")
     }
@@ -247,7 +246,6 @@ final class NotebookLinkMaintenanceTests: XCTestCase {
         XCTAssertNil(corpus.texts[unavailable])
         XCTAssertTrue(corpus.unavailableIDs.contains(unavailable))
         try await replica.rename(unavailable, to: "Renamed lost.md")
-        XCTAssertNil(replica.linkMaintenanceIssueMessage)
         let collisionNames = replica.linkNotes.filter {
             $0.id == firstCollision || $0.id == secondCollision
         }.map(\.name)

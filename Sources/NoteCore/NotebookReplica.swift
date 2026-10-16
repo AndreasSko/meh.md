@@ -105,7 +105,6 @@ public final class NotebookReplica {
     public private(set) var hasPendingImport: Bool
     public private(set) var localEditsSuspended = false
     public private(set) var deletionCleanupErrorMessage: String?
-    public private(set) var linkMaintenanceIssueMessage: String?
     private var searchBodyGeneration: UInt64 = 0
     @ObservationIgnored private var catalog: NotebookCatalogDocument?
     @ObservationIgnored private var linkLocationHistory: [UUID: [NotebookLinkLocation]] = [:]
@@ -1381,11 +1380,6 @@ public final class NotebookReplica {
         return NotebookLinkCorpus(
             notes: notes, texts: texts, unavailableIDs: unavailable,
             editorRevisions: editorRevisions)
-    }
-
-    /// Acknowledge the last structural link-maintenance issue.
-    public func acknowledgeLinkMaintenanceIssue() {
-        linkMaintenanceIssueMessage = nil
     }
 
     func acceptSeed(_ record: SyncRecord) async throws {
