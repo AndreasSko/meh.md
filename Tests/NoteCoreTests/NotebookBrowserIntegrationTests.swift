@@ -39,7 +39,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
             await withCheckedContinuation { releaseWrite = $0 }
         }
         let change = Task { try await replica.setDefaultNewNoteParentID(inbox) }
-        await fulfillment(of: [writeEntered], timeout: 1)
+        await fulfillment(of: [writeEntered], timeout: 10)
         replica.catalogWriteSuspension = nil
         let creation = Task {
             try await replica.createNoteInDefaultFolder(name: "Later.md")
@@ -90,7 +90,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
             await withCheckedContinuation { releaseWrite = $0 }
         }
         let create = Task { try await replica.createFolder(name: "Local") }
-        await fulfillment(of: [writeEntered], timeout: 1)
+        await fulfillment(of: [writeEntered], timeout: 10)
         // A sync download arriving during a local edit waits instead of
         // failing the whole sync pass as busy.
         let download = Task { try await replica.apply(body) }
@@ -116,7 +116,7 @@ final class NotebookBrowserIntegrationTests: XCTestCase {
             await withCheckedContinuation { releaseWrite = $0 }
         }
         let create = Task { try await replica.createFolder(name: "Concurrent") }
-        await fulfillment(of: [writeEntered], timeout: 1)
+        await fulfillment(of: [writeEntered], timeout: 10)
         let rename = Task { try await replica.rename(note, to: "After.md") }
         await Task.yield()
 

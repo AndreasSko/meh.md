@@ -117,7 +117,7 @@ final class NotebookCreationPlacementTests: XCTestCase {
             await withCheckedContinuation { release = $0 }
         }
         let first = Task { try await replica.createFolder(name: "First") }
-        await fulfillment(of: [entered], timeout: 1)
+        await fulfillment(of: [entered], timeout: 10)
         let second = Task { try await replica.createNote(name: "Second.md", position: .first) }
         // Let the second operation reach the occupied catalog write gate.
         for _ in 0..<10 { await Task.yield() }

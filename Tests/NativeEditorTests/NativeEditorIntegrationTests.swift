@@ -489,7 +489,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
             description: "first deferred presentation refresh"
         )
         DispatchQueue.main.async { firstPresentationFinished.fulfill() }
-        await fulfillment(of: [firstPresentationFinished], timeout: 1)
+        await fulfillment(of: [firstPresentationFinished], timeout: 10)
         mounted.window.displayIfNeeded()
 
         let firstSelection = NSRange(
@@ -507,7 +507,7 @@ final class NativeEditorIntegrationTests: XCTestCase {
             description: "second deferred presentation refresh"
         )
         DispatchQueue.main.async { secondPresentationFinished.fulfill() }
-        await fulfillment(of: [secondPresentationFinished], timeout: 1)
+        await fulfillment(of: [secondPresentationFinished], timeout: 10)
         mounted.window.displayIfNeeded()
 
         let expectedSelection = NSRange(

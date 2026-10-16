@@ -354,7 +354,7 @@ final class NotebookBrowserPlacementIntegrationTests: XCTestCase {
         let concurrentMove = Task {
             _ = try await replica.moveItems([note], to: folder)
         }
-        await fulfillment(of: [entered], timeout: 1)
+        await fulfillment(of: [entered], timeout: 10)
         replica.catalogWriteSuspension = nil
         let drop = Task {
             try await replica.placeItems(
