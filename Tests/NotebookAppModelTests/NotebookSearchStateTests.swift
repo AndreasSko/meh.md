@@ -15,7 +15,7 @@ final class NotebookSearchStateTests: XCTestCase {
         state.isPresented = true
         state.query = "apple"
         let first = Task { await state.refresh(replica: fixture.replica, recentIDs: []) }
-        try await Task.sleep(for: .milliseconds(20))
+        for _ in 0..<100 where !state.isPreparing { await Task.yield() }
         state.query = "banana"
         let second = Task { await state.refresh(replica: fixture.replica, recentIDs: []) }
 
@@ -58,7 +58,7 @@ final class NotebookSearchStateTests: XCTestCase {
         state.isPresented = true
         state.query = "Europa"
         let task = Task { await state.refresh(replica: fixture.replica, recentIDs: []) }
-        try await Task.sleep(for: .milliseconds(20))
+        for _ in 0..<100 where !state.isPreparing { await Task.yield() }
 
         task.cancel()
         await task.value

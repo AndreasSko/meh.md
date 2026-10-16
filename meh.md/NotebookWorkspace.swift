@@ -15,6 +15,32 @@ import Observation
 import UIKit
 #endif
 
+/// Time sources for sync scheduling and retry deadlines, so app-model tests
+/// can drive them with a manual clock. Uptime pauses while the device sleeps;
+/// elapsed time keeps counting, like ContinuousClock. Timers sleep until an
+/// elapsed-time deadline taken when they are armed.
+struct NotebookSyncClock: Sendable {
+    let now: @Sendable () -> Date
+    let uptime: @Sendable () -> TimeInterval
+    let elapsed: @Sendable () -> Duration
+    let sleepUntil: @Sendable (Duration) async throws -> Void
+
+    static var live: NotebookSyncClock {
+        let clock = ContinuousClock()
+        let origin = clock.now
+        return NotebookSyncClock(
+            now: { Date() },
+            uptime: { ProcessInfo.processInfo.systemUptime },
+            elapsed: { origin.duration(to: clock.now) },
+            sleepUntil: { try await Task.sleep(until: origin.advanced(by: $0), clock: clock) }
+        )
+    }
+
+    func sleep(for delay: Duration) async throws {
+        try await sleepUntil(elapsed() + delay)
+    }
+}
+
 enum NotebookBackupFrequency: String, CaseIterable, Identifiable {
     case off, daily, weekly, monthly
 
@@ -115,7 +141,7 @@ final class NotebookWorkspace {
         snapshotMaintenanceStatus != nil && !isResetPending && !isLoading
             && !isCleaningCloudCopies && !isSyncUpdateRequired && canRetrySync
             && syncHalt == nil && previousConnectivity != .unsatisfied
-            && (syncRetryNotBefore.map { $0 <= Date() } ?? true)
+            && (syncRetryNotBefore.map { $0 <= syncClock.now() } ?? true)
     }
 
     func requestCloudCopyCleanup() async {
@@ -174,7 +200,7 @@ final class NotebookWorkspace {
                 guard let status = currentStatus else { return }
                 let due = NotebookSnapshotMaintenancePolicy.isDue(status)
                 guard manual || due else { return }
-                if !manual { try await Task.sleep(for: .seconds(2)) }
+                if !manual { try await self.syncClock.sleep(for: .seconds(2)) }
                 try Task.checkCancellation()
                 guard !self.isRefreshing, !self.needsAnotherRefresh,
                       self.scheduledRefresh == nil,
@@ -233,10 +259,10 @@ final class NotebookWorkspace {
     @ObservationIgnored private var backupTimer: Task<Void, Never>?
     @ObservationIgnored private var backupRetryNotBefore: Date?
     @ObservationIgnored private var scheduledRefresh: Task<Void, Never>?
+    @ObservationIgnored private var startingRefreshes = 0
     @ObservationIgnored private var syncSchedule = NotebookSyncSchedule()
-    @ObservationIgnored private var startedRefreshAt: ContinuousClock.Instant?
-    @ObservationIgnored private let syncClock = ContinuousClock()
-    @ObservationIgnored private let syncClockOrigin = ContinuousClock.now
+    @ObservationIgnored private var startedRefreshAt: Duration?
+    @ObservationIgnored private let syncClock: NotebookSyncClock
     @ObservationIgnored private var pendingSyncTrigger = "automatic refresh"
 
     @ObservationIgnored private var cloudActivityTask: Task<Void, Never>?
@@ -404,6 +430,7 @@ final class NotebookWorkspace {
     }
 
     init(preview: Bool = false) {
+        syncClock = .live
         storageBoundary = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         backupFrequency = Self.savedBackupFrequency
         backupRetentionCount = Self.savedBackupRetentionCount
@@ -509,9 +536,11 @@ final class NotebookWorkspace {
          automaticSync: Bool, mode: Mode? = nil,
          storageBoundary: URL? = nil,
          syncSchedule: NotebookSyncSchedule = NotebookSyncSchedule(),
+         syncClock: NotebookSyncClock = .live,
          transportFactory: (@MainActor (String?) async throws -> any SyncTransport)? = nil) {
         self.directory = directory
         self.syncSchedule = syncSchedule
+        self.syncClock = syncClock
         self.documentsDirectory = documentsDirectory
         self.storageBoundary = storageBoundary
             ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
@@ -811,7 +840,21 @@ final class NotebookWorkspace {
         }
     }
 
-    private var syncTime: Duration { syncClockOrigin.duration(to: syncClock.now) }
+    private var syncTime: Duration { syncClock.elapsed() }
+
+    /// Whether a timer or a started task will refresh later. Tests use this
+    /// to prove that nothing more can happen without a new trigger.
+    var hasPendingRefresh: Bool {
+        startingRefreshes > 0 || scheduledRefresh.map { !$0.isCancelled } ?? false
+    }
+
+    private func startRefresh(_ work: @escaping @MainActor () async -> Void) {
+        startingRefreshes += 1
+        Task {
+            await work()
+            startingRefreshes -= 1
+        }
+    }
 
     func noteDidEdit() {
         cancelSnapshotMaintenance()
@@ -879,14 +922,17 @@ final class NotebookWorkspace {
         guard let policyDelay = syncSchedule.delay(at: syncTime) else { return }
         scheduledRefresh?.cancel()
         guard isForeground || !usesSync || !automaticSync else { return }
+        let now = syncClock.now()
         let retryDelay = Duration.seconds(max(
-            0, (notBefore ?? syncRetryNotBefore ?? Date()).timeIntervalSinceNow
+            0, (notBefore ?? syncRetryNotBefore ?? now).timeIntervalSince(now)
         ))
         // Recheck the transport's monotonic cooldown periodically so a
         // corrected calendar cannot strand a previously scheduled refresh.
         let delay = max(policyDelay, min(retryDelay, .seconds(60)))
+        let deadline = syncTime + delay
+        let sleepUntil = syncClock.sleepUntil
         scheduledRefresh = Task { @MainActor [weak self] in
-            do { try await Task.sleep(for: delay) }
+            do { try await sleepUntil(deadline) }
             catch { return }
             guard let self, !Task.isCancelled else { return }
             scheduledRefresh = nil
@@ -939,7 +985,7 @@ final class NotebookWorkspace {
         isForeground = newForeground
         if changed, newForeground, usesSync, isRefreshing,
            let startedRefreshAt {
-            let elapsed = startedRefreshAt.duration(to: syncClock.now).components
+            let elapsed = (syncClock.elapsed() - startedRefreshAt).components
             let milliseconds = elapsed.seconds * 1_000
                 + elapsed.attoseconds / 1_000_000_000_000_000
             let phase = sync?.status == .syncing
@@ -954,7 +1000,7 @@ final class NotebookWorkspace {
            manualSnapshotCleanupRequested {
             // A requested cleanup remains authorized across suspension even
             // when ordinary automatic sync is turned off. Receive first again.
-            Task { await refresh(manual: true, trigger: "resume requested cleanup") }
+            startRefresh { await self.refresh(manual: true, trigger: "resume requested cleanup") }
         }
         guard !isResetPending, automaticSync, changed else { return }
         if newForeground {
@@ -969,10 +1015,10 @@ final class NotebookWorkspace {
             scheduledRefresh?.cancel()
             scheduledRefresh = nil
             if usesSync {
-                Task {
-                    do { try await replica?.flushOpenNotes() }
-                    catch { errorMessage = error.localizedDescription; return }
-                    await refresh(trigger: "background transition")
+                startRefresh {
+                    do { try await self.replica?.flushOpenNotes() }
+                    catch { self.errorMessage = error.localizedDescription; return }
+                    await self.refresh(trigger: "background transition")
                 }
             }
         }
@@ -1045,7 +1091,7 @@ final class NotebookWorkspace {
         }
         await updateRetryDeadline()
         if !manual, !whileLoading,
-           let deadline = syncRetryNotBefore, deadline > Date() {
+           let deadline = syncRetryNotBefore, deadline > syncClock.now() {
             if isForeground { scheduleRefresh(trigger: trigger, notBefore: deadline) }
             return
         }
@@ -1068,7 +1114,7 @@ final class NotebookWorkspace {
         cancelSnapshotMaintenance()
         await maintenance?.value
         guard !isResetPending else { isRefreshing = false; return }
-        startedRefreshAt = syncClock.now
+        startedRefreshAt = syncClock.elapsed()
         // The app may enter the background after this exchange starts, so
         // acquire the lease for every refresh that owns the exchange.
         beginBackgroundExecutionIfNeeded()
@@ -1084,8 +1130,8 @@ final class NotebookWorkspace {
                     let manual = needsManualRefresh
                     needsImmediateRefresh = false
                     needsManualRefresh = false
-                    Task {
-                        await refresh(manual: manual, trigger: "coalesced follow-up")
+                    startRefresh {
+                        await self.refresh(manual: manual, trigger: "coalesced follow-up")
                     }
                 } else {
                     contentDidSave(trigger: "coalesced follow-up")
@@ -1094,7 +1140,7 @@ final class NotebookWorkspace {
         }
         if usesSync {
             syncEventLog.record("refresh started: " + (manual ? "manual" : trigger))
-            let refreshStarted = Date()
+            let refreshStarted = syncClock.now()
             beginSyncPresentation(manual: manual)
             var hasBinding = false
             do {
@@ -1162,12 +1208,12 @@ final class NotebookWorkspace {
                 }
                 recordUpdateRequirement(from: failure)
                 if let syncHalt { recordUpdateRequirement(from: syncHalt.underlyingError) }
-                let now = Date()
+                let now = syncClock.now()
                 plannedRetryDate = syncHalt == nil ? retryPolicy.retryDate(
                     for: failure, now: now,
                     serverNotBefore: syncRetryNotBefore) : nil
                 plannedRetryUptime = plannedRetryDate == nil ? nil
-                    : ProcessInfo.processInfo.systemUptime
+                    : syncClock.uptime()
                 plannedRetryDelay = plannedRetryDate.map {
                     max(0, $0.timeIntervalSince(now))
                 }
@@ -1197,7 +1243,7 @@ final class NotebookWorkspace {
             }
             endSyncPresentation()
             syncEventLog.record("refresh ended", counts: [
-                "duration_ms": Int(Date().timeIntervalSince(refreshStarted) * 1_000)
+                "duration_ms": Int(syncClock.now().timeIntervalSince(refreshStarted) * 1_000)
             ])
         }
         do { try await replica.cleanupDeletedContent() }
@@ -1219,7 +1265,7 @@ final class NotebookWorkspace {
         defer { statusSyncRequestInFlight = false }
         await updateRetryDeadline()
         guard usesSync, canRetrySync, !isLoading, !isRefreshing,
-              syncRetryNotBefore.map({ $0 <= Date() }) ?? true else { return }
+              syncRetryNotBefore.map({ $0 <= syncClock.now() }) ?? true else { return }
         await refresh(manual: true, trigger: "sync status button")
     }
 
@@ -1227,15 +1273,17 @@ final class NotebookWorkspace {
         isSyncing = true
         showSyncCheck = manual
         slowSyncIndicator?.cancel()
+        let slowDeadline = syncTime + .seconds(2)
+        let syncClock = syncClock
         slowSyncIndicator = Task { @MainActor in
-            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            do { try await syncClock.sleepUntil(slowDeadline) } catch { return }
             if isSyncing { showSyncCheck = true }
         }
         syncMonitor?.cancel()
         syncMonitor = Task { @MainActor in
             while !Task.isCancelled, isSyncing {
                 await updateRetryDeadline()
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                do { try await syncClock.sleep(for: .seconds(1)) } catch { return }
             }
         }
     }
@@ -1303,20 +1351,19 @@ final class NotebookWorkspace {
 
     private func updateRetryDeadline() async {
         if let plannedRetryUptime, let plannedRetryDelay {
-            let elapsed = max(
-                0, ProcessInfo.processInfo.systemUptime - plannedRetryUptime
-            )
+            let elapsed = max(0, syncClock.uptime() - plannedRetryUptime)
             let remaining = max(0, plannedRetryDelay - elapsed)
             plannedRetryDate = remaining > 0
-                ? Date().addingTimeInterval(remaining) : nil
+                ? syncClock.now().addingTimeInterval(remaining) : nil
         }
         let notebook = await notebookTransport?.retryNotBefore()
+        let now = syncClock.now()
         let deadline = [notebook, plannedRetryDate].compactMap { $0 }
-            .filter { $0 > Date() }.max()
+            .filter { $0 > now }.max()
         if deadline != syncRetryNotBefore {
             if let deadline {
                 syncEventLog.record("retry cooldown observed", counts: [
-                    "remaining_seconds": max(0, Int(ceil(deadline.timeIntervalSinceNow)))
+                    "remaining_seconds": max(0, Int(ceil(deadline.timeIntervalSince(now))))
                 ])
             } else if syncRetryNotBefore != nil {
                 syncEventLog.record("retry cooldown elapsed")
@@ -1496,11 +1543,11 @@ final class NotebookWorkspace {
         // Coalesced hints share one deadline and one backoff step. A new hint
         // after the retry pass advances the bounded policy if work remains.
         if plannedRetryDate == nil {
-            let now = Date()
+            let now = syncClock.now()
             plannedRetryDate = retryPolicy.retryDate(
                 for: failure, now: now, serverNotBefore: syncRetryNotBefore
             )
-            plannedRetryUptime = ProcessInfo.processInfo.systemUptime
+            plannedRetryUptime = syncClock.uptime()
             plannedRetryDelay = plannedRetryDate.map {
                 max(0, $0.timeIntervalSince(now))
             }
