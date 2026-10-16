@@ -230,10 +230,10 @@ with nine expected skips,
 Dev link-navigation UI test also passed. Exact-head PR CI and review remain
 pending; simulator checks do not establish physical-device improvement.
 
-The owner's [sanitized physical iPhone profile](
-iphone-typing-hangs-2026-10-03.md) independently identifies repeated completion
-state comparisons, toolbar string scans, and core commits. It also separates
-startup catalog decoding and first-activity catalog serialization from typing.
+The owner's sanitized physical iPhone profile independently identified
+repeated completion state comparisons, toolbar string scans, and core commits.
+It also separates startup catalog decoding and first-activity catalog
+serialization from typing.
 The sampled viewport layout contribution was only 0.4% during the selected
 typing window, so the final fix does not change viewport rendering behavior.
 

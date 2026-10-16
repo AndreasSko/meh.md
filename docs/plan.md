@@ -7,8 +7,7 @@ Updated: 2026-09-13
 Milestones 0-3 delivered a native Markdown editor, Automerge-backed local
 saving, a sync transport, and a notebook with folders, import, Markdown copies,
 Trash, permanent deletion, and automatic sync scheduling. Milestone 3 closed
-on 2026-09-13; its [closeout record](milestone-3-plan.md) preserves review and
-validation evidence.
+on 2026-09-13.
 
 Milestone 4 prioritizes pleasant everyday writing; see its
 [execution plan](milestone-4-plan.md). [Sync-pause recovery][issue-22] and
@@ -87,12 +86,9 @@ Status: complete on 2026-09-12.
 
 Status: complete on 2026-09-12.
 
-See the revised [step-by-step execution plan](milestone-1-plan.md) for scope,
-implementation checkpoints, and sub-agent assignments.
-
 ### Work
 
-- The [Automerge spike](automerge-spike.md) follow-up validates history through
+- The Automerge spike follow-up validates history through
   interrupted file saves and automatic native undo integration.
 - The Automerge-backed core and internal file persistence are implemented,
   retaining a previous known-good version for explicit recovery.
@@ -123,10 +119,10 @@ Status: Mac/iPhone physical acceptance and iPad simulator convergence verified.
 Physical iPad checks remain open as follow-up validation.
 PR #6 and stacked PR #7 are merged as of 2026-09-13.
 
-See the [execution plan](milestone-2-plan.md). Prove the shared coordinator
-against a deterministic service and two simulator apps before iCloud device
-acceptance. The production transport boundary is pluggable; the local service
-models remote record storage without simulating Apple account services.
+Prove the shared coordinator against a deterministic service and two
+simulator apps before iCloud device acceptance. The production transport
+boundary is pluggable; the local service models remote record storage without
+simulating Apple account services.
 
 ### Work
 
@@ -155,7 +151,7 @@ models remote record storage without simulating Apple account services.
 ## 3 — A usable notebook
 
 Status: implementation complete; reviewed PRs #14, #16, and #18 merged on
-2026-09-13. See the [execution and closeout record](milestone-3-plan.md).
+2026-09-13.
 Outstanding recovery and device validation are tracked in GitHub issues.
 
 ### Work
@@ -251,7 +247,7 @@ synchronization.
 - **Automated checks:** 47 core and 14 Mac native editor tests; 20 Automerge
   spike tests; 3 iOS native adapter tests; 1 iPhone simulator app persistence
   test. Real spike process kills exercised four save boundaries. Mac and iOS
-  builds passed. See [verification](local-note-verification.md).
+  builds passed.
 - **App checks:** Mac typing, undo, save/reopen, folder selection, bookmark
   restoration, copy overwrite and recreation. iPhone simulator Unicode text,
   save/relaunch, exact copy bytes, and Files preview passed.

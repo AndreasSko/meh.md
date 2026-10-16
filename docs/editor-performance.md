@@ -633,9 +633,6 @@ launches reduce the effect of one noisy median; they cannot excuse an
 absolute typing, bold, or bulk stall. Missing, malformed, duplicate, or
 mismatched fixture reports fail the comparison.
 
-See the [8 October editing profile](editing-profile-2026-10-08.md) for
-per-commit measurements and Instruments attribution of this reference.
-
 
 ### Hosted wall-latency variance policy, 9 October 2026
 

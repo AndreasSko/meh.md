@@ -100,6 +100,5 @@ python3 -m unittest discover -s Tools/LocalSyncServer -p 'test_*.py'
 
 At that checkpoint, a signed Mac iCloud Dev launch joined the existing
 canonical note and synced a newly created folder. Import, permanent cleanup,
-and automatic scheduling were delivered later in milestone 3; see its
-[closeout record](milestone-3-plan.md). Physical-device delivery and energy
-acceptance are distinct from those implementation results.
+and automatic scheduling were delivered later in milestone 3. Physical-device
+delivery and energy acceptance are distinct from those implementation results.

@@ -72,8 +72,5 @@ but it does not maintain the new dates or manual-order behavior when writing.
 ## Verification boundaries
 
 Core tests cover atomic refusal, ancestor normalization, undo/redo, remote
-changes, migration, exact source bytes, and replica convergence. Native app
-builds and simulator interactions are recorded separately in the
-[native browser delivery record](investigations/native-browser-selection.md).
-Simulator evidence does not
-establish physical iPhone or iPad acceptance.
+changes, migration, exact source bytes, and replica convergence. Simulator
+evidence does not establish physical iPhone or iPad acceptance.
