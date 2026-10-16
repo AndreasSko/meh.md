@@ -911,18 +911,21 @@ public final class NotebookReplica {
     }
 
     public func setTrashed(_ id: UUID, _ trashed: Bool) async throws {
-        try ensureAlive(id)
-        let next = try catalog!.fork()
-        try next.setTrashed(id, trashed)
-        if trashed {
-            let former = Set(placements.filter { !$0.isInTrash && $0.item.kind == .note }
-                .map { $0.item.id })
-            let now = Set(try next.placements().filter {
-                !$0.isInTrash && $0.item.kind == .note
-            }.map { $0.item.id })
-            try next.clearRecents(for: former.subtracting(now))
+        try await withCatalogWrite {
+            try self.ensureAlive(id)
+            let next = try self.catalog!.fork()
+            try next.setTrashed(id, trashed)
+            if trashed {
+                let former = Set(self.placements.filter {
+                    !$0.isInTrash && $0.item.kind == .note
+                }.map { $0.item.id })
+                let now = Set(try next.placements().filter {
+                    !$0.isInTrash && $0.item.kind == .note
+                }.map { $0.item.id })
+                try next.clearRecents(for: former.subtracting(now))
+            }
+            try await self.persistCatalog(next)
         }
-        try await saveCatalog(next)
     }
 
     /// Move a prevalidated selection with a single durable catalog write.
@@ -1154,10 +1157,12 @@ public final class NotebookReplica {
 
     /// Record permanent intent received through synchronization.
     func markPermanentlyDeleted(_ ids: Set<UUID>) async throws {
-        guard let catalog else { throw NotebookReplicaError.notJoined }
-        let next = try catalog.fork()
-        try next.markPermanentlyDeleted(ids)
-        try await saveCatalog(next)
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.markPermanentlyDeleted(ids)
+            try await self.persistCatalog(next)
+        }
     }
 
     public func openNote(

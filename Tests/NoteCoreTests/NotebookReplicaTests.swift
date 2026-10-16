@@ -102,4 +102,38 @@ final class NotebookReplicaTests: XCTestCase {
         let reopened = try await replica.openNote(id)
         XCTAssertTrue(session === reopened)
     }
+
+    func testTrashWaitingForCatalogWriteKeepsThatWrite() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let renamed = try await replica.createNote(name: "Draft.md", text: "draft")
+        let trashed = try await replica.createNote(name: "Old.md", text: "old")
+        var entered: CheckedContinuation<Void, Never>?
+        var release: CheckedContinuation<Void, Never>?
+        replica.catalogWriteSuspension = {
+            replica.catalogWriteSuspension = nil
+            await withCheckedContinuation { continuation in
+                release = continuation
+                entered?.resume()
+            }
+        }
+
+        let rename = Task { try await replica.rename(renamed, to: "Final.md") }
+        await withCheckedContinuation { entered = $0 }
+        let trash = Task { try await replica.setTrashed(trashed, true) }
+        // The main actor runs jobs in order, so the trash task reaches the
+        // write lock before this test resumes.
+        await Task.yield()
+        release?.resume()
+        try await rename.value
+        try await trash.value
+
+        let placements = Dictionary(uniqueKeysWithValues: replica.placements.map {
+            ($0.item.id, $0)
+        })
+        XCTAssertEqual(placements[renamed]?.item.name, "Final.md")
+        XCTAssertEqual(placements[trashed]?.isInTrash, true)
+    }
 }
