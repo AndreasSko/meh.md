@@ -644,10 +644,13 @@ final class NotebookCatalogDocument {
     /// First connection copies metadata onto the canonical cloud history.
     /// Note UUIDs and body documents stay intact. Independent catalog roots
     /// are never merged or assigned a matching UUID to bypass validation.
-    func forkJoiningOfflineNotebook(_ local: NotebookCatalogDocument) throws
-        -> NotebookCatalogDocument
+    /// Omitted items, such as a shared welcome note, keep the cloud's state.
+    func forkJoiningOfflineNotebook(
+        _ local: NotebookCatalogDocument, omitting omitted: Set<UUID> = []
+    ) throws -> NotebookCatalogDocument
     {
-        let localItems = try local.items()
+        let localItems = try local.items().filter { !omitted.contains($0.id) }
+        let omittedKeys = omitted.map(\.uuidString)
         let remoteIDs = Set(try items().map(\.id))
         guard remoteIDs.isDisjoint(with: localItems.map(\.id)) else {
             throw SyncError.identityConflict
@@ -671,6 +674,7 @@ final class NotebookCatalogDocument {
                 || key.hasPrefix("recentsHidden.")
                 || key.hasPrefix("linkLocation.") || key == "newNoteParent"
         {
+            if omittedKeys.contains(where: key.contains) { continue }
             guard case .Scalar(let value) = try local.document.get(obj: .ROOT, key: key)
             else { throw NotebookCatalogError.invalidDocument }
             if key != "newNoteParent", let existing = try candidate.document.get(obj: .ROOT, key: key),
@@ -680,7 +684,8 @@ final class NotebookCatalogDocument {
         // The root is shared with cloud notes. Append the offline roots in
         // their existing order; ranks inside their folders are preserved.
         let roots = try local.orderedChildren(parentID: nil, inTrash: false)
-            .filter { $0.item.parentID == nil }.map { $0.item.id }
+            .filter { $0.item.parentID == nil && !omitted.contains($0.item.id) }
+            .map { $0.item.id }
         let lower = try orderedChildren(parentID: nil, inTrash: false).last?.item.orderKey
         let ranks = try NotebookOrderKeyFactory.distribute(itemIDs: roots, lower: lower, upper: nil)
         for id in roots {

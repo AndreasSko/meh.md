@@ -302,6 +302,27 @@ public final class NotebookReplica {
         }
     }
 
+    /// Fresh notebooks start with the shared welcome note. Call it once,
+    /// right after creating the notebook and before any other edit.
+    public func addWelcomeNote() async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.add(id: NotebookWelcomeNote.id, kind: .note,
+                         name: NotebookWelcomeNote.name)
+            try await self.noteStorage(NotebookWelcomeNote.id)
+                .save(NotebookWelcomeNote.snapshot)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    private func isUntouchedWelcomeNote() async throws -> Bool {
+        if let session = sessions[NotebookWelcomeNote.id] { try await session.flush() }
+        guard case .current(let snapshot) = await noteStorage(NotebookWelcomeNote.id)
+            .load(reusing: nil).result else { return false }
+        return snapshot.heads == NotebookWelcomeNote.heads
+    }
+
     func validateOfflineJoinScope(_ scope: String) throws {
         if let transition = try offlineJoinStorage.load()?.transition,
            transition.scope != scope { throw SyncError.scopeChanged }
@@ -337,9 +358,20 @@ public final class NotebookReplica {
             // finish or discard a pending import before changing identity.
             guard !self.hasPendingImport else { throw NotebookImportError.pendingImportExists }
             let canonical = try NotebookCatalogDocument(snapshot: incoming)
-            let joined = try canonical.forkJoiningOfflineNotebook(local)
+            let welcome = NotebookWelcomeNote.id
+            let localWelcome = try local.items().contains { $0.id == welcome }
+            // Another device's welcome note is this one, so the cloud state
+            // wins. Older cloud notebooks never get an untouched copy.
+            var omitted = Set<UUID>()
+            if localWelcome, try canonical.items().contains(where: { $0.id == welcome }) {
+                omitted.insert(welcome)
+            } else if localWelcome, try await self.isUntouchedWelcomeNote() {
+                omitted.insert(welcome)
+            }
+            let joined = try canonical.forkJoiningOfflineNotebook(local, omitting: omitted)
             let deleted = try self.deletedIDs
-            guard deleted.isDisjoint(with: try canonical.items().map(\.id)) else {
+            guard deleted.subtracting(omitted)
+                .isDisjoint(with: try canonical.items().map(\.id)) else {
                 throw SyncError.identityConflict
             }
             let transition = NotebookOfflineJoinReceipt.Transition(

@@ -30,7 +30,8 @@
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
         "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote",
         "NotebookReleaseMenuUITests/testFileMenuPickersAndNewWindowPreserveWriting",
-        "NotebookReleaseMenuUITests/testSelectionCommandsRespectEditorAndTitleFocus"
+        "NotebookReleaseMenuUITests/testSelectionCommandsRespectEditorAndTitleFocus",
+        "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce"
       ]
     }
   ],

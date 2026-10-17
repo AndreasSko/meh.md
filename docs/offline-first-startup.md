@@ -20,6 +20,11 @@ when automatic sync is enabled. Sync Now remains available for manual use.
   distinguishes items with the same name; it does not overwrite either note.
 - Two independently created offline notebooks converge whichever connects
   first. Later connections use ordinary Automerge replication.
+- Fresh iCloud notebooks start with one welcome note. Every device ships the
+  same Automerge bytes and note ID, so copies share one history. When the
+  cloud already has the note, its catalog state wins and body edits merge.
+  An untouched copy never joins a cloud notebook without one; an edited copy
+  joins like any other note. A deletion on either side deletes it everywhere.
 - A bound notebook never joins another account automatically. Account identity
   checks still precede bootstrap, download, and upload. Restoring the original
   account can resume a halted transport; another account leaves sync paused.
