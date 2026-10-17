@@ -962,7 +962,7 @@ final class MarkdownPresentationTests: XCTestCase {
 
         XCTAssertEqual(
             storage.attribute(.underlineStyle, at: linkLocation, effectiveRange: nil) as? Int,
-            NSUnderlineStyle.single.rawValue
+            NSUnderlineStyle.thick.rawValue
         )
         XCTAssertNil(storage.attribute(.underlineStyle, at: plainLocation, effectiveRange: nil))
     }
@@ -979,12 +979,45 @@ final class MarkdownPresentationTests: XCTestCase {
         XCTAssertEqual(
             storage.attribute(.underlineStyle, at: text.range(of: "Garden").location,
                               effectiveRange: nil) as? Int,
-            NSUnderlineStyle.single.rawValue
+            NSUnderlineStyle.thick.rawValue
         )
         XCTAssertNil(storage.attribute(.underlineStyle, at: text.range(of: "[[").location,
                                        effectiveRange: nil))
         XCTAssertNil(storage.attribute(.underlineStyle, at: text.range(of: "]]").location,
                                        effectiveRange: nil))
+    }
+
+    func testChangingThePaletteRestylesTheWholeNote() throws {
+        let source = "See [[Garden plan]] and ==paint== today"
+        let textView = NSTextView(usingTextLayoutManager: true)
+        textView.string = source
+        MarkdownPresentation.configure(textView)
+        defer { MehStyle.palette = MehPalette() }
+        let storage = try XCTUnwrap(textView.textStorage)
+        let link = (source as NSString).range(of: "Garden").location
+        func underline() -> NSColor? {
+            storage.attribute(.underlineColor, at: link, effectiveRange: nil) as? NSColor
+        }
+        func colors() -> (mark: NSColor?, link: NSColor?) {
+            var mark: NSColor?, ink: NSColor?
+            let cache = MarkdownPresentation.syntaxCache(for: textView)
+            cache.currentPresentation?.forEachRenderingSpan(
+                intersecting: NSRange(location: 0, length: storage.length)
+            ) { span, attributes in
+                if span.role == .highlight { mark = attributes[.backgroundColor] as? NSColor }
+                if span.role == .link { ink = attributes[.foregroundColor] as? NSColor }
+            }
+            return (mark, ink)
+        }
+        XCTAssertEqual(underline(), MehPalette.Highlighter.yellow.strokePlatformColor)
+        XCTAssertEqual(colors().mark, MehPalette.Highlighter.yellow.markPlatformColor)
+
+        MehStyle.palette = MehPalette(ink: .blue, highlighter: .pink)
+        MarkdownPresentation.refresh(textView)
+
+        XCTAssertEqual(underline(), MehPalette.Highlighter.pink.strokePlatformColor)
+        XCTAssertEqual(colors().mark, MehPalette.Highlighter.pink.markPlatformColor)
+        XCTAssertEqual(colors().link, MehPalette.Ink.blue.platformColor)
     }
 
     func testFirstRangeEndingAfterFindsTheOverlap() {

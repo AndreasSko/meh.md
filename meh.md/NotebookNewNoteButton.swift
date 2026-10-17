@@ -3,8 +3,10 @@ import SwiftUI
 import UIKit
 
 /// Keeps the primary tap and secondary menu gesture on the same native control.
+/// It's the one button drawn in highlighter, because it's the main action.
 struct NotebookNewNoteButton: UIViewRepresentable {
     let isEnabled: Bool
+    let highlighter: UIColor
     let hasTemplates: Bool
     let onNewNote: () -> Void
     let onNewFromTemplate: () -> Void
@@ -13,8 +15,12 @@ struct NotebookNewNoteButton: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UIButton {
-        var configuration = UIButton.Configuration.plain()
-        configuration.image = UIImage(systemName: "plus")
+        var configuration = UIButton.Configuration.prominentGlass()
+        configuration.cornerStyle = .capsule
+        // Prominent glass picks a white glyph for some tints. Ink stays
+        // readable on every highlighter.
+        configuration.image = UIImage(systemName: "plus")?
+            .withTintColor(MehStyle.onHighlighter, renderingMode: .alwaysOriginal)
         configuration.preferredSymbolConfigurationForImage =
             UIImage.SymbolConfiguration(pointSize: 20, weight: .regular)
         configuration.indicator = .automatic
@@ -51,7 +57,15 @@ struct NotebookNewNoteButton: UIViewRepresentable {
         coordinator.onNewNote = onNewNote
         coordinator.onNewFromTemplate = onNewFromTemplate
         coordinator.onNewFolder = onNewFolder
-        button.isEnabled = isEnabled
+        // Stay enabled while busy: a disabled prominent glass turns gray,
+        // which flickers every time a note opens. The coordinator ignores
+        // taps until it's enabled again.
+        button.tintColor = highlighter
+        if isEnabled {
+            button.accessibilityTraits.remove(.notEnabled)
+        } else {
+            button.accessibilityTraits.insert(.notEnabled)
+        }
         let attributes: UIMenuElement.Attributes = isEnabled ? [] : .disabled
         button.menu = UIMenu(children: [
             UIAction(title: String(localized: "New Note"),

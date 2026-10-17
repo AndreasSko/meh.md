@@ -772,9 +772,7 @@ enum MarkdownPresentation {
         context.setFillColor(color.cgColor)
         context.fill(rect)
         guard let accentRect = decoration.accentRect else { return }
-        context.setFillColor(
-            MehStyle.ink.withAlphaComponent(0.3).cgColor
-        )
+        context.setFillColor(MehStyle.highlighterStroke.cgColor)
         context.fill(
             CGRect(
                 x: rect.minX + accentRect.minX - decoration.rect.minX,
@@ -1134,8 +1132,8 @@ enum MarkdownPresentation {
                 if visible.length > 0, let localRange = local(visible) {
                     desired.addAttributes(
                         [
-                            .underlineColor: MehStyle.ink.withAlphaComponent(0.35),
-                            .underlineStyle: NSUnderlineStyle.single.rawValue,
+                            .underlineColor: MehStyle.highlighterStroke,
+                            .underlineStyle: NSUnderlineStyle.thick.rawValue,
                         ],
                         range: localRange
                     )

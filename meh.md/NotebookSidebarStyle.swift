@@ -18,6 +18,27 @@ enum NotebookSidebarPalette {
     }
 }
 
+/// A folder with a quick, slightly tilted highlighter stroke underneath, so
+/// folders stand out from notes without filling every row with color. Every
+/// folder gets the same stroke, so it never reads as a favorite.
+struct NotebookFolderIcon: View {
+    let systemName: String
+    @Environment(\.mehPalette) private var palette
+    @ScaledMetric(relativeTo: .body) private var strokeHeight = 3.5
+
+    var body: some View {
+        Image(systemName: systemName)
+            .background(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: strokeHeight / 2)
+                    .fill(palette.highlighterColor.opacity(0.8))
+                    .frame(height: strokeHeight)
+                    .padding(.horizontal, -2)
+                    .rotationEffect(.degrees(-2))
+                    .offset(y: strokeHeight * 0.4)
+            }
+    }
+}
+
 struct NotebookSectionToggle: View {
     let title: LocalizedStringResource
     let isExpanded: Bool

@@ -163,6 +163,7 @@ struct NotebookView: View {
     @State private var isLoadingHistory = false
     @State private var historyLoadTask: Task<Void, Never>?
     @State private var historyLoadID = UUID()
+    @Environment(\.mehPalette) private var palette
     @AppStorage("editor.fontSize", store: NotebookEditorPreferences.store)
     private var editorFontSize = 17.0
     @AppStorage("editor.fontFamily", store: NotebookEditorPreferences.store)
@@ -382,10 +383,14 @@ struct NotebookView: View {
                             if !search.isPresented {
                                 ToolbarSpacer(.fixed, placement: .bottomBar)
                                 ToolbarItem(placement: .bottomBar) { libraryNewNote }
+                                    .sharedBackgroundVisibility(.hidden)
                             }
                             #endif
                         } else {
                             ToolbarItem { libraryNewNote }
+                                #if os(iOS)
+                                .sharedBackgroundVisibility(.hidden)
+                                #endif
                         }
                     }
                 }
@@ -562,6 +567,7 @@ struct NotebookView: View {
                                 ToolbarItem {
                                     libraryNewNote
                                 }
+                                .sharedBackgroundVisibility(.hidden)
                             }
                             #endif
                             #if os(macOS)
@@ -1999,9 +2005,14 @@ struct NotebookView: View {
                             : placement.displayName)
                             .accessibilityIdentifier("notebook-sidebar-title-" + row.id.uuidString)
                     } icon: {
-                        Image(systemName: placement.item.kind == .folder
-                            ? (replica.defaultNewNoteParentID == row.id ? "tray" : "folder")
-                            : "note.text")
+                        if placement.item.kind == .folder {
+                            NotebookFolderIcon(
+                                systemName: replica.defaultNewNoteParentID == row.id
+                                    ? "tray" : "folder"
+                            )
+                        } else {
+                            Image(systemName: "note.text")
+                        }
                     }
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3231,7 +3242,8 @@ struct NotebookView: View {
     private var libraryNewNote: some View {
         #if os(iOS)
         NotebookNewNoteButton(
-            isEnabled: !busy, hasTemplates: !replica.templates.isEmpty,
+            isEnabled: !busy, highlighter: palette.highlighter.platformColor,
+            hasTemplates: !replica.templates.isEmpty,
             onNewNote: createDefaultNote,
             onNewFromTemplate: showTemplates,
             onNewFolder: { createItem(kind: .folder, parentID: nil) }

@@ -18,8 +18,8 @@ struct NotebookEmptyLibraryView: View {
         } actions: {
             Button("Start Writing", action: onStartWriting)
                 .buttonStyle(.borderedProminent)
-                .tint(palette.inkColor)
-                .foregroundStyle(palette.onInkColor)
+                .tint(palette.highlighterColor)
+                .foregroundStyle(MehStyle.onHighlighterColor)
                 .accessibilityIdentifier("notebook-start-writing")
 
             Button("Import Markdown", action: onImportMarkdown)
