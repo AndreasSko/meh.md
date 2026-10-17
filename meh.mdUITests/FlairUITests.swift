@@ -25,6 +25,33 @@ final class FlairUITests: XCTestCase {
         XCTAssertTrue(version.label.hasPrefix("meh.md "), version.label)
     }
 
+    func testLibraryEndsWithTheNoteCount() throws {
+        continueAfterFailure = false
+        let app = makeApp(mode: "source")
+        app.launch()
+#if os(iOS)
+        app.revealNotebookSidebar(timeout: 30)
+#endif
+        let footer = app.descendants(matching: .any)["notebook-library-footer"]
+        XCTAssertTrue(footer.waitForExistence(timeout: 15))
+        XCTAssertEqual(footer.label, "3 notes")
+    }
+
+    func testAppearanceSwitchesTheInk() throws {
+        continueAfterFailure = false
+        let app = makeApp(mode: "source")
+        app.launch()
+
+        app.openNotebookSettings()
+        let blue = app.buttons["Royal Blue"]
+        for _ in 0..<4 where !blue.exists { scrollDown(in: app) }
+        XCTAssertTrue(blue.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Black"].isSelected)
+        activate(blue)
+        XCTAssertTrue(blue.isSelected)
+        XCTAssertFalse(app.buttons["Black"].isSelected)
+    }
+
     /// Slow tour for recording a demo video. Run with
     /// `TEST_RUNNER_MEH_SHOWCASE=1`.
     func testShowcaseWalkthrough() throws {
@@ -39,6 +66,13 @@ final class FlairUITests: XCTestCase {
         try XCTSkipIf(app.frame.width >= 600, "The tour is made for iPhone")
 
         app.revealNotebookSidebar(timeout: 30)
+        pause(2.5)
+        let footer = app.descendants(matching: .any)["notebook-library-footer"]
+        XCTAssertTrue(footer.waitForExistence(timeout: 5))
+        for _ in 0..<4 {
+            tapFace(near: footer, dy: 26)
+            pause(1.2)
+        }
         pause(2.5)
 
         app.openTrash()
@@ -59,7 +93,7 @@ final class FlairUITests: XCTestCase {
         app.revealNotebookSidebar()
         pause(1.5)
 
-        openWeekend(in: app)
+        openNote("Weekend", in: app)
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
         pause(3.5)
@@ -90,6 +124,12 @@ final class FlairUITests: XCTestCase {
         cancelSearch(in: app)
         pause(2)
 
+        let newNote = app.buttons["notebook-new-item"]
+        XCTAssertTrue(newNote.waitForExistence(timeout: 5))
+        newNote.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        pause(3.5)
+
         app.openNotebookSettings()
         let version = app.staticTexts["notebook-settings-version"]
         for _ in 0..<6 where !version.exists { scrollDown(in: app) }
@@ -99,7 +139,21 @@ final class FlairUITests: XCTestCase {
             tapFace(near: version, dy: 11)
             pause(1.2)
         }
+        pause(2)
+
+        let blue = app.buttons["Royal Blue"]
+        for _ in 0..<4 where !blue.isHittable { app.swipeDown() }
+        pause(2)
+        blue.tap()
+        pause(2)
+        app.buttons["Pink"].tap()
+        pause(2.5)
+        app.buttons["Done"].tap()
+        app.revealNotebookSidebar()
         pause(3)
+        openNote("Garden plan", in: app)
+        XCTAssertTrue(editor.waitForExistence(timeout: 15))
+        pause(3.5)
 #else
         throw XCTSkip("The tour is made for iPhone")
 #endif
@@ -144,9 +198,30 @@ final class FlairUITests: XCTestCase {
         )
         shot("search")
         cancelSearch(in: app)
-        openWeekend(in: app)
+        openNote("Weekend", in: app)
         XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 15))
         shot("weekend")
+
+        app.revealNotebookSidebar()
+        let newNote = app.buttons["notebook-new-item"]
+        XCTAssertTrue(newNote.waitForExistence(timeout: 5))
+        newNote.tap()
+        XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 15))
+        shot("newnote")
+
+        app.openNotebookSettings()
+        let ink = app.buttons["Royal Blue"]
+        for _ in 0..<4 where !ink.isHittable { scrollDown(in: app) }
+        shot("appearance")
+        ink.tap()
+        app.buttons["Pink"].tap()
+        shot("appearance-alt")
+        app.buttons["Done"].tap()
+        app.revealNotebookSidebar()
+        shot("library-alt")
+        openNote("Weekend", in: app)
+        XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 15))
+        shot("weekend-alt")
 #else
         throw XCTSkip("Made for iPhone")
 #endif
@@ -220,25 +295,25 @@ final class FlairUITests: XCTestCase {
         field.typeText(query)
     }
 
-    private func openWeekend(in app: XCUIApplication) {
+    private func openNote(_ title: String, in app: XCUIApplication) {
         let folder = app.staticTexts.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@",
             "notebook-sidebar-title-", "Home"
         )).firstMatch
         XCTAssertTrue(folder.waitForExistence(timeout: 15))
-        let weekend = app.staticTexts.matching(NSPredicate(
+        let note = app.staticTexts.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@",
-            "notebook-sidebar-title-", "Weekend"
+            "notebook-sidebar-title-", title
         )).firstMatch
-        if !weekend.exists {
+        if !note.exists {
             let disclosure = app.buttons.matching(NSPredicate(
                 format: "identifier BEGINSWITH %@", "notebook-disclosure-"
             )).firstMatch
             if disclosure.exists { disclosure.tap() } else { folder.tap() }
             pause(1.5)
         }
-        XCTAssertTrue(weekend.waitForExistence(timeout: 10))
-        weekend.tap()
+        XCTAssertTrue(note.waitForExistence(timeout: 10))
+        note.tap()
     }
 
     private func pause(_ seconds: TimeInterval) {
