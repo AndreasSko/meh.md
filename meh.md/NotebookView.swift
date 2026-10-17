@@ -186,6 +186,7 @@ struct NotebookView: View {
     @State private var browsingAllRecents = false
     @State private var visibleRecentPreviewIDs: [UUID] = []
     @State private var unrecordedEdit = false
+    @State private var trashedOpenNote = 0
     @State private var editingID: UUID?
     @State private var originalName = ""
     @State private var proposedName = ""
@@ -454,6 +455,7 @@ struct NotebookView: View {
                             fontFamily: editorFontFamily,
                             mode: editorMode
                         )
+                        .mehCrumple(trigger: trashedOpenNote)
                         }
                         if let completion = variableCompletion, canCompleteSnippetVariable {
                             let completionText = linkCompletionText
@@ -867,7 +869,8 @@ struct NotebookView: View {
         }
         .onChange(of: menu.trashRequest) { _, _ in
             guard canManageMenuSelection else { return }
-            trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+            let ids = browserSelection.orderedIDs(in: activeBrowserOrder)
+            trashItems(ids)
         }
         .onChange(of: menu.newNoteRequest) { _, _ in
             guard menuAvailable else { return }
@@ -1308,7 +1311,8 @@ struct NotebookView: View {
                                 setRecentPinned(!replica.isPinnedInRecents(id), for: id)
                             },
                             onTrash: { id, completion in
-                                trashItems([id], onCompletion: completion)
+                                trashItems([id], crumplesOpenNote: false,
+                                           onCompletion: completion)
                             },
                             onHide: { id, completion in
                                 setRecentHidden(true, for: id, onCompletion: completion)
@@ -1479,7 +1483,7 @@ struct NotebookView: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
-                trashItems([placement.item.id])
+                trashItems([placement.item.id], crumplesOpenNote: false)
             } label: {
                 Image(systemName: "trash")
             }
@@ -2049,7 +2053,9 @@ struct NotebookView: View {
                     ? "notebook-sidebar-note-" : "notebook-sidebar-folder-") + row.id.uuidString)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 if !selectingItems, editingID == nil {
-                    Button(role: .destructive) { trashItems([row.id]) } label: {
+                    Button(role: .destructive) {
+                        trashItems([row.id], crumplesOpenNote: false)
+                    } label: {
                         Label("Trash", systemImage: "trash")
                     }
                     .accessibilityIdentifier("notebook-swipe-trash")
@@ -2765,16 +2771,36 @@ struct NotebookView: View {
         }
     }
 
+    /// Swipe actions pass `crumplesOpenNote: false` to keep the list's own
+    /// animation; everywhere else the open note crumples once it's trashed.
     private func trashItems(
-        _ ids: [UUID], onCompletion: @escaping (Bool) -> Void = { _ in }
+        _ ids: [UUID], crumplesOpenNote: Bool = true,
+        onCompletion: @escaping (Bool) -> Void = { _ in }
     ) {
+        let trashesOpenNote = crumplesOpenNote && containsOpenNote(ids)
         perform({
             try await flushEditor()
             browserUndo = try await replica.trashItems(ids)
+            if trashesOpenNote { trashedOpenNote += 1 }
             browserRedo = nil
             browserSelection.clear()
             selectingItems = false
         }, onCompletion: onCompletion)
+    }
+
+    /// Whether trashing `ids` takes the open note with it, directly or
+    /// inside a folder.
+    private func containsOpenNote(_ ids: [UUID]) -> Bool {
+        guard let selectedID else { return false }
+        let parents = Dictionary(uniqueKeysWithValues: replica.placements.map {
+            ($0.item.id, $0.parentID)
+        })
+        var current: UUID? = selectedID
+        while let id = current {
+            if ids.contains(id) { return true }
+            current = parents[id] ?? nil
+        }
+        return false
     }
 
     private func undoBrowserChange(redo: Bool) {
@@ -2902,7 +2928,8 @@ struct NotebookView: View {
                     setRecentPinned(!replica.isPinnedInRecents(id), for: id)
                 },
                 onTrash: { id, completion in
-                    trashItems([id], onCompletion: completion)
+                    trashItems([id], crumplesOpenNote: false,
+                               onCompletion: completion)
                 },
                 onHide: { id, completion in
                     setRecentHidden(true, for: id, onCompletion: completion)
