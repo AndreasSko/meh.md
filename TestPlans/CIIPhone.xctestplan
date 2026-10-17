@@ -50,6 +50,8 @@
         "UIReleasePolishUITests/testNoteMenusExposeTemplatesAndEditorDisplay",
         "UIReleasePolishUITests/testPlusContextActionCreatesFolder",
         "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow",
+        "FlairUITests/testSearchWithoutResultsNamesTheQuery",
+        "FlairUITests/testSettingsEndWithTheVersion",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce"
       ]
     }

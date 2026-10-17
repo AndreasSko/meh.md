@@ -38,6 +38,8 @@
         "UIReleasePolishUITests/testPlusContextActionCreatesFolder",
         "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow",
         "UIReleasePolishUITests/testLongNoteTitleRemainsAccessibleInTheToolbar",
+        "FlairUITests/testSearchWithoutResultsNamesTheQuery",
+        "FlairUITests/testSettingsEndWithTheVersion",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce"
       ]
     }

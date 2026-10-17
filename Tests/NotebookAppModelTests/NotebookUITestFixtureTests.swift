@@ -29,6 +29,7 @@ final class NotebookUITestFixtureTests: XCTestCase {
             case .dragOrder: expected = ["Charlie.md", "Alpha.md", "Bravo.md", "Journeys"]
             case .dragNested: expected = ["Travel checklist.md", "Journeys"]
             case .dragSubtree: expected = ["Packing list.md", "Trips", "Archive"]
+            case .flair: expected = ["Home", "Pancakes.md"]
             case .dragLongList:
                 expected = (1 ... 48).map {
                     String(format: "%02d Field observation.md", $0)
