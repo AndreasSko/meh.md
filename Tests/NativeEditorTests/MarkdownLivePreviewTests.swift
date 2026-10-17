@@ -416,9 +416,46 @@ final class MarkdownLivePreviewTests: XCTestCase {
             in: source, result: syntax, snapshot: active
         )
         XCTAssertTrue(activeRanges.transparent.contains(unchecked))
-        XCTAssertTrue(activeRanges.transparent.contains(
-            (source as NSString).range(of: "-")
+        XCTAssertTrue(activeRanges.collapsed.contains(
+            (source as NSString).range(of: "- ")
         ))
+    }
+
+    func testTaskCheckboxTakesTheBulletPlaceAndWrapsUnderItsText() throws {
+        let source = "- [ ] Style a word with the formatting bar, then keep "
+            + "writing until this task wraps onto another line\nActive"
+        let textView = MarkdownTextView(usingTextLayoutManager: true)
+        textView.frame = NSRect(x: 0, y: 0, width: 260, height: 300)
+        textView.string = source
+        textView.setSelectedRange((source as NSString).range(of: "Active"))
+        MarkdownPresentation.configure(textView, mode: .livePreview)
+        let manager = try XCTUnwrap(textView.textLayoutManager)
+        let content = try XCTUnwrap(manager.textContentManager)
+        manager.ensureLayout(for: content.documentRange)
+        let snapshot = MarkdownLivePreview.snapshot(for: textView)
+        let syntax = MarkdownSyntax.parse(source)
+        let checkbox = try XCTUnwrap(MarkdownPresentation.taskCheckboxDecorations(
+            text: source, result: syntax, layoutManager: manager, snapshot: snapshot
+        ).first)
+        XCTAssertLessThan(checkbox.rect.minX, 12)
+
+        let task = (source as NSString).range(of: "Style a word")
+        let first = try XCTUnwrap(MarkdownPresentation.textSegmentFrames(
+            for: NSRange(location: task.location, length: 1),
+            layoutManager: manager, contentManager: content
+        ).first)
+        let wrapped = (source as NSString).range(of: "line")
+        let last = try XCTUnwrap(MarkdownPresentation.textSegmentFrames(
+            for: NSRange(location: wrapped.location, length: 1),
+            layoutManager: manager, contentManager: content
+        ).first)
+        XCTAssertGreaterThan(last.minY, first.minY)
+        XCTAssertGreaterThan(first.minX, checkbox.rect.maxX)
+        let paragraph = try XCTUnwrap(textView.textStorage?.attribute(
+            .paragraphStyle, at: 0, effectiveRange: nil
+        ) as? NSParagraphStyle)
+        XCTAssertEqual(paragraph.headIndent, first.minX - textView.textContainer!.lineFragmentPadding,
+                       accuracy: 1)
     }
 
     func testTaskCheckboxReflectsExternalSourceReplacement() throws {
