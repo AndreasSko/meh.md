@@ -56,6 +56,13 @@ final class MarkdownEditingCommandsTests: XCTestCase {
         XCTAssertNil(MarkdownEditingRules.toggleTask(text: "`- [x]`", at: 4))
     }
 
+    func testOpenTasksIgnoreCheckedTasksAndCode() {
+        XCTAssertTrue(MarkdownEditingRules.hasOpenTask(in: "- [x] Paint\n- [ ] Dry"))
+        XCTAssertFalse(MarkdownEditingRules.hasOpenTask(in: "- [x] Paint\n- [X] Dry"))
+        XCTAssertFalse(MarkdownEditingRules.hasOpenTask(in: "`- [ ]` is a task"))
+        XCTAssertFalse(MarkdownEditingRules.hasOpenTask(in: "No tasks here."))
+    }
+
     func testReturnContinuesIndentBulletsQuotesAndOrderedNumbers() throws {
         try assertChange(
             .continueLine,

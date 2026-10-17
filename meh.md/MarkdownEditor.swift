@@ -2021,6 +2021,12 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         super.insertText(change.replacement)
         selectedRange = (text ?? "").clampedSelection(selection)
         delegate?.textViewDidChange?(self)
+        let updated = text ?? ""
+        if change.replacement == "[x]", !MarkdownEditingRules.hasOpenTask(
+            in: updated, syntaxResult: markdownSyntaxCache.result(for: updated)
+        ) {
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
     }
 
     func installMarkdownTaskTap() {
