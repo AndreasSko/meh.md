@@ -156,6 +156,10 @@ struct NotebookSettingsView: View {
                         Text(error).font(.caption)
                     }
                 }
+                Section {
+                    NotebookSettingsSignature()
+                        .listRowBackground(Color.clear)
+                }
             }
             .formStyle(.grouped)
             .navigationTitle("Settings")
@@ -253,4 +257,25 @@ struct NotebookSettingsView: View {
         }
     }
 
+}
+
+/// The face and version at the end of Settings. Tapping the face cycles its
+/// moods, like everywhere else.
+private struct NotebookSettingsSignature: View {
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? ""
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            MehFace(mood: .neutral, size: 22)
+            Text(verbatim: "meh.md \(version)")
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("notebook-settings-version")
+    }
 }

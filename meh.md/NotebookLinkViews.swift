@@ -105,8 +105,15 @@ struct NotebookBacklinksView: View {
                     ProgressView("Finding links…")
                         .accessibilityIdentifier("backlinks-loading")
                 } else if backlinks.isEmpty {
-                    ContentUnavailableView("No linked notes", systemImage: "link",
-                        description: Text("Links to this note will appear here."))
+                    ContentUnavailableView {
+                        Label {
+                            Text("No linked notes")
+                        } icon: {
+                            MehFace(mood: .neutral)
+                        }
+                    } description: {
+                        Text("Links to this note will appear here.")
+                    }
                 }
                 ForEach(sourceNotes, id: \.id) { source in
                     Section {

@@ -136,10 +136,15 @@ struct NotebookSyncDetailsView: View {
                         now: context.date
                     )
                 } else {
-                    Text(presentation.title)
-                        .font(.headline)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("note-sync-status")
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        if let mood = presentation.mood {
+                            MehFace(mood: mood, size: 17)
+                        }
+                        Text(presentation.title)
+                            .font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("note-sync-status")
+                    }
                     NotebookSyncFailureView(workspace: workspace, now: context.date)
                 }
                 if let date = workspace.lastSuccessfulSync {
@@ -411,6 +416,14 @@ private struct NotebookSyncPresentation {
             hasPendingChanges: pending,
             isWaitingForLocalSave: waitingForSave
         )
+    }
+
+    /// A face only when nothing needs attention; problems keep plain text.
+    var mood: MehFace.Mood? {
+        guard workspace.usesSync else { return .asleep }
+        guard indicator == .synced, !showsActivity, workspace.syncFailure == nil,
+              workspace.lastSuccessfulSync != nil else { return nil }
+        return .relaxed
     }
 
     var indicatorColor: Color {

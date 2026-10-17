@@ -655,7 +655,11 @@ struct NotebookView: View {
                     emptyLibraryView
                 } else {
                     ContentUnavailableView {
-                        Label("Select a note", systemImage: "note.text")
+                        Label {
+                            Text("Select a note")
+                        } icon: {
+                            MehFace(mood: .neutral)
+                        }
                     } description: {
                         if let message = navigationState.restorationMessage {
                             Text(message)
