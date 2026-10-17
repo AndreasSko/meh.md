@@ -7,7 +7,14 @@ struct NotebookEmptyLibraryView: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("Your library is empty", systemImage: "note.text")
+            Label {
+                Text("Your library is empty")
+            } icon: {
+                // The app icon's face, in place of a generic symbol.
+                Text(verbatim: "•_•")
+                    .font(.system(size: 44, weight: .bold, design: .monospaced))
+                    .accessibilityHidden(true)
+            }
         } description: {
             Text("Start a note, or import your Markdown files.")
         } actions: {
