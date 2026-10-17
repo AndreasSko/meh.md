@@ -122,10 +122,14 @@ enum MarkdownLivePreview {
         var collapsed: [NSRange] = []
         var transparent: [NSRange] = []
         var taskMarkers: [NSRange] = []
-        let taskLines = Set(result.spans.compactMap { span -> Int? in
-            guard case .taskMarker = span.role else { return nil }
-            return source.lineRange(for: span.range).location
-        })
+        var taskBullets: [NSRange] = []
+        let taskLocations = Dictionary(
+            result.spans.compactMap { span -> (Int, Int)? in
+                guard case .taskMarker = span.role else { return nil }
+                return (source.lineRange(for: span.range).location, span.range.location)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
         for span in result.spans {
             collapsed.append(contentsOf: markerRanges(for: span, in: source))
             switch span.role {
@@ -134,8 +138,15 @@ enum MarkdownLivePreview {
             case .listMarker where span.range.length == 1:
                 let marker = source.character(at: span.range.location)
                 if marker == 42 || marker == 43 || marker == 45 {
-                    if taskLines.contains(source.lineRange(for: span.range).location) {
-                        taskMarkers.append(span.range)
+                    if let task = taskLocations[
+                        source.lineRange(for: span.range).location
+                    ], task > span.range.location {
+                        // The checkbox takes the bullet's place, like a
+                        // native checklist, in active lines too.
+                        taskBullets.append(NSRange(
+                            location: span.range.location,
+                            length: task - span.range.location
+                        ))
                     } else {
                         transparent.append(span.range)
                     }
@@ -176,7 +187,7 @@ enum MarkdownLivePreview {
             return mergedRanges(bounded)
         }
         return MarkdownLivePreviewRanges(
-            collapsed: concealed(collapsed),
+            collapsed: mergedRanges(concealed(collapsed) + taskBullets),
             transparent: mergedRanges(concealed(transparent) + taskMarkers)
         )
     }
