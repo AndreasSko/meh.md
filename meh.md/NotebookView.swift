@@ -299,6 +299,10 @@ struct NotebookView: View {
         .disabled(busy)
     }
 
+    private var activeNoteCount: Int {
+        replica.placements.count { !$0.isInTrash && $0.item.kind == .note }
+    }
+
     private var sidebarTitle: String {
         if showsSelectionControls && !search.isPresented { return "" }
         #if os(iOS)
@@ -330,6 +334,7 @@ struct NotebookView: View {
                     )
                 }
             }
+            .background(NotebookSidebarPalette.background.ignoresSafeArea())
             .searchable(text: $search.query, isPresented: $search.isPresented,
                         placement: .toolbar, prompt: "Search all notes")
             .searchFocused($searchFocused)
@@ -352,6 +357,11 @@ struct NotebookView: View {
             #endif
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
+                #if os(iOS)
+                if !sidebarTitle.isEmpty {
+                    ToolbarItem(placement: .largeTitle) { MehTitle() }
+                }
+                #endif
                 if !showingTrash {
                     if let workspace, !showsSelectionControls {
                         ToolbarItem(placement: syncToolbarPlacement) {
@@ -3005,6 +3015,9 @@ struct NotebookView: View {
                     activeTree
                         .opacity(hidesCompactRows ? 0 : 1)
                         .accessibilityHidden(hidesCompactRows)
+                    NotebookLibraryFooter(noteCount: activeNoteCount)
+                        .opacity(hidesCompactRows ? 0 : 1)
+                        .accessibilityHidden(hidesCompactRows)
                 }
             } header: {
                 NotebookSectionToggle(
@@ -3100,6 +3113,9 @@ struct NotebookView: View {
         #endif
         .scrollContentBackground(.hidden)
         .background(NotebookSidebarPalette.background)
+        // The hard edge effect lays a white strip under the bottom bar,
+        // which shows on paper once the list can scroll.
+        .scrollEdgeEffectStyle(.soft, for: .all)
         .contextMenu(forSelectionType: UUID.self) { ids in
             if editingID == nil {
                 if ids.count == 1, let id = ids.first,

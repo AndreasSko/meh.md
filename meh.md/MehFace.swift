@@ -57,6 +57,22 @@ struct MehFace: View {
     }
 }
 
+/// The library's large title: the app name with the face after it. iOS gives
+/// views in the large-title slot no taps, so this face only blinks.
+struct MehTitle: View {
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(verbatim: "meh.md")
+                .font(.largeTitle.bold())
+            MehFace(mood: .neutral, size: 24)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: "meh.md"))
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
 /// Cycles through every mood on tap and returns to the resting face after a
 /// short pause without taps.
 @Observable

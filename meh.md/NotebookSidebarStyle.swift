@@ -1,13 +1,9 @@
 import SwiftUI
 
 enum NotebookSidebarPalette {
-    static var background: Color {
-        #if os(macOS)
-        Color(nsColor: .windowBackgroundColor)
-        #else
-        Color(uiColor: .systemGroupedBackground)
-        #endif
-    }
+    /// The library sits on the same paper as notes; the Recents card stays
+    /// a lighter sheet on top.
+    static var background: Color { MehStyle.paperColor }
 
     static var recents: Color {
         #if os(macOS)
@@ -36,6 +32,29 @@ struct NotebookFolderIcon: View {
                     .rotationEffect(.degrees(-2))
                     .offset(y: strokeHeight * 0.4)
             }
+    }
+}
+
+/// The end of the file list: the face and how many notes there are. It's the
+/// one face you see every day that also changes its mood on tap.
+struct NotebookLibraryFooter: View {
+    let noteCount: Int
+
+    var body: some View {
+        VStack(spacing: 2) {
+            MehFace(mood: .neutral, size: 17)
+            Text(noteCount == 1 ? "1 note" : "\(noteCount) notes")
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 16)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("notebook-library-footer")
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .selectionDisabled()
     }
 }
 
