@@ -17,6 +17,10 @@ enum MehStyle {
     )
     /// Marks drawn on top of ink, such as a checkbox's checkmark.
     static let onInk = dynamic(light: (1, 1, 1, 1), dark: (0, 0, 0, 1))
+    /// The page behind notes: a light paper gray, or a slightly lifted black.
+    static let paper = dynamic(
+        light: (0.969, 0.965, 0.953, 1), dark: (0.09, 0.09, 0.086, 1)
+    )
     /// Marker yellow for `==highlights==`.
     static let highlighter = dynamic(
         light: (1, 0.85, 0.16, 0.5), dark: (1, 0.82, 0.1, 0.5)
@@ -30,9 +34,11 @@ enum MehStyle {
     #if os(macOS)
     static let inkColor = Color(nsColor: ink)
     static let onInkColor = Color(nsColor: onInk)
+    static let paperColor = Color(nsColor: paper)
     #else
     static let inkColor = Color(uiColor: ink)
     static let onInkColor = Color(uiColor: onInk)
+    static let paperColor = Color(uiColor: paper)
     #endif
 
     private typealias Components = (CGFloat, CGFloat, CGFloat, CGFloat)

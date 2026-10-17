@@ -93,6 +93,7 @@ struct NotebookNoteEditor: View {
             .all,
             edges: ignoredSafeAreaEdges
         )
+        .background(MehStyle.paperColor.ignoresSafeArea())
         .onChange(of: session.persistedSnapshot) { _, _ in onPersist() }
         .onDisappear {
             Task { try? await session.flush() }

@@ -173,6 +173,7 @@ struct NoteHistoryBrowserView: View {
             // inset still keeps the last lines reachable above them.
             .ignoresSafeArea(.container, edges: .bottom)
         }
+        .background(MehStyle.paperColor.ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
             NoteHistoryTimeline(
                 isLoading: state.isLoadingIndex,

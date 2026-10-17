@@ -755,7 +755,7 @@ struct NotebookView: View {
                 )
                 .transition(.identity)
             } else if !showsLiveEditor {
-                Color(uiColor: .systemBackground)
+                MehStyle.paperColor
             }
         }
         // Editor previews manage their own bar insets. History uses a SwiftUI
@@ -4165,6 +4165,7 @@ private struct NotebookPreviousLinkView: View {
             initialPreviewOriginY: viewportOriginY
         )
         .ignoresSafeArea(.container, edges: [.top, .bottom])
+        .background(MehStyle.paperColor.ignoresSafeArea())
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .allowsHitTesting(false)
         .accessibilityHidden(true)

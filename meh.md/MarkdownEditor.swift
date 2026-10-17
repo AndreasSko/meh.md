@@ -2396,6 +2396,10 @@ struct MarkdownEditor: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UITextView {
         let textView = MarkdownTextView(usingTextLayoutManager: true)
+        // Notes sit on paper. The hard edge effect would lay a white strip
+        // under the bars, so let the text blur away instead.
+        textView.topEdgeEffect.style = .soft
+        textView.bottomEdgeEffect.style = .soft
         if let layoutManager = textView.textLayoutManager {
             textView.installMarkdownLayoutManagerDelegate(on: layoutManager)
         }
