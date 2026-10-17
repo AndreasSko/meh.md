@@ -143,6 +143,7 @@ struct NoteHistoryBrowserView: View {
     let onError: (Error) -> Void
     @State private var showingRestoreChoices = false
     @State private var confirmingReplacement = false
+    @Environment(\.mehPalette) private var palette
 
     var body: some View {
         VStack(spacing: 0) {
@@ -158,7 +159,8 @@ struct NoteHistoryBrowserView: View {
                 navigation: state.navigation,
                 fontSize: fontSize,
                 fontFamily: fontFamily,
-                mode: mode
+                mode: mode,
+                palette: palette
             )
             .accessibilityIdentifier("note-history-preview")
             .overlay {

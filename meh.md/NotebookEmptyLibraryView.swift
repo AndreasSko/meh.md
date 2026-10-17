@@ -4,6 +4,7 @@ import SwiftUI
 struct NotebookEmptyLibraryView: View {
     let onStartWriting: () -> Void
     let onImportMarkdown: () -> Void
+    @Environment(\.mehPalette) private var palette
 
     var body: some View {
         ContentUnavailableView {
@@ -17,8 +18,8 @@ struct NotebookEmptyLibraryView: View {
         } actions: {
             Button("Start Writing", action: onStartWriting)
                 .buttonStyle(.borderedProminent)
-                .tint(MehStyle.inkColor)
-                .foregroundStyle(MehStyle.onInkColor)
+                .tint(palette.inkColor)
+                .foregroundStyle(palette.onInkColor)
                 .accessibilityIdentifier("notebook-start-writing")
 
             Button("Import Markdown", action: onImportMarkdown)

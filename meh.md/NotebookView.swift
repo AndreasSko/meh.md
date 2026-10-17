@@ -4152,6 +4152,7 @@ private struct NotebookPreviousLinkView: View {
     let fontSize: Double
     let fontFamily: EditorFontFamily
     let mode: MarkdownEditorMode
+    @Environment(\.mehPalette) private var palette
     var body: some View {
         MarkdownEditor(
             text: .constant(text), isReadOnly: true,
@@ -4161,6 +4162,7 @@ private struct NotebookPreviousLinkView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)),
             titleHeight: titleHeight, fontSize: fontSize, fontFamily: fontFamily, mode: mode,
+            palette: palette,
             initialPreviewPosition: position, initialPreviewInsets: viewportInsets,
             initialPreviewOriginY: viewportOriginY
         )

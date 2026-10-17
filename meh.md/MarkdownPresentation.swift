@@ -2666,6 +2666,7 @@ final class MarkdownSyntaxCache: NSObject {
     // Installing syntax, rather than selection equality or a whole-result
     // comparison, owns this editor-local immutable index's lifetime.
     private var renderingSyntaxIndex: MarkdownRenderingPresentation.SyntaxIndex?
+    private var renderingPalette: MehPalette?
     private(set) var renderingSyntaxIndexBuildCount = 0
     private weak var observedTextStorage: NSTextStorage?
     private var presentationIsCurrent = false
@@ -2708,6 +2709,7 @@ final class MarkdownSyntaxCache: NSObject {
     private var dirtyLayoutRange: NSRange?
     private var appliedPreviewRanges: MarkdownLivePreviewRanges?
     private(set) var appliedBodyFont: PlatformFont?
+    private var appliedPalette: MehPalette?
     private(set) var lastLayoutRange = NSRange(location: 0, length: 0)
 
     func recordAppliedLayoutRange(_ range: NSRange) {
@@ -2723,7 +2725,8 @@ final class MarkdownSyntaxCache: NSObject {
         let full = NSRange(location: 0, length: source.length)
         var range = full
         if let dirtyLayoutRange, let old = appliedPreviewRanges,
-           appliedBodyFont?.isEqual(bodyFont) == true {
+           appliedBodyFont?.isEqual(bodyFont) == true,
+           appliedPalette == MehStyle.palette {
             var affected = dirtyLayoutRange
             // Only concealment that changed needs updating on caret movement.
             for (before, after) in [
@@ -2740,6 +2743,7 @@ final class MarkdownSyntaxCache: NSObject {
         }
         appliedPreviewRanges = presentation.previewRanges
         appliedBodyFont = bodyFont
+        appliedPalette = MehStyle.palette
         dirtyLayoutRange = NSRange(location: 0, length: 0)
         lastLayoutRange = range
         return range
@@ -2899,6 +2903,12 @@ final class MarkdownSyntaxCache: NSObject {
         result: MarkdownSyntaxResult,
         snapshot: MarkdownLivePreviewSnapshot
     ) -> MarkdownRenderingPresentation {
+        if renderingPalette != MehStyle.palette {
+            // The syntax index copies the palette's colors into its attributes.
+            renderingPalette = MehStyle.palette
+            renderingSyntaxIndex = nil
+            presentationIsCurrent = false
+        }
         if presentationIsCurrent,
            cachedPreviewSnapshot == snapshot,
            let cachedRenderingPresentation {

@@ -764,6 +764,7 @@ struct MarkdownEditor: NSViewRepresentable {
     var fontSize: Double
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
+    var palette: MehPalette
 
     init(
         text: Binding<String>,
@@ -779,7 +780,8 @@ struct MarkdownEditor: NSViewRepresentable {
         focusRequest: Int = 0,
         fontSize: Double = 17,
         fontFamily: EditorFontFamily = .system,
-        mode: MarkdownEditorMode = .source
+        mode: MarkdownEditorMode = .source,
+        palette: MehPalette = MehStyle.palette
     ) {
         _text = text
         self.isReadOnly = isReadOnly
@@ -795,6 +797,7 @@ struct MarkdownEditor: NSViewRepresentable {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
         self.mode = mode
+        self.palette = palette
     }
 
     func makeCoordinator() -> Coordinator {
@@ -831,6 +834,7 @@ struct MarkdownEditor: NSViewRepresentable {
         textView.setAccessibilityIdentifier(
             isReadOnly ? "note-history-preview" : "markdown-editor"
         )
+        MehStyle.palette = palette
         MarkdownPresentation.configure(
             textView,
             fontSize: fontSize,
@@ -867,6 +871,7 @@ struct MarkdownEditor: NSViewRepresentable {
         private weak var observedTextView: NSTextView?
         private var displayedFontSize: CGFloat
         private var displayedFontFamily: EditorFontFamily
+        private var displayedPalette: MehPalette
         private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
         private var pendingPosition: MarkdownEditorPosition?
@@ -883,6 +888,7 @@ struct MarkdownEditor: NSViewRepresentable {
             displayedText = parent.text
             displayedMode = parent.mode
             displayedFontFamily = parent.fontFamily
+            displayedPalette = parent.palette
             displayedRevision = parent.editRevision
             displayedFontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
@@ -1030,10 +1036,13 @@ struct MarkdownEditor: NSViewRepresentable {
             )
             if displayedFontSize != fontSize
                 || displayedFontFamily != parent.fontFamily
+                || displayedPalette != parent.palette
                 || displayedMode != parent.mode {
                 displayedMode = parent.mode
                 displayedFontSize = fontSize
                 displayedFontFamily = parent.fontFamily
+                displayedPalette = parent.palette
+                MehStyle.palette = parent.palette
                 schedulePresentationRefresh(for: textView)
             }
             guard !hasUncommittedText else { return }
@@ -2348,6 +2357,7 @@ struct MarkdownEditor: UIViewRepresentable {
     var fontSize: Double
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
+    var palette: MehPalette
     var initialPreviewPosition: MarkdownEditorPosition?
     var initialPreviewInsets: UIEdgeInsets?
     var initialPreviewOriginY: CGFloat?
@@ -2367,6 +2377,7 @@ struct MarkdownEditor: UIViewRepresentable {
         fontSize: Double = 17,
         fontFamily: EditorFontFamily = .system,
         mode: MarkdownEditorMode = .source,
+        palette: MehPalette = MehStyle.palette,
         initialPreviewPosition: MarkdownEditorPosition? = nil,
         initialPreviewInsets: UIEdgeInsets? = nil,
         initialPreviewOriginY: CGFloat? = nil
@@ -2385,6 +2396,7 @@ struct MarkdownEditor: UIViewRepresentable {
         self.fontSize = fontSize
         self.fontFamily = fontFamily
         self.mode = mode
+        self.palette = palette
         self.initialPreviewPosition = initialPreviewPosition
         self.initialPreviewInsets = initialPreviewInsets
         self.initialPreviewOriginY = initialPreviewOriginY
@@ -2431,6 +2443,7 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.textContainer.lineFragmentPadding = 4
         textView.accessibilityIdentifier = isReadOnly
             ? "note-history-preview" : "markdown-editor"
+        MehStyle.palette = palette
         MarkdownPresentation.configure(
             textView,
             fontSize: fontSize,
@@ -2468,6 +2481,7 @@ struct MarkdownEditor: UIViewRepresentable {
         private var displayedFontSize: CGFloat
         private var handledFocusRequest: Int
         private var displayedFontFamily: EditorFontFamily
+        private var displayedPalette: MehPalette
         private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
         private var pendingPosition: MarkdownEditorPosition?
@@ -2498,6 +2512,7 @@ struct MarkdownEditor: UIViewRepresentable {
             displayedText = parent.text
             displayedMode = parent.mode
             displayedFontFamily = parent.fontFamily
+            displayedPalette = parent.palette
             displayedRevision = parent.editRevision
             displayedFontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
@@ -2648,10 +2663,13 @@ struct MarkdownEditor: UIViewRepresentable {
             )
             if displayedFontSize != fontSize
                 || displayedFontFamily != parent.fontFamily
+                || displayedPalette != parent.palette
                 || displayedMode != parent.mode {
                 displayedMode = parent.mode
                 displayedFontSize = fontSize
                 displayedFontFamily = parent.fontFamily
+                displayedPalette = parent.palette
+                MehStyle.palette = parent.palette
                 schedulePresentationRefresh(for: textView)
             }
             guard !hasUncommittedText else { return }

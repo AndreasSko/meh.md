@@ -53,6 +53,7 @@ struct NotebookSettingsView: View {
                     }
                     .accessibilityIdentifier("notebook-templates-settings")
                 }
+                NotebookAppearanceSection()
                 Section("Markdown") {
                     Button("Import Markdown…") {
                         #if os(iOS)
@@ -277,5 +278,124 @@ private struct NotebookSettingsSignature: View {
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("notebook-settings-version")
+    }
+}
+
+/// Lets people pick the two pens the app writes with, next to a small sample
+/// of a note that shows both at once.
+private struct NotebookAppearanceSection: View {
+    @AppStorage(MehPalette.inkKey, store: NotebookEditorPreferences.store)
+    private var ink = MehPalette.Ink.black
+    @AppStorage(MehPalette.highlighterKey, store: NotebookEditorPreferences.store)
+    private var highlighter = MehPalette.Highlighter.yellow
+
+    var body: some View {
+        Section {
+            NotebookAppearancePreview(
+                palette: MehPalette(ink: ink, highlighter: highlighter)
+            )
+            NotebookPenPicker(
+                title: "Ink", selection: $ink,
+                color: { Color(uiPlatformColor: $0.platformColor) }, name: \.name
+            )
+            .accessibilityIdentifier("notebook-appearance-ink")
+            NotebookPenPicker(
+                title: "Highlighter", selection: $highlighter,
+                color: { Color(uiPlatformColor: $0.platformColor) }, name: \.name
+            )
+            .accessibilityIdentifier("notebook-appearance-highlighter")
+        } header: {
+            Text("Appearance")
+        } footer: {
+            Text("Ink colors checkboxes, links and buttons. The highlighter marks highlights, folders and the New Note button.")
+        }
+    }
+}
+
+private struct NotebookAppearancePreview: View {
+    let palette: MehPalette
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.square.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(palette.onInkColor, palette.inkColor)
+                    Text("Measure the fence")
+                }
+                Text(sample)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.subheadline)
+            Spacer(minLength: 0)
+            Image(systemName: "plus")
+                .font(.body.weight(.medium))
+                .foregroundStyle(MehStyle.onHighlighterColor)
+                .frame(width: 32, height: 32)
+                .background(palette.highlighterColor, in: .circle)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MehStyle.paperColor, in: .rect(cornerRadius: 10))
+        .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+        .accessibilityHidden(true)
+    }
+
+    private var sample: AttributedString {
+        var mark = AttributedString(localized: "blue paint")
+        mark.backgroundColor = palette.markColor
+        var link = AttributedString(localized: "Garden plan")
+        link.foregroundColor = palette.inkColor
+        link.underlineStyle = Text.LineStyle(pattern: .solid, color: palette.strokeColor)
+        return AttributedString(localized: "Pick up the ") + mark
+            + AttributedString(localized: " from ") + link
+    }
+}
+
+/// A row of color swatches, like the list colors in Reminders.
+private struct NotebookPenPicker<Pen: Hashable & CaseIterable>: View
+where Pen.AllCases: RandomAccessCollection {
+    let title: LocalizedStringResource
+    @Binding var selection: Pen
+    let color: (Pen) -> Color
+    let name: KeyPath<Pen, LocalizedStringResource>
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 0) {
+                ForEach(Array(Pen.allCases), id: \.self) { pen in
+                    Button { selection = pen } label: {
+                        Circle()
+                            .fill(color(pen))
+                            .frame(width: 24, height: 24)
+                            .padding(3)
+                            .overlay {
+                                if pen == selection {
+                                    Circle().strokeBorder(.secondary, lineWidth: 2)
+                                }
+                            }
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text(pen[keyPath: name]))
+                    .accessibilityAddTraits(pen == selection ? .isSelected : [])
+                }
+            }
+        } label: {
+            Text(title)
+        }
+        .sensoryFeedback(.selection, trigger: selection)
+    }
+}
+
+private extension Color {
+    init(uiPlatformColor color: PlatformColor) {
+        #if os(macOS)
+        self.init(nsColor: color)
+        #else
+        self.init(uiColor: color)
+        #endif
     }
 }
