@@ -172,7 +172,15 @@ enum NotebookUITestFixture: String, CaseIterable {
             let home = try await replica.createFolder(name: "Home")
             _ = try await replica.createNote(
                 name: "Garden plan.md",
-                text: "Tomatoes along the fence, herbs by the door.\n",
+                text: """
+                    Tomatoes along the fence, ==herbs== by the door.
+
+                    - [x] Buy seeds
+                    - [ ] Water on Sunday
+
+                    > Plant now, worry later.
+
+                    """,
                 parentID: home)
             _ = try await replica.createNote(
                 name: "Weekend.md",

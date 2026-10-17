@@ -40,6 +40,8 @@
         "UIReleasePolishUITests/testLongNoteTitleRemainsAccessibleInTheToolbar",
         "FlairUITests/testSearchWithoutResultsNamesTheQuery",
         "FlairUITests/testSettingsEndWithTheVersion",
+        "FlairUITests/testLibraryEndsWithTheNoteCount",
+        "FlairUITests/testAppearanceSwitchesTheInk",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce"
       ]
     }
