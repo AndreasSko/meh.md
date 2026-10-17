@@ -57,6 +57,7 @@ let package = Package(
                 "EditorWritingControls.swift",
                 "NotebookEditorPreferences.swift",
                 "MarkdownPresentation.swift", "MarkdownTablePresentation.swift", "MarkdownSyntax.swift", "MyApp.swift",
+                "MehStyle.swift",
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
                 "NotebookQuickActionRequests.swift",
                 "NotebookBackupBackgroundScheduler.swift",
@@ -165,6 +166,7 @@ let package = Package(
                 "MarkdownPresentation.swift",
                 "MarkdownTablePresentation.swift",
                 "MarkdownSyntax.swift",
+                "MehStyle.swift",
             ],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),

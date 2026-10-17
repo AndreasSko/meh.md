@@ -168,14 +168,14 @@ private struct NotebookSyncOverallProgressView: View {
                     .accessibilityIdentifier("notebook-sync-overall-status")
                 ProgressView()
                     .controlSize(.small)
-                    .tint(.blue)
+                    .tint(.accentColor)
                     .accessibilityLabel("Sync in progress")
                     .accessibilityIdentifier("notebook-sync-activity")
             }
             if let fraction {
                 ProgressView(value: fraction)
                     .progressViewStyle(.linear)
-                    .tint(.blue)
+                    .tint(.accentColor)
                     .accessibilityLabel("Overall sync progress")
                     .accessibilityValue(accessibilityValue)
                     .accessibilityIdentifier("notebook-sync-progress")
@@ -295,7 +295,7 @@ private struct NotebookSyncFilesDisclosure: View {
             else { Text("and \(count) others") }
         }
             .buttonStyle(.plain)
-            .foregroundStyle(.blue)
+            .foregroundStyle(.tint)
             .padding(.vertical, 6)
             .accessibilityLabel(expanded ? "Hide filenames" : "Show all filenames")
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
@@ -437,7 +437,7 @@ private struct NotebookSyncRing: View {
     var body: some View {
         Circle()
             .trim(from: 0, to: max(0.01, fraction))
-            .stroke(.blue, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
             .rotationEffect(.degrees(-90))
             #if os(iOS)
             .padding(-4)

@@ -767,13 +767,13 @@ enum MarkdownPresentation {
         context: CGContext
     ) {
         let color: PlatformColor = decoration.kind == .blockquote
-            ? PlatformColor.systemBlue.withAlphaComponent(0.07)
+            ? MehStyle.ink.withAlphaComponent(0.05)
             : PlatformColor.secondarySystemFill
         context.setFillColor(color.cgColor)
         context.fill(rect)
         guard let accentRect = decoration.accentRect else { return }
         context.setFillColor(
-            PlatformColor.systemBlue.withAlphaComponent(0.38).cgColor
+            MehStyle.ink.withAlphaComponent(0.3).cgColor
         )
         context.fill(
             CGRect(
@@ -983,16 +983,16 @@ enum MarkdownPresentation {
             context.saveGState()
             context.setLineWidth(1.5)
             context.setStrokeColor(
-                (decoration.checked ? PlatformColor.systemBlue : secondaryTextColor)
+                (decoration.checked ? MehStyle.ink : secondaryTextColor)
                     .cgColor
             )
             context.addPath(path)
             context.strokePath()
             if decoration.checked {
-                context.setFillColor(PlatformColor.systemBlue.cgColor)
+                context.setFillColor(MehStyle.ink.cgColor)
                 context.addPath(path)
                 context.fillPath()
-                context.setStrokeColor(PlatformColor.white.cgColor)
+                context.setStrokeColor(MehStyle.onInk.cgColor)
                 context.setLineWidth(1.7)
                 context.setLineCap(.round)
                 context.setLineJoin(.round)
@@ -1116,6 +1116,33 @@ enum MarkdownPresentation {
                 range: localRange
             )
         }
+        // Ink links would read as body text without an underline. Like
+        // strikethrough, it lives in storage; hidden brackets stay bare.
+        // Hidden ranges arrive sorted and merged from Live Preview.
+        for span in result.spans where span.role == .link {
+            guard local(span.range) != nil else { continue }
+            var start = span.range.location
+            var hidden: [NSRange] = []
+            var index = firstRange(in: hiddenRanges, endingAfter: span.range.location)
+            while index < hiddenRanges.count,
+                  hiddenRanges[index].location < NSMaxRange(span.range) {
+                hidden.append(hiddenRanges[index])
+                index += 1
+            }
+            for gap in hidden + [NSRange(location: NSMaxRange(span.range), length: 0)] {
+                let visible = NSRange(location: start, length: max(0, gap.location - start))
+                if visible.length > 0, let localRange = local(visible) {
+                    desired.addAttributes(
+                        [
+                            .underlineColor: MehStyle.ink.withAlphaComponent(0.35),
+                            .underlineStyle: NSUnderlineStyle.single.rawValue,
+                        ],
+                        range: localRange
+                    )
+                }
+                start = max(start, NSMaxRange(gap))
+            }
+        }
         let collapsedFont = fontWithSize(
             bodyFont,
             size: MarkdownLivePreview.collapsedFontSize
@@ -1155,6 +1182,8 @@ enum MarkdownPresentation {
             .obliqueness,
             .strikethroughColor,
             .strikethroughStyle,
+            .underlineColor,
+            .underlineStyle,
         ]
         #if os(macOS)
         layoutAttributeKeys.append(.foregroundColor)
@@ -1660,6 +1689,17 @@ enum MarkdownPresentation {
         )
     }
 
+    /// The index of the first range that ends after `location`, in ranges
+    /// sorted by location that don't overlap.
+    static func firstRange(in ranges: [NSRange], endingAfter location: Int) -> Int {
+        var low = 0, high = ranges.count
+        while low < high {
+            let middle = (low + high) / 2
+            if NSMaxRange(ranges[middle]) <= location { low = middle + 1 } else { high = middle }
+        }
+        return low
+    }
+
     static func renderingAttributes(
         for role: MarkdownStyleRole
     ) -> [NSAttributedString.Key: Any] {
@@ -1671,9 +1711,7 @@ enum MarkdownPresentation {
             ]
         case .highlight:
             return [
-                .backgroundColor: PlatformColor.systemYellow.withAlphaComponent(
-                    0.32
-                ),
+                .backgroundColor: MehStyle.highlighter,
             ]
         case .strikethrough:
             return [
@@ -1681,7 +1719,7 @@ enum MarkdownPresentation {
                 .strikethroughStyle: NSUnderlineStyle.single.rawValue,
             ]
         case .link:
-            return [.foregroundColor: PlatformColor.systemBlue]
+            return [.foregroundColor: MehStyle.ink]
         case .listMarker, .taskMarker:
             return [.foregroundColor: secondaryTextColor]
         case .blockquote:

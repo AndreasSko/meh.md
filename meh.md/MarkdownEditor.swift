@@ -1175,7 +1175,7 @@ struct MarkdownEditor: NSViewRepresentable {
                   ) else { return }
             layoutManager.addRenderingAttribute(
                 .backgroundColor,
-                value: NSColor.systemYellow.withAlphaComponent(0.45),
+                value: MehStyle.destinationHighlighter,
                 for: textRange
             )
         }
@@ -1194,7 +1194,7 @@ struct MarkdownEditor: NSViewRepresentable {
                ) {
                 layoutManager.addRenderingAttribute(
                     .backgroundColor,
-                    value: NSColor.systemYellow.withAlphaComponent(0.45),
+                    value: MehStyle.destinationHighlighter,
                     for: textRange
                 )
             }
@@ -2825,7 +2825,7 @@ struct MarkdownEditor: UIViewRepresentable {
                   ) else { return }
             layoutManager.addRenderingAttribute(
                 .backgroundColor,
-                value: UIColor.systemYellow.withAlphaComponent(0.45),
+                value: MehStyle.destinationHighlighter,
                 for: textRange
             )
         }
@@ -2844,7 +2844,7 @@ struct MarkdownEditor: UIViewRepresentable {
                ) {
                 layoutManager.addRenderingAttribute(
                     .backgroundColor,
-                    value: UIColor.systemYellow.withAlphaComponent(0.45),
+                    value: MehStyle.destinationHighlighter,
                     for: textRange
                 )
             }

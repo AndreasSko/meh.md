@@ -88,7 +88,7 @@ trap 'exit 143' TERM
 check_app="$check_root/Editor Quote Check.app"
 mkdir -p "$check_app" "$check_root/sources" "$check_root/module-cache"
 files=(MarkdownSyntax MarkdownPresentation MarkdownEditor MarkdownEditingCommands
-       MarkdownLivePreview EditorWritingControls)
+       MarkdownLivePreview EditorWritingControls MehStyle)
 if [[ "$revision" != working-tree ]]; then
   revision="$(git -C "$repo_root" rev-parse --verify "$revision^{commit}")"
 fi
