@@ -226,10 +226,6 @@ enum MarkdownSyntax {
         parse(text).spans
     }
 
-    static func fontRuns(in text: String) -> [MarkdownFontRun] {
-        parse(text).fontRuns
-    }
-
     /// Reparse from a cached neutral line boundary until the outgoing context
     /// is neutral again. Unchanged suffix syntax can then be reused exactly.
     /// Edits use post-edit UTF-16 coordinates, including coalesced edits.
@@ -1502,32 +1498,6 @@ enum MarkdownSyntax {
         return NSRange(location: location, length: markerEnd - location)
     }
 
-    private static func matchingDelimiter(
-        from start: Int,
-        opening: unichar,
-        closing: unichar,
-        before end: Int,
-        in source: NSString
-    ) -> Int? {
-        var depth = 0
-        var location = start
-        while location < end {
-            if isEscaped(location, in: source) {
-                location += 1
-                continue
-            }
-            let character = source.character(at: location)
-            if character == opening {
-                depth += 1
-            } else if character == closing {
-                depth -= 1
-                if depth == 0 { return location }
-            }
-            location += 1
-        }
-        return nil
-    }
-
     private static func delimiterStrengths(
         for length: Int,
         closing: Bool
@@ -1701,8 +1671,6 @@ private enum ASCII {
     static let carriageReturn: unichar = 13
     static let space: unichar = 32
     static let hash: unichar = 35
-    static let openParenthesis: unichar = 40
-    static let closeParenthesis: unichar = 41
     static let asterisk: unichar = 42
     static let plus: unichar = 43
     static let hyphen: unichar = 45
@@ -1711,9 +1679,7 @@ private enum ASCII {
     static let equals: unichar = 61
     static let zero: unichar = 48
     static let nine: unichar = 57
-    static let openBracket: unichar = 91
     static let backslash: unichar = 92
-    static let closeBracket: unichar = 93
     static let underscore: unichar = 95
     static let backtick: unichar = 96
     static let tilde: unichar = 126

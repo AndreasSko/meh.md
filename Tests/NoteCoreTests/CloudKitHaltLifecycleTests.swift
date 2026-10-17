@@ -1,6 +1,7 @@
 import Foundation
 @testable import NoteCore
 import XCTest
+import TestSupport
 
 final class CloudKitHaltLifecycleTests: XCTestCase {
     func testOutgoingBatchStopsBeforeReadingForEveryHaltCause()
@@ -109,7 +110,6 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
         async throws
     {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = try CloudKitTransportStateStore(
             directory: directory,
             accountRecordName: "account",
@@ -149,7 +149,6 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
     {
         for phase in ["fetched", "sent", "engine", "direct"] {
             let directory = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: directory) }
             let pending = try makeRecord()
             let original = try CloudKitTransportStateStore(
                 directory: directory,
@@ -247,12 +246,6 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
         let document = try NoteDocument(noteID: UUID())
         try document.replaceAll(with: "pending upload")
         return SyncRecord(snapshot: document.snapshot())
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent(
-            "CloudKitHaltLifecycleTests-\(UUID().uuidString)"
-        )
     }
 }
 

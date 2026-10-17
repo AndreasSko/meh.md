@@ -1,6 +1,7 @@
 import Foundation
 import NoteCore
 import XCTest
+import TestSupport
 
 @testable import NotebookAppModel
 
@@ -138,8 +139,9 @@ final class NotebookWorkspaceOfflineTests: XCTestCase {
         factory.isAvailable = true
         workspace.sceneActivityChanged(id: UUID(), isActive: true)
         workspace.cloudAccountAvailabilityChanged()
-        try await Task.sleep(for: .milliseconds(100))
 
+        XCTAssertFalse(workspace.isRefreshing)
+        XCTAssertFalse(workspace.hasPendingRefresh)
         XCTAssertEqual(factory.attempts, initialAttempts)
         XCTAssertNil(workspace.lastSuccessfulSync)
         await workspace.refresh(manual: true)
@@ -168,17 +170,6 @@ final class NotebookWorkspaceOfflineTests: XCTestCase {
 
     private func rootCopyDirectory(for workspace: NotebookWorkspace) -> URL {
         workspace.backupDirectory.deletingLastPathComponent().appending(path: "Notebook Copies/Markdown")
-    }
-
-    private func waitUntil(condition: @escaping @MainActor () -> Bool) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while !condition() {
-            guard ContinuousClock.now < deadline else {
-                XCTFail("Timed out waiting for automatic first sync")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(20))
-        }
     }
 }
 

@@ -86,7 +86,10 @@ extension XCUIApplication {
 
     func openTrash(timeout: TimeInterval = 15) {
 #if os(iOS)
-        revealNotebookSidebar(timeout: timeout)
+        // An empty library has no sidebar to reveal; its menu opens Trash.
+        if !buttons["notebook-start-writing"].exists {
+            revealNotebookSidebar(timeout: timeout)
+        }
 #endif
         guard let trash = notebookMenuAction(
             identifier: "notebook-trash-toggle", timeout: timeout

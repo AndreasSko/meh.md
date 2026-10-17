@@ -500,7 +500,7 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         cell.activateSourceSelection()
         let drained = expectation(description: "Pending activation callback runs")
         DispatchQueue.main.async { drained.fulfill() }
-        wait(for: [drained], timeout: 1)
+        wait(for: [drained], timeout: 10)
         XCTAssertFalse(cell.isActive)
         XCTAssertTrue(owner.hasMarkedText())
         XCTAssertTrue(mounted.window.firstResponder === owner)

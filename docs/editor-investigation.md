@@ -194,11 +194,6 @@ xcodebuild -project meh.md.xcodeproj -scheme meh.md \
   -configuration Debug -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath /tmp/meh-md-derived-ios \
   CODE_SIGNING_ALLOWED=NO build
-
-swiftc -module-cache-path /tmp/meh-md-swift-module-cache \
-  meh.md/MarkdownSyntax.swift scripts/check_editor_syntax.swift \
-  -o /tmp/meh-md-editor-syntax-check
-/tmp/meh-md-editor-syntax-check
 ```
 
 Not yet verified:

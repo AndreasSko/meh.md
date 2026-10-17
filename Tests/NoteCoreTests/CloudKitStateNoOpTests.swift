@@ -1,11 +1,11 @@
 import Foundation
 @testable import NoteCore
 import XCTest
+import TestSupport
 
 final class CloudKitStateNoOpTests: XCTestCase {
     func testRepeatedEngineStateReturnsResultWithoutWriting() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let writes = WriteCounter()
         let store = try CloudKitTransportStateStore(
             directory: directory,
@@ -38,7 +38,6 @@ final class CloudKitStateNoOpTests: XCTestCase {
 
     func testChangedEngineStateIsPersisted() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = try CloudKitTransportStateStore(
             directory: directory,
             accountRecordName: "account",
@@ -59,7 +58,6 @@ final class CloudKitStateNoOpTests: XCTestCase {
 
     func testDuplicateInboxAppendSkipsWriteAndValidatesInput() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let writes = WriteCounter()
         let store = try CloudKitTransportStateStore(
             directory: directory,
@@ -91,7 +89,6 @@ final class CloudKitStateNoOpTests: XCTestCase {
 
     func testRetiredStoreRejectsNoOpUpdate() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = try CloudKitTransportStateStore(
             directory: directory,
             accountRecordName: "account",
@@ -107,7 +104,6 @@ final class CloudKitStateNoOpTests: XCTestCase {
 
     func testWriteFailureCannotBeBypassedByLaterNoOp() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         _ = try CloudKitTransportStateStore(
             directory: directory,
             accountRecordName: "account",
@@ -157,12 +153,6 @@ final class CloudKitStateNoOpTests: XCTestCase {
         object["snapshot"] = snapshot
         let corrupted = try JSONSerialization.data(withJSONObject: object)
         return try JSONDecoder().decode(SyncRecord.self, from: corrupted)
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent(
-            "CloudKitStateNoOpTests-\(UUID().uuidString)"
-        )
     }
 }
 

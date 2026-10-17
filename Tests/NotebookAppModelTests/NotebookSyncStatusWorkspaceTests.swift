@@ -3,13 +3,16 @@ import NoteCore
 import XCTest
 
 @testable import NotebookAppModel
+import TestSupport
 
 @MainActor
 final class NotebookSyncStatusWorkspaceTests: XCTestCase {
+    private let clock = ManualClock()
+
     func testLocalSaveWaitClearsThroughScheduledRetry() async throws {
         let transport = StatusWorkspaceTransport(scope: "local-wait")
         let workspace = makeWorkspace(
-            root: temporaryRoot(), transport: transport, automaticSync: true
+            root: temporaryDirectory(), transport: transport, automaticSync: true
         )
         await workspace.start()
         let sceneID = UUID()
@@ -27,7 +30,8 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
         XCTAssertTrue(workspace.isWaitingForLocalSave(at: Date()))
         XCTAssertNotNil(workspace.syncRetryNotBefore)
         let failedFetchCount = await transport.fetchCount
-        try await waitUntil(timeout: .seconds(8)) {
+        clock.advance(by: .seconds(60))
+        try await waitUntil {
             let fetchCount = await transport.fetchCount
             return workspace.syncFailure == nil && !workspace.isRefreshing
                 && fetchCount > failedFetchCount
@@ -38,7 +42,7 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
     func testRepeatedLocalWaitRetainsGraceStartUntilRecovery() async throws {
         let transport = StatusWorkspaceTransport(scope: "repeated-wait")
         let workspace = makeWorkspace(
-            root: temporaryRoot(), transport: transport, automaticSync: true
+            root: temporaryDirectory(), transport: transport, automaticSync: true
         )
         await workspace.start()
         let sceneID = UUID()
@@ -53,7 +57,8 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
         let started = try XCTUnwrap(workspace.syncWaitStartedAt)
         let failedFetchCount = await transport.fetchCount
 
-        try await waitUntil(timeout: .seconds(8)) {
+        clock.advance(by: .seconds(60))
+        try await waitUntil {
             await transport.fetchCount > failedFetchCount && !workspace.isRefreshing
         }
 
@@ -61,7 +66,8 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
         XCTAssertTrue(workspace.isWaitingForLocalSave(at: started.addingTimeInterval(59)))
         XCTAssertFalse(workspace.isWaitingForLocalSave(at: started.addingTimeInterval(60)))
         XCTAssertFalse(workspace.isWaitingForLocalSave(at: started.addingTimeInterval(61)))
-        try await waitUntil(timeout: .seconds(13)) {
+        clock.advance(by: .seconds(60))
+        try await waitUntil {
             workspace.syncFailure == nil && !workspace.isRefreshing
         }
         XCTAssertNil(workspace.syncWaitStartedAt)
@@ -70,7 +76,7 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
     func testRealSaveFailureWarnsImmediatelyWithAutomaticRetry() async throws {
         let transport = StatusWorkspaceTransport(scope: "disk-full")
         let workspace = makeWorkspace(
-            root: temporaryRoot(), transport: transport, automaticSync: true
+            root: temporaryDirectory(), transport: transport, automaticSync: true
         )
         await workspace.start()
         let sceneID = UUID()
@@ -93,13 +99,14 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
         XCTAssertFalse(workspace.isWaitingForLocalSave(at: Date()))
         XCTAssertNil(workspace.syncWaitStartedAt)
         XCTAssertNotNil(workspace.syncRetryNotBefore)
-        try await waitUntil(timeout: .seconds(8)) {
+        clock.advance(by: .seconds(60))
+        try await waitUntil {
             workspace.syncFailure == nil && !workspace.isRefreshing
         }
     }
 
     func testSuccessfulTimestampSurvivesRelaunchForSameScopeAndNotebook() async throws {
-        let root = temporaryRoot()
+        let root = temporaryDirectory()
         let store = InMemorySyncStore()
         let firstTransport = StatusWorkspaceTransport(scope: "account-a", store: store)
         let first = makeWorkspace(root: root, transport: firstTransport)
@@ -117,7 +124,7 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
     }
 
     func testOfflineTransportPreparationRetainsLocallyBoundTimestamp() async throws {
-        let root = temporaryRoot()
+        let root = temporaryDirectory()
         let first = makeWorkspace(
             root: root, transport: StatusWorkspaceTransport(scope: "account-a")
         )
@@ -140,7 +147,7 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
     }
 
     func testTimestampIsIgnoredForDifferentScopeOrNotebookIdentity() async throws {
-        let root = temporaryRoot()
+        let root = temporaryDirectory()
         let store = InMemorySyncStore()
         let first = makeWorkspace(
             root: root,
@@ -170,7 +177,7 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
     }
 
     func testFailurePreservesLastSuccessfulTimestamp() async throws {
-        let root = temporaryRoot()
+        let root = temporaryDirectory()
         let transport = StatusWorkspaceTransport(scope: "account-a")
         let workspace = makeWorkspace(root: root, transport: transport)
         await workspace.start()
@@ -190,7 +197,7 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
     }
 
     func testStatusTapDoesNotQueueButOrdinaryRefreshStillCoalesces() async throws {
-        let root = temporaryRoot()
+        let root = temporaryDirectory()
         let transport = StatusWorkspaceTransport(scope: "account-a")
         let workspace = makeWorkspace(root: root, transport: transport)
         await workspace.start()
@@ -203,7 +210,7 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
         await transport.resumeFetch()
         await firstTap.value
         try await waitUntil { !workspace.isRefreshing }
-        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertFalse(workspace.hasPendingRefresh)
         let afterStatusTaps = await transport.fetchCount
         XCTAssertEqual(afterStatusTaps, baseline + 1)
 
@@ -228,29 +235,9 @@ final class NotebookSyncStatusWorkspaceTests: XCTestCase {
             directory: root.appending(path: "Notebook"),
             documentsDirectory: root.appending(path: "Documents"),
             transport: transport, automaticSync: automaticSync,
-            mode: .development(URL(string: "http://127.0.0.1")!, "status-test")
+            mode: .development(URL(string: "http://127.0.0.1")!, "status-test"),
+            syncClock: .manual(clock)
         )
-    }
-
-    private func temporaryRoot() -> URL {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-        return root
-    }
-
-    private func waitUntil(
-        timeout: Duration = .seconds(3),
-        condition: @escaping @MainActor @Sendable () async -> Bool
-    ) async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while !(await condition()) {
-            if clock.now >= deadline {
-                XCTFail("Timed out waiting for sync status behavior")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(20))
-        }
     }
 }
 

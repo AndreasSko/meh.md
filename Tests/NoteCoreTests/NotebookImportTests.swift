@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -9,7 +10,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testDestinationImportResumesIntoChosenFolder() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let destination = try await replica.createFolder(name: "Projects")
@@ -44,7 +44,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testDestinationMustBeAnActiveFolderBeforeStaging() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Note.md")
@@ -63,7 +62,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testResumeDoesNotImportIntoDestinationTrashedAfterStaging() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let destination = try await replica.createFolder(name: "Projects")
@@ -87,7 +85,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testDeletionCleanupPreservesDestinationOfRetainedImport() throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let destination = UUID()
         let notebook = UUID()
         let plan = Self.plan()
@@ -176,7 +173,6 @@ final class NotebookImportTests: XCTestCase {
         ]
         for stage in stages {
             let root = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: root) }
             let replica = NotebookReplica(directory: root)
             try await replica.createLocalNotebook()
             replica.importFaultInjector = { observed in
@@ -208,7 +204,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testResumeAfterCatalogCommitPreservesNewerChanges() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         replica.importFaultInjector = { stage in
@@ -240,7 +235,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testResumeForksLatestConcurrentCatalog() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let importing = NotebookReplica(directory: root)
         try await importing.createLocalNotebook()
         importing.importFaultInjector = { stage in
@@ -266,7 +260,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testInvalidAndConflictingPlansWriteNothing() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let existing = try await replica.createFolder(name: "Existing")
@@ -311,7 +304,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testInvalidSuppliedDateWritesNoJournalBodyOrCatalog() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let noteID = UUID()
@@ -347,7 +339,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testCorruptJournalAndBodyAreSafelyRefused() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         replica.importFaultInjector = { stage in
@@ -367,7 +358,6 @@ final class NotebookImportTests: XCTestCase {
 
         try FileManager.default.removeItem(at: root)
         let bodyRoot = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: bodyRoot) }
         let bodyReplica = NotebookReplica(directory: bodyRoot)
         try await bodyReplica.createLocalNotebook()
         bodyReplica.importFaultInjector = { stage in
@@ -425,7 +415,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testPartialCatalogAndMissingCommittedBodyAreRefused() async throws {
         let partialRoot = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: partialRoot) }
         let partial = NotebookReplica(directory: partialRoot)
         try await partial.createLocalNotebook()
         partial.importFaultInjector = { stage in
@@ -453,7 +442,6 @@ final class NotebookImportTests: XCTestCase {
         }
 
         let missingRoot = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: missingRoot) }
         let missing = NotebookReplica(directory: missingRoot)
         try await missing.createLocalNotebook()
         missing.importFaultInjector = { stage in
@@ -517,7 +505,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testSetAsidePreservesCorruptJournalAndStagedState() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         replica.importFaultInjector = { stage in
@@ -574,7 +561,6 @@ final class NotebookImportTests: XCTestCase {
 
     func testSetAsideFailureAfterMoveUpdatesPendingFlag() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         replica.importFaultInjector = { stage in
@@ -623,12 +609,6 @@ final class NotebookImportTests: XCTestCase {
                 ),
             ],
             skippedPaths: []
-        )
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(
-            path: "NotebookImportTests-\(UUID().uuidString)"
         )
     }
 }

@@ -1,13 +1,13 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
 @MainActor
 final class NotebookOrderingIntegrationTests: XCTestCase {
     func testSortingAndMovesPreserveBodiesAcrossReloadAndSync() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let left = NotebookReplica(directory: root.appending(path: "left"))
         try await left.createLocalNotebook()
         let folder = try await left.createFolder(name: "Observatory")
@@ -41,8 +41,7 @@ final class NotebookOrderingIntegrationTests: XCTestCase {
     }
 
     func testDateSortIsOneTimeAndMissingDatesAlwaysComeLast() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let old = UUID(), recent = UUID(), unknown = UUID()
@@ -75,8 +74,7 @@ final class NotebookOrderingIntegrationTests: XCTestCase {
     }
 
     func testDateSortUsesLiveSessionInsteadOfStaleStoredSnapshot() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let active = UUID(), closed = UUID()
@@ -110,8 +108,7 @@ final class NotebookOrderingIntegrationTests: XCTestCase {
     }
 
     func testInvalidReorderDoesNotPublishPartialCatalog() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try await replica.createNote(name: "Comet.md")

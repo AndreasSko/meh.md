@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -7,7 +8,6 @@ import XCTest
 final class NotebookReplicaRecoveryTests: XCTestCase {
     func testRecoverySessionStaysRegisteredAfterExplicitRecovery() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let original = NotebookReplica(directory: root)
         try await original.createLocalNotebook()
         let id = try await original.createNote(name: "Note.md", text: "previous")
@@ -46,7 +46,6 @@ final class NotebookReplicaRecoveryTests: XCTestCase {
 
     func testWrongIdentityIsBlockedForLoadSaveAndRecovery() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let expectedID = try await replica.createNote(name: "Expected.md")
@@ -79,7 +78,6 @@ final class NotebookReplicaRecoveryTests: XCTestCase {
 
     func testCatalogRecoveryReappliesRememberedDeletion() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let original = NotebookReplica(directory: root)
         try await original.createLocalNotebook()
         let id = try await original.createNote(name: "Note.md")
@@ -107,7 +105,6 @@ final class NotebookReplicaRecoveryTests: XCTestCase {
 
     func testPersistedSnapshotsReturnsOnlyListedNoteBodies() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         _ = try await replica.createFolder(name: "Folder")
@@ -119,10 +116,5 @@ final class NotebookReplicaRecoveryTests: XCTestCase {
         XCTAssertEqual(Set(snapshots.map(\.noteID)), [first, second])
         let texts = try snapshots.map { try NoteDocument(snapshot: $0).text }
         XCTAssertEqual(Set(texts), ["one", "two"])
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(
-            path: "NotebookReplicaRecoveryTests-\(UUID().uuidString)")
     }
 }

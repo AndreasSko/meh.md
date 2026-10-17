@@ -32,9 +32,6 @@ required. A signed physical iPhone round trip has also passed. An iPad run
 remains open. Unit tests do not create a container or deploy a production
 schema.
 
-See [live verification](icloud-live-verification.md) for the isolated Mac smoke
-check and historical single-note evidence.
-
 ## Notebook format control
 
 The upgrade safety release adds optional fields to the existing

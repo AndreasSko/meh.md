@@ -1,6 +1,7 @@
 import Foundation
 @testable import NoteCore
 import XCTest
+import TestSupport
 
 func decodeCloudKitDiskState(at file: URL) throws -> CloudKitTransportState {
     try CloudKitStateDiskStorage(directory: file.deletingLastPathComponent())
@@ -10,7 +11,6 @@ func decodeCloudKitDiskState(at file: URL) throws -> CloudKitTransportState {
 final class CloudKitStateDiskStorageTests: XCTestCase {
     func testMetadataCommitExcludesPayloadAndReplaysEverySlot() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let records = try (0..<6).map {
             SyncRecord(snapshot: try NoteDocument(text: "fictional note \($0)").snapshot())
         }
@@ -51,7 +51,6 @@ final class CloudKitStateDiskStorageTests: XCTestCase {
 
     func testSparseSlotsSurviveMigrationWithoutChangingCursor() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let record = SyncRecord(snapshot: try NoteDocument(text: "fictional history").snapshot())
         var state = CloudKitTransportState(accountRecordName: "account", zoneName: "zone")
         try state.appendToInbox(record)
@@ -75,7 +74,6 @@ final class CloudKitStateDiskStorageTests: XCTestCase {
     func testMissingCorruptAndTraversingPayloadReferencesFailClosed() async throws {
         for mode in ["missing", "corrupt", "traversal", "future", "symlink"] {
             let root = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: root) }
             let store = try open(root)
             let record = SyncRecord(snapshot: try NoteDocument(text: "fictional history").snapshot())
             try await store.update { try $0.appendToInbox(record) }
@@ -101,7 +99,6 @@ final class CloudKitStateDiskStorageTests: XCTestCase {
 
     func testFailedManifestCommitLeavesPreviousStateAndReplay() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let initial = try open(root)
         let old = SyncRecord(snapshot: try NoteDocument(text: "old fictional note").snapshot())
         try await initial.update { try $0.appendToInbox(old) }
@@ -125,7 +122,6 @@ final class CloudKitStateDiskStorageTests: XCTestCase {
 
     func testScopeChangeIsRejectedWithExternalPayloads() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let store = try open(root)
         let record = SyncRecord(snapshot: try NoteDocument(text: "fictional history").snapshot())
         try await store.update { try $0.appendToInbox(record) }
@@ -136,7 +132,6 @@ final class CloudKitStateDiskStorageTests: XCTestCase {
 
     func testCancelledMigrationDoesNotReplaceManifestOrRetireStore() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         var legacy = CloudKitTransportState(accountRecordName: "account", zoneName: "zone")
         let record = SyncRecord(snapshot: try NoteDocument(text: "fictional history").snapshot())
         try legacy.appendToInbox(record)
@@ -177,9 +172,5 @@ final class CloudKitStateDiskStorageTests: XCTestCase {
             at: root.appendingPathComponent("cloudkit-sync-payloads"),
             includingPropertiesForKeys: nil
         ).sorted { $0.lastPathComponent < $1.lastPathComponent }
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("CloudKitDisk-\(UUID())")
     }
 }

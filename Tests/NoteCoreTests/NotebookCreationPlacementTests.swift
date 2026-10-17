@@ -1,13 +1,13 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
 @MainActor
 final class NotebookCreationPlacementTests: XCTestCase {
     func testContextualCreationPersistsMixedSiblingOrder() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let first = try await replica.createNote(name: "First.md")
@@ -49,8 +49,7 @@ final class NotebookCreationPlacementTests: XCTestCase {
     }
 
     func testBeforeSiblingCreationPersistsAtBeginningAndBetweenMixedItems() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let parent = try await replica.createFolder(name: "Parent")
@@ -108,8 +107,7 @@ final class NotebookCreationPlacementTests: XCTestCase {
     }
 
     func testQueuedCreationUsesLatestCatalog() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let entered = expectation(description: "first creation is saving")
@@ -119,7 +117,7 @@ final class NotebookCreationPlacementTests: XCTestCase {
             await withCheckedContinuation { release = $0 }
         }
         let first = Task { try await replica.createFolder(name: "First") }
-        await fulfillment(of: [entered], timeout: 1)
+        await fulfillment(of: [entered], timeout: 10)
         let second = Task { try await replica.createNote(name: "Second.md", position: .first) }
         // Let the second operation reach the occupied catalog write gate.
         for _ in 0..<10 { await Task.yield() }

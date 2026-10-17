@@ -2,15 +2,9 @@ import CloudKit
 import Foundation
 @testable import NoteCore
 import XCTest
+import TestSupport
 
 final class CloudKitTransportStateTests: XCTestCase {
-    override func tearDown() {
-        for url in temporaryDirectories { try? FileManager.default.removeItem(at: url) }
-        temporaryDirectories = []
-        super.tearDown()
-    }
-
-    private var temporaryDirectories: [URL] = []
     func testStatePersistsInboxAndAccountBinding() async throws {
         let directory = temporaryDirectory()
         let record = try makeRecord(text: "saved")
@@ -1349,13 +1343,5 @@ final class CloudKitTransportStateTests: XCTestCase {
         return SyncRecord(
             snapshot: document.snapshot(), notebookID: notebookID
         )
-    }
-
-    private func temporaryDirectory() -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "CloudKitTransportTests-\(UUID().uuidString)"
-        )
-        temporaryDirectories.append(url)
-        return url
     }
 }

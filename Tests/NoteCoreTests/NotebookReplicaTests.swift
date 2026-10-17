@@ -1,13 +1,13 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
 @MainActor
 final class NotebookReplicaTests: XCTestCase {
     func testRecordProgressIncludesKnownNoteAndCatalogTotal() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         _ = try await replica.createNote(name: "Fixture.md", text: "fictional")
@@ -19,8 +19,7 @@ final class NotebookReplicaTests: XCTestCase {
     }
 
     func testLifecycleFlushPersistsAllOpenNotesWithoutSync() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let first = try await replica.createNote(name: "First.md", text: "first")
@@ -45,8 +44,7 @@ final class NotebookReplicaTests: XCTestCase {
     }
 
     func testUnlistedBodyIsCheckpointedButNotUploaded() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let note = try NoteDocument(text: "not yet linked")
@@ -84,8 +82,7 @@ final class NotebookReplicaTests: XCTestCase {
     }
 
     func testConcurrentOpeningAndDownloadShareOneSession() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let id = try await replica.createNote(name: "Note.md", text: "base")
@@ -101,5 +98,38 @@ final class NotebookReplicaTests: XCTestCase {
         XCTAssertEqual(session.text, "remote")
         let reopened = try await replica.openNote(id)
         XCTAssertTrue(session === reopened)
+    }
+
+    func testTrashWaitingForCatalogWriteKeepsThatWrite() async throws {
+        let root = temporaryDirectory()
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let renamed = try await replica.createNote(name: "Draft.md", text: "draft")
+        let trashed = try await replica.createNote(name: "Old.md", text: "old")
+        var entered: CheckedContinuation<Void, Never>?
+        var release: CheckedContinuation<Void, Never>?
+        replica.catalogWriteSuspension = {
+            replica.catalogWriteSuspension = nil
+            await withCheckedContinuation { continuation in
+                release = continuation
+                entered?.resume()
+            }
+        }
+
+        let rename = Task { try await replica.rename(renamed, to: "Final.md") }
+        await withCheckedContinuation { entered = $0 }
+        let trash = Task { try await replica.setTrashed(trashed, true) }
+        // The main actor runs jobs in order, so the trash task reaches the
+        // write lock before this test resumes.
+        await Task.yield()
+        release?.resume()
+        try await rename.value
+        try await trash.value
+
+        let placements = Dictionary(uniqueKeysWithValues: replica.placements.map {
+            ($0.item.id, $0)
+        })
+        XCTAssertEqual(placements[renamed]?.item.name, "Final.md")
+        XCTAssertEqual(placements[trashed]?.isInTrash, true)
     }
 }

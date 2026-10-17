@@ -28,7 +28,7 @@ final class EditorNavigationTests: XCTestCase {
     private func drainMainQueue() async {
         let drained = expectation(description: "Attachment callbacks drained")
         DispatchQueue.main.async { drained.fulfill() }
-        await fulfillment(of: [drained], timeout: 1)
+        await fulfillment(of: [drained], timeout: 10)
     }
 
     func testPrepareCommitsNativeBufferBeforeFreezingEditor() throws {

@@ -1169,23 +1169,6 @@ private extension MarkdownEditingRules {
         return nil
     }
 
-    static func findUnescaped(
-        _ character: unichar,
-        after location: Int,
-        in line: NSRange,
-        source: NSString
-    ) -> Int? {
-        var candidate = location + 1
-        while candidate < NSMaxRange(line) {
-            if source.character(at: candidate) == character,
-               !isEscaped(candidate, in: source) {
-                return candidate
-            }
-            candidate += 1
-        }
-        return nil
-    }
-
     static func escapedLinkLabel(_ label: String) -> String {
         var result = ""
         for character in label {

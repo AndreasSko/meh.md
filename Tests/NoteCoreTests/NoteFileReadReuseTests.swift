@@ -1,6 +1,7 @@
 import Automerge
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -11,7 +12,6 @@ final class NoteFileReadReuseTests: XCTestCase {
 
     func testByteIdenticalAtomicReplacementStillLoadsCurrentSnapshot() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let storage = NoteFileStorage(directory: directory)
         let expected = try NoteDocument(noteID: noteID, text: "same").snapshot()
         try await storage.save(expected)
@@ -36,7 +36,6 @@ final class NoteFileReadReuseTests: XCTestCase {
 
     func testMissingCurrentStillRequiresRecoveryFromPrevious() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let storage = NoteFileStorage(directory: directory)
         let old = try NoteDocument(noteID: noteID, text: "old").snapshot()
         try await storage.save(old)
@@ -66,7 +65,6 @@ final class NoteFileReadReuseTests: XCTestCase {
         ]
         for (replacement, expectedFailure) in replacements {
             let directory = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: directory) }
             let storage = NoteFileStorage(directory: directory)
             let old = try NoteDocument(noteID: noteID, text: "old").snapshot()
             try await storage.save(old)
@@ -103,7 +101,6 @@ final class NoteFileReadReuseTests: XCTestCase {
 
     func testUnreadableCurrentPathCannotReuseAValidatedToken() async throws {
         let sourceDirectory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: sourceDirectory) }
         let source = NoteFileStorage(directory: sourceDirectory)
         try await source.save(
             try NoteDocument(noteID: noteID, text: "valid").snapshot()
@@ -114,7 +111,6 @@ final class NoteFileReadReuseTests: XCTestCase {
         }
 
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(
             at: root,
             withIntermediateDirectories: true
@@ -134,7 +130,6 @@ final class NoteFileReadReuseTests: XCTestCase {
     @MainActor
     func testReplicaRejectsExternalNoteIdentityChangeAfterWarmScan() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let noteID = try await replica.createNote(name: "Note.md", text: "original")
@@ -159,7 +154,6 @@ final class NoteFileReadReuseTests: XCTestCase {
         async throws
     {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
         try await replica.createLocalNotebook()
         let noteID = try await replica.createNote(name: "Note.md", text: "old")
@@ -210,11 +204,5 @@ final class NoteFileReadReuseTests: XCTestCase {
         )
         _ = try document.putObject(obj: .ROOT, key: "text", ty: .Text)
         return document.save()
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(
-            path: "NoteFileReadReuseTests-\(UUID().uuidString)"
-        )
     }
 }

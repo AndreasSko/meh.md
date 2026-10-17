@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -11,8 +12,7 @@ final class NotebookHTTPIntegrationTests: XCTestCase {
         else {
             throw XCTSkip("Set MEH_NOTEBOOK_HTTP_URL to a disposable loopback service")
         }
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let transport = LocalSyncTransport(
             baseURL: url, workspace: "notebook-\(UUID().uuidString)", pageSize: 1,
             protocolVersion: 2)

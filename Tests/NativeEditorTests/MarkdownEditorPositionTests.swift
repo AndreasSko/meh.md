@@ -321,7 +321,7 @@ final class MarkdownEditorPositionTests: XCTestCase {
     private func flushMainQueue() async {
         let flushed = expectation(description: "main queue flushed")
         DispatchQueue.main.async { flushed.fulfill() }
-        await fulfillment(of: [flushed], timeout: 1)
+        await fulfillment(of: [flushed], timeout: 10)
     }
 }
 

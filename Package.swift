@@ -23,10 +23,12 @@ let package = Package(
                 .product(name: "Automerge", package: "automerge-swift"),
             ]
         ),
+        .target(name: "TestSupport", path: "Tests/TestSupport"),
         .testTarget(
             name: "NoteCoreTests",
             dependencies: [
                 "NoteCore",
+                "TestSupport",
                 .product(name: "Automerge", package: "automerge-swift"),
             ]
         ),
@@ -98,7 +100,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NotebookAppModelTests",
-            dependencies: ["NotebookAppModel", "NoteCore"],
+            dependencies: ["NotebookAppModel", "NoteCore", "TestSupport"],
             path: "Tests/NotebookAppModelTests"
         ),
         .target(

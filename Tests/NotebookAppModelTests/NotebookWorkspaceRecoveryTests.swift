@@ -1,6 +1,7 @@
 import Foundation
 import NoteCore
 import XCTest
+import TestSupport
 
 @testable import NotebookAppModel
 
@@ -367,21 +368,6 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
                 try await factory.makeTransport(expectedScope: expectedScope)
             }
         )
-    }
-
-    private func waitUntil(
-        timeout: Duration = .seconds(3),
-        condition: @escaping @MainActor () async -> Bool
-    ) async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while !(await condition()) {
-            if clock.now >= deadline {
-                XCTFail("Timed out waiting for transport recovery")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(20))
-        }
     }
 }
 

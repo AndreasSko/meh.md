@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -8,7 +9,6 @@ final class NotebookMarkdownPublisherCacheTests: XCTestCase {
 
     func testWarmPublishDecodesOnlyChangedNote() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let first = try NoteDocument(text: "first")
         let second = try NoteDocument(text: "second")
@@ -54,7 +54,6 @@ final class NotebookMarkdownPublisherCacheTests: XCTestCase {
         async throws
     {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "trusted")
         let other = try NoteDocument(text: "other")
@@ -101,7 +100,6 @@ final class NotebookMarkdownPublisherCacheTests: XCTestCase {
         async throws
     {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "trusted")
         try catalog.add(id: note.noteID, kind: .note, name: "Note")
@@ -149,7 +147,6 @@ final class NotebookMarkdownPublisherCacheTests: XCTestCase {
 
     func testCatalogChangesAndRollbackRefreshPlacements() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "body")
         try catalog.add(id: note.noteID, kind: .note, name: "Original")
@@ -194,7 +191,6 @@ final class NotebookMarkdownPublisherCacheTests: XCTestCase {
 
     func testCountAndByteLimitsBoundRetainedEntries() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let first = try NoteDocument(text: "first")
         let second = try NoteDocument(text: "second")
@@ -242,7 +238,6 @@ final class NotebookMarkdownPublisherCacheTests: XCTestCase {
 
     func testCatalogGrowthPrunesNotesToSharedByteBudget() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let first = try NoteDocument(text: "first body")
         let second = try NoteDocument(text: "second body")
@@ -299,7 +294,6 @@ final class NotebookMarkdownPublisherCacheTests: XCTestCase {
 
     func testChangedAndTrashedNotesArePruned() async throws {
         let root = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
         let catalog = try NotebookCatalogDocument()
         let first = try NoteDocument(text: "first")
         let second = try NoteDocument(text: "second")
@@ -341,7 +335,6 @@ final class NotebookMarkdownPublisherCacheTests: XCTestCase {
     func testSamePublisherRetriesEachDurableBoundary() async throws {
         for stoppedStage in NotebookMarkdownPublishStage.allCases {
             let root = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: root) }
             let catalog = try NotebookCatalogDocument()
             let note = try NoteDocument(text: "before")
             try catalog.add(id: note.noteID, kind: .note, name: "Note")
@@ -430,11 +423,5 @@ final class NotebookMarkdownPublisherCacheTests: XCTestCase {
         } catch {
             XCTFail("Expected publisher error, got \(error)")
         }
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appending(
-            path: "NotebookMarkdownPublisherCacheTests-\(UUID().uuidString)"
-        )
     }
 }

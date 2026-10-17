@@ -1,6 +1,7 @@
 import Automerge
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -17,7 +18,6 @@ final class NotebookCatalogStorageTests: XCTestCase {
         async throws
     {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NotebookCatalogStorage(directory: directory)
         let catalog = try NotebookCatalogDocument(notebookID: notebookID)
         try await store.save(catalog.snapshot())
@@ -45,7 +45,6 @@ final class NotebookCatalogStorageTests: XCTestCase {
 
     func testReplacementKeepsPreviousAndContinuousHistory() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NotebookCatalogStorage(directory: directory)
         let catalog = try NotebookCatalogDocument(notebookID: notebookID)
         let originalHeads = catalog.heads
@@ -66,7 +65,6 @@ final class NotebookCatalogStorageTests: XCTestCase {
     func testInterruptedWritesAlwaysLeaveRecoverableCurrent() async throws {
         for stage in NotebookCatalogWriteStage.allCases {
             let directory = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: directory) }
             let store = NotebookCatalogStorage(directory: directory)
             let catalog = try NotebookCatalogDocument(
                 notebookID: notebookID
@@ -98,7 +96,6 @@ final class NotebookCatalogStorageTests: XCTestCase {
         async throws
     {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NotebookCatalogStorage(directory: directory)
         let firstLoad = await store.load()
         XCTAssertEqual(firstLoad, .firstLaunch)
@@ -124,7 +121,6 @@ final class NotebookCatalogStorageTests: XCTestCase {
 
     func testRecoveryQuarantinesCurrentAndRetainsPrevious() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = try await storeWithPrevious(in: directory)
         let damaged = Data("damaged current bytes".utf8)
         try damaged.write(to: store.currentURL)
@@ -145,7 +141,6 @@ final class NotebookCatalogStorageTests: XCTestCase {
     func testRecoveryRetriesIdempotentlyAfterEveryStage() async throws {
         for stage in NotebookCatalogRecoveryStage.allCases {
             let directory = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: directory) }
             let store = try await storeWithPrevious(in: directory)
             try Data("damaged".utf8).write(to: store.currentURL)
             guard case .recoveryRequired(let recovery) = await store.load()
@@ -176,7 +171,6 @@ final class NotebookCatalogStorageTests: XCTestCase {
     func testRecoveryRefusesChangedCurrentAndPreviousSources() async throws {
         do {
             let directory = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: directory) }
             let store = try await storeWithPrevious(in: directory)
             try Data("damaged".utf8).write(to: store.currentURL)
             guard case .recoveryRequired(let recovery) = await store.load()
@@ -190,7 +184,6 @@ final class NotebookCatalogStorageTests: XCTestCase {
 
         do {
             let directory = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: directory) }
             let store = try await storeWithPrevious(in: directory)
             try Data("damaged".utf8).write(to: store.currentURL)
             guard case .recoveryRequired(let recovery) = await store.load()
@@ -206,7 +199,6 @@ final class NotebookCatalogStorageTests: XCTestCase {
 
     func testUnsupportedCurrentBlocksPreviousRecovery() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = try await storeWithPrevious(in: directory)
         try futureSchemaData().write(to: store.currentURL)
 
@@ -225,7 +217,6 @@ final class NotebookCatalogStorageTests: XCTestCase {
 
     func testSaveRejectsForgedStaleAndForeignSnapshots() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NotebookCatalogStorage(directory: directory)
         let catalog = try NotebookCatalogDocument(notebookID: notebookID)
         let stale = catalog.snapshot()
@@ -321,12 +312,5 @@ final class NotebookCatalogStorageTests: XCTestCase {
         ).filter {
             $0.lastPathComponent.hasPrefix("catalog.quarantine-")
         }
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent(
-            "NotebookCatalogStorageTests-\(UUID().uuidString)",
-            isDirectory: true
-        )
     }
 }

@@ -1,6 +1,7 @@
 import Automerge
 import Foundation
 import XCTest
+import TestSupport
 
 @testable import NoteCore
 
@@ -15,7 +16,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testReplacementKeepsPreviousAndContinuousHistory() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         let original = try NoteDocument(noteID: noteID, text: "old")
         let originalHeads = original.heads
@@ -38,7 +38,6 @@ final class NoteFileStorageTests: XCTestCase {
     func testInterruptedWritesAlwaysLeaveRecoverableCurrent() async throws {
         for stage in NoteFileWriteStage.allCases {
             let directory = temporaryDirectory()
-            defer { try? FileManager.default.removeItem(at: directory) }
             let store = NoteFileStorage(directory: directory)
             try await store.save(
                 try NoteDocument(noteID: noteID, text: "old").snapshot()
@@ -63,7 +62,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testLoadDistinguishesFirstLaunchMissingCurrentAndDamage() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         let firstLoad = await store.load()
         XCTAssertEqual(firstLoad, .firstLaunch)
@@ -90,7 +88,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testRecoveryQuarantinesCurrentAndRetainsPrevious() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         try await store.save(
             try NoteDocument(noteID: noteID, text: "old").snapshot()
@@ -120,7 +117,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testFailedRecoveryRetainsSourcesAndCanRetry() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         try await store.save(
             try NoteDocument(noteID: noteID, text: "old").snapshot()
@@ -157,7 +153,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testRecoveryRetriesAfterCurrentWasRestored() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         try await store.save(
             try NoteDocument(noteID: noteID, text: "old").snapshot()
@@ -185,7 +180,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testUnreadableCurrentRecoveryCanRetryAfterQuarantine() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         try await store.save(
             try NoteDocument(noteID: noteID, text: "old").snapshot()
@@ -217,7 +211,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testMissingCurrentRecoveryCanRetryAfterRestore() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         try await store.save(
             try NoteDocument(noteID: noteID, text: "old").snapshot()
@@ -245,7 +238,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testRecoveryRefusesChangedCurrentFile() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         try await store.save(
             try NoteDocument(noteID: noteID, text: "old").snapshot()
@@ -269,7 +261,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testExistingUnreadablePathIsNotFirstLaunch() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         try FileManager.default.createDirectory(
             at: store.currentURL,
@@ -287,7 +278,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testUnsupportedCurrentNeverDowngradesToPrevious() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         try await store.save(
             try NoteDocument(noteID: noteID, text: "old").snapshot()
@@ -321,7 +311,6 @@ final class NoteFileStorageTests: XCTestCase {
 
     func testSnapshotMetadataMustMatchSerializedDocument() async throws {
         let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let store = NoteFileStorage(directory: directory)
         let valid = try NoteDocument(noteID: noteID, text: "text").snapshot()
         let forged = NoteSnapshot(
@@ -365,12 +354,5 @@ final class NoteFileStorageTests: XCTestCase {
             at: directory,
             includingPropertiesForKeys: nil
         ).filter { $0.lastPathComponent.hasPrefix("note.quarantine-") }
-    }
-
-    private func temporaryDirectory() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent(
-            "NoteCoreTests-\(UUID().uuidString)",
-            isDirectory: true
-        )
     }
 }

@@ -3,9 +3,12 @@ import XCTest
 
 @testable import NoteCore
 @testable import NotebookAppModel
+import TestSupport
 
 @MainActor
 final class NotebookWorkspaceSchedulingTests: XCTestCase {
+    private let clock = ManualClock()
+
     func testActualScenePhasesAreLoggedOnceWithoutRefreshReasons() {
         let workspace = makeWorkspace(
             transport: RecordingTransport(scope: "scene-phases"),
@@ -95,11 +98,13 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
             name: "second.md", text: "second"
         )
         workspace.contentDidSave(trigger: "second save")
+        XCTAssertTrue(workspace.hasPendingRefresh)
 
+        clock.advance(by: .seconds(1))
         try await waitUntil {
             await transport.fetchCount > baselineFetches
+                && !workspace.isRefreshing && !workspace.hasPendingRefresh
         }
-        try await Task.sleep(for: .milliseconds(250))
         let fetches = await transport.fetchCount
         XCTAssertEqual(fetches, baselineFetches + 1)
     }
@@ -116,7 +121,15 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
             name: "manual.md", text: "manual"
         )
         workspace.contentDidSave()
-        try await Task.sleep(for: .seconds(1))
+        // With automatic sync off, the timer only publishes Markdown copies.
+        XCTAssertTrue(workspace.hasPendingRefresh)
+        clock.advance(by: .seconds(60))
+        try await waitUntil {
+            guard let copies = workspace.copiesURL else { return false }
+            return FileManager.default.fileExists(
+                atPath: copies.appending(path: "manual.md").path
+            )
+        }
 
         let operationsBeforeManualRefresh = await transport.operationCount
         XCTAssertEqual(operationsBeforeManualRefresh, baseline)
@@ -145,10 +158,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         async throws {
         let transport = RecordingTransport(scope: "startup-cooldown")
         var attempts = 0
-        let root = FileManager.default.temporaryDirectory.appending(
-            path: UUID().uuidString
-        )
-        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         let workspace = NotebookWorkspace(
             directory: root.appending(path: "Notebook"),
             documentsDirectory: root.appending(path: "Documents"),
@@ -183,12 +193,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
 
     func testBackgroundFlushesOnceAndForegroundResumes() async throws {
         let transport = RecordingTransport(scope: "foreground")
-        // The resumed exchange waits for the idle delay after the edit;
-        // a short one keeps the test from waiting ten real seconds.
-        let workspace = makeWorkspace(
-            transport: transport,
-            syncSchedule: NotebookSyncSchedule(idleDelay: .milliseconds(500))
-        )
+        let workspace = makeWorkspace(transport: transport)
         let sceneID = UUID()
         workspace.sceneActivityChanged(id: sceneID, isActive: true)
         await workspace.start()
@@ -202,15 +207,19 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         workspace.sceneActivityChanged(id: sceneID, isActive: false)
         try await waitUntil {
             await transport.fetchCount > baselineFetches
+                && !workspace.isRefreshing && !workspace.hasPendingRefresh
         }
         let backgroundFetches = await transport.fetchCount
 
         workspace.sceneActivityChanged(id: sceneID, isActive: false)
-        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertFalse(workspace.isRefreshing)
+        XCTAssertFalse(workspace.hasPendingRefresh)
         let repeatedBackgroundFetches = await transport.fetchCount
         XCTAssertEqual(repeatedBackgroundFetches, backgroundFetches)
 
+        // The resumed exchange waits for the idle delay after the edit.
         workspace.sceneActivityChanged(id: sceneID, isActive: true)
+        clock.advance(by: .seconds(10))
         try await waitUntil {
             await transport.fetchCount > backgroundFetches
         }
@@ -228,7 +237,8 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
 
         workspace.sceneActivityChanged(id: firstScene, isActive: false)
         workspace.sceneDidClose(id: firstScene)
-        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertFalse(workspace.isRefreshing)
+        XCTAssertFalse(workspace.hasPendingRefresh)
         let fetchesWhileActive = await transport.fetchCount
         XCTAssertEqual(fetchesWhileActive, baselineFetches)
 
@@ -257,11 +267,12 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         let baselineFetches = await transport.fetchCount
 
         workspace.contentDidSave()
-        try await Task.sleep(for: .seconds(1))
+        XCTAssertFalse(workspace.hasPendingRefresh)
         let backgroundFetches = await transport.fetchCount
         XCTAssertEqual(backgroundFetches, baselineFetches)
 
         workspace.sceneActivityChanged(id: UUID(), isActive: true)
+        clock.advance(by: .seconds(1))
         try await waitUntil {
             await transport.fetchCount > baselineFetches
         }
@@ -278,7 +289,8 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         await workspace.receiveCloudActivity(.failed("Account changed"))
         await workspace.receiveCloudActivity(.failed("Account changed"))
 
-        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertFalse(workspace.isRefreshing)
+        XCTAssertFalse(workspace.hasPendingRefresh)
         let operationsAfterFailures = await transport.operationCount
         XCTAssertEqual(operationsAfterFailures, baselineOperations)
         XCTAssertEqual(workspace.syncSetupError, "Account changed")
@@ -287,7 +299,11 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
             .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
         )
 
-        try await waitUntil { await transport.fetchCount > baselineFetches }
+        clock.advance(by: .seconds(1))
+        try await waitUntil {
+            await transport.fetchCount > baselineFetches
+                && !workspace.isRefreshing && !workspace.hasPendingRefresh
+        }
         let fetchesAfterRemoteChanges = await transport.fetchCount
         XCTAssertEqual(fetchesAfterRemoteChanges, baselineFetches + 1)
         XCTAssertTrue(workspace.syncEventLog.entries.contains {
@@ -306,7 +322,10 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         await workspace.receiveCloudActivity(
             .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
         )
-        try await Task.sleep(for: .seconds(1))
+        // The ten-second idle delay after typing has not passed yet.
+        try await waitUntil { self.clock.sleeperCount == 1 }
+        XCTAssertEqual(clock.advance(by: .seconds(9)), 0)
+        XCTAssertTrue(workspace.hasPendingRefresh)
         let deferred = await transport.fetchCount
         XCTAssertEqual(deferred, baseline)
         await workspace.refresh(manual: true)
@@ -364,7 +383,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         await workspace.receiveCloudActivity(
             .remoteChanges(recordCount: 1, deletionCount: 0, reason: .scheduled)
         )
-        try await Task.sleep(for: .seconds(1))
+        XCTAssertFalse(workspace.hasPendingRefresh)
 
         let after = await transport.operationCount
         XCTAssertEqual(after, baseline)
@@ -379,6 +398,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         let noteID = try await replica.createNote(name: "local.md", text: "first")
         workspace.noteDidEdit()
         workspace.contentDidSave()
+        clock.advance(by: .seconds(1))
         let copy = copies.appending(path: "local.md")
         try await waitUntil {
             (try? String(contentsOf: copy, encoding: .utf8)) == "first"
@@ -389,6 +409,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         workspace.noteDidEdit()
         try await session.flush()
         workspace.contentDidSave()
+        clock.advance(by: .seconds(1))
         try await waitUntil {
             (try? String(contentsOf: copy, encoding: .utf8)) == "updated"
         }
@@ -405,7 +426,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         let baseline = await transport.fetchCount
         let replica = try XCTUnwrap(workspace.replica)
         let noteID = try await replica.createNote(name: "pending.md", text: "durable edit")
-        await transport.setRetryDeadline(Date().addingTimeInterval(5.3))
+        await transport.setRetryDeadline(clock.now().addingTimeInterval(5.3))
 
         await workspace.receiveCloudActivity(.publicationPending)
         let deadline = try XCTUnwrap(workspace.syncRetryNotBefore)
@@ -416,10 +437,9 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         let beforeDeadline = await transport.fetchCount
         XCTAssertEqual(beforeDeadline, baseline)
 
-        try await waitUntil(timeout: .seconds(8)) {
-            let published = await transport.containsPublishedNote(noteID)
-            let finished = await MainActor.run { !workspace.isRefreshing }
-            return published && finished
+        clock.advance(by: .seconds(6))
+        try await waitUntil {
+            await transport.containsPublishedNote(noteID) && !workspace.isRefreshing
         }
         let fetches = await transport.fetchCount
         XCTAssertEqual(fetches, baseline + 1)
@@ -431,18 +451,19 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         let workspace = makeWorkspace(transport: transport)
         await workspace.start()
         let baseline = await transport.fetchCount
-        await transport.setRetryDeadline(Date().addingTimeInterval(5.3))
+        await transport.setRetryDeadline(clock.now().addingTimeInterval(5.3))
         await workspace.receiveCloudActivity(.publicationPending)
         let deadline = try XCTUnwrap(workspace.syncRetryNotBefore)
-        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(workspace.hasPendingRefresh)
         let background = await transport.fetchCount
         XCTAssertEqual(background, baseline)
         workspace.sceneActivityChanged(id: UUID(), isActive: true)
         await workspace.refresh()
         let beforeDeadline = await transport.fetchCount
         XCTAssertEqual(beforeDeadline, baseline)
-        XCTAssertGreaterThan(deadline, Date())
-        try await waitUntil(timeout: .seconds(8)) {
+        XCTAssertGreaterThan(deadline, clock.now())
+        clock.advance(by: .seconds(6))
+        try await waitUntil {
             await transport.fetchCount > baseline
         }
     }
@@ -602,35 +623,16 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
     private func makeWorkspace(
         transport: any SyncTransport,
         automaticSync: Bool = true,
-        mode: NotebookWorkspace.Mode? = nil,
-        syncSchedule: NotebookSyncSchedule = NotebookSyncSchedule()
+        mode: NotebookWorkspace.Mode? = nil
     ) -> NotebookWorkspace {
-        let root = FileManager.default.temporaryDirectory.appending(
-            path: UUID().uuidString
-        )
-        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let root = temporaryDirectory()
         return NotebookWorkspace(
             directory: root.appending(path: "Notebook"),
             documentsDirectory: root.appending(path: "Documents"),
             transport: transport,
             automaticSync: automaticSync, mode: mode,
-            syncSchedule: syncSchedule
+            syncClock: .manual(clock)
         )
-    }
-
-    private func waitUntil(
-        timeout: Duration = .seconds(3),
-        condition: @escaping @Sendable () async -> Bool
-    ) async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while !(await condition()) {
-            if clock.now >= deadline {
-                XCTFail("Timed out waiting for workspace scheduling")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(25))
-        }
     }
 }
 
