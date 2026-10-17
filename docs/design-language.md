@@ -10,10 +10,13 @@ in the way.
 
 - **The shell stays Apple.** System fonts, Liquid Glass toolbars, standard
   lists, menus, gestures and SF Symbols. No custom controls just for looks.
-- **Faces only where the screen would otherwise be empty.** Empty lists, no
-  search results, Sync Details with nothing to report, and one at the end
-  of Settings. Never in toolbars, menus or the rows of notes and folders.
-  The sync button stays an SF Symbol because it is faster to read.
+- **Faces where the screen would otherwise be empty, plus a few fixed
+  spots.** Empty lists, no search results, an empty new note and Sync
+  Details with nothing to report. The fixed spots are the library title,
+  the end of the file list, the end of Settings and the launch screen, so
+  the face shows up on a normal day too. Never in toolbars, menus or the
+  rows of notes and folders. The sync button stays an SF Symbol because it
+  is faster to read.
 - **Dry, short copy.** One plain sentence that says what is going on. No
   extra punchline sentence after it.
 - **No jokes when something is wrong.** Errors, sync problems and anything
@@ -29,7 +32,8 @@ them carries the meaning.
 
 | Face | Mood | Used for |
 | --- | --- | --- |
-| `•_•` | neutral | empty library, no selection, no backlinks, Settings |
+| `•_•` | neutral | title, end of files and Settings, empty note, launch |
+| `•_•` | neutral | empty library, no selection, no backlinks |
 | `•_•?` | puzzled | search without results |
 | `^_^` | pleased | empty Trash |
 | `•‿•` | relaxed | Sync Details when everything is synced |
@@ -37,32 +41,48 @@ them carries the meaning.
 
 Faces with dot eyes blink every few seconds. Tapping a face cycles through
 all moods for a moment and then settles back. This is an easter egg, not a
-feature, so nothing depends on it. The end of Settings always has a face
-next to the version, so there is one place to find it.
+feature, so nothing depends on it. The face under the file list (next to
+the note count) and the one at the end of Settings (next to the version)
+are the everyday places to find it.
 
-The `meh.md` title stays the native large title. iOS 27 neither passes taps
-to a custom view in the large-title slot nor shows it to VoiceOver.
+On iPhone the large title reads `meh.md •_•`. The navigation title stays
+`meh.md` for VoiceOver and the collapsed bar. iOS 27 passes no taps to a
+view in the large-title slot, so that face only blinks.
 
 ## Color
 
-- **Ink** is the accent: near-black in light mode and near-white in dark
-  mode, like the lettering on the icon. It replaces system blue for buttons,
-  links, checkboxes, selection and the blockquote bar. System controls put
-  white glyphs on the accent, so in dark mode the app-wide accent is a mid
-  gray instead of near-white. The editor and the main buttons, where we
-  choose the color on top, always use true ink. On the Mac the system
-  accent setting still wins for standard controls, as usual for Mac apps.
-- **Paper** is the page behind a note: a light paper gray in light mode
-  and a slightly lifted black in dark mode. It covers the editor, link
-  previews and Version History. Lists and Settings keep system colors.
-- **Highlighter** is a marker yellow for `==highlights==` and for the spot
-  a search result or link jumps to. It is dimmer in dark mode, so white
-  text on it stays readable.
+Like the icon, the app writes with two pens on paper. People can pick both
+pens under Settings > Appearance, next to a small sample.
+
+- **Ink** is the accent for buttons, links, checkboxes and selection. The
+  default is black: near-black in light mode and near-white in dark mode,
+  like the lettering on the icon. Royal blue and forest green are the
+  other inks. System controls put white glyphs on the accent, so with
+  black ink the app-wide accent is a mid gray in dark mode. The editor,
+  where we choose the color on top, always uses true ink. On the Mac,
+  black ink leaves standard controls on the system accent color, as usual
+  for Mac apps.
+- **Highlighter** is the second color, so the app never looks flat. It marks
+  `==highlights==`, the spot a search result or link jumps to, link underlines,
+  the blockquote bar, a short stroke under every folder icon and the main
+  action: the New Note button and Start Writing. Every folder gets the same
+  stroke, so it never reads as a favorite. Lines such as link underlines use a
+  deeper stroke of it in light mode, so they stand out on paper. Glyphs on it
+  are always near-black, because every highlighter is light. Yellow is the
+  default; pink, green and blue are the others. It can't be the app-wide
+  accent, since white glyphs on it would be unreadable.
+- **Paper** is the page behind notes and the library: a light paper gray
+  in light mode and a slightly lifted black in dark mode. It also covers
+  link previews, Version History and the launch screen. The Recents card
+  stays a lighter sheet on top. Settings keep system colors.
 - Semantic colors stay system colors: red for destructive actions, orange
   for warnings, gray for neutral swipe actions.
 
-The colors live in `MehStyle`, and the accent also in the asset catalog
-(`AccentColor`) for SwiftUI.
+The colors live in `MehStyle` and `MehPalette`. SwiftUI views read the
+chosen pens from the environment (`\.mehPalette`); the editor gets them
+like its font settings and redraws when they change. Black ink's accent
+also lives in the asset catalog (`AccentColor`), and the launch screen
+uses `LaunchPaper` and `LaunchFace`.
 
 ## Small moments
 
