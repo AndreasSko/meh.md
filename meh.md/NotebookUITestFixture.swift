@@ -13,6 +13,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case dragSubtree = "drag-subtree"
     case dragLongList = "drag-long-list"
     case storageLarge = "storage-large"
+    case flair
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
@@ -167,6 +168,37 @@ enum NotebookUITestFixture: String, CaseIterable {
                     text: "# Fictional island\n\nA sample itinerary.\n",
                     parentID: weekend)
             }
+        case .flair:
+            let home = try await replica.createFolder(name: "Home")
+            _ = try await replica.createNote(
+                name: "Garden plan.md",
+                text: """
+                    Tomatoes along the fence, ==herbs== by the door.
+
+                    - [x] Buy seeds
+                    - [ ] Water on Sunday
+
+                    > Plant now, worry later.
+
+                    """,
+                parentID: home)
+            _ = try await replica.createNote(
+                name: "Weekend.md",
+                text: """
+                    Pick up the ==blue paint== before Saturday. Details are \
+                    in [[Garden plan]].
+
+                    - [x] Call the hardware store
+                    - [x] Measure the fence
+                    - [ ] Paint, two coats
+
+                    > Good enough is good enough.
+
+                    """,
+                parentID: home)
+            _ = try await replica.createNote(
+                name: "Pancakes.md",
+                text: "Flour, milk, two eggs, a pinch of salt.\n")
         case .dragSubtree:
             _ = try await replica.createNote(
                 name: "Packing list.md", text: Self.literalSource)

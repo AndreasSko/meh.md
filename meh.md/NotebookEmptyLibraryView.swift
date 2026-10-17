@@ -4,22 +4,22 @@ import SwiftUI
 struct NotebookEmptyLibraryView: View {
     let onStartWriting: () -> Void
     let onImportMarkdown: () -> Void
+    @Environment(\.mehPalette) private var palette
 
     var body: some View {
         ContentUnavailableView {
             Label {
-                Text("Your library is empty")
+                Text("Nothing here yet")
             } icon: {
-                // The app icon's face, in place of a generic symbol.
-                Text(verbatim: "•_•")
-                    .font(.system(size: 44, weight: .bold, design: .monospaced))
-                    .accessibilityHidden(true)
+                MehFace(mood: .neutral)
             }
         } description: {
             Text("Start a note, or import your Markdown files.")
         } actions: {
             Button("Start Writing", action: onStartWriting)
                 .buttonStyle(.borderedProminent)
+                .tint(palette.highlighterColor)
+                .foregroundStyle(MehStyle.onHighlighterColor)
                 .accessibilityIdentifier("notebook-start-writing")
 
             Button("Import Markdown", action: onImportMarkdown)

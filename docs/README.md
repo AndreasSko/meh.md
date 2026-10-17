@@ -9,6 +9,7 @@ and the evidence collected along the way.
 - [Product brief](product.md): personal goals and scope.
 - [Roadmap](plan.md): milestone status and follow-up issues.
 - [Architecture](architecture.md): the current notebook design.
+- [Design language](design-language.md): ink, faces, and where humor fits.
 - [Native editor decision](decisions/001-native-text-editor.md).
 - [Document boundary](decisions/002-document-persistence-boundary.md).
 - [Automerge save-state decision](decisions/003-automerge-save-state.md).

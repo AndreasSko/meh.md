@@ -19,6 +19,7 @@ struct NotebookNoteEditor: View {
     @State private var editError: String?
     @State private var unrecordedText: String?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.mehPalette) private var palette
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,8 +67,17 @@ struct NotebookNoteEditor: View {
                     title: title, titleHeight: titleHeight,
                     focusRequest: focusRequest,
                     fontSize: fontSize,
-                    fontFamily: fontFamily, mode: mode
+                    fontFamily: fontFamily, mode: mode, palette: palette
                 )
+                .overlay {
+                    // An empty page waits with a faint face until the first
+                    // letter, like the icon's sheet.
+                    if !isInTrash, (unrecordedText ?? session.text).isEmpty {
+                        MehFace(mood: .neutral)
+                            .opacity(0.35)
+                            .allowsHitTesting(false)
+                    }
+                }
             } else {
                 unavailableContent.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -93,6 +103,7 @@ struct NotebookNoteEditor: View {
             .all,
             edges: ignoredSafeAreaEdges
         )
+        .background(MehStyle.paperColor.ignoresSafeArea())
         .onChange(of: session.persistedSnapshot) { _, _ in onPersist() }
         .onDisappear {
             Task { try? await session.flush() }

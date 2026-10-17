@@ -57,6 +57,7 @@ let package = Package(
                 "EditorWritingControls.swift",
                 "NotebookEditorPreferences.swift",
                 "MarkdownPresentation.swift", "MarkdownTablePresentation.swift", "MarkdownSyntax.swift", "MyApp.swift",
+                "MehStyle.swift", "MehFace.swift", "MehCrumple.swift",
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
                 "NotebookQuickActionRequests.swift",
                 "NotebookBackupBackgroundScheduler.swift",
@@ -108,7 +109,7 @@ let package = Package(
             dependencies: ["NoteCore"],
             path: "meh.md",
             exclude: [
-                "MyApp.swift", "Assets.xcassets",
+                "MyApp.swift", "Assets.xcassets", "MehFace.swift", "MehCrumple.swift",
                 "NotebookUITestFixture.swift",
                 "NotebookView.swift", "NotebookNoteEditor.swift", "NotebookWorkspace.swift",
                 "NotebookSnapshotMaintenancePolicy.swift",
@@ -165,6 +166,7 @@ let package = Package(
                 "MarkdownPresentation.swift",
                 "MarkdownTablePresentation.swift",
                 "MarkdownSyntax.swift",
+                "MehStyle.swift",
             ],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),

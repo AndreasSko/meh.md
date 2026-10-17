@@ -31,6 +31,9 @@
         "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote",
         "NotebookReleaseMenuUITests/testFileMenuPickersAndNewWindowPreserveWriting",
         "NotebookReleaseMenuUITests/testSelectionCommandsRespectEditorAndTitleFocus",
+        "FlairUITests/testSearchWithoutResultsNamesTheQuery",
+        "FlairUITests/testSettingsEndWithTheVersion",
+        "FlairUITests/testLibraryEndsWithTheNoteCount",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce"
       ]
     }

@@ -250,6 +250,17 @@ enum MarkdownEditingRules {
         )
     }
 
+    static func hasOpenTask(
+        in text: String,
+        syntaxResult: MarkdownSyntaxResult? = nil
+    ) -> Bool {
+        let spans = syntaxResult?.spans ?? MarkdownSyntax.parse(text).spans
+        return spans.contains {
+            if case .taskMarker(false) = $0.role { return true }
+            return false
+        }
+    }
+
     private static func changeIndent(
         in source: NSString,
         selection: NSRange,

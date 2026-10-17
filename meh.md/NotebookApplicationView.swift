@@ -53,6 +53,7 @@ struct NotebookApplicationView: View {
             }
         }
         .onOpenURL { incomingImports.receive($0) }
+        .mehAppearance()
         .overlay {
             if incomingImports.readingCount > 0 {
                 ProgressView("Reading Markdown…")
