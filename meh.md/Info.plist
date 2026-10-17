@@ -26,6 +26,13 @@
 			<string>doc.on.doc</string>
 		</dict>
 	</array>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchPaper</string>
+		<key>UIImageName</key>
+		<string>LaunchFace</string>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

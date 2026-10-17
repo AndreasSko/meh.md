@@ -69,6 +69,15 @@ struct NotebookNoteEditor: View {
                     fontSize: fontSize,
                     fontFamily: fontFamily, mode: mode, palette: palette
                 )
+                .overlay {
+                    // An empty page waits with a faint face until the first
+                    // letter, like the icon's sheet.
+                    if !isInTrash, (unrecordedText ?? session.text).isEmpty {
+                        MehFace(mood: .neutral)
+                            .opacity(0.35)
+                            .allowsHitTesting(false)
+                    }
+                }
             } else {
                 unavailableContent.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
