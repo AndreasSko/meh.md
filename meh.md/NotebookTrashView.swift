@@ -469,9 +469,7 @@ private struct NotebookTrashItemRow: View {
 private struct NotebookTrashEmptyState: View {
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "trash")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
+            MehFace(mood: .pleased)
             Text("Trash is empty")
                 .font(.headline)
             Text("Items you move to Trash appear here until you restore or delete them.")

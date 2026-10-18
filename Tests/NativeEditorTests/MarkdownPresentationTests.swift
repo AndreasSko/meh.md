@@ -706,7 +706,7 @@ final class MarkdownPresentationTests: XCTestCase {
                 )
                 XCTAssertEqual(
                     link[.foregroundColor] as? NSColor,
-                    NSColor.systemBlue
+                    MehStyle.ink
                 )
                 XCTAssertEqual(
                     marker[.foregroundColor] as? NSColor,
@@ -949,6 +949,83 @@ final class MarkdownPresentationTests: XCTestCase {
                 effectiveRange: nil
             )
         )
+    }
+
+    func testInkLinksAreUnderlinedInStorage() throws {
+        let source = "See [[Garden plan]] today"
+        let textView = NSTextView(usingTextLayoutManager: true)
+        textView.string = source
+        MarkdownPresentation.configure(textView)
+        let storage = try XCTUnwrap(textView.textStorage)
+        let linkLocation = (source as NSString).range(of: "Garden").location
+        let plainLocation = (source as NSString).range(of: "today").location
+
+        XCTAssertEqual(
+            storage.attribute(.underlineStyle, at: linkLocation, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.thick.rawValue
+        )
+        XCTAssertNil(storage.attribute(.underlineStyle, at: plainLocation, effectiveRange: nil))
+    }
+
+    func testLivePreviewUnderlinesOnlyTheVisibleLinkText() throws {
+        let source = "See [[Garden plan]] today\n\nEnd"
+        let textView = NSTextView(usingTextLayoutManager: true)
+        textView.string = source
+        textView.setSelectedRange(NSRange(location: (source as NSString).length, length: 0))
+        MarkdownPresentation.configure(textView, mode: .livePreview)
+        let storage = try XCTUnwrap(textView.textStorage)
+        let text = source as NSString
+
+        XCTAssertEqual(
+            storage.attribute(.underlineStyle, at: text.range(of: "Garden").location,
+                              effectiveRange: nil) as? Int,
+            NSUnderlineStyle.thick.rawValue
+        )
+        XCTAssertNil(storage.attribute(.underlineStyle, at: text.range(of: "[[").location,
+                                       effectiveRange: nil))
+        XCTAssertNil(storage.attribute(.underlineStyle, at: text.range(of: "]]").location,
+                                       effectiveRange: nil))
+    }
+
+    func testChangingThePaletteRestylesTheWholeNote() throws {
+        let source = "See [[Garden plan]] and ==paint== today"
+        let textView = NSTextView(usingTextLayoutManager: true)
+        textView.string = source
+        MarkdownPresentation.configure(textView)
+        defer { MehStyle.palette = MehPalette() }
+        let storage = try XCTUnwrap(textView.textStorage)
+        let link = (source as NSString).range(of: "Garden").location
+        func underline() -> NSColor? {
+            storage.attribute(.underlineColor, at: link, effectiveRange: nil) as? NSColor
+        }
+        func colors() -> (mark: NSColor?, link: NSColor?) {
+            var mark: NSColor?, ink: NSColor?
+            let cache = MarkdownPresentation.syntaxCache(for: textView)
+            cache.currentPresentation?.forEachRenderingSpan(
+                intersecting: NSRange(location: 0, length: storage.length)
+            ) { span, attributes in
+                if span.role == .highlight { mark = attributes[.backgroundColor] as? NSColor }
+                if span.role == .link { ink = attributes[.foregroundColor] as? NSColor }
+            }
+            return (mark, ink)
+        }
+        XCTAssertEqual(underline(), MehPalette.Highlighter.yellow.strokePlatformColor)
+        XCTAssertEqual(colors().mark, MehPalette.Highlighter.yellow.markPlatformColor)
+
+        MehStyle.palette = MehPalette(ink: .blue, highlighter: .pink)
+        MarkdownPresentation.refresh(textView)
+
+        XCTAssertEqual(underline(), MehPalette.Highlighter.pink.strokePlatformColor)
+        XCTAssertEqual(colors().mark, MehPalette.Highlighter.pink.markPlatformColor)
+        XCTAssertEqual(colors().link, MehPalette.Ink.blue.platformColor)
+    }
+
+    func testFirstRangeEndingAfterFindsTheOverlap() {
+        let ranges = [NSRange(location: 2, length: 2), NSRange(location: 10, length: 3)]
+        XCTAssertEqual(MarkdownPresentation.firstRange(in: ranges, endingAfter: 0), 0)
+        XCTAssertEqual(MarkdownPresentation.firstRange(in: ranges, endingAfter: 4), 1)
+        XCTAssertEqual(MarkdownPresentation.firstRange(in: ranges, endingAfter: 12), 1)
+        XCTAssertEqual(MarkdownPresentation.firstRange(in: ranges, endingAfter: 13), 2)
     }
 
     func testFontSizeRefreshPreservesSourceSelectionAndUndoState() throws {

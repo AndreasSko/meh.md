@@ -19,9 +19,13 @@ struct NotebookSearchResults: View {
                                        description: Text(error))
             } else if results.isEmpty && !isPreparing && !query.isEmpty {
                 ContentUnavailableView {
-                    Label("No results", systemImage: "magnifyingglass")
+                    Label {
+                        Text("No notes mention “\(query)”")
+                    } icon: {
+                        MehFace(mood: .puzzled)
+                    }
                 } description: {
-                    Text("No matches for “\(query)”. Try a shorter phrase or another word.")
+                    Text("Try a shorter phrase or another word.")
                 }
             } else if results.isEmpty && !isPreparing {
                 ContentUnavailableView("Search your notes", systemImage: "magnifyingglass",

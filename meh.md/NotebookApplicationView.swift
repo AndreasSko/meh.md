@@ -49,10 +49,19 @@ struct NotebookApplicationView: View {
                 }
                 .disabled(workspace.isLoading)
             } else {
-                ProgressView("Opening notebook…")
+                NotebookOpeningView()
             }
         }
+        // Continue the launch screen's paper while the notebook opens.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(MehStyle.paperColor.ignoresSafeArea())
+        #if os(macOS)
+        // The Mac toolbar shows the window's own background above the detail
+        // column; keep it paper instead of a white strip.
+        .containerBackground(MehStyle.paperColor, for: .window)
+        #endif
         .onOpenURL { incomingImports.receive($0) }
+        .mehAppearance()
         .overlay {
             if incomingImports.readingCount > 0 {
                 ProgressView("Reading Markdown…")
@@ -108,5 +117,22 @@ struct NotebookApplicationView: View {
                 workspace.requestAutomaticRefresh(trigger: "local service foreground check")
             }
         }
+    }
+}
+
+/// Picks up where the launch screen leaves off: the face stays in the same
+/// spot and starts blinking, with the progress underneath.
+private struct NotebookOpeningView: View {
+    var body: some View {
+        MehFace(mood: .neutral)
+            .overlay(alignment: .bottom) {
+                ProgressView("Opening notebook…")
+                    .fixedSize()
+                    .alignmentGuide(.bottom) { $0[.top] - 20 }
+            }
+            // The launch image is centered on the whole screen, not the
+            // safe area.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
     }
 }

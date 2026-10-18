@@ -136,10 +136,15 @@ struct NotebookSyncDetailsView: View {
                         now: context.date
                     )
                 } else {
-                    Text(presentation.title)
-                        .font(.headline)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("note-sync-status")
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        if let mood = presentation.mood {
+                            MehFace(mood: mood, size: 17)
+                        }
+                        Text(presentation.title)
+                            .font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("note-sync-status")
+                    }
                     NotebookSyncFailureView(workspace: workspace, now: context.date)
                 }
                 if let date = workspace.lastSuccessfulSync {
@@ -168,14 +173,14 @@ private struct NotebookSyncOverallProgressView: View {
                     .accessibilityIdentifier("notebook-sync-overall-status")
                 ProgressView()
                     .controlSize(.small)
-                    .tint(.blue)
+                    .tint(.accentColor)
                     .accessibilityLabel("Sync in progress")
                     .accessibilityIdentifier("notebook-sync-activity")
             }
             if let fraction {
                 ProgressView(value: fraction)
                     .progressViewStyle(.linear)
-                    .tint(.blue)
+                    .tint(.accentColor)
                     .accessibilityLabel("Overall sync progress")
                     .accessibilityValue(accessibilityValue)
                     .accessibilityIdentifier("notebook-sync-progress")
@@ -295,7 +300,7 @@ private struct NotebookSyncFilesDisclosure: View {
             else { Text("and \(count) others") }
         }
             .buttonStyle(.plain)
-            .foregroundStyle(.blue)
+            .foregroundStyle(.tint)
             .padding(.vertical, 6)
             .accessibilityLabel(expanded ? "Hide filenames" : "Show all filenames")
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
@@ -413,6 +418,14 @@ private struct NotebookSyncPresentation {
         )
     }
 
+    /// A face only when nothing needs attention; problems keep plain text.
+    var mood: MehFace.Mood? {
+        guard workspace.usesSync else { return .asleep }
+        guard indicator == .synced, !showsActivity, workspace.syncFailure == nil,
+              workspace.lastSuccessfulSync != nil else { return nil }
+        return .relaxed
+    }
+
     var indicatorColor: Color {
         switch indicator {
         case .synced, .syncing, .waiting: .primary
@@ -437,7 +450,7 @@ private struct NotebookSyncRing: View {
     var body: some View {
         Circle()
             .trim(from: 0, to: max(0.01, fraction))
-            .stroke(.blue, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
             .rotationEffect(.degrees(-90))
             #if os(iOS)
             .padding(-4)

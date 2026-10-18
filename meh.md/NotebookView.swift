@@ -163,6 +163,7 @@ struct NotebookView: View {
     @State private var isLoadingHistory = false
     @State private var historyLoadTask: Task<Void, Never>?
     @State private var historyLoadID = UUID()
+    @Environment(\.mehPalette) private var palette
     @AppStorage("editor.fontSize", store: NotebookEditorPreferences.store)
     private var editorFontSize = 17.0
     @AppStorage("editor.fontFamily", store: NotebookEditorPreferences.store)
@@ -186,6 +187,7 @@ struct NotebookView: View {
     @State private var browsingAllRecents = false
     @State private var visibleRecentPreviewIDs: [UUID] = []
     @State private var unrecordedEdit = false
+    @State private var trashedOpenNote = 0
     @State private var editingID: UUID?
     @State private var originalName = ""
     @State private var proposedName = ""
@@ -297,6 +299,10 @@ struct NotebookView: View {
         .disabled(busy)
     }
 
+    private var activeNoteCount: Int {
+        replica.placements.count { !$0.isInTrash && $0.item.kind == .note }
+    }
+
     private var sidebarTitle: String {
         if showsSelectionControls && !search.isPresented { return "" }
         #if os(iOS)
@@ -328,6 +334,7 @@ struct NotebookView: View {
                     )
                 }
             }
+            .background(NotebookSidebarPalette.background.ignoresSafeArea())
             .searchable(text: $search.query, isPresented: $search.isPresented,
                         placement: .toolbar, prompt: "Search all notes")
             .searchFocused($searchFocused)
@@ -350,6 +357,11 @@ struct NotebookView: View {
             #endif
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
+                #if os(iOS)
+                if !sidebarTitle.isEmpty {
+                    ToolbarItem(placement: .largeTitle) { MehTitle() }
+                }
+                #endif
                 if !showingTrash {
                     if let workspace, !showsSelectionControls {
                         ToolbarItem(placement: syncToolbarPlacement) {
@@ -381,10 +393,14 @@ struct NotebookView: View {
                             if !search.isPresented {
                                 ToolbarSpacer(.fixed, placement: .bottomBar)
                                 ToolbarItem(placement: .bottomBar) { libraryNewNote }
+                                    .sharedBackgroundVisibility(.hidden)
                             }
                             #endif
                         } else {
                             ToolbarItem { libraryNewNote }
+                                #if os(iOS)
+                                .sharedBackgroundVisibility(.hidden)
+                                #endif
                         }
                     }
                 }
@@ -454,6 +470,7 @@ struct NotebookView: View {
                             fontFamily: editorFontFamily,
                             mode: editorMode
                         )
+                        .mehCrumple(trigger: trashedOpenNote)
                         }
                         if let completion = variableCompletion, canCompleteSnippetVariable {
                             let completionText = linkCompletionText
@@ -560,6 +577,7 @@ struct NotebookView: View {
                                 ToolbarItem {
                                     libraryNewNote
                                 }
+                                .sharedBackgroundVisibility(.hidden)
                             }
                             #endif
                             #if os(macOS)
@@ -655,7 +673,11 @@ struct NotebookView: View {
                     emptyLibraryView
                 } else {
                     ContentUnavailableView {
-                        Label("Select a note", systemImage: "note.text")
+                        Label {
+                            Text("Select a note")
+                        } icon: {
+                            MehFace(mood: .neutral)
+                        }
                     } description: {
                         if let message = navigationState.restorationMessage {
                             Text(message)
@@ -749,7 +771,7 @@ struct NotebookView: View {
                 )
                 .transition(.identity)
             } else if !showsLiveEditor {
-                Color(uiColor: .systemBackground)
+                MehStyle.paperColor
             }
         }
         // Editor previews manage their own bar insets. History uses a SwiftUI
@@ -863,7 +885,8 @@ struct NotebookView: View {
         }
         .onChange(of: menu.trashRequest) { _, _ in
             guard canManageMenuSelection else { return }
-            trashItems(browserSelection.orderedIDs(in: activeBrowserOrder))
+            let ids = browserSelection.orderedIDs(in: activeBrowserOrder)
+            trashItems(ids)
         }
         .onChange(of: menu.newNoteRequest) { _, _ in
             guard menuAvailable else { return }
@@ -1304,7 +1327,8 @@ struct NotebookView: View {
                                 setRecentPinned(!replica.isPinnedInRecents(id), for: id)
                             },
                             onTrash: { id, completion in
-                                trashItems([id], onCompletion: completion)
+                                trashItems([id], crumplesOpenNote: false,
+                                           onCompletion: completion)
                             },
                             onHide: { id, completion in
                                 setRecentHidden(true, for: id, onCompletion: completion)
@@ -1475,7 +1499,7 @@ struct NotebookView: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
-                trashItems([placement.item.id])
+                trashItems([placement.item.id], crumplesOpenNote: false)
             } label: {
                 Image(systemName: "trash")
             }
@@ -1991,9 +2015,14 @@ struct NotebookView: View {
                             : placement.displayName)
                             .accessibilityIdentifier("notebook-sidebar-title-" + row.id.uuidString)
                     } icon: {
-                        Image(systemName: placement.item.kind == .folder
-                            ? (replica.defaultNewNoteParentID == row.id ? "tray" : "folder")
-                            : "note.text")
+                        if placement.item.kind == .folder {
+                            NotebookFolderIcon(
+                                systemName: replica.defaultNewNoteParentID == row.id
+                                    ? "tray" : "folder"
+                            )
+                        } else {
+                            Image(systemName: "note.text")
+                        }
                     }
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2045,7 +2074,9 @@ struct NotebookView: View {
                     ? "notebook-sidebar-note-" : "notebook-sidebar-folder-") + row.id.uuidString)
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 if !selectingItems, editingID == nil {
-                    Button(role: .destructive) { trashItems([row.id]) } label: {
+                    Button(role: .destructive) {
+                        trashItems([row.id], crumplesOpenNote: false)
+                    } label: {
                         Label("Trash", systemImage: "trash")
                     }
                     .accessibilityIdentifier("notebook-swipe-trash")
@@ -2761,16 +2792,36 @@ struct NotebookView: View {
         }
     }
 
+    /// Swipe actions pass `crumplesOpenNote: false` to keep the list's own
+    /// animation; everywhere else the open note crumples once it's trashed.
     private func trashItems(
-        _ ids: [UUID], onCompletion: @escaping (Bool) -> Void = { _ in }
+        _ ids: [UUID], crumplesOpenNote: Bool = true,
+        onCompletion: @escaping (Bool) -> Void = { _ in }
     ) {
+        let trashesOpenNote = crumplesOpenNote && containsOpenNote(ids)
         perform({
             try await flushEditor()
             browserUndo = try await replica.trashItems(ids)
+            if trashesOpenNote { trashedOpenNote += 1 }
             browserRedo = nil
             browserSelection.clear()
             selectingItems = false
         }, onCompletion: onCompletion)
+    }
+
+    /// Whether trashing `ids` takes the open note with it, directly or
+    /// inside a folder.
+    private func containsOpenNote(_ ids: [UUID]) -> Bool {
+        guard let selectedID else { return false }
+        let parents = Dictionary(uniqueKeysWithValues: replica.placements.map {
+            ($0.item.id, $0.parentID)
+        })
+        var current: UUID? = selectedID
+        while let id = current {
+            if ids.contains(id) { return true }
+            current = parents[id] ?? nil
+        }
+        return false
     }
 
     private func undoBrowserChange(redo: Bool) {
@@ -2898,7 +2949,8 @@ struct NotebookView: View {
                     setRecentPinned(!replica.isPinnedInRecents(id), for: id)
                 },
                 onTrash: { id, completion in
-                    trashItems([id], onCompletion: completion)
+                    trashItems([id], crumplesOpenNote: false,
+                               onCompletion: completion)
                 },
                 onHide: { id, completion in
                     setRecentHidden(true, for: id, onCompletion: completion)
@@ -2961,6 +3013,9 @@ struct NotebookView: View {
             Section {
                 if navigationState.isTreeExpanded {
                     activeTree
+                        .opacity(hidesCompactRows ? 0 : 1)
+                        .accessibilityHidden(hidesCompactRows)
+                    NotebookLibraryFooter(noteCount: activeNoteCount)
                         .opacity(hidesCompactRows ? 0 : 1)
                         .accessibilityHidden(hidesCompactRows)
                 }
@@ -3058,6 +3113,9 @@ struct NotebookView: View {
         #endif
         .scrollContentBackground(.hidden)
         .background(NotebookSidebarPalette.background)
+        // The hard edge effect lays a white strip under the bottom bar,
+        // which shows on paper once the list can scroll.
+        .scrollEdgeEffectStyle(.soft, for: .all)
         .contextMenu(forSelectionType: UUID.self) { ids in
             if editingID == nil {
                 if ids.count == 1, let id = ids.first,
@@ -3200,7 +3258,8 @@ struct NotebookView: View {
     private var libraryNewNote: some View {
         #if os(iOS)
         NotebookNewNoteButton(
-            isEnabled: !busy, hasTemplates: !replica.templates.isEmpty,
+            isEnabled: !busy, highlighter: palette.highlighter.platformColor,
+            hasTemplates: !replica.templates.isEmpty,
             onNewNote: createDefaultNote,
             onNewFromTemplate: showTemplates,
             onNewFolder: { createItem(kind: .folder, parentID: nil) }
@@ -4121,6 +4180,7 @@ private struct NotebookPreviousLinkView: View {
     let fontSize: Double
     let fontFamily: EditorFontFamily
     let mode: MarkdownEditorMode
+    @Environment(\.mehPalette) private var palette
     var body: some View {
         MarkdownEditor(
             text: .constant(text), isReadOnly: true,
@@ -4130,10 +4190,12 @@ private struct NotebookPreviousLinkView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)),
             titleHeight: titleHeight, fontSize: fontSize, fontFamily: fontFamily, mode: mode,
+            palette: palette,
             initialPreviewPosition: position, initialPreviewInsets: viewportInsets,
             initialPreviewOriginY: viewportOriginY
         )
         .ignoresSafeArea(.container, edges: [.top, .bottom])
+        .background(MehStyle.paperColor.ignoresSafeArea())
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .allowsHitTesting(false)
         .accessibilityHidden(true)

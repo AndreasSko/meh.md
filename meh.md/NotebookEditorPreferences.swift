@@ -2,9 +2,12 @@ import Foundation
 import CryptoKit
 
 enum NotebookEditorPreferences {
-    nonisolated static var store: UserDefaults {
-        store(for: ProcessInfo.processInfo.environment)
-    }
+    /// One shared instance: `@AppStorage` only sees changes made through the
+    /// same `UserDefaults` object, and the appearance settings write keys that
+    /// the whole app reads. `UserDefaults` itself is thread-safe.
+    nonisolated(unsafe) static let store = store(
+        for: ProcessInfo.processInfo.environment
+    )
 
     nonisolated static func store(for environment: [String: String]) -> UserDefaults {
         guard let name = suiteName(for: environment) else { return .standard }
