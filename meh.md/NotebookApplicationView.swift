@@ -21,7 +21,7 @@ struct NotebookApplicationView: View {
                     workspace: workspace,
                     incomingImports: incomingImports,
                     sceneID: sceneID,
-                    preferredNoteID: preferredNoteID
+                    preferredNoteID: preferredNoteID ?? workspace.welcomeNoteID
                 )
                     .id(ObjectIdentifier(replica))
             } else if let message = workspace.errorMessage {

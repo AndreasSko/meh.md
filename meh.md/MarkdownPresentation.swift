@@ -1865,11 +1865,9 @@ enum MarkdownPresentation {
             style.paragraphSpacing = level <= 2 ? em * 0.35 : em * 0.25
             style.lineSpacing = 0
         case .list:
-            style.headIndent = prefixWidth(
-                for: run,
-                in: text,
-                font: bodyFont
-            )
+            style.headIndent = isTask
+                ? taskPrefixWidth(for: run, in: text, font: bodyFont)
+                : prefixWidth(for: run, in: text, font: bodyFont)
             style.firstLineHeadIndent = 0
             style.paragraphSpacing = em * (isTask ? 0.55 : 0.2)
         case .indented:
@@ -1921,6 +1919,43 @@ enum MarkdownPresentation {
             }
         }
         return width
+    }
+
+    /// Live Preview collapses a task's bullet and draws its checkbox over
+    /// the monospaced marker, so wrapped lines align with the first line's
+    /// text instead of the source prefix.
+    private static func taskPrefixWidth(
+        for run: MarkdownParagraphRun,
+        in text: NSString,
+        font: PlatformFont
+    ) -> CGFloat {
+        let prefix = run.contentPrefixRange
+        let bullet = text.rangeOfCharacter(
+            from: CharacterSet(charactersIn: "-*+"), range: prefix
+        )
+        let marker = text.range(of: "[", range: prefix)
+        guard bullet.location != NSNotFound, marker.location != NSNotFound,
+              NSMaxRange(marker) + 2 <= NSMaxRange(prefix) else {
+            return prefixWidth(for: run, in: text, font: font)
+        }
+        func width(of range: NSRange, font: PlatformFont) -> CGFloat {
+            text.substring(with: range).size(withAttributes: [.font: font]).width
+        }
+        let indent = MarkdownParagraphRun(
+            range: run.range, kind: run.kind, contentColumn: run.contentColumn,
+            contentPrefixRange: NSRange(
+                location: prefix.location, length: bullet.location - prefix.location
+            )
+        )
+        let task = NSRange(location: marker.location, length: 3)
+        let gap = NSRange(
+            location: NSMaxRange(task), length: NSMaxRange(prefix) - NSMaxRange(task)
+        )
+        let markerFont = PlatformFont.monospacedSystemFont(
+            ofSize: font.pointSize, weight: .regular
+        )
+        return prefixWidth(for: indent, in: text, font: font)
+            + width(of: task, font: markerFont) + width(of: gap, font: font)
     }
 
     static func layoutFont(

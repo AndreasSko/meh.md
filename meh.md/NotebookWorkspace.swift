@@ -290,6 +290,24 @@ final class NotebookWorkspace {
     private var needsAnotherCopyPublication = false
 
     var isPreview: Bool { if case .preview = mode { true } else { false } }
+    /// Set only on the launch that created the notebook, to open the note.
+    private(set) var welcomeNoteID: UUID?
+
+    /// The note describes iCloud sync, so local and test notebooks start
+    /// empty. UI tests opt in with an isolated preview notebook.
+    private var offersWelcomeNote: Bool {
+        #if NOTEBOOK_CLOUD_UI_LAB
+        return false
+        #else
+        if case .cloud = mode { return true }
+        #if DEBUG
+        if isPreview, ProcessInfo.processInfo.environment["MEH_WELCOME_NOTE"] == "1" {
+            return true
+        }
+        #endif
+        return false
+        #endif
+    }
     var backupDirectory: URL { documentsDirectory.appending(path: "Backups") }
 
     func storageReport(for replica: NotebookReplica) async throws
@@ -716,6 +734,10 @@ final class NotebookWorkspace {
                 if loaded.catalogSnapshot == nil {
                     if usesSync && !isPreview { try await loaded.createNotebookForSync() }
                     else { try await loaded.createLocalNotebook() }
+                    if offersWelcomeNote {
+                        try await loaded.addWelcomeNote()
+                        welcomeNoteID = NotebookWelcomeNote.id
+                    }
                 }
                 #if DEBUG
                 try await NotebookUITestFixture.seedIfRequested(
