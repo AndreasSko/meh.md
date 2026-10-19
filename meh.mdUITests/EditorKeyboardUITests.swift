@@ -422,6 +422,24 @@ final class EditorKeyboardUITests: XCTestCase {
         capture(app, name: "Native font and text size settings")
     }
 
+    func testToolbarShowsNoScrollIndicatorWhileScrolling() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        app.launch()
+        let editor = openToolbarTestNote(app)
+        editor.typeText("Fictional toolbar sample")
+        let toolbar = toolbarContainer(in: app)
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
+        toolbar.swipeLeft()
+        let indicator = toolbar.otherElements
+            .matching(NSPredicate(format: "label CONTAINS[c] 'scroll bar'"))
+        XCTAssertEqual(indicator.count, 0, "The formatting bar must not show a scroll bar")
+        capture(app, name: "Formatting bar scrolled")
+    }
+
     func testToolbarOrderPersistsWithoutChangingNote() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
