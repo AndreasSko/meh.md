@@ -1185,7 +1185,8 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             frame: .zero, collectionViewLayout: layout
         )
         view.backgroundColor = .clear
-        view.showsHorizontalScrollIndicator = true
+        view.showsHorizontalScrollIndicator = false
+        view.showsVerticalScrollIndicator = false
         view.contentInsetAdjustmentBehavior = .never
         view.decelerationRate = .fast
         view.dragInteractionEnabled = true
