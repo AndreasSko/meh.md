@@ -155,6 +155,35 @@ final class NotebookWelcomeNoteTests: XCTestCase {
         XCTAssertTrue(visibleWelcomeNotes(second).isEmpty)
     }
 
+    func testMissingWelcomeNoteIsAddedToAnExistingNotebookOnce() async throws {
+        let replica = NotebookReplica(directory: directory())
+        try await replica.createNotebookForSync()
+        _ = try await replica.createNote(name: "Plan.md", text: "Existing note")
+
+        let added = try await replica.addMissingWelcomeNote()
+        let addedAgain = try await replica.addMissingWelcomeNote()
+
+        XCTAssertTrue(added)
+        XCTAssertFalse(addedAgain)
+        XCTAssertEqual(visibleWelcomeNotes(replica).count, 1)
+        let session = try await replica.openNote(welcome)
+        XCTAssertEqual(session.currentSnapshot?.heads, NotebookWelcomeNote.heads)
+    }
+
+    func testTrashedOrDeletedWelcomeNoteIsNotAddedAgain() async throws {
+        let trashed = try await freshDevice()
+        _ = try await trashed.trashItems([welcome])
+        let deleted = try await freshDevice()
+        _ = try await deleted.trashItems([welcome])
+        try await deleted.permanentlyDelete(deleted.deletionSelection(rootIDs: [welcome]))
+
+        for replica in [trashed, deleted] {
+            let added = try await replica.addMissingWelcomeNote()
+            XCTAssertFalse(added)
+            XCTAssertTrue(visibleWelcomeNotes(replica).isEmpty)
+        }
+    }
+
     private func freshDevice() async throws -> NotebookReplica {
         let replica = NotebookReplica(directory: directory())
         try await replica.createNotebookForSync()

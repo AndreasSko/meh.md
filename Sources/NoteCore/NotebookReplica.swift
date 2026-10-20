@@ -305,14 +305,30 @@ public final class NotebookReplica {
     /// Fresh notebooks start with the shared welcome note. Call it once,
     /// right after creating the notebook and before any other edit.
     public func addWelcomeNote() async throws {
+        _ = try await addWelcomeNote(unlessSeen: false)
+    }
+
+    /// Development builds add the welcome note to notebooks created before
+    /// it existed. A deleted welcome note stays deleted.
+    public func addMissingWelcomeNote() async throws -> Bool {
+        try await addWelcomeNote(unlessSeen: true)
+    }
+
+    private func addWelcomeNote(unlessSeen: Bool) async throws -> Bool {
         try await withCatalogWrite {
             guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            if unlessSeen {
+                let id = NotebookWelcomeNote.id
+                guard !self.rememberedDeletions.contains(id),
+                      try !catalog.items().contains(where: { $0.id == id }) else { return false }
+            }
             let next = try catalog.fork()
             try next.add(id: NotebookWelcomeNote.id, kind: .note,
                          name: NotebookWelcomeNote.name)
             try await self.noteStorage(NotebookWelcomeNote.id)
                 .save(NotebookWelcomeNote.snapshot())
             try await self.persistCatalog(next)
+            return true
         }
     }
 
