@@ -508,15 +508,5 @@ struct NotebookSyncEventLogView: View {
         .frame(minWidth: 300, idealWidth: 680, minHeight: 360, idealHeight: 540)
     }
 
-    private var diagnosticText: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
-        #if os(macOS)
-        let platform = "macOS"
-        #else
-        let platform = "iOS"
-        #endif
-        let os = ProcessInfo.processInfo.operatingSystemVersion
-        return "meh.md \(version) (\(build)); \(platform) \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)\n" + log.exportText
-    }
+    private var diagnosticText: String { NotebookFeedback.logText(log) }
 }

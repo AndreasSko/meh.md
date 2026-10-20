@@ -157,6 +157,7 @@ struct NotebookSettingsView: View {
                         Text(error).font(.caption)
                     }
                 }
+                NotebookFeedbackSection(log: workspace.syncEventLog)
                 Section {
                     NotebookSettingsSignature()
                         .listRowBackground(Color.clear)
@@ -264,8 +265,10 @@ struct NotebookSettingsView: View {
 /// moods, like everywhere else.
 private struct NotebookSettingsSignature: View {
     private var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-            as? String ?? ""
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? ""
+        let build = info?["CFBundleVersion"] as? String ?? ""
+        return "\(version) (\(build))"
     }
 
     var body: some View {
