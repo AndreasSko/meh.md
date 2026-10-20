@@ -46,12 +46,12 @@ final class NotebookMacMenuUITests: XCTestCase {
         let settingsItem = app.menuItems["Settings…"]
         XCTAssertTrue(settingsItem.waitForExistence(timeout: 5))
         settingsItem.click()
-        let export = app.buttons["notebook-export"]
-        XCTAssertTrue(export.waitForExistence(timeout: 10))
+        let backups = app.buttons["notebook-backups-settings"]
+        XCTAssertTrue(backups.waitForExistence(timeout: 10))
         app.typeKey("n", modifierFlags: .command)
-        XCTAssertTrue(export.exists)
+        XCTAssertTrue(backups.exists)
         app.buttons["Done"].click()
-        XCTAssertFalse(export.waitForExistence(timeout: 1))
+        XCTAssertFalse(backups.waitForExistence(timeout: 1))
         XCTAssertEqual(sidebarNoteCount(in: app), noteCount)
         XCTAssertEqual(noteTitle.label, title)
         XCTAssertEqual(editor.value as? String, body)
@@ -62,7 +62,7 @@ final class NotebookMacMenuUITests: XCTestCase {
         titleField.typeKey("a", modifierFlags: .command)
         titleField.typeText(shortcutTitle)
         app.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(export.waitForExistence(timeout: 10))
+        XCTAssertTrue(backups.waitForExistence(timeout: 10))
         app.buttons["Done"].click()
         XCTAssertTrue(noteTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(noteTitle.label, shortcutTitle)

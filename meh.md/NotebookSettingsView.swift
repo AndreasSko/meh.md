@@ -1,6 +1,5 @@
 import NoteCore
 import SwiftUI
-import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
 #endif
@@ -8,15 +7,11 @@ import AppKit
 struct NotebookSettingsView: View {
     let replica: NotebookReplica
     let workspace: NotebookWorkspace
-    let onImport: (NotebookImportPlan?) async throws -> Void
     let beforeExport: () async throws -> Void
     var onOpenNote: ((UUID) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingReset = false
     @State private var resetScheduled = false
-    @State private var importing = false
-    @State private var choosingImportSource = false
-    @State private var importingFolder = false
     @State private var exporting = false
     @State private var destinationError: String?
     @State private var updatingDefaultDestination = false
@@ -54,37 +49,11 @@ struct NotebookSettingsView: View {
                     .accessibilityIdentifier("notebook-templates-settings")
                 }
                 NotebookAppearanceSection()
-                Section("Markdown") {
-                    Button("Import Markdown…") {
-                        #if os(iOS)
-                        choosingImportSource = true
-                        #else
-                        importing = true
-                        #endif
-                    }
-                        .accessibilityIdentifier("notebook-import")
-                        #if os(iOS)
-                        .confirmationDialog(
-                            "Import Markdown", isPresented: $choosingImportSource
-                        ) {
-                            Button("Import Files…") {
-                                importingFolder = false
-                                importing = true
-                            }
-                            Button("Import Folder…") {
-                                importingFolder = true
-                                importing = true
-                            }
-                        }
-                        #endif
-                    Button("Export All Notes…") { exporting = true }
-                        .accessibilityIdentifier("notebook-export")
-                }
-                .disabled(exporting)
                 Section {
                     NavigationLink {
                         NotebookBackupsView(
-                            workspace: workspace, beforeBackup: beforeExport
+                            workspace: workspace, exporting: $exporting,
+                            beforeBackup: beforeExport
                         )
                     } label: {
                         Label("Backups", systemImage: "clock.arrow.circlepath")
@@ -164,10 +133,6 @@ struct NotebookSettingsView: View {
         } message: {
             Text("Quit and reopen meh.md to complete the reset. Any changes made before restarting will also be discarded.")
         }
-        .notebookMarkdownImporter(
-            isPresented: $importing, choosingFolder: importingFolder,
-            replica: replica, onImport: onImport
-        )
         .notebookMarkdownExporter(
             isPresented: $exporting, replica: replica, beforeExport: beforeExport
         )
@@ -222,6 +187,7 @@ struct NotebookSettingsView: View {
 /// the automatic backup settings.
 private struct NotebookBackupsView: View {
     let workspace: NotebookWorkspace
+    @Binding var exporting: Bool
     let beforeBackup: () async throws -> Void
 
     var body: some View {
@@ -231,13 +197,16 @@ private struct NotebookBackupsView: View {
                 Text(workspace.usesSync
                     ? "Your notes are saved on this Mac and in your iCloud account."
                     : "Your notes are saved only on this Mac.")
-                Text("meh.md also keeps Markdown copies of your notes and regular backups on this Mac. To keep a copy somewhere else, use Export All Notes in Settings.")
+                Text("meh.md also keeps Markdown copies of your notes and regular backups on this Mac. To keep a copy somewhere else, export your notes.")
                 #else
                 Text(workspace.usesSync
                     ? "Your notes are saved on this device and in your iCloud account. If you delete meh.md, they come back from iCloud when you install it again. Only changes that haven’t synced yet are lost."
                     : "Your notes are saved only on this device. If you delete meh.md, they are deleted with it.")
-                Text("meh.md also keeps Markdown copies of your notes and regular backups on this device. They are deleted with the app, so use Export All Notes in Settings to keep a copy somewhere else.")
+                Text("meh.md also keeps Markdown copies of your notes and regular backups on this device. They are deleted with the app, so export your notes to keep a copy somewhere else.")
                 #endif
+                Button("Export All Notes…") { exporting = true }
+                    .disabled(exporting)
+                    .accessibilityIdentifier("notebook-export")
             }
             Section {
                 Picker("Frequency", selection: Binding(
@@ -263,7 +232,7 @@ private struct NotebookBackupsView: View {
                         }
                     }
                 }
-                .disabled(workspace.isBackingUp)
+                .disabled(workspace.isBackingUp || exporting)
                 .accessibilityIdentifier("notebook-backup-now")
                 if let lastBackup = workspace.lastBackup {
                     LabeledContent("Last backup",
