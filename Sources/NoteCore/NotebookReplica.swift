@@ -311,7 +311,7 @@ public final class NotebookReplica {
             try next.add(id: NotebookWelcomeNote.id, kind: .note,
                          name: NotebookWelcomeNote.name)
             try await self.noteStorage(NotebookWelcomeNote.id)
-                .save(NotebookWelcomeNote.snapshot)
+                .save(NotebookWelcomeNote.snapshot())
             try await self.persistCatalog(next)
         }
     }

@@ -16,10 +16,11 @@ final class NotebookWelcomeNoteTests: XCTestCase {
     }
 
     func testBundledNoteDecodesWithItsFixedHistory() throws {
-        let snapshot = NotebookWelcomeNote.snapshot
+        let snapshot = try NotebookWelcomeNote.snapshot()
         let note = try NoteDocument(snapshot: snapshot)
         XCTAssertEqual(note.noteID, welcome)
-        XCTAssertTrue(try note.text.hasPrefix("I'm your first note."))
+        XCTAssertEqual(try note.text, NotebookWelcomeNote.text)
+        // A failure here after editing the text shows the new heads.
         XCTAssertEqual(note.heads, NotebookWelcomeNote.heads)
         // Each device must edit with its own actor, never the bundled one.
         let first = try Document(snapshot.data)
