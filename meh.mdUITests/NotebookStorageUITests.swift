@@ -12,6 +12,9 @@ final class NotebookStorageUITests: XCTestCase {
         defer { app.terminate() }
         app.launch()
         openSettings(app)
+        let backups = app.buttons["notebook-backups-settings"]
+        reveal(backups, in: app)
+        backups.tap()
         let backup = app.buttons["notebook-backup-now"]
         reveal(backup, in: app)
         backup.tap()
@@ -19,6 +22,9 @@ final class NotebookStorageUITests: XCTestCase {
             predicate: NSPredicate(format: "enabled == true AND label == %@", "Back Up Now"),
             object: backup)
         XCTAssertEqual(XCTWaiter.wait(for: [backedUp], timeout: 180), .completed)
+        let settings = app.navigationBars["Backups"].buttons["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
         reveal(app.buttons["Reset All Local Data…"], in: app)
         capture(app, "Settings with fictional notebook")
 
