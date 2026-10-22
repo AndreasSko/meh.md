@@ -41,6 +41,9 @@ struct CloudKitTransportState: Codable, Equatable {
     var protocolVersion: Int
     var inboxGeneration: UUID
     var engineState: Data?
+    /// Where the last direct read of the zone ended, independent of the
+    /// engine's own position.
+    var zoneChangeToken: Data?
     var canonicalSnapshotID: String?
     fileprivate var inboxSlots: [SyncRecord?]
     var outbox: [String: SyncRecord]
@@ -69,6 +72,7 @@ struct CloudKitTransportState: Codable, Equatable {
         self.protocolVersion = protocolVersion
         inboxGeneration = UUID()
         engineState = nil
+        zoneChangeToken = nil
         canonicalSnapshotID = nil
         inboxSlots = []
         outbox = [:]
@@ -90,7 +94,7 @@ struct CloudKitTransportState: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case diskFormatVersion
         case accountRecordName, zoneName, protocolVersion, inboxGeneration
-        case engineState, canonicalSnapshotID, inbox, outbox, deletedNoteIDs, purgedRecordIDs
+        case engineState, zoneChangeToken, canonicalSnapshotID, inbox, outbox, deletedNoteIDs, purgedRecordIDs
         case pendingRemoteDeletionIDs, scannedDeletedNoteIDs
         case pendingSnapshotCleanup, lastSuccessfulSnapshotCleanupAt
         case lastSnapshotCleanupInboxCount
@@ -109,6 +113,9 @@ struct CloudKitTransportState: Codable, Equatable {
         ) ?? 1
         inboxGeneration = try values.decode(UUID.self, forKey: .inboxGeneration)
         engineState = try values.decodeIfPresent(Data.self, forKey: .engineState)
+        zoneChangeToken = try values.decodeIfPresent(
+            Data.self, forKey: .zoneChangeToken
+        )
         canonicalSnapshotID = try values.decodeIfPresent(
             String.self, forKey: .canonicalSnapshotID
         )
@@ -179,6 +186,7 @@ struct CloudKitTransportState: Codable, Equatable {
         try values.encode(protocolVersion, forKey: .protocolVersion)
         try values.encode(inboxGeneration, forKey: .inboxGeneration)
         try values.encodeIfPresent(engineState, forKey: .engineState)
+        try values.encodeIfPresent(zoneChangeToken, forKey: .zoneChangeToken)
         try values.encodeIfPresent(canonicalSnapshotID, forKey: .canonicalSnapshotID)
         if let disk = encoder.userInfo[CloudKitStateDiskStorage.contextKey]
             as? CloudKitStateDiskStorage {
@@ -701,15 +709,32 @@ actor CloudKitEventCommitter {
     func commitFetched(
         _ records: [SyncRecord],
         deleting recordNames: Set<String> = [],
-        bootstrapRecordName: String = ""
+        bootstrapRecordName: String = "",
+        zoneChangeToken: Data? = nil
     ) async throws -> CloudKitFetchedCommit {
         guard failure == nil else { throw failure! }
-        guard !records.isEmpty || !recordNames.isEmpty else {
+        guard !records.isEmpty || !recordNames.isEmpty
+            || zoneChangeToken != nil else {
             return CloudKitFetchedCommit()
         }
         do {
             return try await store.update { state in
                 var result = CloudKitFetchedCommit()
+                // The engine and direct reads each deliver a deletion once.
+                // Observing it again would reopen a deletion that
+                // retirement has already resolved.
+                let recordNames = recordNames.subtracting(
+                    state.remoteDeletedSnapshotIDs
+                )
+                var records = records
+                if let zoneChangeToken {
+                    // The engine may have delivered a deletion while the
+                    // direct read was in flight; its copy is older.
+                    records.removeAll {
+                        state.remoteDeletedSnapshotIDs.contains($0.id)
+                    }
+                    state.zoneChangeToken = zoneChangeToken
+                }
                 result.deletionCount = state.observeRemoteDeletions(
                     recordNames,
                     bootstrapRecordName: bootstrapRecordName
@@ -1792,6 +1817,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     private var lastReportedFailure: Error?
     private var isRetired = false
     private var unexpectedDeletionObserved = false
+    /// CKSyncEngine only fetches after a push told it about changes, and
+    /// pushes can be lost. A new transport, as at app launch, checks too.
+    private var serverCheckRequested = true
     private var retryThrottle = CloudKitRetryThrottle()
     private var cleanupProgressHandler:
         (@Sendable (SyncCleanupProgress) async -> Void)?
@@ -2609,11 +2637,139 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         if let delegateFailure {
             throw delegateFailure
         }
+        if serverCheckRequested {
+            serverCheckRequested = false
+            do {
+                try await fetchZoneChangesDirectly()
+            } catch {
+                serverCheckRequested = true
+                throw error
+            }
+        }
         try await resolveRemoteSnapshotDeletions()
         let state = await store.snapshot()
         try assertActive()
         try state.validateRemoteDeletions()
         return try state.page(after: cursor, limit: Self.pageSize)
+    }
+
+    /// Makes the next fetch also read the zone directly from iCloud, so it
+    /// finds changes whose push notification never arrived.
+    public func requestServerCheck() {
+        serverCheckRequested = true
+    }
+
+    private func fetchZoneChangesDirectly() async throws {
+        var token = await store.snapshot().zoneChangeToken
+        var moreComing = true
+        while moreComing {
+            let changes: CloudKitZoneChanges
+            let since = token
+            // A full read lists IDs only: most records are already in the
+            // inbox, and downloading them all again would be costly.
+            let withFields = token != nil
+            do {
+                // A missing zone halts sync once this device has joined.
+                changes = try await CloudKitBootstrapZoneRetry.perform {
+                    try await cloudRequest(labLabel: "fetch.serverCheck") {
+                        try await database.zoneChanges(
+                            in: zoneID, since: since, withFields: withFields
+                        )
+                    }
+                } ensureZone: {
+                    try await ensureZone()
+                }
+            } catch let error as CKError
+                where error.code == .changeTokenExpired && token != nil {
+                token = nil
+                continue
+            }
+            try assertActive()
+            let modifications = withFields ? changes.modifications
+                : try await missingRecords(changes.modifications.map(\.recordID))
+            _ = try await commitFetchedChanges(
+                modifications,
+                deletions: changes.deletions,
+                zoneChangeToken: changes.token,
+                event: "server_check_fetched"
+            )
+            token = changes.token
+            moreComing = changes.moreComing
+        }
+    }
+
+    /// Downloads the listed records the inbox does not have yet.
+    private func missingRecords(_ ids: [CKRecord.ID]) async throws -> [CKRecord] {
+        let state = await store.snapshot()
+        let known = Set(state.inbox.map(\.id))
+            .union(state.purgedRecordIDs)
+            .union([mode.bootstrapName])
+        var records: [CKRecord] = []
+        for id in ids where !known.contains(id.recordName) {
+            do {
+                records.append(try await cloudRequest(
+                    labLabel: "fetch.serverCheckRecord"
+                ) { try await database.record(for: id) })
+            } catch let error as CKError where error.code == .unknownItem {
+                // Deleted since it was listed; a later read reports that.
+            }
+        }
+        return records
+    }
+
+    /// Adds fetched records and deletions in this zone to the inbox.
+    private func commitFetchedChanges(
+        _ modifications: [CKRecord],
+        deletions: [CKRecord.ID],
+        zoneChangeToken: Data? = nil,
+        event: String
+    ) async throws -> CloudKitFetchedCommit {
+        if mode == .notebook {
+            for canonical in modifications where
+                canonical.recordID.zoneID == zoneID &&
+                canonical.recordID.recordName == mode.bootstrapName {
+                try CloudKitNotebookFormatGate.read(canonical)
+                    .requireSupported()
+            }
+        }
+        let recordNames = Set(deletions.filter {
+            $0.zoneID == zoneID
+        }.map(\.recordName))
+        let records = try modifications
+            .filter { $0.recordID.zoneID == zoneID }
+            .map(decode)
+        if zoneChangeToken != nil, mode == .notebook,
+           let notebookID = await store.snapshot().inbox.first(where: {
+               $0.kind == .catalog
+           })?.notebookID,
+           records.contains(where: {
+               $0.notebookID.map { $0 != notebookID } ?? false
+           }) {
+            // Another notebook in this zone means the iCloud data was
+            // deleted and seeded again. The engine reports that as a zone
+            // deletion, but only when it fetches.
+            try await haltForDeletedZone()
+            throw CloudKitSyncTransportError.unexpectedDeletion
+        }
+        let committed = try await eventCommitter.commitFetched(
+            records,
+            deleting: recordNames,
+            bootstrapRecordName: mode.bootstrapName,
+            zoneChangeToken: zoneChangeToken
+        )
+        // The newest server timestamp shows how current a delivery
+        // is, which counts alone cannot tell.
+        let newest = modifications.compactMap(\.modificationDate).max()
+        await diagnose(event, counts: [
+            "notes": records.count { $0.kind == .note },
+            "catalogs": records.count { $0.kind == .catalog },
+            "deletions": recordNames.count,
+            "newInbox": committed.recordCount,
+            "newestAgeSeconds": newest.map {
+                max(0, Int(Date().timeIntervalSince($0)))
+            } ?? -1,
+        ])
+        return committed
     }
 
     /// Confirm surviving immutable records outside CKSyncEngine callbacks.
@@ -3678,38 +3834,10 @@ extension CloudKitSyncTransport {
                 let data = try update.get()
                 try await eventCommitter.commitEngineState(data)
             case let .fetchedRecordZoneChanges(modifications, deletions):
-                if mode == .notebook {
-                    for canonical in modifications where
-                        canonical.recordID.zoneID == zoneID &&
-                        canonical.recordID.recordName == mode.bootstrapName {
-                        try CloudKitNotebookFormatGate.read(canonical)
-                            .requireSupported()
-                    }
-                }
-                let targetDeletions = deletions.filter {
-                    $0.zoneID == zoneID
-                }
-                let recordNames = Set(targetDeletions.map(\.recordName))
-                let records = try modifications
-                    .filter { $0.recordID.zoneID == zoneID }
-                    .map(decode)
-                let committed = try await eventCommitter.commitFetched(
-                    records,
-                    deleting: recordNames,
-                    bootstrapRecordName: mode.bootstrapName
+                let committed = try await commitFetchedChanges(
+                    modifications, deletions: deletions,
+                    event: "engine_fetched"
                 )
-                // The newest server timestamp shows how current a delivery
-                // is, which counts alone cannot tell.
-                let newest = modifications.compactMap(\.modificationDate).max()
-                await diagnose("engine_fetched", counts: [
-                    "notes": records.count { $0.kind == .note },
-                    "catalogs": records.count { $0.kind == .catalog },
-                    "deletions": recordNames.count,
-                    "newInbox": committed.recordCount,
-                    "newestAgeSeconds": newest.map {
-                        max(0, Int(Date().timeIntervalSince($0)))
-                    } ?? -1,
-                ])
                 activityTracker.recordFetch(
                     recordCount: committed.recordCount,
                     deletionCount: committed.deletionCount

@@ -32,6 +32,19 @@ protocol CloudKitDatabaseClient: Sendable {
         saveResults: [CKRecordZone.ID: Result<CKRecordZone, any Error>],
         deleteResults: [CKRecordZone.ID: Result<Void, any Error>]
     )
+    /// Reads one zone's changes directly, bypassing CKSyncEngine. A nil
+    /// token reads every record in the zone. Without fields, records carry
+    /// only their IDs, which costs no payload download.
+    func zoneChanges(
+        in zoneID: CKRecordZone.ID, since token: Data?, withFields: Bool
+    ) async throws -> CloudKitZoneChanges
+}
+
+struct CloudKitZoneChanges: Sendable {
+    let modifications: [CKRecord]
+    let deletions: [CKRecord.ID]
+    let token: Data
+    let moreComing: Bool
 }
 
 protocol CloudKitSyncEngineClient: AnyObject, Sendable {
@@ -72,7 +85,37 @@ struct CloudKitServices: Sendable {
 
 extension CKContainer: CloudKitAccountClient {}
 
-extension CKDatabase: CloudKitDatabaseClient {}
+extension CKDatabase: CloudKitDatabaseClient {
+    func zoneChanges(
+        in zoneID: CKRecordZone.ID, since token: Data?, withFields: Bool
+    ) async throws -> CloudKitZoneChanges {
+        // An unreadable token only costs a full read of the zone.
+        let since = token.flatMap {
+            try? NSKeyedUnarchiver.unarchivedObject(
+                ofClass: CKServerChangeToken.self, from: $0
+            )
+        }
+        let changes = try await recordZoneChanges(
+            inZoneWith: zoneID, since: since,
+            desiredKeys: withFields ? nil : []
+        )
+        let modifications = try changes.modificationResultsByID.values.map {
+            try $0.get().record
+        }
+        return CloudKitZoneChanges(
+            modifications: modifications.sorted {
+                ($0.modificationDate ?? .distantPast, $0.recordID.recordName)
+                    < ($1.modificationDate ?? .distantPast, $1.recordID.recordName)
+            },
+            deletions: changes.deletions.map(\.recordID),
+            token: try NSKeyedArchiver.archivedData(
+                withRootObject: changes.changeToken,
+                requiringSecureCoding: true
+            ),
+            moreComing: changes.moreComing
+        )
+    }
+}
 
 extension CKSyncEngine: CloudKitSyncEngineClient {
     var pendingRecordZoneChanges: [CKSyncEngine.PendingRecordZoneChange] {

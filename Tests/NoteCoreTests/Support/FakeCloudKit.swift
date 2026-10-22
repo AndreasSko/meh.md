@@ -42,6 +42,10 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         /// The next engine fetch delivers one chunk of changes, then the app
         /// dies before the engine state is updated.
         case crashAfterFetchedChanges
+        /// The next direct zone read fails with this error.
+        case failNextZoneChanges(CKError.Code)
+        /// The zone is deleted right before the next direct zone read.
+        case deleteZoneBeforeNextZoneChanges
     }
 
     private struct Change {
@@ -67,6 +71,9 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     private var fetchedCount = 0
     private var fetchedBytes = 0
     private var directReads: [String] = []
+    private var zoneChangeReads = 0
+    private var pushesLost = false
+    private var zoneChangesPage: Int?
     private var cloudMutationCount = 0
     private var acceptedAtomicSaveBatches: [[String]] = []
     private let changeTagKey = "fakeServerChangeTag"
@@ -108,6 +115,22 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     }
 
     var offline: Bool { locked { isOffline } }
+
+    /// Like CKSyncEngine whose push notification was lost: explicit engine
+    /// fetches return without reading anything from the server.
+    var losesPushes: Bool {
+        get { locked { pushesLost } }
+        set { locked { pushesLost = newValue } }
+    }
+
+    /// Changes per direct zone read; nil returns everything at once.
+    var zoneChangesPageSize: Int? {
+        get { locked { zoneChangesPage } }
+        set { locked { zoneChangesPage = newValue } }
+    }
+
+    /// Direct zone reads that bypass the engine.
+    var zoneChangeReadCount: Int { locked { zoneChangeReads } }
 
     func inject(_ fault: Fault) { locked { faults.append(fault) } }
 
@@ -409,6 +432,51 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         }
     }
 
+    func zoneChanges(
+        in zoneID: CKRecordZone.ID, since token: Data?, withFields: Bool
+    ) async throws -> CloudKitZoneChanges {
+        try checkReachable()
+        locked { zoneChangeReads += 1 }
+        if takeFault(where: {
+            if case .deleteZoneBeforeNextZoneChanges = $0 { return true }
+            return false
+        }) != nil {
+            deleteZone()
+        }
+        guard locked({ zoneExists }) else { throw CKError(.zoneNotFound) }
+        let after = try token.map {
+            try JSONDecoder().decode(Int.self, from: $0)
+        } ?? 0
+        if case let .failNextZoneChanges(code)? = takeFault(where: {
+            if case .failNextZoneChanges = $0 { return true }
+            return false
+        }) {
+            throw CKError(code)
+        }
+        if token != nil, locked({ zoneDeletedAt.map { $0 > after } ?? false }) {
+            throw CKError(.changeTokenExpired)
+        }
+        let pending = locked {
+            changes.map(\.sequence).filter { $0 > after }.sorted()
+        }
+        let pageEnd = zoneChangesPageSize.flatMap {
+            pending.count > $0 ? pending[$0 - 1] : nil
+        }
+        let changes = try changes(
+            after: after, upTo: pageEnd, measured: withFields
+        )
+        return CloudKitZoneChanges(
+            modifications: withFields ? changes.modifications
+                : changes.modifications.map {
+                    CKRecord(recordType: $0.recordType, recordID: $0.recordID)
+                },
+            // A full read lists what exists, not what was deleted before.
+            deletions: token == nil ? [] : changes.deletions,
+            token: try JSONEncoder().encode(changes.token),
+            moreComing: pageEnd != nil
+        )
+    }
+
     // MARK: Engine support
 
     func checkReachable() throws {
@@ -461,7 +529,9 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     }
 
     /// Latest state of every record changed after `token`, in change order.
-    func changes(after token: Int) throws -> (
+    func changes(
+        after token: Int, upTo end: Int? = nil, measured: Bool = true
+    ) throws -> (
         zoneDeleted: Bool,
         modifications: [CKRecord],
         deletions: [CKRecord.ID],
@@ -472,11 +542,14 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
             var seen = Set<CKRecord.ID>()
             var modifications: [CKRecord] = []
             var deletions: [CKRecord.ID] = []
-            for change in changes.reversed() where change.sequence > token {
+            for change in changes.reversed() where change.sequence > token
+                && change.sequence <= end ?? sequence {
                 guard seen.insert(change.recordID).inserted else { continue }
                 if let record = records[change.recordID] {
-                    fetchedCount += 1
-                    fetchedBytes += assetBytes(of: record)
+                    if measured {
+                        fetchedCount += 1
+                        fetchedBytes += assetBytes(of: record)
+                    }
                     modifications.append(try serverCopy(of: record))
                 } else if !zoneDeleted {
                     deletions.append(change.recordID)
@@ -484,7 +557,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
             }
             return (
                 zoneDeleted, modifications.reversed(), deletions.reversed(),
-                sequence
+                end ?? sequence
             )
         }
     }
@@ -688,6 +761,10 @@ final class FakeSyncEngine: @unchecked Sendable, CloudKitSyncEngineClient {
         guard let transport else { return }
         try server.checkReachable()
         await transport.handle(.willFetchChanges(scheduled: false), from: self)
+        if server.losesPushes {
+            await transport.handle(.didFetchChanges(scheduled: false), from: self)
+            return
+        }
         let changes = try server.changes(after: locked { state.fetchToken })
         if changes.zoneDeleted {
             await transport.handle(

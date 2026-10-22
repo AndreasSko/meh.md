@@ -129,7 +129,7 @@ private struct NotebookSyncLabView: View {
               let rawRun = environment["MEH_SYNC_LAB_RUN"],
               let runID = UUID(uuidString: rawRun),
               let phase = environment["MEH_SYNC_LAB_PHASE"],
-              ["account", "exchange", "offline-join", "offline-ui-seed",
+              ["account", "exchange", "server-check", "offline-join", "offline-ui-seed",
                "offline-ui-verify", "publish", "receive", "edit", "verify", "cleanup"]
                 .contains(phase) else {
             update("Stopped: explicit lab launch configuration required")
@@ -358,6 +358,66 @@ private struct NotebookSyncLabView: View {
                     guard receivingEditor.text == expected else {
                         throw LabError.convergenceFailed
                     }
+                }
+            } else if phase == "server-check" {
+                // Reads the zone directly, as the app does when a push was
+                // lost: first listing every ID, then only what changed since.
+                let senderTransport = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container,
+                    stateDirectory: root.appending(path: "sender/transport"),
+                    runID: runID
+                )
+                let receiverTransport = try await CloudKitSyncTransport.makeIsolatedNotebookLab(
+                    containerIdentifier: container,
+                    stateDirectory: root.appending(path: "receiver/transport"),
+                    runID: runID
+                )
+                transports = ["sender": senderTransport, "receiver": receiverTransport]
+                let source = NotebookReplica(directory: root.appending(path: "sender/notebook"))
+                let destination = NotebookReplica(directory: root.appending(path: "receiver/notebook"))
+                try await source.createLocalNotebook()
+                let firstID = try await source.createNote(
+                    name: "Fictional first note.md", text: "First \(runID)\n"
+                )
+                let receiverLog = NotebookSyncEventLog(directory: root.appending(path: "receiver"))
+                diagnostics = ["receiver": receiverLog]
+                let sender = NotebookSyncCoordinator(replica: source, transport: senderTransport)
+                let receiver = NotebookSyncCoordinator(
+                    replica: destination, transport: receiverTransport,
+                    diagnosticLog: receiverLog
+                )
+                func lastCheck() throws -> [String: Int] {
+                    guard let entry = receiverLog.entries.last(where: {
+                        $0.event == "server_check_fetched"
+                    }) else { throw LabError.convergenceFailed }
+                    return entry.counts
+                }
+                try await measure("initial_upload") { try await synchronize(sender) }
+                try await measure("full_check") { try await synchronize(receiver) }
+                // The full read lists IDs only and finds nothing missing.
+                guard destination.placements.contains(where: { $0.item.id == firstID }),
+                      try lastCheck()["notes"] == 0 else { throw LabError.convergenceFailed }
+                let secondID = try await source.createNote(
+                    name: "Fictional second note.md", text: "Second \(runID)\n"
+                )
+                try await measure("second_upload") { try await synchronize(sender) }
+                receiverLog.clear()
+                await receiverTransport.requestServerCheck()
+                try await measure("incremental_check") { try await synchronize(receiver) }
+                guard destination.placements.contains(where: { $0.item.id == secondID }),
+                      try lastCheck()["notes"] == 1 else { throw LabError.convergenceFailed }
+                receiverLog.clear()
+                await receiverTransport.requestServerCheck()
+                try await measure("unchanged_check") { try await synchronize(receiver) }
+                // The receiver may have uploaded a catalog since, but no note.
+                guard try lastCheck()["notes"] == 0 else {
+                    throw LabError.convergenceFailed
+                }
+                let observedText = try await destination.openNote(secondID).text
+                report.noteID = secondID
+                report.observedText = observedText
+                guard observedText == "Second \(runID)\n" else {
+                    throw LabError.convergenceFailed
                 }
             } else if phase == "offline-join" {
                 let source = NotebookReplica(directory: root.appending(path: "source/notebook"))
