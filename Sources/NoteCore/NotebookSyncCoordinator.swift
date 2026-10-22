@@ -1,4 +1,3 @@
-import CloudKit
 import Foundation
 import Observation
 
@@ -186,8 +185,7 @@ public final class NotebookSyncCoordinator {
     }
 
     private func namedOversizedError(_ error: any Error) -> any Error {
-        guard let failure = error as? CloudKitSyncTransportError,
-              case let .snapshotTooLarge(documentID, kind, _) = failure else {
+        guard let documentID = SyncBackends.oversizedDocumentID(in: error) else {
             return error
         }
         var displayName: String?
@@ -199,9 +197,7 @@ public final class NotebookSyncCoordinator {
                 displayName = items.first { $0.id == documentID }?.name
             }
         }
-        return CloudKitSyncTransportError.snapshotTooLarge(
-            documentID: documentID, kind: kind, displayName: displayName
-        )
+        return SyncBackends.naming(error, displayName: displayName)
     }
 
     private func exchange() async throws {
@@ -403,7 +399,7 @@ public final class NotebookSyncCoordinator {
             phaseFraction: pendingNotes.isEmpty ? 1 : 0,
             completedUnits: 0, totalUnits: pendingNotes.count
         )
-        var oversizedError: CloudKitSyncTransportError?
+        var oversizedError: (any Error)?
         for start in stride(from: 0, to: pendingNotes.count, by: 50) {
             try Task.checkCancellation()
             let end = min(start + 50, pendingNotes.count)
@@ -435,8 +431,7 @@ public final class NotebookSyncCoordinator {
                     state: &state,
                     completedNoteCount: batch.count
                 )
-            } catch let error as CloudKitSyncTransportError {
-                guard case .snapshotTooLarge = error else { throw error }
+            } catch let error where SyncBackends.oversizedDocumentID(in: error) != nil {
                 oversizedError = oversizedError ?? error
             }
         }
