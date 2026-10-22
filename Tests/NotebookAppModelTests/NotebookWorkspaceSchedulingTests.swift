@@ -491,7 +491,7 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         let workspace = makeWorkspace(transport: transport)
         workspace.sceneActivityChanged(id: UUID(), isActive: true)
         await workspace.start()
-        await transport.setHalt(CloudKitSyncHaltStatus(
+        await transport.setHalt(SyncHaltStatus(
             reason: .updateRequired,
             underlyingError: SyncError.updateRequired(requiredVersion: 3),
             isRecoverable: false
@@ -644,11 +644,11 @@ private actor RecordingTransport: HaltableSyncTransport {
     private(set) var fetchCount = 0
     private(set) var purgeCount = 0
     private var retryDeadline: Date?
-    private var halt: CloudKitSyncHaltStatus?
+    private var halt: SyncHaltStatus?
     func setRetryDeadline(_ deadline: Date?) { retryDeadline = deadline }
     func retryNotBefore() async -> Date? { retryDeadline }
-    func setHalt(_ value: CloudKitSyncHaltStatus) { halt = value }
-    func haltStatus() async -> CloudKitSyncHaltStatus? { halt }
+    func setHalt(_ value: SyncHaltStatus) { halt = value }
+    func haltStatus() async -> SyncHaltStatus? { halt }
     func retire() async {}
     func containsPublishedNote(_ id: UUID) async -> Bool {
         guard let page = try? await base.fetch(after: nil) else { return false }

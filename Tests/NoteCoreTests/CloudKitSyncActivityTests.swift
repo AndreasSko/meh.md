@@ -206,7 +206,7 @@ final class CloudKitSyncActivityTests: XCTestCase {
 
     func testActivityChannelCancellationFinishesWaitingStream() async {
         let channel = CloudKitSyncActivityChannel()
-        let task = Task { () -> CloudKitSyncActivity? in
+        let task = Task { () -> SyncActivity? in
             var iterator = channel.stream.makeAsyncIterator()
             return await iterator.next()
         }

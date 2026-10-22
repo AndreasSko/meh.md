@@ -1,34 +1,9 @@
 import Foundation
 
-/// The request path that caused CloudKit to fetch changes.
-public enum CloudKitSyncReason: String, Equatable, Sendable {
-    /// CloudKit scheduled the fetch, normally after receiving a push hint.
-    case scheduled
-
-    /// The app explicitly requested the fetch.
-    case manual
-}
-
-/// Durable CloudKit work that may require a workspace sync pass or status
-/// update. The transport only publishes an activity after its delegate has
-/// committed the corresponding CloudKit event to local transport state.
-public enum CloudKitSyncActivity: Equatable, Sendable {
-    case remoteChanges(
-        recordCount: Int,
-        deletionCount: Int,
-        reason: CloudKitSyncReason
-    )
-    case uploadsAcknowledged(recordCount: Int)
-    /// A scheduled publication needs a fresh app exchange to complete.
-    case publicationPending
-    case accountChanged
-    case failed(String)
-}
-
 /// A single-consumer channel for sync hints. Counts may summarize several
 /// completed operations while the consumer is busy; they are not an event log.
 final class CloudKitSyncActivityChannel: Sendable {
-    let stream: AsyncStream<CloudKitSyncActivity>
+    let stream: AsyncStream<SyncActivity>
     private let buffer: CloudKitSyncActivityBuffer
 
     init() {
@@ -40,7 +15,7 @@ final class CloudKitSyncActivityChannel: Sendable {
         )
     }
 
-    func yield(_ activities: [CloudKitSyncActivity]) {
+    func yield(_ activities: [SyncActivity]) {
         buffer.yield(activities)
     }
 
@@ -63,14 +38,14 @@ private final class CloudKitSyncActivityBuffer: @unchecked Sendable {
     // `lock` protects all mutable state. The collections contain at most one
     // entry for each of the six activity keys.
     private var order: [Key] = []
-    private var pending: [Key: CloudKitSyncActivity] = [:]
-    private var waiter: CheckedContinuation<CloudKitSyncActivity?, Never>?
+    private var pending: [Key: SyncActivity] = [:]
+    private var waiter: CheckedContinuation<SyncActivity?, Never>?
     private var isFinished = false
 
-    func yield(_ activities: [CloudKitSyncActivity]) {
+    func yield(_ activities: [SyncActivity]) {
         var delivery: (
-            CheckedContinuation<CloudKitSyncActivity?, Never>,
-            CloudKitSyncActivity
+            CheckedContinuation<SyncActivity?, Never>,
+            SyncActivity
         )?
         lock.lock()
         if !isFinished {
@@ -86,9 +61,9 @@ private final class CloudKitSyncActivityBuffer: @unchecked Sendable {
         }
     }
 
-    func next() async -> CloudKitSyncActivity? {
+    func next() async -> SyncActivity? {
         await withCheckedContinuation { continuation in
-            var immediate: CloudKitSyncActivity?
+            var immediate: SyncActivity?
             var shouldResume = false
             lock.lock()
             if let activity = removeFirst() {
@@ -105,7 +80,7 @@ private final class CloudKitSyncActivityBuffer: @unchecked Sendable {
     }
 
     func finish() {
-        let suspended: CheckedContinuation<CloudKitSyncActivity?, Never>?
+        let suspended: CheckedContinuation<SyncActivity?, Never>?
         lock.lock()
         isFinished = true
         order.removeAll(keepingCapacity: false)
@@ -116,7 +91,7 @@ private final class CloudKitSyncActivityBuffer: @unchecked Sendable {
         suspended?.resume(returning: nil)
     }
 
-    private func coalesce(_ activity: CloudKitSyncActivity) {
+    private func coalesce(_ activity: SyncActivity) {
         let key = key(for: activity)
         guard let current = pending[key] else {
             pending[key] = activity
@@ -153,13 +128,13 @@ private final class CloudKitSyncActivityBuffer: @unchecked Sendable {
         }
     }
 
-    private func removeFirst() -> CloudKitSyncActivity? {
+    private func removeFirst() -> SyncActivity? {
         guard !order.isEmpty else { return nil }
         let key = order.removeFirst()
         return pending.removeValue(forKey: key)
     }
 
-    private func key(for activity: CloudKitSyncActivity) -> Key {
+    private func key(for activity: SyncActivity) -> Key {
         switch activity {
         case .remoteChanges(_, _, .scheduled): .scheduledFetch
         case .remoteChanges(_, _, .manual): .manualFetch
@@ -189,8 +164,8 @@ struct CloudKitSyncActivityTracker {
     }
 
     mutating func finishFetch(
-        reason: CloudKitSyncReason
-    ) -> CloudKitSyncActivity? {
+        reason: SyncActivity.Reason
+    ) -> SyncActivity? {
         defer {
             fetchedRecordCount = 0
             fetchedDeletionCount = 0
@@ -211,7 +186,7 @@ struct CloudKitSyncActivityTracker {
 
     mutating func finishSend(
         wasScheduled: Bool
-    ) -> CloudKitSyncActivity? {
+    ) -> SyncActivity? {
         defer { acknowledgedRecordCount = 0 }
         guard wasScheduled, acknowledgedRecordCount > 0 else { return nil }
         return .uploadsAcknowledged(recordCount: acknowledgedRecordCount)

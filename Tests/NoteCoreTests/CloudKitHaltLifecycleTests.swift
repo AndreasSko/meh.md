@@ -184,7 +184,7 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
             // Direct writes bypass the event committer. Their failure must
             // still be synchronously visible to transport health/batch gates.
             let failure = try XCTUnwrap(failing.writeHealth.failure, phase)
-            XCTAssertTrue(CloudKitSyncHaltStatus(error: failure).isRecoverable)
+            XCTAssertTrue(SyncHaltStatus(cloudKitError: failure).isRecoverable)
 
             let reopened = try CloudKitTransportStateStore(
                 directory: directory,
@@ -214,7 +214,7 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
     }
 
     func testOnlyKnownLocalWriteErrorsAndInterruptionsAllowReconstruction() {
-        let noSpace = CloudKitSyncHaltStatus(error:
+        let noSpace = SyncHaltStatus(cloudKitError:
             CloudKitStateWriteFailure(underlyingError: POSIXError(.ENOSPC))
         )
         XCTAssertEqual(noSpace.reason, .localStorageFailure)
@@ -224,22 +224,22 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
             Int(ENOSPC)
         )
 
-        let unknownWrite = CloudKitSyncHaltStatus(error:
+        let unknownWrite = SyncHaltStatus(cloudKitError:
             CloudKitStateWriteFailure(underlyingError: POSIXError(.EIO))
         )
         XCTAssertEqual(unknownWrite.reason, .localStorageFailure)
         XCTAssertFalse(unknownWrite.isRecoverable)
-        XCTAssertFalse(CloudKitSyncHaltStatus(
-            error: CloudKitSyncTransportError.corruptState
+        XCTAssertFalse(SyncHaltStatus(
+            cloudKitError: CloudKitSyncTransportError.corruptState
         ).isRecoverable)
-        let interrupted = CloudKitSyncHaltStatus(error: CancellationError())
+        let interrupted = SyncHaltStatus(cloudKitError: CancellationError())
         XCTAssertEqual(interrupted.reason, .interrupted)
         XCTAssertTrue(interrupted.isRecoverable)
-        XCTAssertEqual(CloudKitSyncHaltStatus(
-            error: SyncError.scopeChanged
+        XCTAssertEqual(SyncHaltStatus(
+            cloudKitError: SyncError.scopeChanged
         ).reason, .accountChanged)
-        let futureFormat = CloudKitSyncHaltStatus(
-            error: SyncError.updateRequired(requiredVersion: 3)
+        let futureFormat = SyncHaltStatus(
+            cloudKitError: SyncError.updateRequired(requiredVersion: 3)
         )
         XCTAssertEqual(futureFormat.reason, .updateRequired)
         XCTAssertFalse(futureFormat.isRecoverable)

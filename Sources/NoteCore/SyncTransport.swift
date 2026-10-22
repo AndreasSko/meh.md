@@ -246,6 +246,8 @@ public protocol SyncTransport: Sendable {
     ) async
     /// The earliest useful retry time known by the transport.
     func retryNotBefore() async -> Date?
+    /// Repairs made while opening saved transport state, for the event log.
+    func recoveryEvents() async -> [String]
 }
 
 extension SyncTransport {
@@ -295,6 +297,8 @@ extension SyncTransport {
     ) async {}
 
     public func retryNotBefore() async -> Date? { nil }
+
+    public func recoveryEvents() async -> [String] { [] }
 
     public func purgeDeletedNotes(
         _ noteIDs: Set<UUID>, notebookID: UUID
