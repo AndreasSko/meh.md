@@ -139,6 +139,7 @@ enum CloudKitEngineEvent: Sendable {
     case accountChange(CloudKitAccountChange)
     case fetchedDatabaseChanges(deletedZoneIDs: [CKRecordZone.ID])
     case didFetchRecordZoneChanges(zoneID: CKRecordZone.ID, error: CKError?)
+    case willFetchChanges(scheduled: Bool)
     case didFetchChanges(scheduled: Bool)
     case didSendChanges(scheduled: Bool)
     case other
@@ -179,6 +180,10 @@ enum CloudKitEngineEvent: Sendable {
         case let .didFetchRecordZoneChanges(completion):
             self = .didFetchRecordZoneChanges(
                 zoneID: completion.zoneID, error: completion.error
+            )
+        case let .willFetchChanges(start):
+            self = .willFetchChanges(
+                scheduled: start.context.reason == .scheduled
             )
         case let .didFetchChanges(completion):
             self = .didFetchChanges(

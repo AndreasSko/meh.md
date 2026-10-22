@@ -3698,6 +3698,18 @@ extension CloudKitSyncTransport {
                     deleting: recordNames,
                     bootstrapRecordName: mode.bootstrapName
                 )
+                // The newest server timestamp shows how current a delivery
+                // is, which counts alone cannot tell.
+                let newest = modifications.compactMap(\.modificationDate).max()
+                await diagnose("engine_fetched", counts: [
+                    "notes": records.count { $0.kind == .note },
+                    "catalogs": records.count { $0.kind == .catalog },
+                    "deletions": recordNames.count,
+                    "newInbox": committed.recordCount,
+                    "newestAgeSeconds": newest.map {
+                        max(0, Int(Date().timeIntervalSince($0)))
+                    } ?? -1,
+                ])
                 activityTracker.recordFetch(
                     recordCount: committed.recordCount,
                     deletionCount: committed.deletionCount
@@ -3919,12 +3931,23 @@ extension CloudKitSyncTransport {
                 }
             case let .didFetchRecordZoneChanges(completedZoneID, error):
                 if completedZoneID == zoneID, let error {
+                    await diagnose(
+                        "engine_zone_fetch_error:"
+                            + NotebookSyncEventLog.errorCode(error)
+                    )
                     await observeRetryAfter(error)
                     if let delegateFailure { throw delegateFailure }
                     lastReportedFailure = error
                     activities.append(.failed(error.localizedDescription))
                 }
+            case let .willFetchChanges(scheduled):
+                await diagnose("engine_fetch_start", counts: [
+                    "scheduled": scheduled ? 1 : 0
+                ])
             case let .didFetchChanges(scheduled):
+                await diagnose("engine_fetch_end", counts: [
+                    "scheduled": scheduled ? 1 : 0
+                ])
                 do {
                     // This callback reports durable receipt, not sync success.
                     // Normal fetch/purge confirms retirement coverage after

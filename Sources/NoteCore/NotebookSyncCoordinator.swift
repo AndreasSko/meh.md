@@ -116,6 +116,8 @@ public final class NotebookSyncCoordinator {
         await transport.setCleanupProgressHandler { [weak self] work in
             await self?.updateCleanupProgress(work)
         }
+        // Stays attached after the pass: CKSyncEngine also delivers changes
+        // on its own schedule, and those must show up in the log too.
         await transport.setDiagnosticsHandler { [weak diagnosticLog] event, counts in
             await diagnosticLog?.record(event, counts: counts)
         }
@@ -145,7 +147,6 @@ public final class NotebookSyncCoordinator {
         await transport.endExchange()
         await transport.setReceiveActivityHandler(nil)
         await transport.setCleanupProgressHandler(nil)
-        await transport.setDiagnosticsHandler(nil)
         await diagnosticLog?.flush()
     }
 
@@ -175,12 +176,10 @@ public final class NotebookSyncCoordinator {
                 "deleted": report.deletedSnapshotCount,
                 "compressedBytes": report.deletedCompressedPayloadBytes,
             ])
-            await transport.setDiagnosticsHandler(nil)
             await diagnosticLog?.flush()
             return report
         } catch {
             diagnosticLog?.record("snapshot_maintenance_error:" + NotebookSyncEventLog.errorCode(error))
-            await transport.setDiagnosticsHandler(nil)
             await diagnosticLog?.flush()
             throw error
         }
@@ -334,7 +333,9 @@ public final class NotebookSyncCoordinator {
             diagnosticLog?.record(
                 "page_received",
                 counts: [
+                    "catalogs": page.records.count { $0.kind == .catalog },
                     "exactAcknowledgements": exactAcknowledgements,
+                    "notes": page.records.count { $0.kind == .note },
                     "records": page.records.count,
                 ]
             )
@@ -358,6 +359,11 @@ public final class NotebookSyncCoordinator {
             )
         })
         diagnosticLog?.record("outgoing_scan_end", counts: ["records": outgoing.count])
+        let catalogNotes = try replica.catalogNoteCounts()
+        diagnosticLog?.record("catalog_notes", counts: [
+            "listed": catalogNotes.listed,
+            "withoutBody": catalogNotes.withoutBody,
+        ])
         let pendingNotes = outgoing.filter {
             $0.kind == .note
                 && state.acknowledgedHeads[$0.documentKey] != $0.snapshot.heads

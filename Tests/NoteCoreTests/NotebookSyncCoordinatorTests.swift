@@ -774,6 +774,42 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         assertExchanged(coordinator.status)
     }
 
+    func testDiagnosticLogCountsReceivedNotesAndCatalogBodies() async throws {
+        let store = InMemorySyncStore()
+        let left = NotebookReplica(directory: directory())
+        let rightRoot = directory()
+        let right = NotebookReplica(directory: rightRoot)
+        let log = NotebookSyncEventLog(directory: rightRoot)
+        let sender = NotebookSyncCoordinator(
+            replica: left,
+            transport: InMemorySyncTransport(scope: "shared", store: store)
+        )
+        let receiver = NotebookSyncCoordinator(
+            replica: right,
+            transport: InMemorySyncTransport(scope: "shared", store: store),
+            diagnosticLog: log
+        )
+        await sender.synchronize()
+        await receiver.synchronize()
+        _ = try await left.createNote(name: "new.md", text: "new")
+        await sender.synchronize()
+        log.clear()
+
+        await receiver.synchronize()
+
+        let pages = log.entries.filter { $0.event == "page_received" }
+        XCTAssertEqual(pages.reduce(0) { $0 + ($1.counts["notes"] ?? 0) }, 1)
+        XCTAssertGreaterThanOrEqual(
+            pages.reduce(0) { $0 + ($1.counts["catalogs"] ?? 0) }, 1
+        )
+        let catalog = try XCTUnwrap(
+            log.entries.first { $0.event == "catalog_notes" }
+        )
+        XCTAssertEqual(catalog.counts["listed"], 1)
+        XCTAssertEqual(catalog.counts["withoutBody"], 0)
+        assertExchanged(receiver.status)
+    }
+
     func testCatalogFailureRetainsCompletedNoteProgress() async throws {
         let base = InMemorySyncTransport(scope: "catalog-failure")
         let transport = BatchRecordingTransport(base: base)

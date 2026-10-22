@@ -1644,6 +1644,15 @@ public final class NotebookReplica {
         NoteFileStorage(directory: directory.appending(path: "notes/\(id.uuidString)"))
     }
 
+    /// Notes the catalog lists, and how many of them have no local body.
+    func catalogNoteCounts() throws -> (listed: Int, withoutBody: Int) {
+        guard let catalog else { throw NotebookReplicaError.notJoined }
+        let listed = Set(try catalog.items().filter {
+            $0.kind == .note && !$0.isPermanentlyDeleted
+        }.map(\.id))
+        return (listed.count, listed.subtracting(try storedNoteIDs()).count)
+    }
+
     private func storedNoteIDs() throws -> [UUID] {
         let url = directory.appending(path: "notes")
         do {
