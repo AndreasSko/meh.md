@@ -127,6 +127,14 @@ struct CloudKitRaceDatabase: CloudKitDatabaseClient {
     ) {
         try await base.modifyRecordZones(saving: zones, deleting: ids)
     }
+
+    func zoneChanges(
+        in zoneID: CKRecordZone.ID, since token: Data?, withFields: Bool
+    ) async throws -> CloudKitZoneChanges {
+        try await base.zoneChanges(
+            in: zoneID, since: token, withFields: withFields
+        )
+    }
 }
 
 private actor CloudKitRaceDeleteAttempts {

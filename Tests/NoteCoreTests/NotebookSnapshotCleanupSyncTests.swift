@@ -113,8 +113,8 @@ final class NotebookSnapshotCleanupSyncTests: XCTestCase {
         XCTAssertEqual(text, "new\nedited\n", "Step \(stop)")
     }
 
-    private func open(_ name: String) async throws -> Device {
-        try await Device.open(root.appending(path: name), server: server)
+    private func open(_ name: String) async throws -> FakeCloudKitDevice {
+        try await FakeCloudKitDevice.open(root.appending(path: name), server: server)
     }
 
     private func assertExchanged(
@@ -124,40 +124,5 @@ final class NotebookSnapshotCleanupSyncTests: XCTestCase {
         guard case .exchanged = status else {
             return XCTFail("Expected exchanged, got \(status)", file: file, line: line)
         }
-    }
-}
-
-@MainActor
-private struct Device {
-    let directory: URL
-    let replica: NotebookReplica
-    let transport: CloudKitSyncTransport
-    let coordinator: NotebookSyncCoordinator
-
-    static func open(
-        _ directory: URL, server: FakeCloudKitServer
-    ) async throws -> Device {
-        let replica = NotebookReplica(
-            directory: directory.appending(path: "notebook")
-        )
-        try await replica.load()
-        let transport = try await CloudKitSyncTransport.makeNotebook(
-            services: server.services,
-            containerIdentifier: server.containerIdentifier,
-            stateDirectory: directory.appending(path: "cloudkit")
-        )
-        return Device(
-            directory: directory,
-            replica: replica,
-            transport: transport,
-            coordinator: NotebookSyncCoordinator(
-                replica: replica, transport: transport
-            )
-        )
-    }
-
-    func restarted(server: FakeCloudKitServer) async throws -> Device {
-        await transport.retire()
-        return try await Device.open(directory, server: server)
     }
 }
