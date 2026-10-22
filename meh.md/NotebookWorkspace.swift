@@ -1,4 +1,3 @@
-import CloudKit
 import CryptoKit
 import Foundation
 import Network
@@ -90,6 +89,11 @@ final class NotebookWorkspace {
         case local, preview, cloud
         case development(URL, String)
         case invalid
+
+        /// Posted when the account behind this mode's sync backend changes.
+        var accountChangedNotification: Notification.Name? {
+            if case .cloud = self { CloudKitSyncTransport.accountChangedNotification } else { nil }
+        }
     }
 
     enum PreviewRequest: Equatable {
@@ -126,7 +130,7 @@ final class NotebookWorkspace {
     private(set) var syncSetupError: String?
     private(set) var syncFailure: SyncFailurePresentation?
     private(set) var syncWaitStartedAt: Date?
-    private(set) var syncHalt: CloudKitSyncHaltStatus?
+    private(set) var syncHalt: SyncHaltStatus?
     private(set) var syncUpdateRequiredVersion: UInt64?
     private(set) var copyError: String?
     private(set) var copiesURL: URL?
@@ -271,7 +275,7 @@ final class NotebookWorkspace {
     @ObservationIgnored private var cloudActivityTask: Task<Void, Never>?
     @ObservationIgnored private var accountAvailabilityTask: Task<Void, Never>?
     @ObservationIgnored private var pendingAccountRecheck = false
-    /// Read iCloud directly in the next pass instead of relying only on
+    /// Read the server directly in the next pass instead of relying only on
     /// push notifications, which can be lost.
     @ObservationIgnored private var pendingServerCheck = false
     @ObservationIgnored private var connectivityMonitor: NWPathMonitor?
@@ -812,7 +816,7 @@ final class NotebookWorkspace {
             }
             if isPreviewUpdateRequirementFixture {
                 let error = SyncError.updateRequired(requiredVersion: 3)
-                syncHalt = CloudKitSyncHaltStatus(
+                syncHalt = SyncHaltStatus(
                     reason: .updateRequired,
                     underlyingError: error,
                     isRecoverable: false
@@ -1092,11 +1096,12 @@ final class NotebookWorkspace {
     }
 
     private func startAccountAvailabilityMonitoring() {
-        guard case .cloud = mode, automaticSync, accountAvailabilityTask == nil else { return }
-        // No CKSyncEngine exists when first account discovery fails. Observe
+        guard let notification = mode.accountChangedNotification, automaticSync,
+              accountAvailabilityTask == nil else { return }
+        // No transport exists when first account discovery fails. Observe
         // availability independently, so signing in can finish first joining.
         accountAvailabilityTask = Task { @MainActor [weak self] in
-            for await _ in NotificationCenter.default.notifications(named: .CKAccountChanged) {
+            for await _ in NotificationCenter.default.notifications(named: notification) {
                 guard !Task.isCancelled else { return }
                 self?.cloudAccountAvailabilityChanged()
             }
@@ -1198,10 +1203,10 @@ final class NotebookWorkspace {
                     )
                 }
                 if pendingServerCheck,
-                   let cloud = notebookTransport as? CloudKitSyncTransport {
+                   let active = notebookTransport as? any ActiveSyncTransport {
                     // The transport keeps the request until a check succeeds.
                     pendingServerCheck = false
-                    await cloud.requestServerCheck()
+                    await active.requestServerCheck()
                 }
                 let coordinator = sync ?? NotebookSyncCoordinator(
                     replica: replica,
@@ -1523,19 +1528,14 @@ final class NotebookWorkspace {
             return
         }
         notebookTransport = unavailableWhenRequested(transport)
-        if let cloud = transport as? CloudKitSyncTransport,
-           await cloud.recoveredRetryMetadata {
-            syncEventLog.record("cloud retry metadata recovered")
-        }
-        if let cloud = transport as? CloudKitSyncTransport,
-           await cloud.recoveredLegacySnapshotDeletionHalt {
-            syncEventLog.record("legacy snapshot deletion halt recovered")
+        for event in await transport.recoveryEvents() {
+            syncEventLog.record(event)
         }
         syncHalt = nil
         let generation = transportGeneration
-        if automaticSync, let cloud = notebookTransport as? CloudKitSyncTransport {
+        if automaticSync, let active = notebookTransport as? any ActiveSyncTransport {
             cloudActivityTask = Task { @MainActor [weak self] in
-                for await activity in cloud.activity {
+                for await activity in active.activity {
                     guard !Task.isCancelled, let self,
                           self.transportGeneration == generation else { return }
                     await self.receiveCloudActivity(activity, generation: generation)
@@ -1547,7 +1547,7 @@ final class NotebookWorkspace {
     private(set) var searchScopeGeneration = 0
 
     func receiveCloudActivity(
-        _ activity: CloudKitSyncActivity, generation: UUID? = nil
+        _ activity: SyncActivity, generation: UUID? = nil
     ) async {
         guard !isResetPending else { return }
         if let generation, generation != transportGeneration { return }
@@ -1575,7 +1575,7 @@ final class NotebookWorkspace {
             syncSetupError = message
             let source = notebookTransport
             let halt = await (source as? any HaltableSyncTransport)?.haltStatus()
-            let failure = await (source as? CloudKitSyncTransport)?.lastFailure()
+            let failure = await (source as? any ActiveSyncTransport)?.lastFailure()
             if let generation, generation != transportGeneration { return }
             syncHalt = halt
             if let failure = halt?.underlyingError ?? failure {
@@ -1611,7 +1611,9 @@ final class NotebookWorkspace {
         await updateRetryDeadline()
         guard !isResetPending, automaticSync, !isSyncUpdateRequired,
               generation == transportGeneration else { return }
-        let failure = CloudKitSyncTransportError.uploadNotAcknowledged
+        let failure = SyncError.unavailable(
+            "The server has not acknowledged all uploaded notes yet."
+        )
         // Coalesced hints share one deadline and one backoff step. A new hint
         // after the retry pass advances the bounded policy if work remains.
         if plannedRetryDate == nil {
