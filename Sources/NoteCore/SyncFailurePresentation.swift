@@ -1,4 +1,3 @@
-import CloudKit
 import Foundation
 
 /// User-facing explanation and next step for a sync failure.
@@ -43,7 +42,7 @@ public struct SyncFailurePresentation: Equatable, Sendable {
         }
     }
 
-    private struct Failure {
+    struct Failure {
         let title: LocalizedStringResource
         let message: LocalizedStringResource
         let actionHint: LocalizedStringResource?
@@ -98,14 +97,6 @@ public struct SyncFailurePresentation: Equatable, Sendable {
             )
         }
 
-        if let failure = error as? CloudKitStateWriteFailure {
-            return classify(
-                failure.underlyingError,
-                depth: depth + 1,
-                visited: visited
-            )
-        }
-
         if error is CancellationError {
             return Failure(
                 "Sync stopped",
@@ -149,74 +140,10 @@ public struct SyncFailurePresentation: Equatable, Sendable {
             }
         }
 
-        if let error = error as? CloudKitSyncTransportError {
-            switch error {
-            case .accountUnavailable:
-                return Failure(
-                    "iCloud account unavailable",
-                    "An available iCloud account is needed to sync.",
-                    actionHint: "Check iCloud sign-in, then try syncing again."
-                )
-            case .corruptState:
-                return Failure(
-                    "Sync state needs recovery",
-                    "The saved iCloud sync state could not be read safely.",
-                    actionHint: "Sync recovery is needed before syncing can continue.",
-                    disposition: .unavailable
-                )
-            case .unrecoverableRetryDelay:
-                return Failure(
-                    "Sync paused for retry safety",
-                    "The saved iCloud server retry delay could not be verified.",
-                    actionHint: "Keep local notes and share sync diagnostics for recovery.",
-                    disposition: .unavailable
-                )
-            case .invalidRemoteRecord:
-                return Failure(
-                    "Sync needs attention",
-                    "iCloud returned sync data that could not be safely applied.",
-                    actionHint: "Review the sync status before trying again.",
-                    disposition: .unavailable
-                )
-            case .unexpectedDeletion:
-                return Failure(
-                    "Sync paused",
-                    "A remote note snapshot was deleted unexpectedly. Sync paused to preserve history.",
-                    actionHint: "Review the sync status before trying again.",
-                    disposition: .unavailable
-                )
-            case .uploadNotAcknowledged:
-                return transientFailure
-            case let .snapshotTooLarge(documentID, kind, displayName):
-                if kind == .catalog {
-                    return Failure(
-                        "Notebook too large to sync",
-                        "The notebook's saved organization history exceeds the 64 MiB iCloud sync limit. Notebook sync is paused. Local notes remain available.",
-                        actionHint: "Keep your local data and export a backup before seeking help to recover sync.",
-                        disposition: .unavailable
-                    )
-                }
-                let identity = displayName ?? documentID.uuidString
-                return Failure(
-                    "Snapshot too large to sync",
-                    "The saved history for \(identity) exceeds the 64 MiB iCloud sync limit. Its local copy remains available.",
-                    actionHint: "Other notes can still sync. Export a backup before seeking help to reduce this note's history.",
-                    disposition: .manual
-                )
-            case let .uploadFailed(code):
-                return classifyCloudCode(code)
-            }
-        }
-
-        if let error = error as? CKError {
-            if error.code == .partialFailure,
-               let partialErrors = error.userInfo[CKPartialErrorsByItemIDKey]
-                    as? [AnyHashable: any Error] {
-                return classifyPartialErrors(
-                    partialErrors, depth: depth, visited: visited
-                )
-            }
-            return classifyCloudCode(error.code.rawValue)
+        if let failure = SyncBackends.failure(of: error, nested: {
+            classify($0, depth: depth + 1, visited: visited)
+        }) {
+            return failure
         }
 
         if let error = error as? URLError {
@@ -244,9 +171,6 @@ public struct SyncFailurePresentation: Equatable, Sendable {
         var nextVisited = visited
         nextVisited.insert(identifier)
 
-        if nsError.domain == CKErrorDomain {
-            return classifyCloudCode(nsError.code)
-        }
         if nsError.domain == NSURLErrorDomain,
            isTransient(URLError.Code(rawValue: nsError.code)) {
             return transientFailure
@@ -275,72 +199,18 @@ public struct SyncFailurePresentation: Equatable, Sendable {
         return unknownFailure
     }
 
-    private static func classifyPartialErrors(
-        _ errors: [AnyHashable: any Error],
-        depth: Int,
-        visited: Set<ObjectIdentifier>
-    ) -> Failure {
-        let candidates = errors.sorted {
-            String(describing: $0.key) < String(describing: $1.key)
-        }.map {
-            classify($0.value, depth: depth + 1, visited: visited)
-        }
-        return candidates.first(where: { $0.disposition == .unavailable })
-            ?? candidates.first(where: { !$0.isUnknown })
-            ?? unknownFailure
-    }
-
-    private static let transientFailure = Failure(
+    static let transientFailure = Failure(
         "Sync temporarily unavailable",
         "A temporary network or iCloud service problem stopped sync.",
         actionHint: "Try syncing again.",
         disposition: .automatic
     )
 
-    private static let unknownFailure = Failure(
+    static let unknownFailure = Failure(
         "Sync failed",
         "Sync could not complete. The cause is not available.",
         actionHint: "Try syncing again."
     )
-
-    private static func classifyCloudCode(_ rawValue: Int) -> Failure {
-        guard let code = CKError.Code(rawValue: rawValue) else {
-            return unknownFailure
-        }
-        switch code {
-        case .notAuthenticated, .accountTemporarilyUnavailable:
-            return Failure(
-                "iCloud account unavailable",
-                "The iCloud account is signed out or temporarily unavailable.",
-                actionHint: "Check iCloud sign-in, then try syncing again."
-            )
-        case .quotaExceeded:
-            return Failure(
-                "iCloud storage is full",
-                "iCloud does not have enough available storage for this sync.",
-                actionHint: "Free up iCloud storage, then try syncing again."
-            )
-        case .permissionFailure, .missingEntitlement:
-            return Failure(
-                "iCloud access unavailable",
-                "This app does not currently have permission to sync with iCloud.",
-                actionHint: "Check iCloud access for this app."
-            )
-        case .networkUnavailable, .networkFailure, .serviceUnavailable,
-             .requestRateLimited, .zoneBusy, .serverResponseLost:
-            return transientFailure
-        case .serverRecordChanged, .changeTokenExpired, .unknownItem,
-             .invalidArguments, .constraintViolation:
-            return Failure(
-                "Sync needs attention",
-                "iCloud sync data could not be safely reconciled.",
-                actionHint: "Review the sync status before trying again.",
-                disposition: .unavailable
-            )
-        default:
-            return unknownFailure
-        }
-    }
 
     private static func isTransient(_ code: URLError.Code) -> Bool {
         [

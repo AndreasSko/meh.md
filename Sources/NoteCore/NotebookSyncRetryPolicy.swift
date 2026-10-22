@@ -1,4 +1,3 @@
-import CloudKit
 import Foundation
 
 /// App-level retries cover setup and coordinator failures outside the engine.
@@ -29,14 +28,7 @@ public struct NotebookSyncRetryPolicy: Sendable {
             default: return false
             }
         }
-        if let error = error as? CloudKitSyncTransportError {
-            switch error {
-            case .uploadNotAcknowledged: return true
-            case .uploadFailed(let code): return transientCloudCode(code)
-            default: return false
-            }
-        }
-        if let error = error as? CKError { return transientCloudCode(error.code.rawValue) }
+        if let isTransient = SyncBackends.isTransient(error) { return isTransient }
         if let error = error as? URLError {
             return [.timedOut, .cannotFindHost, .cannotConnectToHost,
                     .networkConnectionLost, .dnsLookupFailed, .notConnectedToInternet,
@@ -44,11 +36,5 @@ public struct NotebookSyncRetryPolicy: Sendable {
                 .contains(error.code)
         }
         return error as? NotebookReplicaError == .busy
-    }
-
-    private static func transientCloudCode(_ code: Int) -> Bool {
-        [CKError.networkUnavailable, .networkFailure, .serviceUnavailable,
-         .requestRateLimited, .zoneBusy, .serverResponseLost]
-            .contains { $0.rawValue == code }
     }
 }
