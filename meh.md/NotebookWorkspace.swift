@@ -268,6 +268,9 @@ final class NotebookWorkspace {
     @ObservationIgnored private var cloudActivityTask: Task<Void, Never>?
     @ObservationIgnored private var accountAvailabilityTask: Task<Void, Never>?
     @ObservationIgnored private var pendingAccountRecheck = false
+    /// Read iCloud directly in the next pass instead of relying only on
+    /// push notifications, which can be lost.
+    @ObservationIgnored private var pendingServerCheck = false
     @ObservationIgnored private var connectivityMonitor: NWPathMonitor?
     @ObservationIgnored private var previousConnectivity: NWPath.Status?
     @ObservationIgnored private var retryPolicy = NotebookSyncRetryPolicy()
@@ -1030,6 +1033,7 @@ final class NotebookWorkspace {
             snapshotMaintenanceStatus = nil
             cloudCleanupError = nil
             pendingAccountRecheck = true
+            pendingServerCheck = true
             requestAutomaticRefresh(trigger: "foreground activation")
         } else {
             // The engine owns background scheduling. App retry timers resume
@@ -1106,6 +1110,7 @@ final class NotebookWorkspace {
         guard !isResetPending else { return }
         guard whileLoading || !isLoading else { return }
         guard let replica else { return }
+        if manual { pendingServerCheck = true }
         if isSyncUpdateRequired {
             try? await replica.cleanupDeletedContent()
             await publishCopies()
@@ -1180,6 +1185,12 @@ final class NotebookWorkspace {
                     throw SyncError.unavailable(
                         "Notebook sync setup has not completed."
                     )
+                }
+                if pendingServerCheck,
+                   let cloud = notebookTransport as? CloudKitSyncTransport {
+                    // The transport keeps the request until a check succeeds.
+                    pendingServerCheck = false
+                    await cloud.requestServerCheck()
                 }
                 let coordinator = sync ?? NotebookSyncCoordinator(
                     replica: replica,
