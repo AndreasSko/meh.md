@@ -88,7 +88,9 @@ markers prevent an offline device from resurrecting deleted notes. See the
 pluggable record-store transport. CloudKit uses CKSyncEngine with a private
 database. An in-process store and a
 [localhost HTTP service](local-sync-service.md) exercise replication without
-an iCloud account; the service is a development tool.
+an iCloud account; the service is a development tool. [Sync
+backends](sync-backends.md) describes what another storage backend must
+provide and how its tests run.
 
 Records contain immutable full-history Automerge snapshots. Version 2 record
 digests bind document kind, notebook identity, document identity, and bytes.
