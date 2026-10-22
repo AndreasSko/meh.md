@@ -232,7 +232,7 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
     }
 
     func testNonrecoverableAccountAndCorruptHaltsDoNotReconstruct() async throws {
-        let statuses: [(CloudKitSyncHaltReason, any Error)] = [
+        let statuses: [(SyncHaltReason, any Error)] = [
             (.accountChanged, SyncError.scopeChanged),
             (.corruptState, CloudKitSyncTransportError.corruptState),
         ]
@@ -419,7 +419,7 @@ private final class RecoveryTransportFactory {
 private actor HaltableRecordingTransport: HaltableSyncTransport {
     nonisolated let scope: String
     private let base: InMemorySyncTransport
-    private var currentHalt: CloudKitSyncHaltStatus?
+    private var currentHalt: SyncHaltStatus?
     private(set) var publishCount = 0
     private(set) var isRetired = false
 
@@ -431,18 +431,18 @@ private actor HaltableRecordingTransport: HaltableSyncTransport {
     }
 
     func setHalt(
-        _ reason: CloudKitSyncHaltReason,
+        _ reason: SyncHaltReason,
         underlyingError: any Error,
         recoverable: Bool
     ) {
-        currentHalt = CloudKitSyncHaltStatus(
+        currentHalt = SyncHaltStatus(
             reason: reason,
             underlyingError: underlyingError,
             isRecoverable: recoverable
         )
     }
 
-    func haltStatus() async -> CloudKitSyncHaltStatus? { currentHalt }
+    func haltStatus() async -> SyncHaltStatus? { currentHalt }
     func retire() async { isRetired = true }
 
     private func ensureActive() throws {
