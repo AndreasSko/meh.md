@@ -687,6 +687,7 @@ final class FakeSyncEngine: @unchecked Sendable, CloudKitSyncEngineClient {
     func fetchChanges(_ options: CKSyncEngine.FetchChangesOptions) async throws {
         guard let transport else { return }
         try server.checkReachable()
+        await transport.handle(.willFetchChanges(scheduled: false), from: self)
         let changes = try server.changes(after: locked { state.fetchToken })
         if changes.zoneDeleted {
             await transport.handle(
