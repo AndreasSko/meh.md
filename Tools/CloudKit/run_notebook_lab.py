@@ -145,8 +145,9 @@ def main():
     parser.add_argument("app", type=Path)
     parser.add_argument("evidence", type=Path)
     parser.add_argument("--phase", choices=[
-        "account", "exchange", "offline-join", "offline-ui-seed",
-        "offline-ui-verify", "publish", "receive", "edit", "verify", "cleanup"
+        "account", "exchange", "server-check", "offline-join",
+        "offline-ui-seed", "offline-ui-verify", "publish", "receive", "edit",
+        "verify", "cleanup"
     ], required=True)
     parser.add_argument("--allow-development-cloud", action="store_true")
     parser.add_argument("--run-id", type=uuid.UUID)
