@@ -49,6 +49,8 @@ and the evidence collected along the way.
 - [Local durability](durability-contract.md): per-note save and recovery rules.
 - [Notebook sync](notebook-sync-contract.md): bootstrap and durable
   replication.
+- [Sync backends](sync-backends.md): what a storage backend provides and
+  how it plugs in.
 - [Notebook upgrades](notebook-upgrade-safety.md): update requirements,
   atomic CloudKit publication, and release order.
 - [Sync progress](notebook-sync-progress.md): batching, status, and
