@@ -35,7 +35,7 @@ final class NotebookImportUITests: XCTestCase {
     }
 
     func testFilesCompleteAfterDismissalAndCancelDoesNotReimport() {
-        openSettings()
+        openImport()
         openPicker(folder: false)
         navigateToFixture()
         let first = sourceCell("First")
@@ -49,26 +49,24 @@ final class NotebookImportUITests: XCTestCase {
         pickerOpenButton.tap()
         assertCompletionAfterDismissal()
         app.buttons["OK"].tap()
-        app.buttons["Done"].tap()
         XCTAssertEqual(noteTitles, ["First", "Second"])
         capture("import-files-at-root")
 
-        openSettings()
+        openImport()
         openPicker(folder: false)
         // Cancel after an earlier successful import. The previous URLs must
         // not be delivered again when a fresh picker closes without choosing.
         let cancel = button(["Cancel", "Abbrechen"])
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         cancel.tap()
-        XCTAssertTrue(app.buttons["notebook-import"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(timeout: 5))
         XCTAssertFalse(completionAlert.waitForExistence(timeout: 3))
-        app.buttons["Done"].tap()
         XCTAssertEqual(noteTitles, ["First", "Second"])
         capture("import-cancel-preserves-notes")
     }
 
     func testInvalidUTF8ErrorAppearsAfterDismissal() {
-        openSettings()
+        openImport()
         openPicker(folder: false)
         navigateToFixture()
         let invalid = sourceCell("Invalid")
@@ -85,12 +83,11 @@ final class NotebookImportUITests: XCTestCase {
         )).firstMatch.exists)
         capture("import-invalid-utf8-error")
         app.buttons["OK"].tap()
-        app.buttons["Done"].tap()
         XCTAssertEqual(noteTitles, [])
     }
 
     func testFolderCompletesAfterDismissalAtRoot() {
-        openSettings()
+        openImport()
         openPicker(folder: true)
         navigateToFixture()
         let folder = sourceCell("Folder")
@@ -99,22 +96,20 @@ final class NotebookImportUITests: XCTestCase {
         pickerOpenButton.tap()
         assertCompletionAfterDismissal()
         app.buttons["OK"].tap()
-        app.buttons["Done"].tap()
         XCTAssertEqual(noteTitles, ["Child", "Folder"])
         capture("import-folder-at-root")
     }
 
-    private func openSettings() {
+    private func openImport() {
         let menu = app.buttons["notebook-app-menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 15))
         menu.tap()
-        app.buttons["notebook-settings"].tap()
-        XCTAssertTrue(app.buttons["notebook-import"].waitForExistence(timeout: 5))
-        capture("import-settings")
+        XCTAssertTrue(app.buttons["notebook-import-browser"].waitForExistence(timeout: 5))
+        capture("import-browser-actions")
     }
 
     private func openPicker(folder: Bool) {
-        app.buttons["notebook-import"].tap()
+        app.buttons["notebook-import-browser"].tap()
         let choice = app.buttons[folder ? "Import Folder…" : "Import Files…"]
         XCTAssertTrue(choice.waitForExistence(timeout: 5))
         capture("import-source-choice")

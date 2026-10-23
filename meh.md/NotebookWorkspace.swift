@@ -741,6 +741,13 @@ final class NotebookWorkspace {
                         try await loaded.addWelcomeNote()
                         welcomeNoteID = NotebookWelcomeNote.id
                     }
+                } else {
+                    #if DEBUG
+                    if case .cloud = mode, offersWelcomeNote,
+                       try await loaded.addMissingWelcomeNote() {
+                        welcomeNoteID = NotebookWelcomeNote.id
+                    }
+                    #endif
                 }
                 #if DEBUG
                 try await NotebookUITestFixture.seedIfRequested(

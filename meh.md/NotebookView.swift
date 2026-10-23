@@ -1075,7 +1075,6 @@ struct NotebookView: View {
         .sheet(isPresented: $showingSettings, onDismiss: finishTemplatePresentation) {
             NotebookSettingsView(replica: replica,
                                  workspace: workspace ?? NotebookWorkspace.shared,
-                                 onImport: importMarkdown,
                                  beforeExport: flushEditor,
                                  onOpenNote: openReusableSource)
         }

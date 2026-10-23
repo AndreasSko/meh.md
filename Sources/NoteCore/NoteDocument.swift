@@ -357,9 +357,11 @@ final class NoteDocument {
     init(
         noteID: UUID = UUID(),
         text: String = "",
-        metadata: NoteMetadata = .now()
+        metadata: NoteMetadata = .now(),
+        actor: ActorId? = nil
     ) throws {
         let document = Document(textEncoding: .unicodeScalar)
+        if let actor { document.actor = actor }
         try document.put(
             obj: .ROOT,
             key: Self.noteIDKey,

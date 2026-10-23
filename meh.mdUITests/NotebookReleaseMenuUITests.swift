@@ -54,10 +54,25 @@ final class NotebookReleaseMenuUITests: XCTestCase {
         cancelPicker()
         openMenu("meh.md iCloud Dev")
         app.menuItems["Settings…"].click()
+        let backups = app.buttons["notebook-backups-settings"]
+        XCTAssertTrue(backups.waitForExistence(timeout: 10))
+        // Same scroll as FlairUITests; the Settings sheet is centered.
+        for _ in 0..<6 where !backups.isHittable {
+            app.windows.firstMatch.scroll(byDeltaX: 0, deltaY: -400)
+        }
+        backups.click()
         let settingsExport = app.buttons["notebook-export"]
         XCTAssertTrue(settingsExport.waitForExistence(timeout: 10))
         settingsExport.click()
         cancelPicker()
+        XCTAssertTrue(settingsExport.isEnabled,
+                      "Cancelling export must re-enable the export button")
+        let back = app.sheets.firstMatch.buttons.matching(NSPredicate(
+            format: "identifier == 'BackButton' OR label IN %@", ["Back", "Settings"]
+        )).firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 5),
+                      app.sheets.firstMatch.debugDescription)
+        back.click()
         let done = app.buttons["Done"]
         XCTAssertTrue(done.waitForExistence(timeout: 5))
         XCTAssertTrue(done.isEnabled,

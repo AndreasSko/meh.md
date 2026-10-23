@@ -1,13 +1,14 @@
 # Automatic Markdown backups
 
 The notebook keeps its current readable copy at
-`Documents/Notebook Copies/Markdown`. Settings describes where to find this
-folder and `Documents/Backups` in Finder or Files. These are local app
-documents, not a shared iCloud Drive folder. A backup stored only here may
-disappear if the app is removed from an iPhone or iPad.
+`Documents/Notebook Copies/Markdown`. The Backups page in Settings describes
+where to find this folder and `Documents/Backups` in Finder or Files. These
+are local app documents, not a shared iCloud Drive folder. A backup stored
+only here may disappear if the app is removed from an iPhone or iPad, and the
+Backups page says so.
 
-Automatic backups default to daily with the latest 14 kept. Settings also
-offers Off, Weekly, Monthly, a retention count, and Back Up Now. A newly
+Automatic backups default to daily with the latest 14 kept. The Backups page
+also offers Off, Weekly, Monthly, a retention count, and Back Up Now. A newly
 enabled schedule runs when due. The app checks on launch and activation,
 uses a timer while running, and requests opportunistic iOS background time.
 iOS decides when or whether to grant that time, so a missed backup catches up

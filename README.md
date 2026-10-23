@@ -52,10 +52,10 @@ If you are curious, feel free to
 [join that group](https://testflight.apple.com/join/NRAvtpSJ). But keep
 in mind: Use it at your own risk 🤞
 
-For the long run I plan to make it available on the App Store, most likely
-with the option to [buy me a coffee](https://paypal.me/AndreasSkor)
-for anyone who likes to. But I think I want
-to keep it free (I'm sick of yet another forced subscription service).
+For the long run I plan to make it available on the App Store, and I want
+to keep it free (I'm sick of yet another forced subscription service). If
+you'd like to support it anyway, see
+[Can I support meh.md?](#can-i-support-mehmd)
 
 ## Build it yourself
 
@@ -84,3 +84,15 @@ refine eventually, but that wasn't my priority so far.
 
 - [Writing experience plan](docs/milestone-4-plan.md): milestone-four scope,
   issues, privacy boundary, and editor validation.
+
+## Can I support meh.md?
+
+meh.md is free, and I don't plan to make money with it. It's the note
+app I wanted for myself, and I'm happy if it's useful to you too 😊
+
+Two costs come out of my own pocket: the yearly Apple Developer fee
+that's needed to publish on the App Store, and my Claude subscription,
+which does a lot of the work of maintaining the app. If you'd like to
+help with those, you can do so via
+[PayPal](https://paypal.me/AndreasSkor). But don't worry. I'm just
+happy if the app is useful for you as well.
