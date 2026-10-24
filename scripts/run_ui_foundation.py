@@ -95,25 +95,31 @@ def select_simulator(inventory, platform):
     ]
     if not runtimes:
         raise ValueError("An available iOS 27 simulator runtime is required")
-    runtime = max(runtimes, key=lambda r: tuple(map(int, r["version"].split("."))))
-    supported = {d["identifier"] for d in runtime.get("supportedDeviceTypes", [])}
-    devices = [
-        d
-        for d in inventory["devicetypes"]
-        if (
-            d["name"] == "iPhone 12 Pro Max"
-            if platform == "iphone"
-            else d["name"].startswith("iPad")
-        )
-        and (not supported or d["identifier"] in supported)
-    ]
-    if not devices:
-        required = "iPhone 12 Pro Max" if platform == "iphone" else "iPad"
-        raise ValueError(
-            f"No {required} device type supported by {runtime['identifier']}"
-        )
-    device = sorted(devices, key=lambda d: d["identifier"])[0]
-    return runtime, device
+    # Point releases can ship device-specific runtimes (Xcode 27.1's iOS 27.1
+    # only supports iPhone Duo), so fall back to the newest runtime that fits.
+    runtimes.sort(
+        key=lambda r: tuple(map(int, r["version"].split("."))), reverse=True
+    )
+    for runtime in runtimes:
+        supported = {d["identifier"] for d in runtime.get("supportedDeviceTypes", [])}
+        devices = [
+            d
+            for d in inventory["devicetypes"]
+            if (
+                d["name"] == "iPhone 12 Pro Max"
+                if platform == "iphone"
+                else d["name"].startswith("iPad")
+            )
+            and (not supported or d["identifier"] in supported)
+        ]
+        if devices:
+            device = sorted(devices, key=lambda d: d["identifier"])[0]
+            return runtime, device
+    required = "iPhone 12 Pro Max" if platform == "iphone" else "iPad"
+    raise ValueError(
+        f"No {required} device type supported by "
+        + ", ".join(r["identifier"] for r in runtimes)
+    )
 
 
 def finalize(manifest, validation_complete, write_manifest):
