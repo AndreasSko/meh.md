@@ -14,6 +14,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case dragLongList = "drag-long-list"
     case storageLarge = "storage-large"
     case flair
+    case readme
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
@@ -199,12 +200,152 @@ enum NotebookUITestFixture: String, CaseIterable {
             _ = try await replica.createNote(
                 name: "Pancakes.md",
                 text: "Flour, milk, two eggs, a pinch of salt.\n")
+        case .readme:
+            try await seedReadme(replica)
         case .dragSubtree:
             _ = try await replica.createNote(
                 name: "Packing list.md", text: Self.literalSource)
             let trips = try await replica.createFolder(name: "Trips")
             _ = try await replica.createFolder(name: "Island", parentID: trips)
             _ = try await replica.createFolder(name: "Archive")
+        }
+    }
+
+    /// The sample notebook behind the README screenshots, sorted the PARA
+    /// way. The Lisbon note leads Recents, and its previous version has the
+    /// overplanned trip. The weekly review comes from a template.
+    private func seedReadme(_ replica: NotebookReplica) async throws {
+        let inbox = try await replica.createFolder(name: "Inbox")
+        let projects = try await replica.createFolder(name: "Projects")
+        let areas = try await replica.createFolder(name: "Areas")
+        let resources = try await replica.createFolder(name: "Resources")
+        let archive = try await replica.createFolder(name: "Archive")
+        try await replica.setDefaultNewNoteParentID(inbox)
+
+        _ = try await replica.createNote(
+            name: "Call landlord.md",
+            text: "Heating makes the weird noise again. Ask about the window too.\n",
+            parentID: inbox)
+        let groceries = try await replica.createNote(
+            name: "Groceries.md",
+            text: "For Saturday: oat milk, lemons, coffee.\n",
+            parentID: inbox)
+        _ = try await replica.createNote(
+            name: "Packing list.md",
+            text: "- [x] Passport\n- [ ] Chargers\n- [ ] Sunscreen\n",
+            parentID: resources)
+        let book = try await replica.createNote(
+            name: "Book notes.md",
+            text: "> We are what we repeatedly do.\n",
+            parentID: resources)
+        _ = try await replica.createNote(
+            name: "Barcelona 2025.md",
+            text: "Best tapas: the tiny place behind the market. No name, no website.\n",
+            parentID: archive)
+
+        let templates = try await replica.createFolder(name: "Templates", parentID: resources)
+        let weekly = try await replica.createNote(
+            name: "Weekly review.md",
+            text: "## Good\n\n- \n\n## Meh\n\n- \n\n## Next week\n\n- \n",
+            parentID: templates)
+        try await replica.setTemplateSource(weekly, enabled: true)
+        try await replica.setTemplateSettings(
+            NotebookTemplateSettings(destination: .folder(areas),
+                                     filenamePattern: "Weekly review {{date}}"),
+            for: weekly)
+
+        let snippets = try await replica.createFolder(name: "Snippets", parentID: resources)
+        for (name, text) in [
+            ("Meeting notes", "## Meeting {{date:short}}\n\nWho: \n\n- \n\n**Action items**\n\n- [ ] \n"),
+            ("Pros & cons", "| Pros | Cons |\n| --- | --- |\n|  |  |\n"),
+            ("Decision", "**Decision:** \n**Why:** \n**Also considered:** \n"),
+            ("Log entry", "**{{date:short}}** – "),
+        ] {
+            _ = try await replica.createNote(name: "\(name).md", text: text, parentID: snippets)
+        }
+        try await replica.setSnippetSource(snippets, enabled: true)
+
+        let review = try await replica.createNoteFromTemplate(
+            weekly, name: "Weekly review 2026-10-24")
+        let reviewSession = try await replica.openNote(review)
+        try reviewSession.replaceAll(with: """
+            ## Good
+
+            - Lisbon is booked 🎉
+            - Finally found that sync bug
+
+            ## Meh
+
+            - Too many meetings. Again.
+
+            ## Next week
+
+            - Decide on the new laptop
+            """)
+        try await reviewSession.flush()
+
+        let lisbon = try await replica.createNote(
+            name: "Lisbon in May.md",
+            text: """
+                Four days, no plans before ten.
+
+                ## To do
+
+                - [ ] Book flights
+                - [ ] Find a place in Alfama
+
+                """,
+            parentID: projects)
+        let session = try await replica.openNote(lisbon)
+        for text in [
+            """
+            Four days, no plans before ten. What to bring is in \
+            [[Packing list]].
+
+            ## To do
+
+            - [x] Book flights
+            - [ ] Find a place in Alfama
+            - [ ] Reserve dinner in ==Bairro Alto==
+
+            ## Plan
+
+            | Day | What |
+            | --- | --- |
+            | Thu | Tram 28, castle, Alfama, fado |
+            | Fri | Belém, LX Factory, sunset |
+            | Sat | Sintra *and* Cascais |
+
+            """,
+            """
+            Four days, no plans before ten. What to bring is in \
+            [[Packing list]].
+
+            ## To do
+
+            - [x] Book flights
+            - [x] Find a place in Alfama
+            - [ ] Reserve dinner in ==Bairro Alto==
+            - [ ] Charge the **good** camera
+
+            ## Plan
+
+            | Day | What |
+            | --- | --- |
+            | Thu | Tram 28, castle |
+            | Fri | Belém, *pastéis* |
+            | Sat | Sintra (just Sintra) |
+            | Sun | Nothing 🏖️ |
+
+            > Slow down. It's a holiday.
+
+            """,
+        ] {
+            try session.replaceAll(with: text)
+            try await session.flush()
+        }
+        for id in [book, groceries, review, lisbon] {
+            try await replica.recordRecentActivity(for: id)
         }
     }
 }

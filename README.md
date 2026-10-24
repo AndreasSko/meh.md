@@ -11,6 +11,49 @@ Markdown-first, without the whole ‘everything is a block’ thing (I look at
 you, Notion and Craft), simple, minimalistic UI, AND: having a great sync
 out-of-the-box ⚡️.
 
+## So how does the app look like?
+
+A picture says more than a thousand words(?), so here are a few screenshots:
+
+<p>
+  <img
+    src="docs/images/readme-library.png"
+    alt="The notebook with Recents, an Inbox for new notes, and PARA folders"
+    width="250"
+  />
+  <img
+    src="docs/images/readme-note.png"
+    alt="A note in Live Preview with a link, checklist, and table"
+    width="250"
+  />
+</p>
+
+<img
+  src="docs/images/readme-mac.png"
+  alt="The Mac app showing an older version of the note in version history"
+  width="700"
+/>
+
+### Features
+
+The goal of the app wasn't to rebuild Obsidian, but condense some of its
+useful features. It should feel native, be fast, and just fun to use.
+
+It has..
+
+* Most of the Markdown features that I use day to day (if you are missing one,
+  feel free to create an issue)
+* Great iCloud sync 🤓
+* Templates and snippets 💪
+* (Back)links
+* Version history (which gives me peace of mind when rewriting notes 🙏)
+* Works for iPhone, iPad, and Mac
+* ..and: no need for yet another account or subscription 🙌
+
+As I said: The app was mainly built for me. If it works for you - that's
+awesome! If you have an idea for another feature: Cool! Feel free to open
+an issue, but please don't expect it to actually happen.
+
 ## How does sync work?
 
 What I personally find REALLY COOL is the way data is synced: Many apps
@@ -23,24 +66,6 @@ Meh.md goes a slightly different way: Yes, it uses iCloud for storage, but with
 library). What does that mean for you? Local-first syncing without the risk of
 conflicts. You can feel safe to edit the same note across multiple devices
 with the confidence that everything will be fine. That's pretty cool 😎
-
-## What's the state of the app?
-
-This is an incomplete list of things accomplished so far:
-
-- All the basic Markdown that I need works
-- Notes can be imported and exported
-- Sync across devices works fairly well, though can still be slow sometimes
-- It is pretty responsive, but every now and then there might be a quick
-  hiccup
-- UI is good enough, but faaar from beautiful
-- The code is.. a LOT. I'm 1000% it can be simplified and made more beautiful
-  quite a bit. But that's ok. We'll handle that in the future. For now I'm
-  trusting my tests and the many ones that AI is doing for me.
-
-If you are curious about the roadmap: Have a look at the open issues. I
-use them to track my ideas and goals for the app, and if my limits aren't at
-0%, let Codex to implementation for me.
 
 ## Where can I get it?
 
@@ -81,7 +106,6 @@ refine eventually, but that wasn't my priority so far.
 - [Architecture](docs/architecture.md): how the app fits together.
 - [Documentation index](docs/README.md): development guides, contracts,
   decisions, and historical verification records.
-
 - [Writing experience plan](docs/milestone-4-plan.md): milestone-four scope,
   issues, privacy boundary, and editor validation.
 
