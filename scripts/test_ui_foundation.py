@@ -99,6 +99,32 @@ class FoundationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "No iPad device type supported"):
             select_simulator(inventory, "ipad")
 
+    def test_device_specific_point_runtime_falls_back_to_older_runtime(self):
+        general = {
+            "isAvailable": True,
+            "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+            "version": "27.0",
+            "supportedDeviceTypes": [{"identifier": "phone"}, {"identifier": "ipad"}],
+        }
+        duo_only = {
+            "isAvailable": True,
+            "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-1",
+            "version": "27.1",
+            "supportedDeviceTypes": [{"identifier": "duo"}],
+        }
+        inventory = {
+            "runtimes": [general, duo_only],
+            "devicetypes": [
+                {"name": "iPhone Duo", "identifier": "duo"},
+                {"name": "iPhone 12 Pro Max", "identifier": "phone"},
+                {"name": "iPad Air 11-inch (M4)", "identifier": "ipad"},
+            ],
+        }
+        for platform, identifier in (("iphone", "phone"), ("ipad", "ipad")):
+            runtime, device = select_simulator(inventory, platform)
+            self.assertEqual(runtime, general)
+            self.assertEqual(device["identifier"], identifier)
+
     def test_valid_exact_results(self):
         self.assertEqual(
             check(self.summary, self.tests, self.expected, "iphone"),
