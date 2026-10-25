@@ -26,6 +26,11 @@ A picture says more than a thousand words(?), so here are a few screenshots:
     alt="A note in Live Preview with a link, checklist, and table"
     width="250"
   />
+  <img
+    src="docs/images/readme-history.png"
+    alt="Version history with its timeline, showing a changed and a removed task"
+    width="250"
+  />
 </p>
 
 <img

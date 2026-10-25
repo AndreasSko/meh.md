@@ -285,6 +285,31 @@ extension XCUIApplication {
         return nil
     }
 
+    /// History's timeline has no step buttons. A tap left of its handle
+    /// selects the nearest older version, a tap at its right end the newest.
+    func tapHistoryTimeline(older: Bool) {
+        let timeline = descendants(matching: .any)
+            .matching(identifier: "note-history-timeline").firstMatch
+        XCTAssertTrue(timeline.waitForExistence(timeout: 10))
+        let point = timeline.coordinate(
+            withNormalizedOffset: CGVector(dx: older ? 0.35 : 0.95, dy: 0.3)
+        )
+#if os(macOS)
+        point.click()
+#else
+        point.tap()
+#endif
+    }
+
+    func waitForHistoryIndex(timeout: TimeInterval) {
+        let loading = descendants(matching: .any)
+            .matching(identifier: "note-history-index-loading").firstMatch
+        let ready = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: loading
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: timeout), .completed)
+    }
+
     func revealNotebookSidebar(timeout: TimeInterval = 15) {
 #if os(iOS)
         let files = buttons["notebook-tree-toggle"]

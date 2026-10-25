@@ -13,10 +13,10 @@ in the way.
 - **Faces where the screen would otherwise be empty, plus a few fixed
   spots.** Empty lists, no search results, an empty new note and Sync
   Details with nothing to report. The fixed spots are the library title,
-  the end of the file list, the end of Settings and the launch screen, so
-  the face shows up on a normal day too. Never in toolbars, menus or the
-  rows of notes and folders. The sync button stays an SF Symbol because it
-  is faster to read.
+  the end of the file list, the end of Settings, the launch screen and the
+  handle of the History timeline, so the face shows up on a normal day too.
+  Never in toolbars, menus or the rows of notes and folders. The sync
+  button stays an SF Symbol because it is faster to read.
 - **Dry, short copy.** One plain sentence that says what is going on. No
   extra punchline sentence after it.
 - **No jokes when something is wrong.** Errors, sync problems and anything
@@ -38,6 +38,7 @@ them carries the meaning.
 | `^_^` | pleased | empty Trash |
 | `•‿•` | relaxed | Sync Details when everything is synced |
 | `-_-` | asleep | Sync Details when sync is off |
+| `•_•` | neutral | the handle of the History timeline |
 
 Faces with dot eyes blink every few seconds. Tapping a face cycles through
 all moods for a moment and then settles back. This is an easter egg, not a

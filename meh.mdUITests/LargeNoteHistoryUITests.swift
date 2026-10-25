@@ -48,13 +48,11 @@ final class LargeNoteHistoryUITests: XCTestCase {
         let preview = app.textViews["note-history-preview"]
         XCTAssertTrue(preview.waitForExistence(timeout: 10))
         waitForIndexReady(in: app)
-        let previous = app.buttons["note-history-previous"]
-        waitUntilEnabled(previous, timeout: historyReadinessTimeout)
-        previous.tap()
+        app.tapHistoryTimeline(older: true)
         waitForPreviewReady(in: app)
         let earlier = try readSource(from: preview)
         XCTAssertFalse(earlier.utf8.elementsEqual(updated.utf8))
-        app.buttons["note-history-next"].tap()
+        app.tapHistoryTimeline(older: false)
         waitForPreviewReady(in: app)
         let nextSource = try readSource(from: preview)
         let firstDifference = zip(updated.utf8, nextSource.utf8)
@@ -69,8 +67,7 @@ final class LargeNoteHistoryUITests: XCTestCase {
                       "Browsing historical text must leave current source intact")
         openHistory(in: app)
         waitForIndexReady(in: app)
-        waitUntilEnabled(previous, timeout: historyReadinessTimeout)
-        previous.tap()
+        app.tapHistoryTimeline(older: true)
         waitForPreviewReady(in: app)
         XCTAssertTrue(try readSource(from: preview).utf8.elementsEqual(earlier.utf8))
         capture(app, name: "Large History can close, browse and reopen safely")
@@ -155,15 +152,6 @@ final class LargeNoteHistoryUITests: XCTestCase {
             for _ in 0..<3 where !history.isHittable { menu.swipeUp() }
         }
         history.tap()
-    }
-
-    @MainActor
-    private func waitUntilEnabled(_ element: XCUIElement, timeout: TimeInterval) {
-        let enabled = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "enabled == true"),
-            object: element
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: timeout), .completed)
     }
 
     @MainActor
