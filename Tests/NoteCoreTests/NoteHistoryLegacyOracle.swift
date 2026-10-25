@@ -25,6 +25,8 @@ final class NoteHistoryLegacyOracle {
             let isTypingEdit: Bool
             let startsNewRun: Bool
             let isRestore: Bool
+            let addedCharacters: Int
+            let removedCharacters: Int
         }
 
         var frontier = Set<ChangeHash>()
@@ -63,7 +65,17 @@ final class NoteHistoryLegacyOracle {
                         }
                         return false
                     },
-                    isRestore: change.message == "Restore note text"
+                    isRestore: change.message == "Restore note text",
+                    addedCharacters: bodyPatches.reduce(0) { total, patch in
+                        guard case let .SpliceText(_, _, value, _) =
+                            patch.action else { return total }
+                        return total + value.unicodeScalars.count
+                    },
+                    removedCharacters: bodyPatches.reduce(0) { total, patch in
+                        guard case let .DeleteSeq(deletion) = patch.action
+                        else { return total }
+                        return total + Int(deletion.length)
+                    }
                 ))
             } else if !candidates.isEmpty {
                 // Metadata writes belong to the same visible text state.
@@ -121,7 +133,9 @@ final class NoteHistoryLegacyOracle {
                 isOverviewStop: !isSameTypingRun(
                     candidates[index], candidates[index + 1],
                     nextIndex: index + 1
-                )
+                ),
+                addedCharacters: candidate.addedCharacters,
+                removedCharacters: candidate.removedCharacters
             ))
             frontiers[id] = candidate.frontier
         }

@@ -11,17 +11,25 @@ public struct NoteHistoryVersion: Identifiable, Equatable, Sendable {
     /// The last recorded text state in a short typing run before another
     /// run. Raw versions remain available through More Detail.
     public let isOverviewStop: Bool
+    /// Unicode scalars this state added and removed compared with the state
+    /// before it. History draws its timeline from these, without loading text.
+    public let addedCharacters: Int
+    public let removedCharacters: Int
 
     init(
         id: String,
         ordinal: Int,
         date: Date?,
-        isOverviewStop: Bool
+        isOverviewStop: Bool,
+        addedCharacters: Int,
+        removedCharacters: Int
     ) {
         self.id = id
         self.ordinal = ordinal
         self.date = date
         self.isOverviewStop = isOverviewStop
+        self.addedCharacters = addedCharacters
+        self.removedCharacters = removedCharacters
     }
 }
 

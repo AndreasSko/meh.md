@@ -128,6 +128,8 @@ final class NoteDocument {
             let isTypingEdit: Bool
             let startsNewRun: Bool
             let isRestore: Bool
+            let addedCharacters: Int
+            let removedCharacters: Int
         }
 
         private let source: NoteDocument
@@ -189,6 +191,7 @@ final class NoteDocument {
                     } else {
                         date = nil
                     }
+                    let size = NoteDocument.editSize(of: bodyPatches)
                     let next = Candidate(
                         frontier: frontier,
                         date: date,
@@ -205,7 +208,9 @@ final class NoteDocument {
                             return false
                         },
                         isRestore: change.message ==
-                            NoteDocument.restoreChangeMessage
+                            NoteDocument.restoreChangeMessage,
+                        addedCharacters: size.added,
+                        removedCharacters: size.removed
                     )
                     if let previous = pending {
                         publish(previous, followedBy: next)
@@ -241,10 +246,32 @@ final class NoteDocument {
                 id: id,
                 ordinal: versions.count + 1,
                 date: previous.date,
-                isOverviewStop: !sameRun
+                isOverviewStop: !sameRun,
+                addedCharacters: previous.addedCharacters,
+                removedCharacters: previous.removedCharacters
             ))
             frontiers[id] = previous.frontier
         }
+    }
+
+    /// The body patches already describe each change, so sizing them costs
+    /// no further history reads.
+    private static func editSize(
+        of patches: [Patch]
+    ) -> (added: Int, removed: Int) {
+        var added = 0
+        var removed = 0
+        for patch in patches {
+            switch patch.action {
+            case let .SpliceText(_, _, value, _):
+                added += value.unicodeScalars.count
+            case let .DeleteSeq(deletion):
+                removed += Int(deletion.length)
+            default:
+                break
+            }
+        }
+        return (added, removed)
     }
 
     private func isSingleCharacterEdit(_ patch: Patch) -> Bool {
