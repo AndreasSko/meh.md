@@ -1353,7 +1353,10 @@ struct MarkdownEditor: NSViewRepresentable {
                 x: visibleRect.minX + textView.textContainerInset.width + 1,
                 y: visibleRect.minY + 1
             )
-            let rawAnchor = textView.characterIndexForInsertion(at: point)
+            // Scrolled to the top, the probe lands above the text, where
+            // AppKit can return a character far down the note.
+            let rawAnchor = visibleRect.minY <= 0
+                ? 0 : textView.characterIndexForInsertion(at: point)
             let anchor = source.clampedSelection(
                 NSRange(location: rawAnchor, length: 0)
             ).location

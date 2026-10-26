@@ -290,7 +290,10 @@ struct NoteHistoryBrowserView: View {
                 self.removal = NoteHistoryRemovalPopover(text: removal.text, rect: rect)
             }
             navigation.whenAttached { [weak navigation, weak browser] in
-                guard let navigation, let position = browser?.originalPosition else {
+                // At the top, the editor's offset includes the note title,
+                // which the preview shows above the text instead.
+                guard let navigation, let position = browser?.originalPosition,
+                      position.scrollAnchor > 0 else {
                     return
                 }
                 navigation.restorePosition?(position)
