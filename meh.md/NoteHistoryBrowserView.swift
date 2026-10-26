@@ -20,7 +20,15 @@ final class NoteHistoryBrowserState {
     private var comparedBase: Int?
     private(set) var isLoadingIndex = true
     private(set) var isLoadingPreview = false
+    @ObservationIgnored private var revision = -1
+    /// The version whose text the preview shows; empty for the current
+    /// text. Loaded details can move the selection's index and base, so the
+    /// text is tracked by version rather than by index.
+    @ObservationIgnored private var shownTextID = ""
+    /// The version the last selection asked for, shown or still loading.
+    @ObservationIgnored private var requestedTextID = ""
     @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var detailTask: Task<Void, Never>?
     @ObservationIgnored private var selectionGeneration = 0
 
     init(
@@ -33,9 +41,7 @@ final class NoteHistoryBrowserState {
     ) {
         self.noteID = noteID
         self.versions = versions
-        var timeline = NoteHistoryTimeline()
-        timeline.append(versions)
-        self.timeline = timeline
+        timeline = NoteHistoryTimeline(versions)
         self.expectedHeads = expectedHeads
         self.originalPosition = originalPosition
         currentText = text
@@ -49,15 +55,42 @@ final class NoteHistoryBrowserState {
     }
     var isViewingCurrent: Bool { selectedIndex == versions.count }
 
+    /// Updates arrive from the index and from detail loading. Loaded
+    /// details insert versions, so the selection follows its version.
     func apply(_ update: NoteHistoryIndexUpdate) {
-        let viewingCurrent = isViewingCurrent
+        guard update.revision > revision else { return }
+        revision = update.revision
+        let selectedID = selectedVersion?.id
+        let baseID = comparedBase.flatMap { versions.indices.contains($0) ? versions[$0].id : nil }
         versions = update.versions
-        timeline.append(update.versions)
-        if viewingCurrent { selectedIndex = versions.count }
+        timeline = NoteHistoryTimeline(versions)
+        selectedIndex = selectedID.flatMap { id in versions.firstIndex { $0.id == id } }
+            ?? versions.count
+        comparedBase = baseID.flatMap { id in versions.firstIndex { $0.id == id } }
         isLoadingIndex = !update.isComplete
     }
 
+    /// Loads single saved states around a version, or around the current
+    /// text, so the rail can show them when asked.
+    func loadDetails(near version: NoteHistoryVersion?) {
+        detailTask?.cancel()
+        detailTask = Task { @MainActor [weak self, reader] in
+            // Index errors reach History through the index updates.
+            do {
+                for try await update in await reader.details(near: version) {
+                    self?.apply(update)
+                }
+            } catch {}
+        }
+    }
+
     func cancel() {
+        cancelPreview()
+        detailTask?.cancel()
+        detailTask = nil
+    }
+
+    private func cancelPreview() {
         selectionGeneration += 1
         previewTask?.cancel()
         previewTask = nil
@@ -69,10 +102,15 @@ final class NoteHistoryBrowserState {
         _ index: Int, comparedWith base: Int?, onError: @escaping (Error) -> Void
     ) {
         guard (0...versions.count).contains(index) else { return }
+        let target = versions.indices.contains(index) ? versions[index] : nil
+        let targetID = target?.id ?? ""
+        guard targetID != requestedTextID || index != selectedIndex
+                || (target != nil && base != comparedBase) else { return }
         // The same version at another level of detail only needs new marks.
-        let isSameText = index == selectedIndex
-        guard !isSameText || (!isViewingCurrent && base != comparedBase) else { return }
-        cancel()
+        let isSameText = targetID == shownTextID
+        requestedTextID = targetID
+        cancelPreview()
+        if !isSameText { loadDetails(near: target) }
         let generation = selectionGeneration
         let previousPosition = isSameText ? nil : navigation.capturePosition?()
         selectedIndex = index
@@ -80,7 +118,7 @@ final class NoteHistoryBrowserState {
         if isViewingCurrent {
             isLoadingPreview = false
             changes = .none
-            installText(currentText, position: previousPosition, generation: generation)
+            installText(currentText, of: "", position: previousPosition, generation: generation)
             return
         }
         let version = versions[index]
@@ -96,7 +134,8 @@ final class NoteHistoryBrowserState {
                 guard let self, selectionGeneration == generation else { return }
                 changes = nextChanges
                 if let nextText {
-                    installText(nextText, position: previousPosition, generation: generation)
+                    installText(nextText, of: version.id, position: previousPosition,
+                                generation: generation)
                 }
                 isLoadingPreview = false
                 previewTask = nil
@@ -107,6 +146,8 @@ final class NoteHistoryBrowserState {
                 selectedIndex = versions.count
                 comparedBase = nil
                 text = currentText
+                shownTextID = ""
+                requestedTextID = ""
                 changes = .none
                 isLoadingPreview = false
                 previewTask = nil
@@ -116,10 +157,11 @@ final class NoteHistoryBrowserState {
     }
 
     private func installText(
-        _ nextText: String, position previousPosition: MarkdownEditorPosition?,
+        _ nextText: String, of id: String, position previousPosition: MarkdownEditorPosition?,
         generation: Int
     ) {
         text = nextText
+        shownTextID = id
         if let previousPosition {
             let length = (nextText as NSString).length
             let position = MarkdownEditorPosition(

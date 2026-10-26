@@ -3,7 +3,7 @@ import SwiftUI
 import TipKit
 
 private struct NoteHistoryDetailTip: Tip {
-    var title: Text { Text("See every change") }
+    var title: Text { Text("See every step") }
     var message: Text? {
         #if os(macOS)
         Text("Pinch the timeline or press ⌘+.")
@@ -38,9 +38,9 @@ struct NoteHistoryTimelineView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     private let tip = NoteHistoryDetailTip()
 
-    /// Detail spacing between single saved states.
+    /// Detail spacing between steps.
     private static let detailSpacing: CGFloat = 8
-    /// How far above the rail a finger switches to every saved state.
+    /// How far above the rail a finger switches to every step.
     private static let detailLift: CGFloat = 40
     /// Dragging less than one tick still has to feel like a step.
     private static let minimumStep: CGFloat = 6
@@ -56,6 +56,11 @@ struct NoteHistoryTimelineView: View {
     }
     private var metrics: NoteHistoryTimeline.Metrics {
         sizeClass == .compact ? .compact : .regular
+    }
+    /// The selected version, or empty for the current text. Unlike the
+    /// index, it stays the same when loaded details insert versions.
+    private var selectedID: String {
+        versions.indices.contains(selectedIndex) ? versions[selectedIndex].id : ""
     }
     private var selectedItem: NoteHistoryTimeline.Item {
         selectedIndex >= versions.count ? .current : timeline.item(containing: selectedIndex)
@@ -82,9 +87,9 @@ struct NoteHistoryTimelineView: View {
                 return .handled
             }
             .background { zoomShortcuts }
-            // The current text's index grows while History loads; only a
-            // new selection should tick.
-            .sensoryFeedback(.selection, trigger: selectedIndex >= versions.count ? -1 : selectedIndex)
+            // Loading moves the selection's index; only a new selection
+            // should tick.
+            .sensoryFeedback(.selection, trigger: selectedID)
             .onAppear { isFocused = true }
             .accessibilityElement()
             .accessibilityLabel("Version timeline")
@@ -118,6 +123,11 @@ struct NoteHistoryTimelineView: View {
         .onChange(of: showsDetail) { _, detailed in
             guard selectedIndex < versions.count else { return }
             select(selectedIndex, base(of: selectedIndex, detailed: detailed))
+        }
+        // Loaded details can put a new state before the selected one.
+        .onChange(of: versions.count) {
+            guard selectedIndex < versions.count else { return }
+            select(selectedIndex, base(of: selectedIndex, detailed: showsDetail))
         }
         // Like the jumper, loading floats so the preview does not shift
         // when it ends.
@@ -210,7 +220,7 @@ struct NoteHistoryTimelineView: View {
         .contentShape(Rectangle())
         // Following a finger must not lag behind it; only taps, keys and
         // releases animate.
-        .animation(reduceMotion || drag != nil ? nil : .spring(duration: 0.3), value: selectedIndex)
+        .animation(reduceMotion || drag != nil ? nil : .spring(duration: 0.3), value: selectedID)
         .animation(reduceMotion ? nil : .spring(duration: 0.3), value: detail)
         .gesture(dragGesture(width: width))
         .simultaneousGesture(
@@ -392,7 +402,7 @@ struct NoteHistoryTimelineView: View {
         let versionSize = Self.sizeLabel(
             added: version.addedCharacters, removed: version.removedCharacters
         )
-        if showsDetail { return String(localized: "Every change · \(versionSize)") }
+        if showsDetail { return String(localized: "Every step · \(versionSize)") }
         if showsSingleState { return versionSize }
         guard case let .session(session) = selectedItem else { return nil }
         let day = timeline.days[timeline.dayIndex(ofSession: session)]

@@ -34,26 +34,20 @@ struct NoteHistoryTimeline: Equatable {
     /// Versions after the last stop are typing that continues into the
     /// current text, so they belong to the current item.
     private var openRunStart = 0
-    private var openRunAdded = 0
-    private var openRunRemoved = 0
 
-    /// Published versions never change, so each index update only needs its
-    /// new suffix.
-    mutating func append(_ versions: [NoteHistoryVersion]) {
-        guard versions.count > versionCount else {
-            if versions.count < versionCount { self = .init(); append(versions) }
-            return
-        }
+    init() {}
+
+    /// Loaded details insert states inside sessions, so each index update
+    /// builds the timeline again. A stop carries its session's size, which
+    /// stays the same when details load.
+    init(_ versions: [NoteHistoryVersion]) {
         let calendar = Calendar.current
-        for index in versionCount ..< versions.count {
-            let version = versions[index]
-            openRunAdded += version.addedCharacters
-            openRunRemoved += version.removedCharacters
-            guard version.isOverviewStop else { continue }
+        for (index, version) in versions.enumerated() where version.isOverviewStop {
             let day = version.date.map(calendar.startOfDay(for:))
             let session = Session(
                 first: openRunStart, last: index, day: day,
-                addedCharacters: openRunAdded, removedCharacters: openRunRemoved
+                addedCharacters: version.sessionAddedCharacters,
+                removedCharacters: version.sessionRemovedCharacters
             )
             if let lastDay = days.indices.last, days[lastDay].day == day {
                 days[lastDay].sessions = days[lastDay].sessions.lowerBound
@@ -71,8 +65,6 @@ struct NoteHistoryTimeline: Equatable {
             }
             sessions.append(session)
             openRunStart = index + 1
-            openRunAdded = 0
-            openRunRemoved = 0
         }
         versionCount = versions.count
     }

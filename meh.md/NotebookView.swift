@@ -3496,6 +3496,7 @@ struct NotebookView: View {
                     reader: reader
                 )
                 historyBrowser = browser
+                browser.loadDetails(near: nil)
                 editorNavigation.invalidate()
                 // History can be closed while its frozen index is building.
                 // Subsequent live edits are checked again before restoration.

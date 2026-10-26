@@ -80,7 +80,7 @@ final class NoteHistoryTourUITests: XCTestCase {
         pause(3)
         app.staticTexts["note-history-title"].tap()
         pause(1)
-        // Sliding the finger up while dragging shows every saved state.
+        // Sliding the finger up while dragging shows every step.
         let start = center(of: timeline)
         start.press(
             forDuration: 0.3,
@@ -157,7 +157,7 @@ final class NoteHistoryTourUITests: XCTestCase {
         // Clicking the selected tick keeps the version and takes the keys back.
         timeline.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).click()
         pause(0.5)
-        // ⌘+ zooms into every saved state; the arrows then step one by one.
+        // ⌘+ zooms into every step; the arrows then step one by one.
         app.typeKey("=", modifierFlags: .command)
         pause(1.5)
         for _ in 0 ..< 12 {
