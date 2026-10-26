@@ -35,6 +35,8 @@ and the evidence collected along the way.
 - [Offline-first startup](offline-first-startup.md): write before iCloud is
   available and connect later without losing local notes.
 - [Local search](notebook-search.md): matching, Quick Open, and native Find.
+- [Version history](note-history.md): the timeline, every saved state, and
+  what each edit changed.
 - [Note templates](notebook-templates.md): reusable notes, recursive template
   folders, and destination and filename defaults.
 - [Markdown snippets](notebook-snippets.md): reusable text, folder categories,

@@ -361,4 +361,27 @@ final class NoteHistoryTests: XCTestCase {
             try reopened.historicalText(for: $0) == "second"
         })
     }
+
+    func testVersionsRecordTheCharactersEachEditAddedAndRemoved() throws {
+        let start = Date(timeIntervalSince1970: 100)
+        let note = try NoteDocument(
+            text: "Hello",
+            metadata: NoteMetadata(createdAt: start, modifiedAt: start)
+        )
+        try note.replaceUTF16(
+            range: NSRange(location: 5, length: 0), with: " world 👋🏽",
+            at: start.addingTimeInterval(100)
+        )
+        try note.replaceUTF16(
+            range: NSRange(location: 5, length: 6), with: "",
+            at: start.addingTimeInterval(200)
+        )
+        try note.replaceAll(with: "Bye", at: start.addingTimeInterval(300))
+
+        let versions = try note.historyVersions()
+        XCTAssertEqual(versions, try NoteHistoryLegacyOracle(
+            snapshot: note.snapshot()).historyVersions())
+        XCTAssertEqual(versions.map(\.addedCharacters), [5, 9, 0])
+        XCTAssertEqual(versions.map(\.removedCharacters), [0, 0, 6])
+    }
 }

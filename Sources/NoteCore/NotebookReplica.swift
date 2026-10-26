@@ -625,6 +625,67 @@ public final class NotebookReplica {
         }
     }
 
+    #if DEBUG
+    /// One step of a fixture note's past. A typed step adds its inserted text
+    /// one character per second, like a person typing.
+    public struct FixtureEdit: Sendable {
+        public let date: Date
+        public let text: String
+        public let isTyped: Bool
+
+        public init(date: Date, text: String, isTyped: Bool = false) {
+            self.date = date
+            self.text = text
+            self.isTyped = isTyped
+        }
+    }
+
+    /// History fixtures need edits on past days, which normal editing cannot
+    /// create.
+    public func createNote(
+        name: String, history: [FixtureEdit], parentID: UUID? = nil
+    ) async throws -> UUID {
+        guard let first = history.first else {
+            return try await createNote(name: name, parentID: parentID)
+        }
+        let note = try NoteDocument(
+            text: first.text,
+            metadata: NoteMetadata(createdAt: first.date, modifiedAt: first.date)
+        )
+        for edit in history.dropFirst() {
+            guard edit.isTyped else {
+                try note.replaceAll(with: edit.text, at: edit.date)
+                continue
+            }
+            let old = Array((try note.text).utf16)
+            let new = Array(edit.text.utf16)
+            let prefix = zip(old, new).prefix { $0 == $1 }.count
+            let count = new.count - old.count
+            guard count > 0, old[prefix...].elementsEqual(new[(prefix + count)...]) else {
+                preconditionFailure("A typed fixture edit must only insert text")
+            }
+            let inserted = String(decoding: new[prefix ..< prefix + count], as: UTF16.self)
+            var location = prefix
+            for (offset, character) in inserted.enumerated() {
+                let value = String(character)
+                try note.replaceUTF16(
+                    range: NSRange(location: location, length: 0), with: value,
+                    at: edit.date.addingTimeInterval(Double(offset))
+                )
+                location += value.utf16.count
+            }
+        }
+        return try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.add(id: note.noteID, kind: .note, name: name, parentID: parentID)
+            try await self.noteStorage(note.noteID).save(note.snapshot())
+            try await self.persistCatalog(next)
+            return note.noteID
+        }
+    }
+    #endif
+
     public func createNoteInDefaultFolder(
         name: String, text: String = ""
     ) async throws -> UUID {

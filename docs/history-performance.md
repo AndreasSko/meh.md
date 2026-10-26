@@ -71,6 +71,16 @@ Retaining the original historical comparisons preserves existing semantics
 and avoids that regression. No binary format parser or dependency change
 was introduced.
 
+## Edit sizes
+
+[Version history](note-history.md) draws each version's edit size. The index
+counts it from the body patches it already computes, so no further history
+reads are needed. On the same fixture, three optimized runs each took a mean
+of 4.991 s for the complete index before and 5.009 s after, within normal
+variation; first readiness stayed at 0.33 s. Version IDs, dates, ordinals
+and overview stops keep the same digest. Raw data is in
+`benchmarks/history-edit-sizes-2026-10-25.json`.
+
 ## Swift regression checks
 
 `NoteHistoryTests` and `NoteHistoryReaderTests` compare with the previous

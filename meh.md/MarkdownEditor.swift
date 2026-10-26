@@ -43,6 +43,14 @@ final class MarkdownEditorNavigation {
     var searchLandingPosition: MarkdownEditorPosition?
     var capturePosition: (() -> MarkdownEditorPosition?)?
     var restorePosition: ((MarkdownEditorPosition) -> Void)?
+    /// History's preview reports the text on screen as it scrolls.
+    var visibleRangeChanged: ((NSRange) -> Void)?
+    /// Floating controls cover the bottom of History's preview, which still
+    /// scrolls under them; text there does not count as visible.
+    var coveredBottomHeight: CGFloat = 0
+    /// History's preview reports a tap on a removal ring, with the ring's
+    /// area in the editor's own coordinates.
+    var removalTapped: ((NoteHistoryChanges.Removal, CGRect) -> Void)?
     #if os(iOS)
     // Present editor controls in the document window, never the keyboard window.
     weak var editorPresentationView: UIView?
@@ -315,6 +323,12 @@ final class MarkdownTextView: NSTextView {
     let markdownSyntaxCache = MarkdownSyntaxCache()
     var markdownDidBeginEditing: (() -> Void)?
     var markdownDidLayout: (() -> Void)?
+    /// History's preview marks the lines this version changed.
+    var markdownHistoryChanges = NoteHistoryChanges.none {
+        didSet {
+            if markdownHistoryChanges != oldValue { needsDisplay = true }
+        }
+    }
     private let markdownTopInset: CGFloat = 20
     private var markdownTitleHeight: CGFloat = 0
     private var markdownTitleHost: NSHostingView<AnyView>?
@@ -631,6 +645,22 @@ final class MarkdownTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         markdownCellController.end()
         let point = convert(event.locationInWindow, from: nil)
+        if let ring = historyRemoval(at: point),
+           let tapped = markdownLinkNavigation?.removalTapped,
+           let scrollView = enclosingScrollView {
+            let size = MarkdownHistoryMarks.ringHitSize
+            let origin = textContainerOrigin
+            var rect = convert(CGRect(
+                x: ring.center.x + origin.x - size / 2,
+                y: ring.center.y + origin.y - size / 2,
+                width: size, height: size
+            ), to: scrollView)
+            if !scrollView.isFlipped {
+                rect.origin.y = scrollView.bounds.height - rect.maxY
+            }
+            tapped(ring.removal, rect)
+            return
+        }
         if let checkbox = MarkdownPresentation.taskCheckbox(at: point, in: self) {
             toggleMarkdownTask(at: checkbox.range.location)
             return
@@ -740,6 +770,18 @@ final class MarkdownTextView: NSTextView {
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         MarkdownPresentation.drawBlockBackgrounds(in: self, dirtyRect: rect)
+        MarkdownHistoryMarks.draw(in: self, dirtyRect: rect)
+    }
+
+    func historyRemoval(at point: CGPoint) -> MarkdownHistoryMarks.Ring? {
+        guard let layoutManager = textLayoutManager else { return nil }
+        let origin = textContainerOrigin
+        return MarkdownHistoryMarks.ring(
+            at: CGPoint(x: point.x - origin.x, y: point.y - origin.y),
+            changes: markdownHistoryChanges,
+            layoutManager: layoutManager,
+            textLength: textStorage?.length ?? 0
+        )
     }
 }
 
@@ -765,6 +807,7 @@ struct MarkdownEditor: NSViewRepresentable {
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
     var palette: MehPalette
+    var historyChanges: NoteHistoryChanges
 
     init(
         text: Binding<String>,
@@ -781,7 +824,8 @@ struct MarkdownEditor: NSViewRepresentable {
         fontSize: Double = 17,
         fontFamily: EditorFontFamily = .system,
         mode: MarkdownEditorMode = .source,
-        palette: MehPalette = MehStyle.palette
+        palette: MehPalette = MehStyle.palette,
+        historyChanges: NoteHistoryChanges = .none
     ) {
         _text = text
         self.isReadOnly = isReadOnly
@@ -798,6 +842,7 @@ struct MarkdownEditor: NSViewRepresentable {
         self.fontFamily = fontFamily
         self.mode = mode
         self.palette = palette
+        self.historyChanges = historyChanges
     }
 
     func makeCoordinator() -> Coordinator {
@@ -842,6 +887,8 @@ struct MarkdownEditor: NSViewRepresentable {
             mode: mode
         )
         context.coordinator.observeUndoAndRedo(for: textView)
+        textView.markdownHistoryChanges = historyChanges
+        if isReadOnly { context.coordinator.observeViewport(of: scrollView) }
 
         context.coordinator.attachNavigation(to: textView)
         textView.updateMarkdownTitle(title, height: titleHeight)
@@ -947,6 +994,7 @@ struct MarkdownEditor: NSViewRepresentable {
             textView.markdownDidLayout = { [weak self, weak textView] in
                 guard let self, let textView else { return }
                 self.centerDestinationIfGeometryChanged(in: textView)
+                self.reportVisibleRange(in: textView)
             }
             refreshTableCommands(in: textView)
             parent.navigation?.prepareCommand = { [weak textView] command in
@@ -1020,6 +1068,7 @@ struct MarkdownEditor: NSViewRepresentable {
 
         func update(parent: MarkdownEditor, textView: NSTextView) {
             self.parent = parent
+            (textView as? MarkdownTextView)?.markdownHistoryChanges = parent.historyChanges
             if let nativeView = textView as? MarkdownTextView,
                nativeView.markdownLinkNavigation !== parent.navigation {
                 attachNavigation(to: nativeView)
@@ -1078,6 +1127,35 @@ struct MarkdownEditor: NSViewRepresentable {
             )
             schedulePendingSearchMatchReveal(in: textView)
             schedulePendingPositionRestore(in: textView)
+        }
+
+        func observeViewport(of scrollView: NSScrollView) {
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(viewportDidChange(_:)),
+                name: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView
+            )
+        }
+
+        @objc private func viewportDidChange(_ notification: Notification) {
+            guard let clipView = notification.object as? NSClipView,
+                  let textView = clipView.documentView as? NSTextView else { return }
+            reportVisibleRange(in: textView)
+        }
+
+        private func reportVisibleRange(in textView: NSTextView) {
+            guard let report = parent.navigation?.visibleRangeChanged else { return }
+            let visible = textView.visibleRect
+            let start = textView.characterIndexForInsertion(
+                at: CGPoint(x: visible.minX + 40, y: visible.minY)
+            )
+            let covered = parent.navigation?.coveredBottomHeight ?? 0
+            let end = textView.characterIndexForInsertion(
+                at: CGPoint(x: visible.maxX - 1, y: max(visible.minY, visible.maxY - covered))
+            )
+            report(NSRange(location: start, length: max(0, end - start)))
         }
 
         @objc private func undoManagerDidChange(_ notification: Notification) {
@@ -1275,7 +1353,10 @@ struct MarkdownEditor: NSViewRepresentable {
                 x: visibleRect.minX + textView.textContainerInset.width + 1,
                 y: visibleRect.minY + 1
             )
-            let rawAnchor = textView.characterIndexForInsertion(at: point)
+            // Scrolled to the top, the probe lands above the text, where
+            // AppKit can return a character far down the note.
+            let rawAnchor = visibleRect.minY <= 0
+                ? 0 : textView.characterIndexForInsertion(at: point)
             let anchor = source.clampedSelection(
                 NSRange(location: rawAnchor, length: 0)
             ).location
@@ -1868,6 +1949,32 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         didAttachToWindow()
     }
 
+    /// History's preview marks the lines this version changed.
+    var markdownHistoryChanges: NoteHistoryChanges {
+        get { markdownState.historyChanges }
+        set {
+            guard newValue != markdownState.historyChanges else { return }
+            markdownState.historyChanges = newValue
+            // Marks widen each fragment's drawing surface, not only its pixels.
+            if let layoutManager = textLayoutManager {
+                layoutManager.invalidateLayout(for: layoutManager.documentRange)
+            }
+        }
+    }
+
+    func historyRemoval(at point: CGPoint) -> MarkdownHistoryMarks.Ring? {
+        guard let layoutManager = textLayoutManager else { return nil }
+        return MarkdownHistoryMarks.ring(
+            at: CGPoint(
+                x: point.x - textContainerInset.left,
+                y: point.y - textContainerInset.top
+            ),
+            changes: markdownHistoryChanges,
+            layoutManager: layoutManager,
+            textLength: textStorage.length
+        )
+    }
+
     var markdownLinkNavigation: MarkdownEditorNavigation? {
         get { markdownState.linkNavigation }
         set {
@@ -2063,6 +2170,16 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 
     @objc private func tappedMarkdownTask(_ tap: UITapGestureRecognizer) {
         let point = tap.location(in: self)
+        if let ring = markdownState.tappedRemoval {
+            markdownState.tappedRemoval = nil
+            let size = MarkdownHistoryMarks.ringHitSize
+            markdownLinkNavigation?.removalTapped?(ring.removal, CGRect(
+                x: ring.center.x + textContainerInset.left - size / 2 - contentOffset.x,
+                y: ring.center.y + textContainerInset.top - size / 2 - contentOffset.y,
+                width: size, height: size
+            ))
+            return
+        }
         if let link = markdownState.tappedLink {
             markdownState.tappedLink = nil
             markdownLinkNavigation?.openLink?(link)
@@ -2191,9 +2308,12 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             return super.gestureRecognizerShouldBegin(gestureRecognizer)
         }
         let point = tap.location(in: self)
+        markdownState.tappedRemoval = markdownLinkNavigation?.removalTapped == nil
+            ? nil : historyRemoval(at: point)
         markdownState.tappedLink = passiveNoteLink(at: point, modifiers: tap.modifierFlags)
         return MarkdownPresentation.taskCheckbox(at: point, in: self) != nil
             || markdownState.tappedLink != nil
+            || markdownState.tappedRemoval != nil
     }
 }
 
@@ -2222,6 +2342,8 @@ private final class MarkdownTextViewState: NSObject {
     let syntaxCache = MarkdownSyntaxCache()
     var taskTap: UITapGestureRecognizer?
     var tappedLink: NotebookLinkOccurrence?
+    var tappedRemoval: MarkdownHistoryMarks.Ring?
+    var historyChanges = NoteHistoryChanges.none
     var linkPointer: UIPointerInteraction?
     weak var linkNavigation: MarkdownEditorNavigation?
     var layoutDelegate: MarkdownLayoutManagerDelegate?
@@ -2309,10 +2431,12 @@ nonisolated private final class MarkdownTextLayoutFragment:
                 textView.font?.lineHeight ?? 0,
                 MarkdownPresentation.editorBodyFont.lineHeight
             ) * 0.3
+            let marksExtension = textView.markdownHistoryChanges.isEmpty
+                ? 0 : MarkdownHistoryMarks.surfaceExtension
             let panelBounds = CGRect(
-                x: -fragmentFrame.minX - 3,
+                x: -fragmentFrame.minX - 3 - marksExtension,
                 y: -verticalPadding,
-                width: textView.textContainer.size.width + 3,
+                width: textView.textContainer.size.width + 3 + marksExtension,
                 height: fragmentFrame.height + 2 * verticalPadding
             )
             return defaultBounds.union(panelBounds)
@@ -2325,6 +2449,12 @@ nonisolated private final class MarkdownTextLayoutFragment:
         MainActor.assumeIsolated {
             if let textView = fragment.value.textView {
                 MarkdownPresentation.drawBlockBackgrounds(
+                    in: fragment.value,
+                    textView: textView,
+                    at: point,
+                    context: drawingContext.value
+                )
+                MarkdownHistoryMarks.draw(
                     in: fragment.value,
                     textView: textView,
                     at: point,
@@ -2358,6 +2488,7 @@ struct MarkdownEditor: UIViewRepresentable {
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
     var palette: MehPalette
+    var historyChanges: NoteHistoryChanges
     var initialPreviewPosition: MarkdownEditorPosition?
     var initialPreviewInsets: UIEdgeInsets?
     var initialPreviewOriginY: CGFloat?
@@ -2378,6 +2509,7 @@ struct MarkdownEditor: UIViewRepresentable {
         fontFamily: EditorFontFamily = .system,
         mode: MarkdownEditorMode = .source,
         palette: MehPalette = MehStyle.palette,
+        historyChanges: NoteHistoryChanges = .none,
         initialPreviewPosition: MarkdownEditorPosition? = nil,
         initialPreviewInsets: UIEdgeInsets? = nil,
         initialPreviewOriginY: CGFloat? = nil
@@ -2397,6 +2529,7 @@ struct MarkdownEditor: UIViewRepresentable {
         self.fontFamily = fontFamily
         self.mode = mode
         self.palette = palette
+        self.historyChanges = historyChanges
         self.initialPreviewPosition = initialPreviewPosition
         self.initialPreviewInsets = initialPreviewInsets
         self.initialPreviewOriginY = initialPreviewOriginY
@@ -2451,6 +2584,7 @@ struct MarkdownEditor: UIViewRepresentable {
             mode: mode
         )
 
+        textView.markdownHistoryChanges = historyChanges
         context.coordinator.attachNavigation(to: textView)
         textView.updateMarkdownTitle(title, height: titleHeight)
         context.coordinator.applyInitialPreviewInsets(in: textView)
@@ -2505,6 +2639,28 @@ struct MarkdownEditor: UIViewRepresentable {
             cancelPositionRestore()
         }
 
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard let textView = scrollView as? UITextView else { return }
+            reportVisibleRange(in: textView)
+        }
+
+        private func reportVisibleRange(in textView: UITextView) {
+            guard let report = parent.navigation?.visibleRangeChanged else { return }
+            let inset = textView.adjustedContentInset
+            let bottom = max(inset.bottom, parent.navigation?.coveredBottomHeight ?? 0)
+            let x = textView.textContainerInset.left + 8
+            guard let start = textView.closestPosition(to: CGPoint(
+                      x: x, y: textView.contentOffset.y + inset.top
+                  )),
+                  let end = textView.closestPosition(to: CGPoint(
+                      x: textView.bounds.width - 1,
+                      y: textView.contentOffset.y + textView.bounds.height - bottom
+                  )) else { return }
+            let lower = textView.offset(from: textView.beginningOfDocument, to: start)
+            let upper = textView.offset(from: textView.beginningOfDocument, to: end)
+            report(NSRange(location: lower, length: max(0, upper - lower)))
+        }
+
         init(parent: MarkdownEditor) {
             self.parent = parent
             pendingInitialPreviewPosition = parent.initialPreviewPosition
@@ -2547,6 +2703,7 @@ struct MarkdownEditor: UIViewRepresentable {
                 guard let self, let textView else { return }
                 self.restoreInitialPreviewIfNeeded(in: textView)
                 self.centerDestinationIfGeometryChanged(in: textView)
+                self.reportVisibleRange(in: textView)
             }
             refreshTableCommands(in: textView)
             parent.navigation?.prepareCommand = { [weak textView] command in
@@ -2643,6 +2800,7 @@ struct MarkdownEditor: UIViewRepresentable {
                 textView.setNeedsLayout()
             }
             self.parent = parent
+            (textView as? MarkdownTextView)?.markdownHistoryChanges = parent.historyChanges
             applyInitialPreviewInsets(in: textView)
             // SwiftUI can retain the native view while a navigation visit or
             // History changes its owner. Selection reporting uses the updated

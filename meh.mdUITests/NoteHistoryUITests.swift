@@ -37,13 +37,8 @@ final class NoteHistoryUITests: XCTestCase {
         history.tap()
         let preview = app.textViews["note-history-preview"]
         waitForPreview(currentBody, in: preview)
-        let previous = app.buttons["note-history-previous"]
-        let ready = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == true AND enabled == true"),
-            object: previous
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
-        previous.tap()
+        app.waitForHistoryIndex(timeout: 10)
+        app.tapHistoryTimeline(older: true)
         waitForPreview(firstBody, in: preview)
         app.buttons["note-history-restore"].tap()
         app.buttons["Restore This Note…"].tap()

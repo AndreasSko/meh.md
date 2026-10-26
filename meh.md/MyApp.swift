@@ -1,5 +1,6 @@
 import SwiftUI
 import NoteCore
+import TipKit
 
 struct NotebookWindowValue: Codable, Hashable {
     let id: UUID
@@ -22,6 +23,19 @@ struct NotebookWindowValue: Codable, Hashable {
     #endif
 
     @State private var workspace = NotebookWorkspace.shared
+
+    init() {
+        #if DEBUG
+        // UI tests see tips only when a test asks for them.
+        let environment = ProcessInfo.processInfo.environment
+        if environment["MEH_SHOW_TIPS"] == "1" {
+            try? Tips.resetDatastore()
+        } else if environment["MEH_NOTEBOOK_PREVIEW"] == "1" {
+            Tips.hideAllTipsForTesting()
+        }
+        #endif
+        try? Tips.configure()
+    }
 
     var body: some Scene {
         WindowGroup("meh.md", id: "notebook", for: NotebookWindowValue.self) { value in

@@ -6,8 +6,7 @@ import SwiftUI
 final class NoteHistoryBrowserState {
     let noteID: UUID
     private(set) var versions: [NoteHistoryVersion]
-    private(set) var overviewNavigationStops: [Int]
-    private(set) var overviewStops: [Int]
+    private(set) var timeline = NoteHistoryTimeline()
     let expectedHeads: Set<String>
     let originalPosition: MarkdownEditorPosition?
     let currentText: String
@@ -15,6 +14,10 @@ final class NoteHistoryBrowserState {
     let navigation = MarkdownEditorNavigation()
     private(set) var selectedIndex: Int
     private(set) var text: String
+    /// What the selected version changed, compared with the version before
+    /// it at the timeline's current level of detail.
+    private(set) var changes = NoteHistoryChanges.none
+    private var comparedBase: Int?
     private(set) var isLoadingIndex = true
     private(set) var isLoadingPreview = false
     @ObservationIgnored private var previewTask: Task<Void, Never>?
@@ -30,11 +33,9 @@ final class NoteHistoryBrowserState {
     ) {
         self.noteID = noteID
         self.versions = versions
-        let navigationStops = versions.indices.filter {
-            versions[$0].isOverviewStop
-        } + [versions.count]
-        overviewNavigationStops = navigationStops
-        overviewStops = Self.makeOverviewStops(from: navigationStops)
+        var timeline = NoteHistoryTimeline()
+        timeline.append(versions)
+        self.timeline = timeline
         self.expectedHeads = expectedHeads
         self.originalPosition = originalPosition
         currentText = text
@@ -51,10 +52,7 @@ final class NoteHistoryBrowserState {
     func apply(_ update: NoteHistoryIndexUpdate) {
         let viewingCurrent = isViewingCurrent
         versions = update.versions
-        overviewNavigationStops = versions.indices.filter {
-            versions[$0].isOverviewStop
-        } + [versions.count]
-        overviewStops = Self.makeOverviewStops(from: overviewNavigationStops)
+        timeline.append(update.versions)
         if viewingCurrent { selectedIndex = versions.count }
         isLoadingIndex = !update.isComplete
     }
@@ -65,25 +63,41 @@ final class NoteHistoryBrowserState {
         previewTask = nil
     }
 
-    func select(_ index: Int, onError: @escaping (Error) -> Void) {
-        guard (0...versions.count).contains(index), index != selectedIndex else { return }
+    /// `base` is the version the changes are compared with; `nil` compares
+    /// with an empty note.
+    func select(
+        _ index: Int, comparedWith base: Int?, onError: @escaping (Error) -> Void
+    ) {
+        guard (0...versions.count).contains(index) else { return }
+        // The same version at another level of detail only needs new marks.
+        let isSameText = index == selectedIndex
+        guard !isSameText || (!isViewingCurrent && base != comparedBase) else { return }
         cancel()
         let generation = selectionGeneration
-        let previousPosition = navigation.capturePosition?()
+        let previousPosition = isSameText ? nil : navigation.capturePosition?()
         selectedIndex = index
+        comparedBase = base
         if isViewingCurrent {
             isLoadingPreview = false
+            changes = .none
             installText(currentText, position: previousPosition, generation: generation)
             return
         }
         let version = versions[index]
+        let baseVersion = base.flatMap { versions.indices.contains($0) ? versions[$0] : nil }
         isLoadingPreview = true
         previewTask = Task { @MainActor [weak self, reader] in
             do {
-                let nextText = try await reader.historicalText(for: version)
+                let nextText = isSameText ? nil : try await reader.historicalText(for: version)
+                // The reader keeps both texts cached, so comparing them right
+                // away lets text and marks arrive in one update.
+                let nextChanges = try await reader.changes(for: version, since: baseVersion)
                 try Task.checkCancellation()
                 guard let self, selectionGeneration == generation else { return }
-                installText(nextText, position: previousPosition, generation: generation)
+                changes = nextChanges
+                if let nextText {
+                    installText(nextText, position: previousPosition, generation: generation)
+                }
                 isLoadingPreview = false
                 previewTask = nil
             } catch is CancellationError {
@@ -91,7 +105,9 @@ final class NoteHistoryBrowserState {
             } catch {
                 guard let self, selectionGeneration == generation else { return }
                 selectedIndex = versions.count
+                comparedBase = nil
                 text = currentText
+                changes = .none
                 isLoadingPreview = false
                 previewTask = nil
                 onError(error)
@@ -118,16 +134,6 @@ final class NoteHistoryBrowserState {
             }
         }
     }
-
-    private static func makeOverviewStops(from allStops: [Int]) -> [Int] {
-        guard allStops.count > 25 else { return allStops }
-        // The global slider and date menu stay compact. Previous and Next
-        // still visit every grouped stop, and Detail visits every raw state.
-        return (0..<25).map { position in
-            let offset = position * (allStops.count - 1) / 24
-            return allStops[offset]
-        }
-    }
 }
 
 struct NoteHistoryBrowserView: View {
@@ -143,13 +149,19 @@ struct NoteHistoryBrowserView: View {
     let onError: (Error) -> Void
     @State private var showingRestoreChoices = false
     @State private var confirmingReplacement = false
+    @State private var isDetailed = false
+    @State private var viewport = NoteHistoryViewport()
+    @State private var removal: NoteHistoryRemovalPopover?
     @Environment(\.mehPalette) private var palette
 
     var body: some View {
         VStack(spacing: 0) {
             NoteHistoryHeading(
                 title: title,
-                isCurrent: state.isViewingCurrent,
+                version: state.selectedVersion,
+                // A single state picked inside a session reads to the second,
+                // like the rail's caption.
+                isDetailed: isDetailed || !state.timeline.isSessionEnd(state.selectedIndex),
                 fontSize: fontSize,
                 fontFamily: fontFamily
             )
@@ -160,16 +172,28 @@ struct NoteHistoryBrowserView: View {
                 fontSize: fontSize,
                 fontFamily: fontFamily,
                 mode: mode,
-                palette: palette
+                palette: palette,
+                historyChanges: state.changes
             )
             .accessibilityIdentifier("note-history-preview")
+            .overlay(alignment: .trailing) {
+                NoteHistoryScrollMarks(changes: state.changes, textLength: (state.text as NSString).length)
+            }
             .overlay {
                 if state.isLoadingPreview {
-                    ProgressView("Loading version…")
-                        .padding(12)
-                        .background(.regularMaterial, in: .rect(cornerRadius: 12))
-                        .accessibilityIdentifier("note-history-preview-loading")
+                    NoteHistoryLoadingIndicator()
                 }
+            }
+            .popover(item: $removal, attachmentAnchor: .rect(.rect(removal?.rect ?? .zero))) { removal in
+                Text(removal.text)
+                    .strikethrough()
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+                    .padding()
+                    .frame(maxWidth: 320, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(Text("Removed: \(removal.text)"))
+                    .presentationCompactAdaptation(.popover)
             }
             // Fill the area behind the floating controls. The safe-area
             // inset still keeps the last lines reachable above them.
@@ -177,17 +201,53 @@ struct NoteHistoryBrowserView: View {
         }
         .background(MehStyle.paperColor.ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            NoteHistoryTimeline(
-                isLoading: state.isLoadingIndex,
-                versions: state.versions,
-                overviewNavigationStops: state.overviewNavigationStops,
-                overviewStops: state.overviewStops,
-                selectedIndex: state.selectedIndex,
-                select: { index in
-                    state.select(index ?? state.versions.count, onError: onError)
-                }
-            )
+            VStack(spacing: 10) {
+                NoteHistoryTimelineView(
+                    isLoading: state.isLoadingIndex,
+                    timeline: state.timeline,
+                    versions: state.versions,
+                    selectedIndex: state.selectedIndex,
+                    changes: state.changes,
+                    isDetailed: $isDetailed,
+                    select: { index, base in
+                        removal = nil
+                        state.select(index, comparedWith: base, onError: onError)
+                    }
+                )
+            }
+            .padding(.top, 18)
+            .padding(.bottom, 6)
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                state.navigation.coveredBottomHeight = height
+            }
+            // The jumper comes and goes; floating it above the panel keeps the
+            // preview's inset steady, so the text does not jump when it shows.
+            .overlay(alignment: .top) {
+                NoteHistoryChangeJumper(
+                    changes: state.changes,
+                    viewport: viewport,
+                    reveal: { location in
+                        state.navigation.revealSearchMatch?(NSRange(location: location, length: 0))
+                    }
+                )
+                .alignmentGuide(.top) { $0[.bottom] - 8 }
+            }
+            .background {
+                LinearGradient(
+                    stops: [
+                        .init(color: MehStyle.paperColor.opacity(0), location: 0),
+                        .init(color: MehStyle.paperColor, location: 0.35),
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+            }
         }
+        // History must fit the window it opens in; on the Mac a taller
+        // minimum would grow the window.
+        .frame(minHeight: 0, maxHeight: .infinity)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done", action: onDone)
@@ -222,22 +282,57 @@ struct NoteHistoryBrowserView: View {
         .onAppear {
             let browser = state
             let navigation = browser.navigation
+            let viewport = viewport
+            navigation.visibleRangeChanged = { [weak viewport] range in
+                if viewport?.range != range { viewport?.range = range }
+            }
+            navigation.removalTapped = { removal, rect in
+                self.removal = NoteHistoryRemovalPopover(text: removal.text, rect: rect)
+            }
             navigation.whenAttached { [weak navigation, weak browser] in
-                guard let navigation, let position = browser?.originalPosition else {
+                // At the top, the editor's offset includes the note title,
+                // which the preview shows above the text instead.
+                guard let navigation, let position = browser?.originalPosition,
+                      position.scrollAnchor > 0 else {
                     return
                 }
                 navigation.restorePosition?(position)
             }
         }
     }
+}
 
+private struct NoteHistoryRemovalPopover: Identifiable {
+    let id = UUID()
+    let text: String
+    let rect: CGRect
+}
+
+/// The text range on screen. Only the change jumper reads it, so scrolling
+/// does not re-render the rest of History.
+@MainActor
+@Observable
+private final class NoteHistoryViewport {
+    var range: NSRange?
 }
 
 private struct NoteHistoryHeading: View {
     let title: String
-    let isCurrent: Bool
+    let version: NoteHistoryVersion?
+    let isDetailed: Bool
     let fontSize: Double
     let fontFamily: EditorFontFamily
+
+    private var status: String {
+        guard let version else { return String(localized: "Current version") }
+        guard let date = version.date else { return String(localized: "Date unavailable") }
+        var format = Date.FormatStyle.dateTime.weekday(.wide).day().month(.wide).hour().minute()
+        if !Calendar.current.isDate(date, equalTo: .now, toGranularity: .year) {
+            format = format.year()
+        }
+        if isDetailed { format = format.second() }
+        return date.formatted(format)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -251,13 +346,10 @@ private struct NoteHistoryHeading: View {
                 )))
                 .foregroundStyle(.primary)
                 .accessibilityIdentifier("note-history-title")
-            Label(
-                isCurrent ? "Current version" : "Viewing an older version",
-                systemImage: "clock.arrow.circlepath"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .accessibilityIdentifier("note-history-status")
+            Label(status, systemImage: "clock.arrow.circlepath")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("note-history-status")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
@@ -266,221 +358,135 @@ private struct NoteHistoryHeading: View {
     }
 }
 
-private struct NoteHistoryTimeline: View {
-    private struct DayGroup: Identifiable {
-        let id: Int
-        let day: Date?
-        var indices: [Int]
-    }
+/// Fast steps would flash a spinner for every version. It shows only when
+/// a version takes a moment.
+private struct NoteHistoryLoadingIndicator: View {
+    @State private var isVisible = false
 
-    let isLoading: Bool
-    let versions: [NoteHistoryVersion]
-    let overviewNavigationStops: [Int]
-    let overviewStops: [Int]
-    let selectedIndex: Int
-    let select: (Int?) -> Void
-    @State private var showingDetail = false
-    @State private var detailRange: ClosedRange<Int>?
-
-    private var stops: [Int] {
-        if showingDetail {
-            return Array(detailRange ?? range(around: selectedIndex))
-        }
-        return overviewStops
-    }
-
-    private var sliderIndex: Int {
-        stops.firstIndex(of: selectedIndex) ??
-            (stops.lastIndex { $0 < selectedIndex } ?? 0)
-    }
-
-    private var menuGroups: [DayGroup] {
-        var groups: [DayGroup] = []
-        for index in stops where versions.indices.contains(index) {
-            let day = versions[index].date.map(Calendar.current.startOfDay(for:))
-            if let last = groups.indices.last, groups[last].day == day {
-                groups[last].indices.append(index)
-            } else {
-                groups.append(DayGroup(id: index, day: day, indices: [index]))
+    var body: some View {
+        ProgressView("Loading version…")
+            .padding(12)
+            .background(.regularMaterial, in: .rect(cornerRadius: 12))
+            .opacity(isVisible ? 1 : 0)
+            .accessibilityHidden(true)
+            .background {
+                // VoiceOver and UI tests learn about loading right away.
+                Color.clear
+                    .accessibilityElement()
+                    .accessibilityLabel("Loading version…")
+                    .accessibilityIdentifier("note-history-preview-loading")
             }
+            .task {
+                try? await Task.sleep(for: .milliseconds(250))
+                isVisible = true
+            }
+    }
+}
+
+// MARK: - Changes
+
+/// Where the changes are in the whole note, along the right edge.
+private struct NoteHistoryScrollMarks: View {
+    let changes: NoteHistoryChanges
+    let textLength: Int
+    @Environment(\.mehPalette) private var palette
+
+    var body: some View {
+        if !changes.isEmpty, textLength > 0 {
+            Canvas { context, size in
+                let length = CGFloat(textLength)
+                func mark(at location: Int, color: Color) {
+                    let y = size.height * CGFloat(location) / length
+                    context.fill(
+                        Path(roundedRect: CGRect(x: 0, y: min(y, size.height - 3), width: 6, height: 3),
+                             cornerRadius: 1.5),
+                        with: .color(color)
+                    )
+                }
+                for range in changes.changed { mark(at: range.location, color: palette.strokeColor) }
+                for removal in changes.removed { mark(at: removal.location, color: .secondary) }
+            }
+            .frame(width: 6)
+            .padding(.vertical, 24)
+            .padding(.trailing, 3)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
-        return groups
+    }
+}
+
+/// Steps through changes that are off screen. Hidden when every change is
+/// already visible.
+private struct NoteHistoryChangeJumper: View {
+    let changes: NoteHistoryChanges
+    let viewport: NoteHistoryViewport
+    let reveal: (Int) -> Void
+    @State private var current: Int?
+
+    private var locations: [Int] {
+        (changes.changed.map(\.location) + changes.removed.map(\.location)).sorted()
     }
 
     var body: some View {
-        VStack(spacing: 8) {
-            if isLoading {
-                ProgressView("Loading versions…")
-                    .font(.caption)
-                    .accessibilityIdentifier("note-history-index-loading")
-            }
-            HStack(spacing: 12) {
-                Button { step(backward: true) } label: {
-                    Image(systemName: "chevron.left")
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .disabled(showingDetail ? selectedIndex == 0
-                          : selectedIndex == overviewStops.first)
-                .accessibilityLabel("Previous version")
-                .accessibilityIdentifier("note-history-previous")
-
-                if stops.count > 1 {
-                    Slider(
-                        value: Binding(
-                            get: { Double(sliderIndex) },
-                            set: { value in
-                                let offset = min(max(Int(value.rounded()), 0), stops.count - 1)
-                                requestSelection(stops[offset])
-                            }
-                        ),
-                        in: 0...Double(stops.count - 1),
-                        step: 1
-                    )
-                    .accessibilityLabel("Version timeline")
-                    .accessibilityValue(versionLabel(at: selectedIndex))
-                    .accessibilityIdentifier("note-history-timeline")
-                }
-
-                Button { step(backward: false) } label: {
-                    Image(systemName: "chevron.right")
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .disabled(showingDetail ? selectedIndex == versions.count
-                          : selectedIndex == overviewStops.last)
-                .accessibilityLabel("Next version")
-                .accessibilityIdentifier("note-history-next")
-            }
-            HStack(spacing: 10) {
+        let locations = locations
+        let visible = viewport.range
+        let isAllVisible = visible.map { range in
+            locations.allSatisfy { $0 >= range.location && $0 <= NSMaxRange(range) }
+        } ?? true
+        if !locations.isEmpty, !isAllVisible {
+            let targets = targets(in: locations, visible: visible)
+            HStack(spacing: 2) {
                 Button {
-                    showingDetail.toggle()
-                    if showingDetail { detailRange = range(around: selectedIndex) }
+                    targets.previous.map { move(to: $0, in: locations) }
                 } label: {
-                    Text(showingDetail ? "Overview" : "More Detail")
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
+                    Image(systemName: "chevron.up").frame(width: 32, height: 30)
                 }
-                .disabled(versions.count < 2)
-                .accessibilityIdentifier("note-history-detail-toggle")
-                Spacer(minLength: 0)
-                Menu {
-                    ForEach(menuGroups) { group in
-                        Section(groupTitle(for: group)) {
-                            ForEach(group.indices, id: \.self) { index in
-                                Button { requestSelection(index) } label: {
-                                    Label(
-                                        menuRowLabel(at: index),
-                                        systemImage: "number"
-                                    )
-                                }
-                                .accessibilityLabel(versionLabel(at: index))
-                            }
-                        }
-                    }
-                    if stops.contains(versions.count) {
-                        Button("Current version") { select(nil) }
-                    }
+                .disabled(targets.previous == nil)
+                .accessibilityLabel("Previous change")
+                Text("Change \(targets.shown + 1) of \(locations.count)")
+                    .font(.footnote.weight(.semibold))
+                    .monospacedDigit()
+                Button {
+                    targets.next.map { move(to: $0, in: locations) }
                 } label: {
-                    Label(menuTriggerLabel(at: selectedIndex), systemImage: "calendar")
-                        .lineLimit(1)
-                        .padding(.horizontal, 12)
-                        .frame(minWidth: 160, maxWidth: 220, minHeight: 44)
-                        .contentShape(Rectangle())
+                    Image(systemName: "chevron.down").frame(width: 32, height: 30)
                 }
-                .accessibilityIdentifier("note-history-date-list")
-                .accessibilityLabel(versionLabel(at: selectedIndex))
-                .accessibilityHint("Choose a version")
+                .disabled(targets.next == nil)
+                .accessibilityLabel("Next change")
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-        .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 28))
-        .frame(maxWidth: 520)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .onChange(of: versions.count) { _, _ in
-            if showingDetail { detailRange = range(around: selectedIndex) }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 6)
+            .glassEffect(.regular.interactive(), in: .capsule)
+            .accessibilityIdentifier("note-history-change-jumper")
+            .onChange(of: changes) { current = nil }
+            .transition(.opacity)
         }
     }
 
-    private func requestSelection(_ index: Int) {
-        select(versions.indices.contains(index) ? index : nil)
+    /// After a jump the arrows step from that change. Otherwise they go to
+    /// the nearest change above or below the screen.
+    private func targets(
+        in locations: [Int], visible: NSRange?
+    ) -> (shown: Int, previous: Int?, next: Int?) {
+        let range = visible ?? NSRange(location: 0, length: 0)
+        func isVisible(_ location: Int) -> Bool {
+            location >= range.location && location <= NSMaxRange(range)
+        }
+        if let current, locations.indices.contains(current), isVisible(locations[current]) {
+            return (
+                current,
+                current > 0 ? current - 1 : nil,
+                current < locations.count - 1 ? current + 1 : nil
+            )
+        }
+        let above = locations.lastIndex { $0 < range.location }
+        let below = locations.firstIndex { $0 > NSMaxRange(range) }
+        return (below ?? above ?? 0, above, below)
     }
 
-    private func step(backward: Bool) {
-        if showingDetail {
-            let index = selectedIndex + (backward ? -1 : 1)
-            if detailRange?.contains(index) != true {
-                detailRange = range(around: index)
-            }
-            requestSelection(index)
-        } else {
-            let offset: Int
-            if backward {
-                let lower = overviewNavigationStops.lastIndex {
-                    $0 <= selectedIndex
-                } ?? 0
-                offset = overviewNavigationStops[lower] == selectedIndex
-                    ? max(0, lower - 1) : lower
-            } else {
-                offset = overviewNavigationStops.firstIndex {
-                    $0 > selectedIndex
-                } ?? overviewNavigationStops.count - 1
-            }
-            requestSelection(overviewNavigationStops[offset])
-        }
-    }
-
-    private func range(around index: Int) -> ClosedRange<Int> {
-        max(0, index - 12)...min(versions.count, index + 12)
-    }
-
-    private func versionLabel(at index: Int) -> String {
-        guard versions.indices.contains(index) else {
-            return String(localized: "Current version")
-        }
-        let version = versions[index]
-        guard let date = version.date else {
-            return String(localized: "Version \(version.ordinal) · Date unavailable")
-        }
-        let formattedDate = date.formatted(date: .abbreviated, time: .shortened)
-        return String(localized: "Version \(version.ordinal) · \(formattedDate)")
-    }
-
-    private func menuTriggerLabel(at index: Int) -> String {
-        guard versions.indices.contains(index) else {
-            return String(localized: "Current version")
-        }
-        guard let date = versions[index].date else {
-            return String(localized: "Date unavailable")
-        }
-        return date.formatted(date: .numeric, time: .shortened)
-    }
-
-    private func groupTitle(for group: DayGroup) -> String {
-        guard let day = group.day else {
-            return String(localized: "Date unavailable")
-        }
-        let groups = menuGroups
-        if let position = groups.firstIndex(where: { $0.id == group.id }),
-           position > 0,
-           let previousDay = groups[position - 1].day,
-           Calendar.current.isDate(
-               previousDay, equalTo: day, toGranularity: .year
-           ) {
-            return day.formatted(.dateTime.day().month(.abbreviated))
-        }
-        return day.formatted(.dateTime.day().month(.abbreviated).year())
-    }
-
-    private func menuRowLabel(at index: Int) -> String {
-        let ordinal = versions[index].ordinal.formatted()
-        guard let date = versions[index].date else { return ordinal }
-        let time = date.formatted(date: .omitted, time: .shortened)
-        return String(localized: "\(ordinal) · \(time)")
+    private func move(to index: Int, in locations: [Int]) {
+        guard locations.indices.contains(index) else { return }
+        current = index
+        reveal(locations[index])
     }
 }

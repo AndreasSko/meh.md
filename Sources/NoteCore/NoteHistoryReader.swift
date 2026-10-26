@@ -26,6 +26,7 @@ public actor NoteHistoryReader {
     private let previewCapacity = 3
     private let previewByteLimit = 4 * 1024 * 1024
     private var previewBytes = 0
+    private var lastChanges: (key: String, changes: NoteHistoryChanges)?
 
     // Deterministic diagnostics distinguish indexing from preview work.
     private(set) var loadCount = 0
@@ -96,6 +97,23 @@ public actor NoteHistoryReader {
             touchPreview(version.id)
         }
         return text
+    }
+
+    /// Compares a version with an earlier one, or with an empty note when
+    /// there is none. The preview cache already holds the selected text, so
+    /// this usually decodes only the earlier version.
+    public func changes(
+        for version: NoteHistoryVersion,
+        since base: NoteHistoryVersion?
+    ) throws -> NoteHistoryChanges {
+        let key = (base?.id ?? "") + "|" + version.id
+        if let lastChanges, lastChanges.key == key { return lastChanges.changes }
+        let text = try historicalText(for: version)
+        let baseText = try base.map { try historicalText(for: $0) } ?? ""
+        try Task.checkCancellation()
+        let changes = NoteHistoryChanges(from: baseText, to: text)
+        lastChanges = (key, changes)
+        return changes
     }
 
     private func touchPreview(_ id: String) {

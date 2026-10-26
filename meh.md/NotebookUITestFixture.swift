@@ -8,6 +8,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case writing
     case syncStatus = "sync-status"
     case historyRestore = "history-restore"
+    case historyTour = "history-tour"
     case dragOrder = "drag-order"
     case dragNested = "drag-nested"
     case dragSubtree = "drag-subtree"
@@ -200,8 +201,16 @@ enum NotebookUITestFixture: String, CaseIterable {
             _ = try await replica.createNote(
                 name: "Pancakes.md",
                 text: "Flour, milk, two eggs, a pinch of salt.\n")
+        // Performance probes link Release NoteCore, which omits the DEBUG
+        // history API these fixtures need.
         case .readme:
+            #if !NOTEBOOK_PERFORMANCE_HOST
             try await seedReadme(replica)
+            #endif
+        case .historyTour:
+            #if !NOTEBOOK_PERFORMANCE_HOST
+            try await seedHistoryTour(replica)
+            #endif
         case .dragSubtree:
             _ = try await replica.createNote(
                 name: "Packing list.md", text: Self.literalSource)
@@ -209,6 +218,82 @@ enum NotebookUITestFixture: String, CaseIterable {
             _ = try await replica.createFolder(name: "Island", parentID: trips)
             _ = try await replica.createFolder(name: "Archive")
         }
+    }
+
+    #if !NOTEBOOK_PERFORMANCE_HOST
+    /// The Lisbon trip note and its packing list, for History recordings.
+    private func seedHistoryTour(_ replica: NotebookReplica) async throws {
+        _ = try await replica.createNote(
+            name: "Packing list.md",
+            text: "- [x] Passport\n- [ ] Chargers\n- [ ] Sunscreen\n")
+        _ = try await replica.createNote(name: "Lisbon in May.md", history: Self.lisbonHistory())
+    }
+
+    /// A trip note written over two weeks: quiet days, busy evenings, a
+    /// typed sentence and a removed task.
+    private static func lisbonHistory() -> [NotebookReplica.FixtureEdit] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        func at(_ daysAgo: Int, _ hour: Int, _ minute: Int) -> Date {
+            let day = calendar.date(byAdding: .day, value: -daysAgo, to: today)!
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)!
+        }
+        let intro = "Four days, no plans before ten."
+        let packing = " What to bring is in [[Packing list]]."
+        var todo = ["- [ ] Book flights", "- [ ] Find a place in Alfama", "- [ ] Rent a car"]
+        var plan = ["| Thu | Museums |"]
+        var quote = ""
+        var linksPacking = false
+        var text: String {
+            var lines = [intro + (linksPacking ? packing : ""), "", "## To do", ""] + todo
+            if !plan.isEmpty {
+                lines += ["", "## Plan", "", "| Day | What |", "| --- | --- |"] + plan
+            }
+            if !quote.isEmpty { lines += ["", quote] }
+            return lines.joined(separator: "\n") + "\n"
+        }
+        var history: [NotebookReplica.FixtureEdit] = []
+        func edit(_ date: Date, typed: Bool = false) {
+            history.append(.init(date: date, text: text, isTyped: typed))
+        }
+        plan = []
+        edit(at(13, 20, 10))
+        plan = ["| Thu | Museums |"]
+        edit(at(13, 20, 42))
+        plan.append("| Fri | Belém |")
+        edit(at(11, 9, 5))
+        todo[0] = "- [x] Book flights"
+        edit(at(9, 18, 5))
+        plan[0] = "| Thu | Tram 28, castle |"
+        edit(at(9, 18, 21))
+        plan.append("| Sat | Sintra |")
+        edit(at(9, 21, 30))
+        todo.append("- [ ] Reserve dinner in ==Bairro Alto==")
+        linksPacking = true
+        edit(at(6, 19, 12))
+        plan[1] = "| Fri | Belém, *pastéis* |"
+        edit(at(6, 22, 40))
+        // One version that both edits and removes a line.
+        todo.remove(at: 2)
+        todo[1] = "- [x] Find a place in Alfama"
+        edit(at(3, 8, 50))
+        plan[0] = "| Thu | Tram 28, castle, Alfama |"
+        edit(at(3, 12, 15))
+        plan[0] = "| Thu | Tram 28, castle, Alfama, fado |"
+        edit(at(3, 15, 7))
+        todo.append("- [ ] Charge the **good** camera")
+        edit(at(3, 17, 30))
+        quote = "> Slow down. It's a holiday."
+        edit(at(3, 18, 42), typed: true)
+        plan[1] = "| Fri | Belém, LX Factory, sunset |"
+        edit(at(3, 21, 5))
+        plan.append("| Sun | Nothing 🏖️ |")
+        edit(at(1, 10, 20))
+        plan[2] = "| Sat | Sintra *and* Cascais |"
+        edit(at(1, 21, 55))
+        plan.removeLast()
+        edit(min(at(0, 9, 30), Date.now.addingTimeInterval(-600)))
+        return history
     }
 
     /// The sample notebook behind the README screenshots, sorted the PARA
@@ -285,68 +370,11 @@ enum NotebookUITestFixture: String, CaseIterable {
         try await reviewSession.flush()
 
         let lisbon = try await replica.createNote(
-            name: "Lisbon in May.md",
-            text: """
-                Four days, no plans before ten.
-
-                ## To do
-
-                - [ ] Book flights
-                - [ ] Find a place in Alfama
-
-                """,
-            parentID: projects)
-        let session = try await replica.openNote(lisbon)
-        for text in [
-            """
-            Four days, no plans before ten. What to bring is in \
-            [[Packing list]].
-
-            ## To do
-
-            - [x] Book flights
-            - [ ] Find a place in Alfama
-            - [ ] Reserve dinner in ==Bairro Alto==
-
-            ## Plan
-
-            | Day | What |
-            | --- | --- |
-            | Thu | Tram 28, castle, Alfama, fado |
-            | Fri | Belém, LX Factory, sunset |
-            | Sat | Sintra *and* Cascais |
-
-            """,
-            """
-            Four days, no plans before ten. What to bring is in \
-            [[Packing list]].
-
-            ## To do
-
-            - [x] Book flights
-            - [x] Find a place in Alfama
-            - [ ] Reserve dinner in ==Bairro Alto==
-            - [ ] Charge the **good** camera
-
-            ## Plan
-
-            | Day | What |
-            | --- | --- |
-            | Thu | Tram 28, castle |
-            | Fri | Belém, *pastéis* |
-            | Sat | Sintra (just Sintra) |
-            | Sun | Nothing 🏖️ |
-
-            > Slow down. It's a holiday.
-
-            """,
-        ] {
-            try session.replaceAll(with: text)
-            try await session.flush()
-        }
+            name: "Lisbon in May.md", history: Self.lisbonHistory(), parentID: projects)
         for id in [book, groceries, review, lisbon] {
             try await replica.recordRecentActivity(for: id)
         }
     }
+    #endif
 }
 #endif
