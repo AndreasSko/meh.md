@@ -92,7 +92,7 @@ struct CloudKitTransportState: Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case diskFormatVersion
+        case diskFormatVersion, recordValidationStamp
         case accountRecordName, zoneName, protocolVersion, inboxGeneration
         case engineState, zoneChangeToken, canonicalSnapshotID, inbox, outbox, deletedNoteIDs, purgedRecordIDs
         case pendingRemoteDeletionIDs, scannedDeletedNoteIDs
@@ -191,6 +191,9 @@ struct CloudKitTransportState: Codable, Equatable {
         if let disk = encoder.userInfo[CloudKitStateDiskStorage.contextKey]
             as? CloudKitStateDiskStorage {
             try values.encode(CloudKitStateDiskStorage.formatVersion, forKey: .diskFormatVersion)
+            try values.encodeIfPresent(
+                disk.recordValidationStamp, forKey: .recordValidationStamp
+            )
             try values.encode(
                 inboxSlots.map { try $0.map { try disk.reference(for: $0) } },
                 forKey: .inbox
@@ -525,11 +528,13 @@ actor CloudKitTransportStateStore {
         accountRecordName: String,
         zoneName: String,
         protocolVersion: Int = 1,
+        recordValidationStamp: String? = CloudKitStateDiskStorage.buildStamp,
         writeState: (@Sendable (Data, URL) throws -> Void)? = nil
     ) async throws -> CloudKitTransportStateStore {
         try CloudKitTransportStateStore(
             directory: directory, accountRecordName: accountRecordName,
             zoneName: zoneName, protocolVersion: protocolVersion,
+            recordValidationStamp: recordValidationStamp,
             writeState: writeState
         )
     }
@@ -539,6 +544,7 @@ actor CloudKitTransportStateStore {
         accountRecordName: String,
         zoneName: String,
         protocolVersion: Int = 1,
+        recordValidationStamp: String? = CloudKitStateDiskStorage.buildStamp,
         writeState: (@Sendable (Data, URL) throws -> Void)? = nil
     ) throws {
         try FileManager.default.createDirectory(
@@ -546,16 +552,28 @@ actor CloudKitTransportStateStore {
         )
         self.protocolVersion = protocolVersion
         self.writeState = writeState ?? SyncFileIO.replace
-        diskStorage = CloudKitStateDiskStorage(directory: directory)
+        diskStorage = CloudKitStateDiskStorage(
+            directory: directory, recordValidationStamp: recordValidationStamp
+        )
         fileURL = directory.appendingPathComponent("cloudkit-sync-state.json")
         if FileManager.default.fileExists(atPath: fileURL.path) {
+            let decoded: (
+                state: CloudKitTransportState, legacy: Bool, validatedByThisBuild: Bool
+            )
             do {
-                state = try diskStorage.decode(Data(contentsOf: fileURL)).state
+                decoded = try diskStorage.decode(Data(contentsOf: fileURL))
             } catch {
                 throw CloudKitSyncTransportError.corruptState
             }
+            state = decoded.state
             do {
-                try state.validate(expectedProtocolVersion: protocolVersion)
+                // Every record this build writes passes full validation first,
+                // and loading checked each payload against its digest. Only
+                // the record decoding is skipped; every state invariant runs.
+                try state.validate(
+                    expectedProtocolVersion: protocolVersion,
+                    reusing: decoded.validatedByThisBuild ? state : nil
+                )
             } catch {
                 if error as? SyncError == .scopeChanged { throw error }
                 throw CloudKitSyncTransportError.corruptState
@@ -563,6 +581,15 @@ actor CloudKitTransportStateStore {
             guard state.accountRecordName == accountRecordName,
                   state.zoneName == zoneName else {
                 throw SyncError.scopeChanged
+            }
+            // Keep a recovered retry deadline on disk until initialize()
+            // records that recovery.
+            if !decoded.legacy, !decoded.validatedByThisBuild,
+               !state.recoveredInvalidRetryDeadline,
+               recordValidationStamp != nil {
+                // Records were already validated above, so a failed stamp
+                // write only means the next launch validates them again.
+                try? self.writeState(diskStorage.encode(state), fileURL)
             }
         } else {
             state = CloudKitTransportState(
