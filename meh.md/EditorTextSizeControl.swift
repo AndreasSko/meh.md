@@ -3,6 +3,8 @@ import SwiftUI
 struct EditorTextSizeControl: View {
     @Binding var fontSize: Double
     @Binding var fontFamily: EditorFontFamily
+    @AppStorage(EditorLineWidth.key, store: NotebookEditorPreferences.store)
+    private var lineWidth = EditorLineWidth.standard
 
     init(
         fontSize: Binding<Double>,
@@ -64,11 +66,25 @@ struct EditorTextSizeControl: View {
                 .accessibilityLabel("Increase text size")
                 .disabled(displayedSize >= 28)
             }
+            if EditorLineWidth.isAdjustable {
+                Divider()
+                Text("Line width").font(.headline)
+                Picker("Line width", selection: $lineWidth) {
+                    ForEach(EditorLineWidth.allCases) { width in
+                        Text(width.title).tag(width)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityIdentifier("editor-line-width")
+            }
             Button("Reset to Defaults") {
                 fontFamily = .system
                 fontSize = 17
+                lineWidth = .standard
             }
-            .disabled(displayedSize == 17 && fontFamily == .system)
+            .disabled(displayedSize == 17 && fontFamily == .system
+                && lineWidth == .standard)
         }
         .padding(16)
         .frame(width: 260)

@@ -334,9 +334,43 @@ final class MarkdownTextView: NSTextView {
     private var markdownTitleHost: NSHostingView<AnyView>?
     private var markdownTitle: AnyView?
     private var markdownTitleWidth: CGFloat = 0
+    /// The editor sets this to center its text; until then the insets
+    /// stay as configured.
+    var markdownMaxTextWidth: CGFloat? {
+        didSet {
+            let wasManaged = managesHorizontalInset
+            managesHorizontalInset = true
+            guard markdownMaxTextWidth != oldValue || !wasManaged else { return }
+            updateHorizontalInset(width: frame.width)
+            layoutMarkdownTitle()
+        }
+    }
+    private var managesHorizontalInset = false
+    private var isApplyingHorizontalInset = false
 
     private var markdownTitleExtent: CGFloat {
         markdownTitleHost == nil ? 0 : markdownTitleHeight + 12
+    }
+
+    private var markdownMargin: CGFloat {
+        textContainerInset.width + (textContainer?.lineFragmentPadding ?? 0)
+    }
+
+    private func updateHorizontalInset(width: CGFloat) {
+        guard managesHorizontalInset else { return }
+        let inset = EditorTextMargin.horizontal(
+            width: width, maxTextWidth: markdownMaxTextWidth
+        ) - (textContainer?.lineFragmentPadding ?? 0)
+        guard textContainerInset.width != inset else { return }
+        // AppKit answers an inset change with a nested resize to the old
+        // frame size, which must not recompute the inset from that width.
+        isApplyingHorizontalInset = true
+        defer { isApplyingHorizontalInset = false }
+        textContainerInset.width = inset
+        // A setting change keeps the frame, so resize the text right away.
+        if let container = textContainer, container.widthTracksTextView {
+            container.size.width = max(0, width - 2 * textContainerInset.width)
+        }
     }
 
     func updateMarkdownTitle(_ title: AnyView?, height: CGFloat) {
@@ -344,11 +378,11 @@ final class MarkdownTextView: NSTextView {
         if let title {
             if let markdownTitleHost {
                 markdownTitleHost.rootView = AnyView(
-                    title.frame(width: max(0, bounds.width - 52))
+                    title.frame(width: max(0, bounds.width - 2 * markdownMargin))
                 )
             } else {
                 let host = NSHostingView(rootView: AnyView(
-                    title.frame(width: max(0, bounds.width - 52))
+                    title.frame(width: max(0, bounds.width - 2 * markdownMargin))
                 ))
                 addSubview(host)
                 markdownTitleHost = host
@@ -357,7 +391,7 @@ final class MarkdownTextView: NSTextView {
             markdownTitleHost?.removeFromSuperview()
             markdownTitleHost = nil
         }
-        markdownTitleWidth = max(0, bounds.width - 52)
+        markdownTitleWidth = max(0, bounds.width - 2 * markdownMargin)
         markdownTitleHeight = max(0, height)
         layoutMarkdownTitle()
         updateScrollPastEndPadding(
@@ -367,7 +401,7 @@ final class MarkdownTextView: NSTextView {
 
     func layoutMarkdownTitle() {
         guard let markdownTitleHost, let markdownTitle else { return }
-        let width = max(0, bounds.width - 52)
+        let width = max(0, bounds.width - 2 * markdownMargin)
         if abs(markdownTitleWidth - width) > 0.5 {
             markdownTitleWidth = width
             markdownTitleHost.rootView = AnyView(
@@ -375,7 +409,7 @@ final class MarkdownTextView: NSTextView {
             )
         }
         markdownTitleHost.frame = NSRect(
-            x: 26, y: markdownTopInset,
+            x: markdownMargin, y: markdownTopInset,
             width: width, height: markdownTitleHeight
         )
         guard width > 0 else { return }
@@ -415,6 +449,9 @@ final class MarkdownTextView: NSTextView {
     }
 
     override func setFrameSize(_ newSize: NSSize) {
+        if !isApplyingHorizontalInset {
+            updateHorizontalInset(width: newSize.width)
+        }
         super.setFrameSize(newSize)
         if let container = textContainer {
             markdownSyntaxCache.refreshTablesAfterResize(
@@ -808,6 +845,12 @@ struct MarkdownEditor: NSViewRepresentable {
     var mode: MarkdownEditorMode
     var palette: MehPalette
     var historyChanges: NoteHistoryChanges
+    @AppStorage(EditorLineWidth.key, store: NotebookEditorPreferences.store)
+    private var lineWidth = EditorLineWidth.standard
+
+    private var maxTextWidth: CGFloat? {
+        lineWidth.maxTextWidth(fontSize: fontSize, fontFamily: fontFamily)
+    }
 
     init(
         text: Binding<String>,
@@ -871,6 +914,7 @@ struct MarkdownEditor: NSViewRepresentable {
         textView.textColor = .textColor
         textView.textContainerInset = NSSize(width: 22, height: 20)
         textView.textContainer?.lineFragmentPadding = 4
+        textView.markdownMaxTextWidth = maxTextWidth
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
@@ -900,6 +944,7 @@ struct MarkdownEditor: NSViewRepresentable {
             return
         }
         context.coordinator.update(parent: self, textView: textView)
+        (textView as? MarkdownTextView)?.markdownMaxTextWidth = maxTextWidth
         (textView as? MarkdownTextView)?.updateMarkdownTitle(
             title, height: titleHeight
         )
@@ -1659,6 +1704,23 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
                height: size.height + markdownScrollPastEndPadding)
     }
 
+    var markdownMaxTextWidth: CGFloat? {
+        get { markdownState.maxTextWidth }
+        set {
+            guard markdownState.maxTextWidth != newValue
+                || !markdownState.managesHorizontalInsets else { return }
+            markdownState.maxTextWidth = newValue
+            markdownState.managesHorizontalInsets = true
+            setNeedsLayout()
+        }
+    }
+
+    private var markdownMargin: CGFloat {
+        EditorTextMargin.horizontal(
+            width: bounds.width, maxTextWidth: markdownState.maxTextWidth
+        )
+    }
+
     var markdownFindPresentation: MarkdownEditorFindPresentation? {
         get { markdownState.findPresentation }
         set { markdownState.findPresentation = newValue }
@@ -1713,6 +1775,10 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         let titleExtent = markdownState.titleHost == nil
             ? 0 : markdownState.titleHeight + 12
         insets.top = 18 + titleExtent
+        if markdownState.managesHorizontalInsets {
+            insets.left = markdownMargin - textContainer.lineFragmentPadding
+            insets.right = insets.left
+        }
         // Small system gestures can briefly resize the editor. Keep optional
         // end space stable so those changes do not move the scrollable extent.
         // Optional space below the document may differ from half the viewport
@@ -1830,15 +1896,15 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         guard let host = markdownState.titleHost else { return }
         measureMarkdownTitle()
         host.view.frame = CGRect(
-            x: 20, y: 18,
-            width: max(0, bounds.width - 40),
+            x: markdownMargin, y: 18,
+            width: max(0, bounds.width - 2 * markdownMargin),
             height: markdownState.titleHeight
         )
     }
 
     private func measureMarkdownTitle() {
         guard let host = markdownState.titleHost else { return }
-        let width = max(0, bounds.width - 40)
+        let width = max(0, bounds.width - 2 * markdownMargin)
         guard width > 0 else { return }
         let measured = host.sizeThatFits(
             in: CGSize(width: width, height: .greatestFiniteMagnitude)
@@ -1846,6 +1912,8 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         if measured.isFinite, measured > 0,
            abs(markdownState.titleHeight - measured) > 0.5 {
             markdownState.titleHeight = measured
+            // The top inset was computed from the previous height.
+            setNeedsLayout()
         }
     }
 
@@ -2349,6 +2417,8 @@ private final class MarkdownTextViewState: NSObject {
     var layoutDelegate: MarkdownLayoutManagerDelegate?
     var titleHost: UIHostingController<AnyView>?
     var titleHeight: CGFloat = 0
+    var maxTextWidth: CGFloat?
+    var managesHorizontalInsets = false
 }
 
 private final class MarkdownLayoutManagerDelegate:
@@ -2492,6 +2562,12 @@ struct MarkdownEditor: UIViewRepresentable {
     var initialPreviewPosition: MarkdownEditorPosition?
     var initialPreviewInsets: UIEdgeInsets?
     var initialPreviewOriginY: CGFloat?
+    @AppStorage(EditorLineWidth.key, store: NotebookEditorPreferences.store)
+    private var lineWidth = EditorLineWidth.standard
+
+    private var maxTextWidth: CGFloat? {
+        lineWidth.maxTextWidth(fontSize: fontSize, fontFamily: fontFamily)
+    }
 
     init(
         text: Binding<String>,
@@ -2574,6 +2650,7 @@ struct MarkdownEditor: UIViewRepresentable {
             right: 16
         )
         textView.textContainer.lineFragmentPadding = 4
+        textView.markdownMaxTextWidth = maxTextWidth
         textView.accessibilityIdentifier = isReadOnly
             ? "note-history-preview" : "markdown-editor"
         MehStyle.palette = palette
@@ -2593,6 +2670,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.update(parent: self, textView: textView)
+        (textView as? MarkdownTextView)?.markdownMaxTextWidth = maxTextWidth
         (textView as? MarkdownTextView)?.updateMarkdownTitle(
             title, height: titleHeight
         )

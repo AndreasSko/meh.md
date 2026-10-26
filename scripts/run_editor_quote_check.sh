@@ -75,6 +75,7 @@ xcrun swiftc -parse-as-library -swift-version 6 \
   "$repo_root/meh.md/MarkdownLivePreview.swift" \
   "$repo_root/meh.md/EditorWritingControls.swift" \
   "$repo_root/meh.md/NotebookEditorPreferences.swift" \
+  "$repo_root/meh.md/EditorLineWidth.swift" \
   "$repo_root/Tools/EditorQuoteCheck/EditorQuoteCheck.swift" \
   -o "$check_app/EditorQuoteCheck"
 
