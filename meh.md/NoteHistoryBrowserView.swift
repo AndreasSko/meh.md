@@ -322,6 +322,16 @@ private struct NoteHistoryHeading: View {
     let isDetailed: Bool
     let fontSize: Double
     let fontFamily: EditorFontFamily
+    @AppStorage(EditorLineWidth.key, store: NotebookEditorPreferences.store)
+    private var lineWidth = EditorLineWidth.standard
+    @State private var width: CGFloat = 0
+
+    private var margin: CGFloat {
+        EditorTextMargin.horizontal(
+            width: width,
+            maxTextWidth: lineWidth.maxTextWidth(fontSize: fontSize, fontFamily: fontFamily)
+        )
+    }
 
     private var status: String {
         guard let version else { return String(localized: "Current version") }
@@ -352,9 +362,10 @@ private struct NoteHistoryHeading: View {
                 .accessibilityIdentifier("note-history-status")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, margin)
         .padding(.top, 12)
         .padding(.bottom, 8)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
 
