@@ -65,8 +65,10 @@ enum MehStyle {
 
     typealias Components = (CGFloat, CGFloat, CGFloat, CGFloat)
 
+    // SwiftUI can resolve colors on its render thread. A provider that
+    // inherits the main actor would trap there.
     #if os(macOS)
-    static func dynamic(light: Components, dark: Components) -> NSColor {
+    nonisolated static func dynamic(light: Components, dark: Components) -> NSColor {
         NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             let c = isDark ? dark : light
@@ -74,7 +76,7 @@ enum MehStyle {
         }
     }
     #else
-    static func dynamic(light: Components, dark: Components) -> UIColor {
+    nonisolated static func dynamic(light: Components, dark: Components) -> UIColor {
         UIColor { traits in
             let c = traits.userInterfaceStyle == .dark ? dark : light
             return UIColor(red: c.0, green: c.1, blue: c.2, alpha: c.3)
