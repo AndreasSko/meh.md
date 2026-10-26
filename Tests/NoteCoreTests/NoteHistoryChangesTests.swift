@@ -94,8 +94,9 @@ final class NoteHistoryChangesTests: XCTestCase {
             text: "A\nB",
             metadata: NoteMetadata(createdAt: start, modifiedAt: start)
         )
-        try note.replaceAll(with: "A\nB\nC", at: start.addingTimeInterval(100))
-        try note.replaceAll(with: "A\nC", at: start.addingTimeInterval(200))
+        // Ten minutes apart, so each edit is its own session.
+        try note.replaceAll(with: "A\nB\nC", at: start.addingTimeInterval(600))
+        try note.replaceAll(with: "A\nC", at: start.addingTimeInterval(1_200))
         let reader = NoteHistoryReader(snapshot: note.snapshot())
         var versions: [NoteHistoryVersion] = []
         for try await update in await reader.updates() {

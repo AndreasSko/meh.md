@@ -102,7 +102,7 @@ final class CloudKitSnapshotCleanupIntegrationTests: XCTestCase {
         _ = try await drain(before)
         let beforeFetch = server.fetchMeasurements
         let original = try NoteDocument(snapshot: fixture.notes.last!.snapshot)
-        let expectedVersions = try original.historyVersions()
+        let expectedVersions = try original.historyVersions(detailed: true)
         let expectedHistory = try expectedVersions.map(original.historicalText(for:))
         _ = try await writer.cleanupRedundantSnapshots(notebookID: notebookID)
         let afterNames = server.recordNames
@@ -122,9 +122,9 @@ final class CloudKitSnapshotCleanupIntegrationTests: XCTestCase {
         let latest = try XCTUnwrap(received.first { $0.id == fixture.notes.last!.id })
         let document = try NoteDocument(snapshot: latest.snapshot)
         let start = Date()
-        let history = try document.historyVersions().map(document.historicalText(for:))
+        let history = try document.historyVersions(detailed: true).map(document.historicalText(for:))
         let elapsed = Date().timeIntervalSince(start)
-        XCTAssertEqual(try document.historyVersions(), expectedVersions)
+        XCTAssertEqual(try document.historyVersions(detailed: true), expectedVersions)
         XCTAssertEqual(history, expectedHistory)
         let allStates = history + [try document.text]
         for text in fixture.texts { XCTAssertTrue(allStates.contains(text)) }
@@ -499,7 +499,10 @@ final class CloudKitSnapshotCleanupIntegrationTests: XCTestCase {
         for index in 0..<edits {
             let text = "Fictional research journal\nRevision \(index)\n"
                 + String(repeating: "Invented observation \(index).\n", count: 80)
-            try document.replaceAll(with: text)
+            // Ten seconds apart, each revision is its own step.
+            try document.replaceAll(
+                with: text, at: .now.addingTimeInterval(Double(index + 1) * 10)
+            )
             notes.append(record(document))
             texts.append(text)
         }

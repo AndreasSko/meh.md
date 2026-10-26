@@ -32,7 +32,7 @@ final class CloudKitSnapshotCleanupChainRaceTests: XCTestCase {
         let middle = SyncRecord(snapshot: document.snapshot(), notebookID: notebookID)
         try document.replaceAll(with: "Fictional latest journal\n")
         let latest = SyncRecord(snapshot: document.snapshot(), notebookID: notebookID)
-        let expectedVersions = try document.historyVersions()
+        let expectedVersions = try document.historyVersions(detailed: true)
         let expectedTexts = try expectedVersions.map(document.historicalText(for:))
         let catalogDocument = try NotebookCatalogDocument(notebookID: notebookID)
         _ = try catalogDocument.add(id: document.noteID, kind: .note,
@@ -123,8 +123,8 @@ final class CloudKitSnapshotCleanupChainRaceTests: XCTestCase {
         let restoredRecord = try XCTUnwrap(received.first { $0.id == latest.id })
         let restored = try NoteDocument(snapshot: restoredRecord.snapshot)
         XCTAssertEqual(try restored.text, try document.text)
-        XCTAssertEqual(try restored.historyVersions(), expectedVersions)
-        XCTAssertEqual(try restored.historyVersions().map(restored.historicalText(for:)),
+        XCTAssertEqual(try restored.historyVersions(detailed: true), expectedVersions)
+        XCTAssertEqual(try restored.historyVersions(detailed: true).map(restored.historicalText(for:)),
                        expectedTexts)
         await b.retire()
         await restarted.retire()

@@ -132,9 +132,9 @@ final class CloudKitSnapshotCleanupDeletionRaceTests: XCTestCase {
         let expected = try NoteDocument(snapshot: fixture.sibling.snapshot)
         let restored = try NoteDocument(snapshot: sibling.snapshot)
         XCTAssertEqual(try restored.text, try expected.text)
-        XCTAssertEqual(try restored.historyVersions(), try expected.historyVersions())
-        XCTAssertEqual(try restored.historyVersions().map(restored.historicalText(for:)),
-                       try expected.historyVersions().map(expected.historicalText(for:)))
+        XCTAssertEqual(try restored.historyVersions(detailed: true), try expected.historyVersions(detailed: true))
+        XCTAssertEqual(try restored.historyVersions(detailed: true).map(restored.historicalText(for:)),
+                       try expected.historyVersions(detailed: true).map(expected.historicalText(for:)))
         try await assertReplicaConverges(
             fresh, name: "fresh-replica", fixture: fixture, root: root
         )

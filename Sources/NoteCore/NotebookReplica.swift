@@ -627,7 +627,7 @@ public final class NotebookReplica {
 
     #if DEBUG
     /// One step of a fixture note's past. A typed step adds its inserted text
-    /// one character per second, like a person typing.
+    /// one character every ten seconds, so History's details list each.
     public struct FixtureEdit: Sendable {
         public let date: Date
         public let text: String
@@ -670,7 +670,7 @@ public final class NotebookReplica {
                 let value = String(character)
                 try note.replaceUTF16(
                     range: NSRange(location: location, length: 0), with: value,
-                    at: edit.date.addingTimeInterval(Double(offset))
+                    at: edit.date.addingTimeInterval(Double(offset) * 10)
                 )
                 location += value.utf16.count
             }

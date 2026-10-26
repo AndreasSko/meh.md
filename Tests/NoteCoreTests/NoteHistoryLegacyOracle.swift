@@ -128,7 +128,6 @@ final class NoteHistoryLegacyOracle {
                 .sorted().joined(separator: ",")
             versions.append(NoteHistoryVersion(
                 id: id,
-                ordinal: versions.count + 1,
                 date: candidate.date,
                 isOverviewStop: !isSameTypingRun(
                     candidates[index], candidates[index + 1],
