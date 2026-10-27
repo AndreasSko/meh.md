@@ -251,6 +251,23 @@ full and stamped the manifest; the second took the trusted path:
 Most of what remains is the exchange itself (3.3 s), including the history
 check of saved checkpoints (2.0 s).
 
+## Compare checkpoint history as raw hashes
+
+Each exchange first confirms that the note files still contain every version
+sync last applied or confirmed; otherwise it replays from the start. On the
+iPhone launch above this check took 2.0 s, and about 1.1 s of it turned every
+change hash in every note's history into hex text, one byte at a time.
+
+The check now keeps each history as raw change hashes and parses only the
+saved checkpoint heads, usually one or a few per note, into the same form.
+The comparison and its result are unchanged. A head that is not lowercase
+hex of the right length still counts as missing and triggers a replay,
+exactly as it did when it could never match the hex text.
+
+On the same iPhone, the history check fell from 2.0 s to 0.95 s of CPU on a
+launch that trusted its saved state, and the whole startup sync from 4.6 s to
+3.7 s. What remains is decoding each note and listing its history.
+
 ## Scope and next layers
 
 The follow-up [local exchange benchmark](notebook-exchange-performance.md)

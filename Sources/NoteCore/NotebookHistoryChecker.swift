@@ -1,3 +1,4 @@
+import Automerge
 import Foundation
 
 /// Checks immutable, durable snapshots away from the UI's main actor.
@@ -5,7 +6,7 @@ import Foundation
 actor NotebookHistoryChecker {
     private struct Entry {
         let record: SyncRecord
-        let history: Set<String>
+        let history: Set<ChangeHash>
         let cost: Int
     }
 
@@ -53,7 +54,8 @@ actor NotebookHistoryChecker {
             } else if let record = indexed[key] {
                 // Presence is checked even when history is cached: a lost file
                 // must still cause replay.
-                contains = heads.isSubset(of: try history(for: record))
+                let history = try history(for: record)
+                contains = Self.changeHashes(heads)?.isSubset(of: history) ?? false
             } else {
                 contains = false
             }
@@ -74,7 +76,32 @@ actor NotebookHistoryChecker {
             && UUID(uuidString: String(key.dropFirst(5))).map(deleted.contains) == true
     }
 
-    private func history(for record: SyncRecord) throws -> Set<String> {
+    /// Parses lowercase hex heads, the only form `ChangeHash` produces.
+    /// Anything else cannot be in a history, so it is reported as missing.
+    static func changeHashes(_ heads: Set<String>) -> Set<ChangeHash>? {
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(heads.count * 32)
+        for head in heads {
+            let digits = Array(head.utf8)
+            guard digits.count == 64 else { return nil }
+            for index in stride(from: 0, to: 64, by: 2) {
+                guard let high = nibble(digits[index]),
+                      let low = nibble(digits[index + 1]) else { return nil }
+                bytes.append(high << 4 | low)
+            }
+        }
+        return Data(bytes).heads()
+    }
+
+    private static func nibble(_ digit: UInt8) -> UInt8? {
+        switch digit {
+        case 48...57: digit - 48
+        case 97...102: digit - 87
+        default: nil
+        }
+    }
+
+    private func history(for record: SyncRecord) throws -> Set<ChangeHash> {
         let key = record.documentKey
         // Compare bytes and claimed identity/heads, not just revision labels.
         // Corruption or a rollback must not reuse a previously validated entry.
@@ -82,11 +109,11 @@ actor NotebookHistoryChecker {
             return entry.history
         }
         remove(key)
-        let history: Set<String>
+        let history: Set<ChangeHash>
         if let catalog = record.catalogSnapshot {
-            history = try NotebookCatalogDocument(snapshot: catalog).historyHeads
+            history = try NotebookCatalogDocument(snapshot: catalog).historyHashes
         } else {
-            history = try NoteDocument(snapshot: record.snapshot).historyHeads
+            history = try NoteDocument(snapshot: record.snapshot).historyHashes
         }
         decodedSnapshotCount += 1
 

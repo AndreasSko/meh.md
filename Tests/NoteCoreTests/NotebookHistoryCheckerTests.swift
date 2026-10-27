@@ -24,6 +24,33 @@ final class NotebookHistoryCheckerTests: XCTestCase {
         XCTAssertEqual(decoded, 1)
     }
 
+    func testHexHeadsParseToTheSameChangeHashes() throws {
+        let note = try NoteDocument(text: "fictional hash fixture")
+        try note.replaceAll(with: "fictional hash fixture, edited")
+        XCTAssertEqual(
+            NotebookHistoryChecker.changeHashes(note.historyHeads),
+            note.historyHashes
+        )
+        XCTAssertEqual(NotebookHistoryChecker.changeHashes([]), [])
+
+        let head = try XCTUnwrap(note.historyHeads.first)
+        for malformed in [head.uppercased(), String(head.dropLast()), head + "0",
+                          String(head.dropLast()) + "g"] {
+            XCTAssertNil(NotebookHistoryChecker.changeHashes([head, malformed]))
+        }
+    }
+
+    func testMalformedCheckpointHeadIsReportedMissing() async throws {
+        let checker = NotebookHistoryChecker()
+        let note = try NoteDocument(text: "fictional malformed fixture")
+        let record = SyncRecord(snapshot: note.snapshot())
+        let uppercased = Set(record.snapshot.heads.map { $0.uppercased() })
+        let contains = try await checker.containsHistory(
+            [record.documentKey: uppercased], records: [record], deleted: []
+        )
+        XCTAssertFalse(contains)
+    }
+
     func testProgressStopsAtFailedComparisonAndThrottlesLargePass() async throws {
         let checker = NotebookHistoryChecker()
         let missing = Dictionary(uniqueKeysWithValues: (0..<1_000).map {
