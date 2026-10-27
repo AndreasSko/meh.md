@@ -1793,7 +1793,14 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         // below the note in its scrollable extent instead.
         insets.bottom = 18
         if insets != textContainerInset {
+            let marginChanged = insets.left != textContainerInset.left
             textContainerInset = insets
+            // Margins follow the editor width. UIKit lays out the text
+            // before this point, so a changed margin leaves the content
+            // size from the previous width, and scrolling snaps back.
+            if marginChanged {
+                textLayoutManager?.textViewportLayoutController.layoutViewport()
+            }
         }
         if previousPadding != markdownState.appliedEndPadding,
            let naturalSize = markdownState.naturalContentSize {

@@ -335,6 +335,11 @@ struct NotebookView: View {
                 }
             }
             .background(NotebookSidebarPalette.background.ignoresSafeArea())
+            #if os(iOS)
+            .overlay(alignment: .trailing) {
+                if horizontalSizeClass == .regular { NotebookSidebarDivider() }
+            }
+            #endif
             .searchable(text: $search.query, isPresented: $search.isPresented,
                         placement: .toolbar, prompt: "Search all notes")
             .searchFocused($searchFocused)
@@ -685,6 +690,8 @@ struct NotebookView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(MehStyle.paperColor.ignoresSafeArea())
     }
 
     private var usesCompactLinkNavigation: Bool {

@@ -14,6 +14,22 @@ enum NotebookSidebarPalette {
     }
 }
 
+#if os(iOS)
+/// The sidebar and the note share one paper color, so the edge between them
+/// needs a line to show where the sidebar ends and where to drag its width.
+struct NotebookSidebarDivider: View {
+    @Environment(\.displayScale) private var displayScale
+
+    var body: some View {
+        Color(uiColor: .separator)
+            .frame(width: 1 / displayScale)
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+#endif
+
 /// A folder with a quick, slightly tilted highlighter stroke underneath, so
 /// folders stand out from notes without filling every row with color. Every
 /// folder gets the same stroke, so it never reads as a favorite.

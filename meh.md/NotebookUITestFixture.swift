@@ -16,6 +16,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case storageLarge = "storage-large"
     case flair
     case readme
+    case longNote = "long-note"
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
@@ -201,6 +202,16 @@ enum NotebookUITestFixture: String, CaseIterable {
             _ = try await replica.createNote(
                 name: "Pancakes.md",
                 text: "Flour, milk, two eggs, a pinch of salt.\n")
+        case .longNote:
+            let paragraphs = (1...60).map {
+                "Paragraph \($0) of a fictional journal. The morning was quiet, "
+                + "the harbor wind was light, and the ferry to the island left "
+                + "a little later than the timetable promised."
+            }
+            _ = try await replica.createNote(
+                name: "Island journal.md",
+                text: "# Island journal\n\n"
+                    + paragraphs.joined(separator: "\n\n") + "\n")
         // Performance probes link Release NoteCore, which omits the DEBUG
         // history API these fixtures need.
         case .readme:
