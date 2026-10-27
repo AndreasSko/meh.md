@@ -238,6 +238,80 @@ final class NotebookSnippetsUITests: XCTestCase {
                       "Ordinary notes should retain literal braces")
     }
 
+    func testEditSnippetFromMenuThenInsertOrGoBack() throws {
+        continueAfterFailure = false
+        let app = makeApp(fixture: "snippets")
+        app.launch()
+        let log = fileTitle("Training log", in: app)
+        XCTAssertTrue(log.waitForExistence(timeout: 15))
+        log.tap()
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let original = "20.10 – Pull\n- Pull-ups: 7, 7\n- Ring rows: 12, 10\n\n"
+        XCTAssertEqual(editor.value as? String, original)
+        // A cursor away from the end proves the insertion waits for the
+        // note to restore it, rather than using a freshly loaded editor's.
+        let title = app.buttons["note-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: editor.frame.minX + 4, dy: title.frame.maxY + 16
+        )).tap()
+
+        editSnippet("Pull", in: "Training", app: app)
+        let source = "{{date:short}} – Pull\n- Pull-ups: \n- Ring rows: \n"
+        XCTAssertEqual(editor.value as? String, source)
+        let insert = app.buttons["note-snippet-return-insert"]
+        XCTAssertTrue(insert.waitForExistence(timeout: 5))
+        capture(app, "snippet-edit-after")
+        editor.tap()
+        editor.typeText("- Face pulls: ")
+        insert.tap()
+
+        let added = "– Pull\n- Pull-ups: \n- Ring rows: \n- Face pulls: "
+        let inserted = NSPredicate(format: "value CONTAINS %@ AND value ENDSWITH %@",
+                                   added, original)
+        expectation(for: inserted, evaluatedWith: editor)
+        waitForExpectations(timeout: 10)
+        XCTAssertFalse(insert.exists, "The bar belongs to the snippet only")
+        let afterInsert = editor.value as? String ?? ""
+        capture(app, "snippet-return-insert-after")
+
+        editSnippet("Pull", in: "Training", app: app)
+        XCTAssertEqual(editor.value as? String, source + "- Face pulls: ",
+                       "Editing must keep the snippet's own changes")
+        XCTAssertTrue(insert.waitForExistence(timeout: 5))
+        let back = app.buttons["note-link-back"]
+        (back.exists ? back : app.navigationBars.buttons.firstMatch).tap()
+        let unchanged = NSPredicate(format: "value == %@", afterInsert)
+        expectation(for: unchanged, evaluatedWith: editor)
+        waitForExpectations(timeout: 10)
+        XCTAssertFalse(insert.exists)
+
+        // Holding the button and moving still rearranges it. The move is
+        // slow, like a finger, so the menu hands over to the drag.
+        editor.tap()
+        revealSnippetMenu(in: app)
+        let button = app.buttons["editor-snippet-menu"]
+        let neighbor = app.collectionViews["editor-keyboard-toolbar"].buttons
+            .allElementsBoundByIndex
+            .filter { $0.isHittable && $0.frame.midX < button.frame.midX }
+            .max { $0.frame.midX < $1.frame.midX }
+        // Elements bound by index follow the position, not the button.
+        let left = app.buttons[try XCTUnwrap(neighbor).identifier]
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: button.frame.midX, dy: button.frame.midY))
+            .press(forDuration: 0.8, thenDragTo: origin.withOffset(CGVector(
+                dx: left.frame.midX - 20, dy: left.frame.midY
+            )), withVelocity: .slow, thenHoldForDuration: 0.5)
+        let moved = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in button.frame.midX < left.frame.midX },
+            object: app
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 5), .completed)
+        XCTAssertFalse(app.staticTexts["Edit Snippet"].exists)
+        XCTAssertEqual(editor.value as? String, afterInsert)
+    }
+
     func testMultipleSnippetFolderRootsKeepTheirNames() throws {
         continueAfterFailure = false
         let app = makeApp()
@@ -400,10 +474,12 @@ final class NotebookSnippetsUITests: XCTestCase {
             .exists)
     }
 
-    private func makeApp(mode: String = "source") -> XCUIApplication {
+    private func makeApp(mode: String = "source",
+                         fixture: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
+        app.launchEnvironment["MEH_NOTEBOOK_TEST_FIXTURE"] = fixture
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", mode]
         return app
@@ -515,6 +591,17 @@ final class NotebookSnippetsUITests: XCTestCase {
         revealSnippetMenu(in: app)
         let menu = app.buttons["editor-snippet-menu"]
         menu.tap()
+    }
+
+    private func editSnippet(_ name: String, in folder: String,
+                             app: XCUIApplication) {
+        revealSnippetMenu(in: app)
+        app.buttons["editor-snippet-menu"].press(forDuration: 1)
+        XCTAssertTrue(app.staticTexts["Edit Snippet"].waitForExistence(timeout: 5),
+                      "Holding the button opens the menu for editing")
+        capture(app, "snippet-edit-menu-after")
+        chooseMenuItem(folder, in: app)
+        chooseMenuItem(name, in: app)
     }
 
     private func revealSnippetMenu(in app: XCUIApplication) {

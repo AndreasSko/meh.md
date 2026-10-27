@@ -479,6 +479,35 @@ final class NotebookNavigationStateTests: XCTestCase {
 }
 
 @MainActor
+final class NotebookSnippetReturnTests: XCTestCase {
+    func testSnippetReturnLastsWhileTheSnippetStaysSelected() async throws {
+        let fixture = try await Fixture()
+        let note = try await fixture.replica.createNote(name: "Log.md")
+        let snippet = try await fixture.replica.createNote(name: "Pull.md")
+        let state = fixture.makeState()
+        try await state.installSelection(
+            note, session: fixture.replica.openNote(note), recordActivity: true)
+
+        state.beginSnippetEdit(snippet, from: note)
+        XCTAssertNil(state.snippetReturn, "Only a selected snippet can return")
+
+        let snippetSession = try await fixture.replica.openNote(snippet)
+        state.installSelection(snippet, session: snippetSession, recordActivity: true)
+        state.beginSnippetEdit(snippet, from: note)
+        XCTAssertEqual(state.snippetReturn,
+                       NotebookSnippetReturn(noteID: note, snippetID: snippet))
+        state.installSelection(snippet, session: snippetSession, recordActivity: false)
+        XCTAssertNotNil(state.snippetReturn, "Reselecting the snippet keeps it")
+
+        try await state.installSelection(
+            note, session: fixture.replica.openNote(note), recordActivity: true)
+        XCTAssertNil(state.snippetReturn)
+        state.installSelection(snippet, session: snippetSession, recordActivity: true)
+        XCTAssertNil(state.snippetReturn, "Opening it again without Edit has no return")
+    }
+}
+
+@MainActor
 private final class Fixture {
     let root: URL
     let replica: NotebookReplica

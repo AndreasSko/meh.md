@@ -94,6 +94,10 @@ private struct EditorSnippetMenu: View {
                     insert: {
                         navigation.insertSnippet?($0)
                         didCommit?()
+                    },
+                    edit: {
+                        navigation.editSnippet?($0)
+                        didCommit?()
                     }
                 )
             }
@@ -109,15 +113,25 @@ private struct EditorSnippetMenu: View {
 private struct EditorSnippetMenuContent: View {
     let entries: [EditorSnippetMenuEntry]
     let insert: (UUID) -> Void
+    let edit: (UUID) -> Void
 
     var body: some View {
         ForEach(entries) { entry in
             if let id = entry.snippetID {
                 Button(entry.name) { insert(id) }
                     .accessibilityIdentifier("editor-snippet-choice-" + id.uuidString)
+                    #if os(macOS)
+                    // Holding Option turns a snippet into its Edit item, like
+                    // other alternate items in Mac menus.
+                    .modifierKeyAlternate(.option) {
+                        Button("Edit “\(entry.name)”") { edit(id) }
+                            .accessibilityIdentifier("editor-snippet-edit-" + id.uuidString)
+                    }
+                    #endif
             } else {
                 Menu {
-                    EditorSnippetMenuContent(entries: entry.children, insert: insert)
+                    EditorSnippetMenuContent(entries: entry.children, insert: insert,
+                                             edit: edit)
                 } label: {
                     Label(entry.name, systemImage: "folder")
                 }
@@ -1347,7 +1361,9 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             if definition.id == "snippets" {
                 cell.configureMenu(makeSnippetMenu(), image: "text.badge.plus",
                                    title: String(localized: "Insert Snippet"),
-                                   identifier: "editor-snippet-menu")
+                                   identifier: "editor-snippet-menu",
+                                   holdMenu: navigation.editSnippet == nil
+                                       ? nil : makeSnippetMenu(editing: true))
             }
             if definition.command == .heading {
                 cell.configureHeadingPicker()
@@ -1363,27 +1379,70 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             CGSize(width: 44, height: 44)
         }
 
-        private func makeSnippetMenu() -> UIMenu {
-            guard !snippetEntries.isEmpty else {
-                return UIMenu(children: [
-                    UIAction(title: String(localized: "No Snippets Yet"),
-                             attributes: .disabled) { _ in },
-                    UIAction(title: String(localized: "Use as Snippet in Files"),
-                             attributes: .disabled) { _ in },
-                ])
-            }
-            return UIMenu(children: snippetEntries.map(makeSnippetEntry))
+        /// The bar, not the button, owns a button's hold menu, so moving the
+        /// finger still turns the press into a drag that rearranges it.
+        func collectionView(
+            _ collectionView: UICollectionView,
+            contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point: CGPoint
+        ) -> UIContextMenuConfiguration? {
+            guard indexPaths.count == 1, let indexPath = indexPaths.first,
+                  let cell = collectionView.cellForItem(at: indexPath) as? KeyboardToolbarCell,
+                  cell.isEnabled, let menu = cell.holdMenu else { return nil }
+            return UIContextMenuConfiguration(actionProvider: { _ in menu })
         }
 
-        private func makeSnippetEntry(_ entry: EditorSnippetMenuEntry) -> UIMenuElement {
+        func collectionView(
+            _ collectionView: UICollectionView,
+            contextMenuConfiguration configuration: UIContextMenuConfiguration,
+            highlightPreviewForItemAt indexPath: IndexPath
+        ) -> UITargetedPreview? {
+            guard let cell = collectionView.cellForItem(at: indexPath),
+                  let parameters = previewParameters(at: indexPath) else { return nil }
+            return UITargetedPreview(view: cell, parameters: parameters)
+        }
+
+        /// A button with a hold menu leaves touches to the bar, so its tap
+        /// arrives here.
+        func collectionView(_ collectionView: UICollectionView,
+                            didSelectItemAt indexPath: IndexPath) {
+            collectionView.deselectItem(at: indexPath, animated: false)
+            guard let cell = collectionView.cellForItem(at: indexPath) as? KeyboardToolbarCell,
+                  cell.isEnabled, cell.holdMenu != nil else { return }
+            cell.openMenu()
+        }
+
+        private func makeSnippetMenu(editing: Bool = false) -> UIMenu {
+            let children = snippetEntries.isEmpty ? [
+                UIAction(title: String(localized: "No Snippets Yet"),
+                         attributes: .disabled) { _ in },
+                UIAction(title: String(localized: "Use as Snippet in Files"),
+                         attributes: .disabled) { _ in },
+            ] : snippetEntries.map { makeSnippetEntry($0, editing: editing) }
+            // Both menus list the same snippets, so the title tells them apart.
+            return UIMenu(title: editing ? String(localized: "Edit Snippet") : "",
+                          children: children)
+        }
+
+        private func makeSnippetEntry(
+            _ entry: EditorSnippetMenuEntry, editing: Bool
+        ) -> UIMenuElement {
             if let id = entry.snippetID {
                 return UIAction(
                     title: entry.name,
-                    identifier: UIAction.Identifier("editor-snippet-choice-" + id.uuidString)
-                ) { [weak self] _ in self?.navigation.insertSnippet?(id) }
+                    identifier: UIAction.Identifier(
+                        (editing ? "editor-snippet-edit-" : "editor-snippet-choice-")
+                            + id.uuidString
+                    )
+                ) { [weak self] _ in
+                    if editing {
+                        self?.navigation.editSnippet?(id)
+                    } else {
+                        self?.navigation.insertSnippet?(id)
+                    }
+                }
             }
             return UIMenu(title: entry.name, image: UIImage(systemName: "folder"),
-                          children: entry.children.map(makeSnippetEntry))
+                          children: entry.children.map { makeSnippetEntry($0, editing: editing) })
         }
 
         private func presentHeadingPicker(from cell: KeyboardToolbarCell) {
@@ -1684,6 +1743,8 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
         button.menu = nil
         button.isContextMenuInteractionEnabled = false
         button.showsMenuAsPrimaryAction = false
+        button.isUserInteractionEnabled = true
+        holdMenu = nil
         button.setTitle(nil, for: .normal)
         button.setImage(UIImage(systemName: image)?.withConfiguration(
             UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)
@@ -1715,7 +1776,11 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
                       identifier: "editor-table-menu")
     }
 
-    func configureMenu(_ menu: UIMenu, image: String, title: String, identifier: String) {
+    /// A press that starts on a button never reaches the bar's context menu.
+    /// A button with a hold menu therefore leaves touches to the bar, which
+    /// opens both menus and still drags the button when the finger moves.
+    func configureMenu(_ menu: UIMenu, image: String, title: String, identifier: String,
+                       holdMenu: UIMenu? = nil) {
         action = nil
         var configuration = UIButton.Configuration.plain()
         configuration.image = UIImage(systemName: image)
@@ -1728,6 +1793,17 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
         button.configuration = configuration
         button.menu = menu
         button.isContextMenuInteractionEnabled = false
+        button.isUserInteractionEnabled = holdMenu == nil
+        self.holdMenu = holdMenu
+        if let holdMenu {
+            // VoiceOver reaches the hold menu without a long press.
+            button.accessibilityCustomActions?.insert(UIAccessibilityCustomAction(
+                name: holdMenu.title
+            ) { [weak button] _ in
+                button?.openMenu(holdMenu)
+                return true
+            }, at: 0)
+        }
         button.accessibilityLabel = title
         button.accessibilityIdentifier = identifier
     }
@@ -1747,6 +1823,19 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
         button.isContextMenuInteractionEnabled = false
     }
 
+    private(set) var holdMenu: UIMenu?
+
+    var isEnabled: Bool { button.isEnabled }
+
+    override var isHighlighted: Bool {
+        // A button that leaves touches to the bar still shows the press.
+        didSet { button.isHighlighted = isHighlighted }
+    }
+
+    func openMenu() {
+        button.openMenu()
+    }
+
     @objc private func activate() {
         if button.menu != nil {
             button.openMenu()
@@ -1757,8 +1846,15 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
 }
 
 private final class KeyboardToolbarButton: UIButton {
-    func openMenu() {
+    private var replacedMenu: UIMenu?
+
+    /// Opens the button's menu, or `other` in its place this one time.
+    func openMenu(_ other: UIMenu? = nil) {
         guard !showsMenuAsPrimaryAction else { return }
+        if let other {
+            replacedMenu = menu
+            menu = other
+        }
         // A primary menu normally opens on touch-down, consuming the long
         // press used to reorder toolbar items. Open after touch-up instead.
         isContextMenuInteractionEnabled = true
@@ -1774,6 +1870,10 @@ private final class KeyboardToolbarButton: UIButton {
         super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
         showsMenuAsPrimaryAction = false
         isContextMenuInteractionEnabled = false
+        if let replacedMenu {
+            menu = replacedMenu
+            self.replacedMenu = nil
+        }
     }
 }
 

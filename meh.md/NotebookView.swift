@@ -477,6 +477,12 @@ struct NotebookView: View {
                         )
                         .mehCrumple(trigger: trashedOpenNote)
                         }
+                        if let snippetReturn = visibleSnippetReturn {
+                            NotebookSnippetReturnBar(title: snippetReturnTitle(snippetReturn),
+                                                     isEnabled: !busy) {
+                                returnAndInsertSnippet(snippetReturn)
+                            }
+                        }
                         if let completion = variableCompletion, canCompleteSnippetVariable {
                             let completionText = linkCompletionText
                             let navigation = editorNavigation
@@ -758,6 +764,7 @@ struct NotebookView: View {
         // A departing screen must keep its own preview throughout that gap.
         let showsLiveEditor = isCurrent && route?.noteID == selectedID
         let showsHistory = showsLiveEditor && historyBrowser != nil
+        let showsSnippetReturn = showsLiveEditor && visibleSnippetReturn != nil
         let isRestoring = session?.isEditingEnabled == true
             && (route.map { restoringLinkRouteID == $0.id } ?? false)
         return ZStack {
@@ -782,10 +789,11 @@ struct NotebookView: View {
             }
         }
         // Editor previews manage their own bar insets. History uses a SwiftUI
-        // heading, which must stay below the status and navigation bars.
+        // heading, which must stay below the status and navigation bars, and
+        // the snippet return bar must stay above the home indicator.
         // Keep editor geometry fixed when a link preview is removed.
-        .ignoresSafeArea(.container,
-                         edges: showsHistory ? .bottom : [.top, .bottom])
+        .ignoresSafeArea(.container, edges: showsHistory ? .bottom
+                         : showsSnippetReturn ? .top : [.top, .bottom])
         .animation(nil, value: isRestoring)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -798,7 +806,8 @@ struct NotebookView: View {
         }
     }
 
-    private func navigateCompactLinks(to routes: [NotebookLinkRoute]) {
+    private func navigateCompactLinks(to routes: [NotebookLinkRoute],
+                                      onReturn: (@MainActor () -> Void)? = nil) {
         guard !busy, routes.count < linkRoutes.count,
               Array(linkRoutes.prefix(routes.count)) == routes else { return }
         let steps = linkRoutes.count - routes.count
@@ -808,7 +817,8 @@ struct NotebookView: View {
         let previousRoutes = linkRoutes
         rememberLinkVisitPreview()
         linkRoutes = routes
-        navigateLinkHistory(back: true, steps: steps, compactRoutesBeforePop: previousRoutes)
+        navigateLinkHistory(back: true, steps: steps, compactRoutesBeforePop: previousRoutes,
+                            onReturn: onReturn)
     }
     #endif
 
@@ -817,7 +827,10 @@ struct NotebookView: View {
         .task(id: ObjectIdentifier(editorNavigation)) { configureSnippetNavigation() }
         .onChange(of: replica.snippets, initial: true) { _, _ in updateSnippetMenu() }
         .onChange(of: replica.snippetSources) { _, _ in updateSnippetMenu() }
-        .onChange(of: busy) { _, _ in updateSnippetMenu() }
+        .onChange(of: busy) { _, _ in
+            updateSnippetMenu()
+            insertPendingSnippet()
+        }
         .onChange(of: historyBrowser == nil) { _, _ in updateSnippetMenu() }
         .onChange(of: session?.isEditingEnabled) { _, _ in updateSnippetMenu() }
     }
@@ -2444,6 +2457,10 @@ struct NotebookView: View {
     private func configureSnippetNavigation() {
         let navigation = editorNavigation
         updateSnippetMenu()
+        navigation.editSnippet = { [weak navigation] id in
+            guard let navigation, navigation === editorNavigation else { return }
+            editSnippet(id)
+        }
         navigation.insertSnippet = { [weak navigation] id in
             guard let navigation, navigation === editorNavigation,
                   !busy, historyBrowser == nil, let targetID = selectedID,
@@ -2477,6 +2494,59 @@ struct NotebookView: View {
                 }
             }
         }
+    }
+
+    private func editSnippet(_ id: UUID) {
+        guard !busy, historyBrowser == nil, let noteID = selectedID else { return }
+        guard noteID != id else {
+            editorNavigation.focusEditor?()
+            return
+        }
+        perform {
+            try await visitLinkedNote(id, fragment: nil)
+            navigationState.beginSnippetEdit(id, from: noteID)
+        }
+    }
+
+    /// Offered while editing a snippet opened from a note, until leaving it.
+    private var visibleSnippetReturn: NotebookSnippetReturn? {
+        guard let snippetReturn = navigationState.snippetReturn,
+              historyBrowser == nil, session?.isEditingEnabled == true,
+              linkHistory.backTarget?.noteID == snippetReturn.noteID,
+              replica.snippets.contains(where: { $0.id == snippetReturn.snippetID })
+        else { return nil }
+        return snippetReturn
+    }
+
+    private func snippetReturnTitle(_ snippetReturn: NotebookSnippetReturn) -> String {
+        replica.placements.first { $0.item.id == snippetReturn.noteID }
+            .map { NotebookNoteName.title(from: $0.displayName) } ?? ""
+    }
+
+    private func returnAndInsertSnippet(_ snippetReturn: NotebookSnippetReturn) {
+        guard !busy, linkHistory.backTarget?.noteID == snippetReturn.noteID else { return }
+        let navigationState = navigationState
+        let onReturn = {
+            navigationState.pendingSnippetInsertion = snippetReturn
+            insertPendingSnippet()
+        }
+        #if os(iOS)
+        if usesCompactLinkNavigation {
+            navigateCompactLinks(to: Array(linkRoutes.dropLast()), onReturn: onReturn)
+            return
+        }
+        #endif
+        navigateLinkHistory(back: true, onReturn: onReturn)
+    }
+
+    /// Inserting needs the returned note's editor and an idle notebook, which
+    /// may arrive in either order.
+    private func insertPendingSnippet() {
+        guard let pending = navigationState.pendingSnippetInsertion, !busy else { return }
+        navigationState.pendingSnippetInsertion = nil
+        guard selectedID == pending.noteID else { return }
+        editorNavigation.focusEditor?()
+        editorNavigation.insertSnippet?(pending.snippetID)
     }
 
     private func setTemplateSource(_ id: UUID, enabled: Bool) {
@@ -3893,8 +3963,10 @@ struct NotebookView: View {
         return matching.count == 1 ? matching[0].range : nil
     }
 
+    /// `onReturn` runs once the destination has restored its position.
     private func navigateLinkHistory(back: Bool, steps: Int = 1,
-                                     compactRoutesBeforePop: [NotebookLinkRoute]? = nil) {
+                                     compactRoutesBeforePop: [NotebookLinkRoute]? = nil,
+                                     onReturn: (@MainActor () -> Void)? = nil) {
         let target = back ? linkHistory.backTarget(steps: steps) : linkHistory.forwardTarget
         guard let target else { return }
         let journeyID = linkJourneyID
@@ -3940,25 +4012,24 @@ struct NotebookView: View {
                 #endif
                 incoming.whenAttached { [weak incoming] in
                     guard let incoming, selectedID == target.noteID else { return }
-                    let finishRestoration = {
+                    let finishRestoration: () -> Void = {
                         #if os(iOS)
                         guard incoming === editorNavigation, linkJourneyID == journeyID,
                               restoringLinkRouteID == restorationRouteID else { return }
                         restoringLinkRouteID = nil
                         #endif
+                        onReturn?()
                     }
                     if let data = target.position,
                        let position = try? JSONDecoder().decode(MarkdownEditorPosition.self, from: data) {
-                        #if os(iOS)
-                        if usesCompactLinkNavigation, let restore = incoming.restorePositionAndNotify {
+                        // Restoring is asynchronous; `onReturn` needs the
+                        // restored selection, not the editor's initial one.
+                        if let restore = incoming.restorePositionAndNotify {
                             restore(position, finishRestoration)
                         } else {
                             incoming.restorePosition?(position)
                             finishRestoration()
                         }
-                        #else
-                        incoming.restorePosition?(position)
-                        #endif
                     } else {
                         finishRestoration()
                     }

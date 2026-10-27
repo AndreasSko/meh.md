@@ -17,6 +17,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case flair
     case readme
     case longNote = "long-note"
+    case snippets
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
@@ -218,6 +219,25 @@ enum NotebookUITestFixture: String, CaseIterable {
             #if !NOTEBOOK_PERFORMANCE_HOST
             try await seedReadme(replica)
             #endif
+        case .snippets:
+            // One registered folder flattens its root, leaving Training as
+            // the folder the snippet menu expands.
+            let snippets = try await replica.createFolder(name: "Snippets")
+            let training = try await replica.createFolder(name: "Training", parentID: snippets)
+            for (name, text) in [
+                ("Legs", "{{date:short}} – Legs\n- Squats: \n- Lunges: \n"),
+                ("Push", "{{date:short}} – Push\n- Dips: \n- Push-ups: \n"),
+                ("Pull", "{{date:short}} – Pull\n- Pull-ups: \n- Ring rows: \n"),
+            ] {
+                _ = try await replica.createNote(name: "\(name).md", text: text,
+                                                 parentID: training)
+            }
+            _ = try await replica.createNote(name: "Log entry.md", text: "**{{date:short}}** – ",
+                                             parentID: snippets)
+            try await replica.setSnippetSource(snippets, enabled: true)
+            _ = try await replica.createNote(
+                name: "Training log.md",
+                text: "20.10 – Pull\n- Pull-ups: 7, 7\n- Ring rows: 12, 10\n\n")
         case .historyTour:
             #if !NOTEBOOK_PERFORMANCE_HOST
             try await seedHistoryTour(replica)

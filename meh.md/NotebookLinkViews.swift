@@ -292,6 +292,39 @@ private struct NotebookLinkSuggestionRow: View {
     }
 }
 
+/// While editing a snippet opened from a note, insert it there in one step.
+struct NotebookSnippetReturnBar: View {
+    let title: String
+    let isEnabled: Bool
+    let insert: () -> Void
+    @Environment(\.mehPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("Snippet")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Button(action: insert) {
+                Label("Insert into “\(title)”", systemImage: "text.badge.plus")
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            .buttonStyle(.glassProminent)
+            .tint(palette.highlighterColor)
+            .foregroundStyle(MehStyle.onHighlighterColor)
+            .disabled(!isEnabled)
+            .accessibilityIdentifier("note-snippet-return-insert")
+        }
+        .padding(.leading, 16).padding(.trailing, 6).padding(.vertical, 6)
+        .frame(maxWidth: 480)
+        .glassEffect(.regular, in: .capsule)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(MehStyle.paperColor)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("note-snippet-return")
+    }
+}
+
 /// Variable tokens stay literal in the source and expand at snippet insertion.
 struct NotebookSnippetVariableSuggestions: View {
     let variables: [NotebookSnippetVariable]
