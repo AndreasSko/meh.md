@@ -690,6 +690,8 @@ struct NotebookView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(MehStyle.paperColor.ignoresSafeArea())
     }
 
     private var usesCompactLinkNavigation: Bool {
