@@ -416,7 +416,8 @@ struct CloudKitTransportState: Codable, Equatable {
     /// cannot establish that a record has already passed validation.
     fileprivate func validate(
         expectedProtocolVersion: Int,
-        reusing previous: CloudKitTransportState?
+        reusing previous: CloudKitTransportState?,
+        progress: ((_ completed: Int, _ total: Int) -> Void)? = nil
     ) throws {
         guard protocolVersion == expectedProtocolVersion else {
             throw SyncError.scopeChanged
@@ -424,6 +425,16 @@ struct CloudKitTransportState: Codable, Equatable {
         guard hasUnexpectedDeletion || remoteDeletionHaltReason == nil else {
             throw SyncError.invalidRecord
         }
+        let total = progress == nil ? 0 : inbox.count + outbox.count
+        let interval = max(1, total / 100)
+        var completed = 0
+        func advance() {
+            completed += 1
+            if completed == total || completed.isMultiple(of: interval) {
+                progress?(completed, total)
+            }
+        }
+        progress?(0, total)
         for (index, slot) in inboxSlots.enumerated() {
             guard let record = slot else { continue }
             let unchanged = previous.map {
@@ -434,6 +445,7 @@ struct CloudKitTransportState: Codable, Equatable {
             guard record.protocolVersion == protocolVersion else {
                 throw SyncError.invalidRecord
             }
+            advance()
         }
         for (id, record) in outbox {
             if previous?.outbox[id] != record { try record.validate() }
@@ -441,6 +453,7 @@ struct CloudKitTransportState: Codable, Equatable {
                   record.protocolVersion == protocolVersion else {
                 throw SyncError.invalidRecord
             }
+            advance()
         }
         guard purgedRecordIDs.allSatisfy({ id in
             id.count == 64 && id.utf8.allSatisfy {
@@ -504,6 +517,10 @@ struct CloudKitTransportState: Codable, Equatable {
     }
 }
 
+/// Reports records checked while opening saved sync state in full.
+public typealias CloudKitStateValidationProgress =
+    @Sendable (_ completed: Int, _ total: Int) -> Void
+
 actor CloudKitTransportStateStore {
     private let fileURL: URL
     private let diskStorage: CloudKitStateDiskStorage
@@ -529,13 +546,15 @@ actor CloudKitTransportStateStore {
         zoneName: String,
         protocolVersion: Int = 1,
         recordValidationStamp: String? = CloudKitStateDiskStorage.buildStamp,
-        writeState: (@Sendable (Data, URL) throws -> Void)? = nil
+        writeState: (@Sendable (Data, URL) throws -> Void)? = nil,
+        validationProgress: CloudKitStateValidationProgress? = nil
     ) async throws -> CloudKitTransportStateStore {
         try CloudKitTransportStateStore(
             directory: directory, accountRecordName: accountRecordName,
             zoneName: zoneName, protocolVersion: protocolVersion,
             recordValidationStamp: recordValidationStamp,
-            writeState: writeState
+            writeState: writeState,
+            validationProgress: validationProgress
         )
     }
 
@@ -545,7 +564,8 @@ actor CloudKitTransportStateStore {
         zoneName: String,
         protocolVersion: Int = 1,
         recordValidationStamp: String? = CloudKitStateDiskStorage.buildStamp,
-        writeState: (@Sendable (Data, URL) throws -> Void)? = nil
+        writeState: (@Sendable (Data, URL) throws -> Void)? = nil,
+        validationProgress: CloudKitStateValidationProgress? = nil
     ) throws {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true
@@ -570,10 +590,17 @@ actor CloudKitTransportStateStore {
                 // Every record this build writes passes full validation first,
                 // and loading checked each payload against its digest. Only
                 // the record decoding is skipped; every state invariant runs.
-                try state.validate(
-                    expectedProtocolVersion: protocolVersion,
-                    reusing: decoded.validatedByThisBuild ? state : nil
-                )
+                // Only the slow full check reports progress.
+                if decoded.validatedByThisBuild {
+                    try state.validate(
+                        expectedProtocolVersion: protocolVersion, reusing: state
+                    )
+                } else {
+                    try state.validate(
+                        expectedProtocolVersion: protocolVersion, reusing: nil,
+                        progress: validationProgress
+                    )
+                }
             } catch {
                 if error as? SyncError == .scopeChanged { throw error }
                 throw CloudKitSyncTransportError.corruptState
@@ -1892,7 +1919,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         stateDirectory: URL,
         automaticallySync: Bool = false,
         expectedScope: String? = nil,
-        expectedNotebookID: UUID? = nil
+        expectedNotebookID: UUID? = nil,
+        validationProgress: CloudKitStateValidationProgress? = nil
     ) async throws -> CloudKitSyncTransport {
         try await make(
             containerIdentifier: containerIdentifier,
@@ -1901,7 +1929,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             mode: .notebook,
             automaticallySync: automaticallySync,
             expectedScope: expectedScope,
-            expectedNotebookID: expectedNotebookID
+            expectedNotebookID: expectedNotebookID,
+            validationProgress: validationProgress
         )
     }
 
@@ -1962,7 +1991,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         expectedNotebookID: UUID? = nil,
         labRunID: UUID? = nil,
         services: CloudKitServices? = nil,
-        writeState: (@Sendable (Data, URL) throws -> Void)? = nil
+        writeState: (@Sendable (Data, URL) throws -> Void)? = nil,
+        validationProgress: CloudKitStateValidationProgress? = nil
     ) async throws -> CloudKitSyncTransport {
         if let labRunID {
             guard mode == .notebook else { throw SyncError.scopeChanged }
@@ -2013,7 +2043,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
             accountRecordName: userRecordID.recordName,
             zoneName: zoneName,
             protocolVersion: mode.protocolVersion,
-            writeState: writeState
+            writeState: writeState,
+            validationProgress: validationProgress
         )
         if let expectedNotebookID {
             let state = await store.snapshot()

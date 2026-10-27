@@ -350,6 +350,34 @@ final class CloudKitStateValidationTests: XCTestCase {
         XCTAssertEqual(try stamp(at: fileURL), "build-a")
     }
 
+    func testOnlyFullStartupValidationReportsProgress() async throws {
+        let directory = temporaryDirectory()
+        let store = try CloudKitTransportStateStore(
+            directory: directory, accountRecordName: "account", zoneName: "zone",
+            recordValidationStamp: "build-a"
+        )
+        let records = try (0..<3).map { try makeRecord(text: "saved \($0)") }
+        try await store.update { state in
+            for record in records { try state.appendToInbox(record) }
+        }
+
+        let reports = ProgressReports()
+        func reopen(_ stamp: String) throws {
+            _ = try CloudKitTransportStateStore(
+                directory: directory, accountRecordName: "account", zoneName: "zone",
+                recordValidationStamp: stamp,
+                validationProgress: { reports.append($0, $1) }
+            )
+        }
+        try reopen("build-b")
+        XCTAssertEqual(reports.values.map(\.0), [0, 1, 2, 3])
+        XCTAssertTrue(reports.values.allSatisfy { $0.1 == 3 })
+
+        reports.removeAll()
+        try reopen("build-b")
+        XCTAssertTrue(reports.values.isEmpty)
+    }
+
     func testBuildStampIsTheImageUUID() throws {
         let stamp = try XCTUnwrap(CloudKitStateDiskStorage.buildStamp)
         XCTAssertNotNil(UUID(uuidString: stamp))
@@ -405,4 +433,15 @@ final class CloudKitStateValidationTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: json)
         return try JSONDecoder().decode(CloudKitTransportState.self, from: data)
     }
+}
+
+private final class ProgressReports: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reports: [(Int, Int)] = []
+
+    var values: [(Int, Int)] { lock.withLock { reports } }
+    func append(_ completed: Int, _ total: Int) {
+        lock.withLock { reports.append((completed, total)) }
+    }
+    func removeAll() { lock.withLock { reports.removeAll() } }
 }

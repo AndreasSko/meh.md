@@ -63,6 +63,14 @@ starts a new attempt with its own counters.
 - A known CloudKit cooldown is shown as a retry deadline, including persisted
   availability cooldowns encountered before transport construction completes.
 
+Before an exchange starts, sync opens its saved iCloud state. Usually this is
+quick, because records saved by the same app build are trusted after their
+digest check (see [sync performance](sync-performance.md)). After an app
+update, every saved record is checked in full once, which can take many
+seconds. That check shows "Verifying saved sync data…" with a count of saved
+items verified. It has no share of the exchange budget, so the bar stays
+indeterminate, and late reports from a finished check are ignored.
+
 Progress is transient coordinator state, separate from Automerge content and
 catalog history. Durable progress continues to use document IDs, acknowledged
 heads, and replay cursors. No note format or cloud zone migration is required.
