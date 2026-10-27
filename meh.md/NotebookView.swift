@@ -335,6 +335,11 @@ struct NotebookView: View {
                 }
             }
             .background(NotebookSidebarPalette.background.ignoresSafeArea())
+            #if os(iOS)
+            .overlay(alignment: .trailing) {
+                if horizontalSizeClass == .regular { NotebookSidebarDivider() }
+            }
+            #endif
             .searchable(text: $search.query, isPresented: $search.isPresented,
                         placement: .toolbar, prompt: "Search all notes")
             .searchFocused($searchFocused)
