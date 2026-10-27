@@ -53,7 +53,13 @@ final class NotebookUITestFixtureTests: XCTestCase {
                 let note = try await replica.openNote(large.item.id)
                 XCTAssertGreaterThan(note.text.utf8.count, 100_000)
                 XCTAssertTrue(note.text.contains("Fictional revision 4."))
-                XCTAssertGreaterThan(try note.historyVersions().count, 1)
+                // Its revisions follow within moments, so they form one
+                // step after the created text.
+                var versions: [NoteHistoryVersion] = []
+                for try await update in await (try note.makeHistoryReader()).details(near: nil) {
+                    versions = update.versions
+                }
+                XCTAssertFalse(versions.isEmpty)
                 let wrongRun = root.appending(path: "Documents/NotebookPreviewTests/other")
                 try await NotebookUITestFixture.seedIfRequested(
                     replica, isPreview: true, directory: directory,

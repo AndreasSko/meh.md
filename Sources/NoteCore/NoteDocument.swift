@@ -24,16 +24,14 @@ final class NoteDocument {
     private static let createdAtKey = "createdAt"
     private static let modifiedAtKey = "modifiedAt"
     private static let restoreChangeMessage = "Restore note text"
-    private static let typingRunMaximumGap: TimeInterval = 10
+    /// A longer pause between two changes starts a new edit session.
+    private static let sessionMaximumGap: TimeInterval = 3 * 60
+    /// Inside a session, a longer pause ends a step of its details.
+    private static let stepMaximumGap: TimeInterval = 5
 
     private let document: Document
     private let textObject: ObjId
-    private var historyCache: (
-        heads: Set<String>,
-        versions: [NoteHistoryVersion],
-        isComplete: Bool,
-        frontiers: [String: Set<ChangeHash>]
-    )?
+    private var historyCache: (heads: Set<String>, builder: HistoryBuilder)?
 
     let noteID: UUID
 
@@ -92,18 +90,30 @@ final class NoteDocument {
         document.getHistory().count
     }
 
-    /// Past text states in causal order. The chunkable builder publishes
-    /// finalized versions without blocking callers on the complete index.
-    func historyVersions() throws -> [NoteHistoryVersion] {
-        if let historyCache, historyCache.heads == heads,
-           historyCache.isComplete {
-            return historyCache.versions
+    /// Edit sessions in causal order; `detailed` also loads the steps
+    /// inside them. Readers load details only where History looks.
+    func historyVersions(detailed: Bool = false) throws -> [NoteHistoryVersion] {
+        let builder: HistoryBuilder
+        if let historyCache, historyCache.heads == heads {
+            builder = historyCache.builder
+        } else {
+            builder = try makeHistoryBuilder()
+            installHistoryIndex(builder)
         }
-        let builder = try makeHistoryBuilder()
-        while !builder.isComplete {
-            try builder.advance(batchSize: 128)
+        do {
+            while !builder.isComplete {
+                try builder.advance(batchSize: 128)
+            }
+            if detailed {
+                for session in 0 ..< builder.sessionCount {
+                    while try !builder.advanceDetails(ofSession: session, batchSize: 16) {}
+                }
+            }
+        } catch {
+            // A failed builder may have skipped part of the history.
+            historyCache = nil
+            throw error
         }
-        installHistoryIndex(builder)
         return builder.versions
     }
 
@@ -112,39 +122,99 @@ final class NoteDocument {
     }
 
     func installHistoryIndex(_ builder: HistoryBuilder) {
-        historyCache = (
-            heads, builder.versions, builder.isComplete, builder.frontiers
-        )
+        historyCache = (heads, builder)
     }
 
-    /// Only the unresolved last text state is mutable. A subsequent body
-    /// change proves the previous state historical and fixes its typing-run
-    /// boundary, so published prefix versions never change identity.
+    /// Indexing in two passes keeps long notes fast. Comparing two states
+    /// costs about as much as the whole note, so the first pass compares
+    /// only once per edit session. It groups changes from their recorded
+    /// author, time and message alone. The second pass compares once per
+    /// step, the typing between two short pauses, of one session when a
+    /// reader asks for its details.
+    ///
+    /// Only the last session is unresolved: a later session with text
+    /// changes proves it historical. Published stops keep their identity
+    /// when details load.
     final class HistoryBuilder {
-        private struct Candidate {
+        private struct Session {
+            var changes: Range<Int>
+            let start: Set<ChangeHash>
+            var end: Set<ChangeHash>
+            let date: Date?
+            let addedCharacters: Int
+            let removedCharacters: Int
+            var stop: NoteHistoryVersion?
+            /// The states before the last one, once loaded.
+            var states: [NoteHistoryVersion]?
+            /// The last state as the details pass saw it.
+            var last: State?
+            var detail: DetailProgress?
+        }
+
+        private struct State {
             var frontier: Set<ChangeHash>
-            var date: Date?
-            let actor: ActorId
-            let isTypingEdit: Bool
-            let startsNewRun: Bool
-            let isRestore: Bool
+            let date: Date?
             let addedCharacters: Int
             let removedCharacters: Int
         }
 
-        private let source: NoteDocument
+        private struct DetailProgress {
+            var changes: [IndexedChange]
+            /// Where each step ends, as positions in `changes`.
+            var ends: [Int]
+            var step = 0
+            var position = 0
+            var frontier: Set<ChangeHash>
+            var previousModifiedAt: Date?
+            var pending: State?
+            var states: [NoteHistoryVersion] = []
+        }
+
+        private struct IndexedChange {
+            let index: Int
+            let change: Change
+        }
+
+        private struct OpenSession {
+            var changes: Range<Int>
+            let start: Set<ChangeHash>
+            var beforeLast: Set<ChangeHash>
+            var last: Change
+        }
+
+        // The document caches its builder, so the builder must not own it.
+        private unowned let source: NoteDocument
         private let history: [ChangeHash]
         private let bodyObject: ObjId
         private var position = 0
         private var frontier = Set<ChangeHash>()
-        private var pending: Candidate?
-        private var candidateCount = 0
-        private var previousModifiedAt: Date?
-        private(set) var versions: [NoteHistoryVersion] = []
+        private var open: OpenSession?
+        private var previous: IndexedChange?
+        /// Change times that cost a read; see `time(of:)`.
+        private var readTimes: [Int: Date?] = [:]
+        private var sessions: [Session] = []
+        private var sessionOfVersion: [String: Int] = [:]
+        private var cachedVersions: [NoteHistoryVersion]?
         private(set) var frontiers: [String: Set<ChangeHash>] = [:]
+        /// Counts changes to `versions`, so readers publish only news.
+        private(set) var revision = 0
+        private(set) var processedChangeCount = 0
+        private(set) var detailChangeCount = 0
+        var timeReadCount: Int { readTimes.count }
 
-        var isComplete: Bool { position == history.count }
-        var processedChangeCount: Int { position }
+        var isComplete: Bool { position == history.count && open == nil }
+        var sessionCount: Int { sessions.count }
+
+        var versions: [NoteHistoryVersion] {
+            if let cachedVersions { return cachedVersions }
+            var versions: [NoteHistoryVersion] = []
+            for session in sessions {
+                versions += session.states ?? []
+                if let stop = session.stop { versions.append(stop) }
+            }
+            cachedVersions = versions
+            return versions
+        }
 
         init(source: NoteDocument) throws {
             self.source = source
@@ -158,100 +228,292 @@ final class NoteDocument {
             bodyObject = object
         }
 
+        /// The session a version belongs to; `nil` means the current text,
+        /// which ends the last session.
+        func session(containing id: String?) -> Int? {
+            guard let id else { return sessions.indices.last }
+            return sessionOfVersion[id]
+        }
+
+        func hasDetails(ofSession index: Int) -> Bool {
+            sessions[index].states != nil
+        }
+
+        /// Reads the next changes' metadata. Comparing text happens only
+        /// when a session ends.
         func advance(batchSize: Int) throws {
+            // A batch runs whole, so cancelling never skips changes.
+            try Task.checkCancellation()
             let end = position + min(
                 max(1, batchSize), history.count - position
             )
+            var changes = previous.map { [$0] } ?? []
             while position < end {
-                try Task.checkCancellation()
-                let hash = history[position]
-                position += 1
-                guard let change = source.document.change(hash: hash) else {
-                    continue
+                if let change = source.document.change(hash: history[position]) {
+                    changes.append(IndexedChange(index: position, change: change))
                 }
-                let previousFrontier = frontier
-                frontier.subtract(change.deps)
-                frontier.insert(hash)
-                let bodyPatches = source.document.difference(
-                    from: previousFrontier, to: frontier
-                ).filter {
-                    source.patchChangesBody(
-                        $0, bodyObject: bodyObject
+                position += 1
+            }
+            let pauses = try pauses(
+                in: changes, longerThan: NoteDocument.sessionMaximumGap
+            )
+            for next in changes.dropFirst(previous == nil ? 0 : 1) {
+                processedChangeCount += 1
+                if open != nil, let previous, pauses.contains(previous.index) {
+                    try closeSession()
+                }
+                let before = frontier
+                frontier.subtract(next.change.deps)
+                frontier.insert(next.change.hash)
+                if var session = open {
+                    session.changes = session.changes.lowerBound ..< next.index + 1
+                    session.beforeLast = before
+                    session.last = next.change
+                    open = session
+                } else {
+                    open = OpenSession(
+                        changes: next.index ..< next.index + 1,
+                        start: before, beforeLast: before, last: next.change
                     )
                 }
-                let textChanged = !bodyPatches.isEmpty
-                let modifiedAt = try source.historyModifiedAt(at: frontier)
+                previous = next
+            }
+            if position == history.count { try closeSession() }
+        }
 
-                if textChanged {
-                    let date: Date?
-                    if modifiedAt != previousModifiedAt, let modifiedAt {
-                        date = modifiedAt
-                    } else if change.timestamp.timeIntervalSince1970 != 0 {
-                        date = change.timestamp
+        /// The changes after which a longer pause follows, or another
+        /// device, a restore or an unknown time. Old app versions recorded
+        /// no change times, which then cost a read each. The note's
+        /// modified date only grows, so a run of them whose ends lie close
+        /// enough holds no pause and needs no reads in between.
+        private func pauses(
+            in changes: [IndexedChange], longerThan maximumGap: TimeInterval
+        ) throws -> Set<Int> {
+            var pauses = Set<Int>()
+            func fits(_ earlier: Date?, _ later: Date?) -> Bool {
+                guard let earlier, let later else { return false }
+                let gap = later.timeIntervalSince(earlier)
+                return gap >= 0 && gap <= maximumGap
+            }
+            func search(_ low: Int, _ high: Int) throws {
+                let earlier = try time(of: changes[low])
+                let later = try time(of: changes[high])
+                if high == low + 1 {
+                    if !fits(earlier, later) { pauses.insert(changes[low].index) }
+                } else if !fits(earlier, later) {
+                    let middle = (low + high) / 2
+                    try search(low, middle)
+                    try search(middle, high)
+                }
+            }
+            var low = 0
+            while low + 1 < changes.count {
+                // Each run between hard breaks needs its times compared.
+                var high = low + 1
+                while high < changes.count,
+                      Self.mayContinue(changes[high - 1].change, with: changes[high].change) {
+                    high += 1
+                }
+                if high - 1 > low {
+                    if changes[low ..< high].allSatisfy(\.change.hasTimestamp) {
+                        for index in low ..< high - 1
+                        where !fits(changes[index].change.timestamp,
+                                    changes[index + 1].change.timestamp) {
+                            pauses.insert(changes[index].index)
+                        }
                     } else {
-                        date = nil
+                        try search(low, high - 1)
                     }
-                    let size = NoteDocument.editSize(of: bodyPatches)
-                    let next = Candidate(
-                        frontier: frontier,
-                        date: date,
-                        actor: change.actorId,
-                        isTypingEdit: bodyPatches.count <= 2
-                            && bodyPatches.allSatisfy(
-                                source.isSingleCharacterEdit
-                            ),
-                        startsNewRun: bodyPatches.contains { patch in
-                            if case let .SpliceText(_, _, value, _) =
-                                patch.action {
-                                return value == "\n"
-                            }
-                            return false
-                        },
-                        isRestore: change.message ==
-                            NoteDocument.restoreChangeMessage,
+                }
+                if high < changes.count { pauses.insert(changes[high - 1].index) }
+                low = high
+            }
+            return pauses
+        }
+
+        private static func mayContinue(_ previous: Change, with next: Change) -> Bool {
+            previous.actorId == next.actorId
+                && previous.message != NoteDocument.restoreChangeMessage
+                && next.message != NoteDocument.restoreChangeMessage
+        }
+
+        private func time(of change: IndexedChange) throws -> Date? {
+            if change.change.hasTimestamp { return change.change.timestamp }
+            if let time = readTimes[change.index] { return time }
+            let time = try source.historyModifiedAt(at: [change.change.hash])
+            readTimes[change.index] = time
+            return time
+        }
+
+        private func closeSession() throws {
+            guard let open else { return }
+            let patches = bodyPatches(from: open.start, to: frontier)
+            guard !patches.isEmpty else {
+                self.open = nil
+                // Without text changes, these changes extend the previous
+                // text state, like metadata writes do.
+                if let last = sessions.indices.last {
+                    sessions[last].changes =
+                        sessions[last].changes.lowerBound ..< open.changes.upperBound
+                    sessions[last].end = frontier
+                    sessions[last].states = nil
+                    sessions[last].last = nil
+                    sessions[last].detail = nil
+                    changed()
+                }
+                return
+            }
+            let size = NoteDocument.editSize(of: patches)
+            let date = try source.historyDate(
+                of: open.last,
+                modifiedAt: source.historyModifiedAt(at: frontier),
+                previousModifiedAt: source.historyModifiedAt(at: open.beforeLast)
+            )
+            self.open = nil
+            if let last = sessions.indices.last { publish(last) }
+            sessions.append(Session(
+                changes: open.changes, start: open.start, end: frontier,
+                date: date, addedCharacters: size.added,
+                removedCharacters: size.removed
+            ))
+            changed()
+        }
+
+        /// Compares the next steps of one session, until about
+        /// `batchSize` changes. Returns whether its details are complete.
+        func advanceDetails(ofSession index: Int, batchSize: Int) throws -> Bool {
+            let session = sessions[index]
+            guard session.states == nil else { return true }
+            var progress: DetailProgress
+            if let detail = session.detail {
+                progress = detail
+            } else {
+                var changes: [IndexedChange] = []
+                for position in session.changes {
+                    try Task.checkCancellation()
+                    if let change = source.document.change(hash: history[position]) {
+                        changes.append(IndexedChange(index: position, change: change))
+                    }
+                }
+                let pauses = try pauses(
+                    in: changes, longerThan: NoteDocument.stepMaximumGap
+                )
+                progress = try DetailProgress(
+                    changes: changes,
+                    ends: changes.indices.filter {
+                        $0 == changes.count - 1 || pauses.contains(changes[$0].index)
+                    },
+                    frontier: session.start,
+                    previousModifiedAt: source.historyModifiedAt(at: session.start)
+                )
+            }
+            try Task.checkCancellation()
+            var compared = 0
+            while progress.step < progress.ends.count, compared < max(1, batchSize) {
+                let end = progress.ends[progress.step]
+                let before = progress.frontier
+                let last = progress.changes[end].change
+                for next in progress.changes[progress.position ... end] {
+                    progress.frontier.subtract(next.change.deps)
+                    progress.frontier.insert(next.change.hash)
+                }
+                compared += end + 1 - progress.position
+                detailChangeCount += end + 1 - progress.position
+                progress.position = end + 1
+                progress.step += 1
+                let patches = bodyPatches(from: before, to: progress.frontier)
+                let modifiedAt = try source.historyModifiedAt(at: progress.frontier)
+                if !patches.isEmpty {
+                    let size = NoteDocument.editSize(of: patches)
+                    if let pending = progress.pending {
+                        let state = version(of: pending, isOverviewStop: false)
+                        progress.states.append(state)
+                        frontiers[state.id] = pending.frontier
+                        sessionOfVersion[state.id] = index
+                    }
+                    progress.pending = State(
+                        frontier: progress.frontier,
+                        date: source.historyDate(
+                            of: last, modifiedAt: modifiedAt,
+                            previousModifiedAt: progress.previousModifiedAt
+                        ),
                         addedCharacters: size.added,
                         removedCharacters: size.removed
                     )
-                    if let previous = pending {
-                        publish(previous, followedBy: next)
-                    }
-                    pending = next
-                    candidateCount += 1
-                } else if pending != nil {
-                    pending?.frontier = frontier
+                } else {
+                    progress.pending?.frontier = progress.frontier
                 }
-                previousModifiedAt = modifiedAt
+                progress.previousModifiedAt = modifiedAt
+            }
+            guard progress.step == progress.ends.count else {
+                sessions[index].detail = progress
+                return false
+            }
+            sessions[index].detail = nil
+            sessions[index].states = progress.states
+            sessions[index].last = progress.pending
+            if session.stop != nil { publish(index) }
+            changed()
+            return true
+        }
+
+        private func publish(_ index: Int) {
+            let session = sessions[index]
+            let stop = NoteHistoryVersion(
+                id: Self.id(of: session.end),
+                date: session.last.map(\.date) ?? session.date,
+                isOverviewStop: true,
+                addedCharacters: session.last?.addedCharacters
+                    ?? session.addedCharacters,
+                removedCharacters: session.last?.removedCharacters
+                    ?? session.removedCharacters,
+                sessionAddedCharacters: session.addedCharacters,
+                sessionRemovedCharacters: session.removedCharacters
+            )
+            sessions[index].stop = stop
+            frontiers[stop.id] = session.end
+            sessionOfVersion[stop.id] = index
+        }
+
+        private func version(
+            of state: State, isOverviewStop: Bool
+        ) -> NoteHistoryVersion {
+            NoteHistoryVersion(
+                id: Self.id(of: state.frontier),
+                date: state.date,
+                isOverviewStop: isOverviewStop,
+                addedCharacters: state.addedCharacters,
+                removedCharacters: state.removedCharacters
+            )
+        }
+
+        private func changed() {
+            cachedVersions = nil
+            revision += 1
+        }
+
+        private func bodyPatches(
+            from before: Set<ChangeHash>, to after: Set<ChangeHash>
+        ) -> [Patch] {
+            source.document.difference(from: before, to: after).filter {
+                source.patchChangesBody($0, bodyObject: bodyObject)
             }
         }
 
-        private func publish(
-            _ previous: Candidate, followedBy next: Candidate
-        ) {
-            let sameRun: Bool
-            if candidateCount > 1,
-               previous.isTypingEdit, next.isTypingEdit,
-               !next.startsNewRun,
-               !previous.isRestore, !next.isRestore,
-               previous.actor == next.actor,
-               let earlier = previous.date, let later = next.date {
-                let gap = later.timeIntervalSince(earlier)
-                sameRun = gap >= 0 && gap <=
-                    NoteDocument.typingRunMaximumGap
-            } else {
-                sameRun = false
-            }
-            let id = previous.frontier.map(\.debugDescription)
-                .sorted().joined(separator: ",")
-            versions.append(NoteHistoryVersion(
-                id: id,
-                ordinal: versions.count + 1,
-                date: previous.date,
-                isOverviewStop: !sameRun,
-                addedCharacters: previous.addedCharacters,
-                removedCharacters: previous.removedCharacters
-            ))
-            frontiers[id] = previous.frontier
+        private static func id(of frontier: Set<ChangeHash>) -> String {
+            frontier.map(\.debugDescription).sorted().joined(separator: ",")
         }
+    }
+
+    /// The content date when it advanced with this change, otherwise the
+    /// time Automerge recorded for it.
+    private func historyDate(
+        of change: Change, modifiedAt: Date?, previousModifiedAt: Date?
+    ) -> Date? {
+        if modifiedAt != previousModifiedAt, let modifiedAt {
+            return modifiedAt
+        }
+        return change.hasTimestamp ? change.timestamp : nil
     }
 
     /// The body patches already describe each change, so sizing them costs
@@ -272,17 +534,6 @@ final class NoteDocument {
             }
         }
         return (added, removed)
-    }
-
-    private func isSingleCharacterEdit(_ patch: Patch) -> Bool {
-        switch patch.action {
-        case let .SpliceText(_, _, value, _):
-            return value.count == 1
-        case let .DeleteSeq(deletion):
-            return deletion.length == 1
-        default:
-            return false
-        }
     }
 
     private func patchChangesBody(
@@ -306,19 +557,9 @@ final class NoteDocument {
         }
     }
 
-    /// Frozen readers only preview published frontiers, never rescan history.
-    func indexedHistoricalText(
-        for version: NoteHistoryVersion
-    ) throws -> String {
-        guard let frontier = historyCache?.frontiers[version.id] else {
-            throw NoteHistoryError.versionUnavailable
-        }
-        return try document.textAt(obj: textObject, heads: frontier)
-    }
-
     func historicalText(for version: NoteHistoryVersion) throws -> String {
         let frontier: Set<ChangeHash>
-        if let cached = historyCache?.frontiers[version.id] {
+        if let cached = historyCache?.builder.frontiers[version.id] {
             frontier = cached
         } else {
             // A remote merge can change the displayed sequence while an old
@@ -641,4 +882,9 @@ final class NoteDocument {
         }
         return dates.dropFirst().reduce(dates[0], reduce)
     }
+}
+
+private extension Change {
+    /// Old app versions committed without a time.
+    var hasTimestamp: Bool { timestamp.timeIntervalSince1970 != 0 }
 }

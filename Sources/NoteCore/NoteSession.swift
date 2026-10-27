@@ -218,7 +218,9 @@ public final class NoteSession {
         queueSave()
     }
 
-    /// Read-only history queries never enter the save loop or record activity.
+    /// The last state of each edit session; a reader loads the states inside
+    /// a session on request. Read-only history queries never enter the save
+    /// loop or record activity.
     public func historyVersions() throws -> [NoteHistoryVersion] {
         guard isEditingEnabled, let document else {
             throw SyncError.localSaveRequired
@@ -242,7 +244,7 @@ public final class NoteSession {
         return reader
     }
 
-    /// Compatibility query for callers that need the complete version list.
+    /// Every edit session's last state, once the reader has indexed them all.
     public func loadHistoryVersions() async throws -> [NoteHistoryVersion] {
         let reader = try makeHistoryReader()
         for try await update in await reader.updates() {
@@ -274,19 +276,8 @@ public final class NoteSession {
         guard document.heads == expectedHeads else {
             throw NoteHistoryError.currentChanged
         }
-        let reader = try makeHistoryReader()
-        let restoredText: String
-        do {
-            restoredText = try await reader.historicalText(for: version)
-        } catch NoteHistoryError.versionUnavailable {
-            // Legacy callers may obtain a version through the synchronous
-            // query. Finish that reader's index before requesting its text.
-            for try await update in await reader.updates() {
-                try Task.checkCancellation()
-                if update.isComplete { break }
-            }
-            restoredText = try await reader.historicalText(for: version)
-        }
+        // The reader resolves any version of these heads, indexed or not.
+        let restoredText = try await makeHistoryReader().historicalText(for: version)
         try Task.checkCancellation()
         // Reading a frozen preview suspends. A new edit, merge, recovery or
         // reset must be checked against the live document after that await.

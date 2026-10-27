@@ -8,8 +8,8 @@ final class NoteHistoryReaderTests: XCTestCase {
         let bytes = try NoteHistoryPerformanceTests().makeFixture(lines: 30, edits: 160)
         let document = try NoteDocument(serializedData: bytes)
         let snapshot = document.snapshot()
-        let expected = try NoteHistoryLegacyOracle(snapshot: snapshot).historyVersions()
-        XCTAssertEqual(try document.historyVersions(), expected)
+        let expected = try document.historyVersions()
+        XCTAssertEqual(expected.count, 3)
         let reader = NoteHistoryReader(snapshot: snapshot)
         var previous: [NoteHistoryVersion] = []
         var sawPartial = false
@@ -29,19 +29,16 @@ final class NoteHistoryReaderTests: XCTestCase {
         XCTAssertEqual(scans, 1)
         XCTAssertEqual(loads, 1)
         XCTAssertEqual(replays, document.historyCount)
-        let hasReplay = await reader.hasActiveIndexBuilder
-        XCTAssertFalse(hasReplay)
+        assertAwaitedEqual(await reader.detailChangeCount, 0)
         assertAwaitedEqual(await reader.previewReadCount, 0)
-        for index in [0, 40, 80, 120] {
-            let actual = try await reader.historicalText(for: expected[index])
-            XCTAssertEqual(actual, try document.historicalText(for: expected[index]))
+        for version in expected + [expected[2]] {
+            let actual = try await reader.historicalText(for: version)
+            XCTAssertEqual(actual, try document.historicalText(for: version))
         }
         assertAwaitedEqual(await reader.cachedPreviewCount, 3)
+        assertAwaitedEqual(await reader.previewReadCount, 3)
         let cacheBytes = await reader.cachedPreviewBytes
         XCTAssertLessThanOrEqual(cacheBytes, 4 * 1024 * 1024)
-        let before = await reader.previewReadCount
-        _ = try await reader.historicalText(for: expected[120])
-        assertAwaitedEqual(await reader.previewReadCount, before)
         var repeatUpdates = 0
         for try await update in await reader.updates(batchSize: 1) {
             XCTAssertTrue(update.isComplete)
@@ -52,6 +49,61 @@ final class NoteHistoryReaderTests: XCTestCase {
         assertAwaitedEqual(await reader.historyScanCount, scans)
         assertAwaitedEqual(await reader.processedChangeCount, replays)
         XCTAssertEqual(document.snapshot(), snapshot)
+    }
+
+    func testDetailsLoadAroundTheFocusedSession() async throws {
+        let bytes = try NoteHistoryPerformanceTests().makeFixture(lines: 3, edits: 40 * 24)
+        let document = try NoteDocument(serializedData: bytes)
+        let sessions = try document.historyVersions()
+        XCTAssertEqual(sessions.count, 23)
+        let detailed = try NoteDocument(serializedData: bytes).historyVersions(detailed: true)
+        let reader = NoteHistoryReader(snapshot: document.snapshot())
+        for try await _ in await reader.updates() {}
+
+        let focused = sessions[0]
+        var revision = 0
+        var final: [NoteHistoryVersion] = []
+        for try await update in await reader.details(near: focused) {
+            XCTAssertGreaterThanOrEqual(update.revision, revision)
+            revision = update.revision
+            final = update.versions
+            // Loading details never changes which stops exist.
+            XCTAssertEqual(update.versions.filter(\.isOverviewStop).map(\.id),
+                           sessions.map(\.id))
+        }
+        // The focused session and four after it, 40 edits each. The first
+        // session also holds the note's creation.
+        assertAwaitedEqual(await reader.detailChangeCount, 40 * 5 + 1)
+        XCTAssertEqual(final.count, sessions.count + 40 + 39 * 4)
+        let loaded = try XCTUnwrap(final.firstIndex { $0.id == sessions[4].id }) + 1
+        XCTAssertEqual(detailed.prefix(loaded).map(NoteHistoryTests.state),
+                       final.prefix(loaded).map(NoteHistoryTests.state))
+        XCTAssertEqual(final.filter(\.isOverviewStop).map(\.sessionAddedCharacters),
+                       sessions.map(\.sessionAddedCharacters))
+        let state = try XCTUnwrap(final.first { !$0.isOverviewStop })
+        let text = try await reader.historicalText(for: state)
+        XCTAssertEqual(text, try document.historicalText(for: state))
+
+        // The current text's session and those before it.
+        for try await _ in await reader.details(near: nil) {}
+        assertAwaitedEqual(await reader.detailChangeCount, 40 * 10 + 1)
+        assertAwaitedEqual(await reader.processedChangeCount, document.historyCount)
+    }
+
+    func testTheIndexCompletesBeforeAnyDetails() async throws {
+        let bytes = try NoteHistoryPerformanceTests().makeFixture(lines: 3, edits: 40 * 6)
+        let document = try NoteDocument(serializedData: bytes)
+        let first = try XCTUnwrap(document.historyVersions().first)
+        let reader = NoteHistoryReader(snapshot: document.snapshot())
+        var sawDetails = false
+        for try await update in await reader.details(near: first, batchSize: 4) {
+            let hasDetails = update.versions.contains { !$0.isOverviewStop }
+            XCTAssertTrue(update.isComplete || !hasDetails)
+            sawDetails = sawDetails || hasDetails
+        }
+        XCTAssertTrue(sawDetails)
+        assertAwaitedEqual(await reader.isIndexComplete, true)
+        assertAwaitedEqual(await reader.isIndexing, false)
     }
 
     func testConcurrentHistoryRestoreAndMetadataMatchFrozenIndex() async throws {
@@ -73,8 +125,7 @@ final class NoteHistoryReaderTests: XCTestCase {
             at: start.addingTimeInterval(3))
         _ = left.snapshot()
         let snapshot = left.snapshot()
-        let expected = try NoteHistoryLegacyOracle(snapshot: snapshot).historyVersions()
-        XCTAssertEqual(try left.historyVersions(), expected)
+        let expected = try left.historyVersions()
         let reader = NoteHistoryReader(snapshot: snapshot)
         var final: [NoteHistoryVersion] = []
         for try await update in await reader.updates(batchSize: 2) {
@@ -110,7 +161,8 @@ final class NoteHistoryReaderTests: XCTestCase {
     func testOpenBrowserKeepsFrozenPreviewAfterSessionEdit() async throws {
         let source = try NoteDocument(text: "Fictional earlier text")
         _ = source.snapshot()
-        try source.replaceAll(with: "Fictional current text")
+        // A later session makes the earlier text a version.
+        try source.replaceAll(with: "Fictional current text", at: .now.addingTimeInterval(600))
         let session = NoteSession(storage:
             HistoryRestoreTestStorage(snapshot: source.snapshot()))
         await session.load()
@@ -151,7 +203,8 @@ final class NoteHistoryReaderTests: XCTestCase {
     func testRestoreReleasesStaleSessionReader() async throws {
         let source = try NoteDocument(text: "Fictional earlier text")
         _ = source.snapshot()
-        try source.replaceAll(with: "Fictional current text")
+        // A later session makes the earlier text a version.
+        try source.replaceAll(with: "Fictional current text", at: .now.addingTimeInterval(600))
         let snapshot = source.snapshot()
         let session = NoteSession(storage: HistoryRestoreTestStorage(snapshot: snapshot),
             saveScheduling: .immediate)
@@ -168,7 +221,7 @@ final class NoteHistoryReaderTests: XCTestCase {
     }
 
     @MainActor
-    func testLiveEditWhileRestoreAwaitsIndexRejectsReplacement() async throws {
+    func testLiveEditWhileRestoreAwaitsPreviewRejectsReplacement() async throws {
         let bytes = try NoteHistoryPerformanceTests().makeFixture(lines: 15, edits: 500)
         let source = try NoteDocument(serializedData: bytes)
         let snapshot = source.snapshot()
@@ -176,20 +229,11 @@ final class NoteHistoryReaderTests: XCTestCase {
         let storage = HistoryRestoreTestStorage(snapshot: snapshot)
         let session = NoteSession(storage: storage, saveScheduling: .immediate)
         await session.load()
-        let reader = try session.makeHistoryReader()
         let restore = Task { @MainActor in
             try await session.restoreHistoryVersion(version, expectedHeads: snapshot.heads)
         }
-        var observedIndexing = false
-        for _ in 0..<1_000 {
-            if await reader.hasActiveIndexBuilder {
-                observedIndexing = true
-                break
-            }
-            if await reader.isIndexComplete { break }
-            await Task.yield()
-        }
-        XCTAssertTrue(observedIndexing, "Restore must suspend while its index is built")
+        // The restore runs until it awaits the reader's preview.
+        await Task.yield()
         try session.replaceAll(with: "New fictional edit during restore")
         do {
             try await restore.value

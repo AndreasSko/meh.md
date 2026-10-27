@@ -4,32 +4,39 @@ import Foundation
 /// `id` identifies a causal frontier, not a wall-clock instant.
 public struct NoteHistoryVersion: Identifiable, Equatable, Sendable {
     public let id: String
-    public let ordinal: Int
     /// The content date, or the recorded change time if that date did not
     /// advance. Legacy changes may have neither.
     public let date: Date?
-    /// The last recorded text state in a short typing run before another
-    /// run. Raw versions remain available through More Detail.
+    /// The last text state of an edit session. A session's other states
+    /// appear once a reader loads its details.
     public let isOverviewStop: Bool
     /// Unicode scalars this state added and removed compared with the state
-    /// before it. History draws its timeline from these, without loading text.
+    /// before it in the index. Until a session's details load, its stop
+    /// compares with the previous stop. History draws its timeline from
+    /// these, without loading text.
     public let addedCharacters: Int
     public let removedCharacters: Int
+    /// What the whole session added and removed, for its stop; zero for
+    /// other states. Loading details does not change it.
+    public let sessionAddedCharacters: Int
+    public let sessionRemovedCharacters: Int
 
     init(
         id: String,
-        ordinal: Int,
         date: Date?,
         isOverviewStop: Bool,
         addedCharacters: Int,
-        removedCharacters: Int
+        removedCharacters: Int,
+        sessionAddedCharacters: Int = 0,
+        sessionRemovedCharacters: Int = 0
     ) {
         self.id = id
-        self.ordinal = ordinal
         self.date = date
         self.isOverviewStop = isOverviewStop
         self.addedCharacters = addedCharacters
         self.removedCharacters = removedCharacters
+        self.sessionAddedCharacters = sessionAddedCharacters
+        self.sessionRemovedCharacters = sessionRemovedCharacters
     }
 }
 

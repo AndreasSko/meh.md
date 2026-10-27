@@ -1,0 +1,94 @@
+{
+  "description": "History index in edit sessions and steps. Optimized Swift tests on one Mac, Automerge 0.7.2. legacyIndexSeconds is the previous per-change index on the same fixture in the same process.",
+  "detailRadiusSessions": 4,
+  "fixtures": [
+    {
+      "bodyUTF8Bytes": 121224,
+      "cachedIndexSeconds": 7.3667e-05,
+      "decodeSeconds": 0.023054333,
+      "detailedIndexSeconds": 5.297134708,
+      "edits": 600,
+      "fixtureBytes": 3164,
+      "fixtureDigest": "364d96d368fa160de0a99f1696af9076c22bd9935fdabbdae0cc88cdf252429a",
+      "historyChanges": 601,
+      "indexSeconds": 0.187651375,
+      "label": "current",
+      "legacyIndexSeconds": 5.306299667,
+      "lines": 1800,
+      "sessionFirstLoadSeconds": 0.206768917,
+      "sessionFirstReadySeconds": 0.090793042,
+      "sessionFocusDetailSeconds": 3.108491875,
+      "sessionReopenSeconds": 0.000155084,
+      "sessionThreePreviewsSeconds": 0.015292208,
+      "tag": "MEH_HISTORY_BENCHMARK",
+      "versionDigest": "32e5ccb4e37ed841dcbf3d47e232cdaf327d4badc9d499f5743192ba23e488ba",
+      "versions": 14
+    },
+    {
+      "bodyUTF8Bytes": 500444,
+      "cachedIndexSeconds": 5.175e-05,
+      "decodeSeconds": 0.086125,
+      "detailedIndexSeconds": 21.392049,
+      "edits": 600,
+      "fixtureBytes": 4711,
+      "fixtureDigest": "d6921bd5d90716adc75170aab177cbb9bd87e9fbccb9b5c6d9c815482582ea05",
+      "historyChanges": 601,
+      "indexSeconds": 0.722267625,
+      "label": "current",
+      "legacyIndexSeconds": 21.222230541,
+      "lines": 7460,
+      "sessionFirstLoadSeconds": 0.806530292,
+      "sessionFirstReadySeconds": 0.36623575,
+      "sessionFocusDetailSeconds": 12.246801791,
+      "sessionReopenSeconds": 0.000112417,
+      "sessionThreePreviewsSeconds": 0.060158,
+      "tag": "MEH_HISTORY_BENCHMARK",
+      "versionDigest": "0bb2f09750d32d18bc388ee140fece646b4d539c16616382ab3415aadc4412d6",
+      "versions": 14
+    }
+  ],
+  "realNote": {
+    "description": "A copy of a real diary note, 114 KB, 8,821 changes, 6,405 of them saved by older app versions without a change time. Release build of the same tests on the same Mac.",
+    "detailSecondsPerSession": [
+      0.078,
+      0.705,
+      0.515,
+      0.053,
+      0.653
+    ],
+    "modifiedDateReads": 205,
+    "sessionIndexSeconds": 0.431,
+    "sessions": 5,
+    "stepsPerSession": [
+      1,
+      31,
+      19,
+      3,
+      36
+    ]
+  },
+  "sessionMaximumGapSeconds": 180,
+  "stepMaximumGapSeconds": 5,
+  "typedFixtures": [
+    {
+      "bodyScalars": 10030,
+      "changes": 2000,
+      "fixtureBytes": 35122,
+      "indexSeconds": 0.285352792,
+      "legacyIndexSeconds": 3.829943292,
+      "sessionDetailSeconds": 0.014797875,
+      "sessions": 40,
+      "tag": "MEH_HISTORY_TYPED_BENCHMARK"
+    },
+    {
+      "bodyScalars": 30033,
+      "changes": 6000,
+      "fixtureBytes": 109331,
+      "indexSeconds": 2.315995917,
+      "legacyIndexSeconds": 33.769364,
+      "sessionDetailSeconds": 0.041877834,
+      "sessions": 120,
+      "tag": "MEH_HISTORY_TYPED_BENCHMARK"
+    }
+  ]
+}

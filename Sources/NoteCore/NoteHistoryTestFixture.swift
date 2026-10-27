@@ -42,7 +42,10 @@ public enum NoteHistoryTestFixture {
         raw.commitWith(timestamp: start)
         var position = UInt64(text.unicodeScalars.count)
         for edit in 0..<edits {
-            let date = start.addingTimeInterval(Double(edit + 1))
+            // Steps ten seconds apart and ten minutes of rest after every
+            // 40 edits, like the benchmark.
+            let date = start.addingTimeInterval(
+                Double(edit + 1) * 10 + Double(edit / 40) * 600)
             try raw.spliceText(obj: body, start: position, delete: 0,
                 value: edit % 19 == 0 ? "\n" : "x")
             try raw.put(obj: .ROOT, key: "modifiedAt", value: .Timestamp(date))

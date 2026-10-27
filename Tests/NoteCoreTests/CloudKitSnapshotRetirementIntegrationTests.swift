@@ -237,7 +237,9 @@ final class CloudKitSnapshotRetirementIntegrationTests: XCTestCase {
     private func makeFixture() throws -> Fixture {
         let document = try NoteDocument(text: "Original text\n")
         let old = record(document)
-        try document.replaceAll(with: "Original text\nLatest text\n")
+        try document.replaceAll(
+            with: "Original text\nLatest text\n", at: .now.addingTimeInterval(600)
+        )
         let catalog = try NotebookCatalogDocument(notebookID: notebookID)
         _ = try catalog.add(id: document.noteID, kind: .note,
                             name: "Fictional retirement note")
@@ -253,7 +255,7 @@ final class CloudKitSnapshotRetirementIntegrationTests: XCTestCase {
         let old = try NoteDocument(snapshot: fixture.old.snapshot)
         let latest = try NoteDocument(snapshot: fixture.latest.snapshot)
         XCTAssertTrue(old.historyHeads.isSubset(of: latest.historyHeads))
-        let texts = try latest.historyVersions().map(latest.historicalText(for:))
+        let texts = try latest.historyVersions(detailed: true).map(latest.historicalText(for:))
         XCTAssertTrue(texts.contains("Original text\n"))
     }
 

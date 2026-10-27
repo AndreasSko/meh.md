@@ -10,7 +10,8 @@ final class NoteSessionTests: XCTestCase {
     {
         let source = try NoteDocument(text: "before")
         _ = source.snapshot()
-        try source.replaceAll(with: "current")
+        // A later session makes "before" a version.
+        try source.replaceAll(with: "current", at: .now.addingTimeInterval(600))
         let original = source.snapshot()
         let storage = ControlledStorage(loadResult: .current(original))
         let session = NoteSession(storage: storage, saveScheduling: .immediate)
@@ -43,7 +44,8 @@ final class NoteSessionTests: XCTestCase {
     {
         let source = try NoteDocument(text: "before")
         _ = source.snapshot()
-        try source.replaceAll(with: "current")
+        // A later session makes "before" a version.
+        try source.replaceAll(with: "current", at: .now.addingTimeInterval(600))
         let original = source.snapshot()
         let storage = ControlledStorage(loadResult: .current(original))
         let session = NoteSession(storage: storage, saveScheduling: .immediate)
@@ -64,7 +66,8 @@ final class NoteSessionTests: XCTestCase {
     func testRestoreSaveFailureKeepsEditAvailableForRetry() async throws {
         let source = try NoteDocument(text: "before")
         _ = source.snapshot()
-        try source.replaceAll(with: "current")
+        // A later session makes "before" a version.
+        try source.replaceAll(with: "current", at: .now.addingTimeInterval(600))
         let original = source.snapshot()
         let storage = ControlledStorage(loadResult: .current(original))
         await storage.failNextSave()
@@ -100,7 +103,8 @@ final class NoteSessionTests: XCTestCase {
     func testRemoteEditDuringHistoryRejectsRestore() async throws {
         let source = try NoteDocument(text: "before")
         _ = source.snapshot()
-        try source.replaceAll(with: "current")
+        // A later session makes "before" a version.
+        try source.replaceAll(with: "current", at: .now.addingTimeInterval(600))
         let original = source.snapshot()
         let storage = ControlledStorage(loadResult: .current(original))
         let session = NoteSession(storage: storage, saveScheduling: .immediate)

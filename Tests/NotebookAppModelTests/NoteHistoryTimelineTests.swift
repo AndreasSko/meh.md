@@ -15,7 +15,7 @@ final class NoteHistoryTimelineTests: XCTestCase {
     }
 
     /// Two edits on one day, a typed run the next day, then the current text.
-    private func versions() async throws -> [NoteHistoryVersion] {
+    private func versions(detailedNear session: Int? = nil) async throws -> [NoteHistoryVersion] {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let replica = NotebookReplica(directory: root)
@@ -26,45 +26,51 @@ final class NoteHistoryTimelineTests: XCTestCase {
             .init(date: date(daysAgo: 2, hour: 10), text: "A\nB\nhello\n", isTyped: true),
             .init(date: date(daysAgo: 1, hour: 8), text: "A\nhello\n"),
         ])
-        return try await replica.openNote(id).loadHistoryVersions()
+        let note = try await replica.openNote(id)
+        let sessions = try await note.loadHistoryVersions()
+        guard let session else { return sessions }
+        var versions = sessions
+        for try await update in await (try note.makeHistoryReader()).details(near: sessions[session]) {
+            versions = update.versions
+        }
+        return versions
     }
 
     func testSessionsGroupTypingAndDays() async throws {
         let versions = try await versions()
-        var timeline = NoteHistoryTimeline()
-        timeline.append(versions)
+        let timeline = NoteHistoryTimeline(versions)
 
-        // Each replacement is a session. Typing "hello" is one more, and the
-        // typed line break starts its own.
-        XCTAssertEqual(timeline.sessions.count, 4)
-        XCTAssertEqual(timeline.days.map(\.sessions), [0 ..< 2, 2 ..< 4])
-        XCTAssertEqual(timeline.sessions[2].addedCharacters, 5)
-        let typedRun = timeline.sessions[2]
-        XCTAssertGreaterThan(typedRun.last, typedRun.first)
-        XCTAssertEqual(timeline.item(containing: typedRun.first), .session(2))
+        // Each replacement is a session, and so is typing "hello" with its
+        // line break.
+        XCTAssertEqual(timeline.sessions.count, 3)
+        XCTAssertEqual(timeline.days.map(\.sessions), [0 ..< 2, 2 ..< 3])
+        XCTAssertEqual(timeline.sessions[2].addedCharacters, 6)
         XCTAssertEqual(timeline.item(containing: versions.count), .current)
         XCTAssertEqual(timeline.versionIndex(of: .current), versions.count)
         XCTAssertEqual(timeline.baseVersionIndex(ofSession: 2), timeline.sessions[1].last)
         XCTAssertNil(timeline.baseVersionIndex(ofSession: 0))
-        XCTAssertEqual(timeline.item(.session(3), movedBy: 1), .current)
+        XCTAssertEqual(timeline.item(.session(2), movedBy: 1), .current)
         XCTAssertEqual(timeline.item(.session(0), movedBy: -1), .session(0))
     }
 
-    func testAppendingPrefixesMatchesOneAppend() async throws {
-        let versions = try await versions()
-        var whole = NoteHistoryTimeline()
-        whole.append(versions)
-        var growing = NoteHistoryTimeline()
-        for count in 0 ... versions.count {
-            growing.append(Array(versions.prefix(count)))
-        }
-        XCTAssertEqual(growing, whole)
+    func testLoadedDetailsKeepSessionsAndTheirSizes() async throws {
+        let sessions = NoteHistoryTimeline(try await versions())
+        let versions = try await versions(detailedNear: 2)
+        let detailed = NoteHistoryTimeline(versions)
+
+        XCTAssertEqual(detailed.sessions.map(\.addedCharacters),
+                       sessions.sessions.map(\.addedCharacters))
+        XCTAssertEqual(detailed.days.map(\.sessions), sessions.days.map(\.sessions))
+        let typedRun = detailed.sessions[2]
+        XCTAssertEqual(typedRun.last - typedRun.first, 5)
+        XCTAssertEqual(detailed.item(containing: typedRun.first), .session(2))
+        XCTAssertFalse(detailed.isSessionEnd(typedRun.first))
+        XCTAssertTrue(detailed.isSessionEnd(typedRun.last))
     }
 
     func testSelectedDaySpreadsWithinItsWidth() async throws {
         let versions = try await versions()
-        var timeline = NoteHistoryTimeline()
-        timeline.append(versions)
+        let timeline = NoteHistoryTimeline(versions)
         let metrics = NoteHistoryTimeline.Metrics.compact
         let folded = timeline.layout(spreading: nil, metrics: metrics)
         let spread = timeline.layout(spreading: 0, metrics: metrics)
@@ -84,8 +90,7 @@ final class NoteHistoryTimelineTests: XCTestCase {
 
     func testStepDistanceMatchesTheLayout() async throws {
         let versions = try await versions()
-        var timeline = NoteHistoryTimeline()
-        timeline.append(versions)
+        let timeline = NoteHistoryTimeline(versions)
         // Two days apart, with one quiet day between them.
         XCTAssertEqual(timeline.days.map(\.quietDaysBefore), [0, 2])
         let metrics = NoteHistoryTimeline.Metrics.compact
