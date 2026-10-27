@@ -86,6 +86,10 @@ final class NoteDocument {
         Set(document.getHistory().map(\.debugDescription))
     }
 
+    var historyHashes: Set<ChangeHash> {
+        Set(document.getHistory())
+    }
+
     var historyCount: Int {
         document.getHistory().count
     }

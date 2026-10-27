@@ -20,6 +20,21 @@ final class NotebookSyncActivityPresentationTests: XCTestCase {
         XCTAssertNil(NotebookSyncActivityPresentation(isActive: false, progress: progress).fraction)
     }
 
+    func testVerifyingSavedStateShowsItsCountWithoutAFraction() {
+        let verifying = NotebookSyncProgress(
+            phase: .verifyingSavedState, receivedRecords: 0,
+            completedNotes: 0, totalNotes: 0, lastProgressAt: Date(),
+            completedUnits: 120, totalUnits: 300
+        )
+        let activity = NotebookSyncActivityPresentation(isActive: true, progress: verifying)
+        XCTAssertEqual(String(localized: activity.title), "Verifying saved sync data…")
+        XCTAssertEqual(String(localized: activity.detail(at: Date())!),
+                       "120 of 300 saved items verified")
+        XCTAssertEqual(String(localized: activity.hint!),
+                       "Usually once after an app update, before sync starts")
+        XCTAssertNil(activity.fraction)
+    }
+
     func testRemoteHistoryShowsLocalCheckingWithoutInventedCounts() {
         let local = NotebookSyncProgress(
             phase: .checkingRemoteHistory, receivedRecords: 0,

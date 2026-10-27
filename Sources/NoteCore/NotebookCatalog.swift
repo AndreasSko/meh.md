@@ -127,6 +127,10 @@ final class NotebookCatalogDocument {
         Set(document.getHistory().map(\.debugDescription))
     }
 
+    var historyHashes: Set<ChangeHash> {
+        Set(document.getHistory())
+    }
+
     init(notebookID: UUID = UUID()) throws {
         let document = Document(textEncoding: .unicodeScalar)
         try document.put(obj: .ROOT, key: "kind", value: .String("notebookCatalog"))

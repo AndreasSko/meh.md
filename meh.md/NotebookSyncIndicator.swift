@@ -65,6 +65,7 @@ nonisolated struct NotebookSyncActivityPresentation {
         guard let progress else { return "Checking for changes…" }
         if progress.waitingSince != nil { return "Waiting for iCloud…" }
         switch progress.phase {
+        case .verifyingSavedState: return "Verifying saved sync data…"
         case .checking: return "Checking for changes…"
         case .checkingRemoteHistory: return "Checking iCloud history…"
         case .receiving:
@@ -90,6 +91,8 @@ nonisolated struct NotebookSyncActivityPresentation {
             return count > 0 ? "Removing copies of \(count) deleted notes"
                 : "Removing copies of deleted notes"
         case .cleaningUpSnapshots: return "Removing extra sync copies from iCloud"
+        case .verifyingSavedState:
+            return "Usually once after an app update, before sync starts"
         case .checking, .checkingRemoteHistory, .receiving, .uploadingNotes,
              .comparing, .finalizing: return nil
         }
@@ -104,6 +107,8 @@ nonisolated struct NotebookSyncActivityPresentation {
         guard let completed = progress.completedUnits,
               let total = progress.totalUnits, total > 0 else { return nil }
         switch progress.phase {
+        case .verifyingSavedState:
+            return "\(completed) of \(total) saved items verified"
         case .checking, .comparing, .finalizing:
             return "\(completed) of \(total) documents checked"
         case .receiving: return "\(completed) of \(total) changes in this batch"

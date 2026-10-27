@@ -119,6 +119,9 @@ final class NotebookWorkspace {
 
     private(set) var replica: NotebookReplica?
     private(set) var sync: NotebookSyncCoordinator?
+    /// Progress while saved sync state opens, before a coordinator exists.
+    private(set) var preparationProgress: NotebookSyncProgress?
+    private var preparationID: UUID?
     private(set) var errorMessage: String?
     private(set) var syncSetupError: String?
     private(set) var syncFailure: SyncFailurePresentation?
@@ -1021,7 +1024,8 @@ final class NotebookWorkspace {
             let milliseconds = elapsed.seconds * 1_000
                 + elapsed.attoseconds / 1_000_000_000_000_000
             let phase = sync?.status == .syncing
-                ? sync?.progress?.phase.rawValue ?? "preparing" : "preparing"
+                ? sync?.progress?.phase.rawValue ?? "preparing"
+                : preparationProgress?.phase.rawValue ?? "preparing"
             syncEventLog.record("foreground resumed unfinished sync: "
                 + phase, counts: [
                     "elapsed_ms": Int(milliseconds)
@@ -1361,6 +1365,19 @@ final class NotebookWorkspace {
         #endif
     }
 
+    /// Reports arrive on separate tasks, so ignore late or out-of-order ones.
+    private func showPreparationProgress(
+        _ completed: Int, of total: Int, for preparation: UUID
+    ) {
+        guard preparationID == preparation,
+              completed >= preparationProgress?.completedUnits ?? 0 else { return }
+        preparationProgress = NotebookSyncProgress(
+            phase: .verifyingSavedState, receivedRecords: 0,
+            completedNotes: 0, totalNotes: 0, lastProgressAt: Date(),
+            completedUnits: completed, totalUnits: total
+        )
+    }
+
     private func endSyncPresentation() {
         slowSyncIndicator?.cancel()
         syncMonitor?.cancel()
@@ -1414,6 +1431,12 @@ final class NotebookWorkspace {
 
     private func prepareNotebookTransport(recoverIfHalted: Bool,
                                           recheckAccount: Bool = false) async throws {
+        let preparation = UUID()
+        preparationID = preparation
+        defer {
+            preparationID = nil
+            preparationProgress = nil
+        }
         var expectedScope: String?
         var expectedNotebookID: UUID?
         if let existing = notebookTransport {
@@ -1464,7 +1487,14 @@ final class NotebookWorkspace {
                     stateDirectory: directory.appending(path: "CloudKit"),
                     automaticallySync: automaticSync,
                     expectedScope: expectedScope,
-                    expectedNotebookID: expectedNotebookID
+                    expectedNotebookID: expectedNotebookID,
+                    validationProgress: { [weak self] completed, total in
+                        Task { @MainActor in
+                            self?.showPreparationProgress(
+                                completed, of: total, for: preparation
+                            )
+                        }
+                    }
                 )
                 #endif
             case .development(let endpoint, let name):

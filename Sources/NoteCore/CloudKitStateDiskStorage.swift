@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import MachO
 
 /// Local disk representation only. Cloud records and exported SyncRecords keep
 /// their existing inline Codable format. Payloads are committed before the
@@ -15,25 +16,41 @@ final class CloudKitStateDiskStorage {
 
     private struct Header: Decodable {
         let diskFormatVersion: Int?
+        let recordValidationStamp: String?
     }
 
     private let directory: URL
+    /// Identifies the build whose record validation every manifest written
+    /// here has passed. Nil never matches, so such stores always revalidate.
+    let recordValidationStamp: String?
     private var cached: [String: (record: SyncRecord, reference: Reference)] = [:]
 
-    init(directory: URL) {
+    init(directory: URL, recordValidationStamp: String? = nil) {
         self.directory = directory.appendingPathComponent("cloudkit-sync-payloads")
+        self.recordValidationStamp = recordValidationStamp
     }
 
-    func decode(_ data: Data) throws -> (state: CloudKitTransportState, legacy: Bool) {
+    /// `validatedByThisBuild` is true only for the payload format, where each
+    /// record was read through its full-file digest, and only when this same
+    /// build wrote the manifest.
+    func decode(_ data: Data) throws -> (
+        state: CloudKitTransportState, legacy: Bool, validatedByThisBuild: Bool
+    ) {
         let decoder = JSONDecoder()
-        let version = try decoder.decode(Header.self, from: data).diskFormatVersion
+        let header = try decoder.decode(Header.self, from: data)
+        let version = header.diskFormatVersion
         if let version {
             guard version == Self.formatVersion else {
                 throw CloudKitSyncTransportError.corruptState
             }
             decoder.userInfo[Self.contextKey] = self
         }
-        return (try decoder.decode(CloudKitTransportState.self, from: data), version == nil)
+        return (
+            try decoder.decode(CloudKitTransportState.self, from: data),
+            version == nil,
+            version != nil && recordValidationStamp != nil
+                && header.recordValidationStamp == recordValidationStamp
+        )
     }
 
     func encode(_ state: CloudKitTransportState) throws -> Data {
@@ -115,4 +132,21 @@ final class CloudKitStateDiskStorage {
     private static func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
+
+    /// The Mach-O UUID of the image containing this code. It changes with
+    /// every build that changes the validation code, including app updates.
+    static let buildStamp: String? = {
+        let header = #dsohandle.assumingMemoryBound(to: mach_header_64.self)
+        guard header.pointee.magic == MH_MAGIC_64 else { return nil }
+        var command = #dsohandle.advanced(by: MemoryLayout<mach_header_64>.size)
+        for _ in 0..<header.pointee.ncmds {
+            let load = command.loadUnaligned(as: load_command.self)
+            if load.cmd == LC_UUID {
+                let uuid = command.loadUnaligned(as: uuid_command.self).uuid
+                return UUID(uuid: uuid).uuidString
+            }
+            command = command.advanced(by: Int(load.cmdsize))
+        }
+        return nil
+    }()
 }

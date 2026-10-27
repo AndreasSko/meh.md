@@ -2,6 +2,8 @@ import Foundation
 
 public struct NotebookSyncProgress: Equatable, Sendable {
     public enum Phase: String, Equatable, Sendable {
+        /// Opening saved sync state, before an exchange starts.
+        case verifyingSavedState
         case checking
         case receiving
         case checkingRemoteHistory
@@ -15,6 +17,7 @@ public struct NotebookSyncProgress: Equatable, Sendable {
         /// Fixed work budgets for one exchange, not estimates of elapsed time.
         var range: ClosedRange<Double> {
             switch self {
+            case .verifyingSavedState: 0...0
             case .checking: 0...0.20
             case .receiving, .checkingRemoteHistory: 0.20...0.50
             case .comparing: 0.50...0.55

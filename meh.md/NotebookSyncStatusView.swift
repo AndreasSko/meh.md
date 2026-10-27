@@ -373,7 +373,10 @@ private struct NotebookSyncPresentation {
     }
 
     var activity: NotebookSyncActivityPresentation {
-        NotebookSyncActivityPresentation(isActive: showsActivity, progress: workspace.sync?.progress)
+        NotebookSyncActivityPresentation(
+            isActive: showsActivity,
+            progress: workspace.preparationProgress ?? workspace.sync?.progress
+        )
     }
 
     var activeFiles: [NotebookSyncActiveFile] {

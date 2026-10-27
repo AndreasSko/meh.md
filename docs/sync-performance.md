@@ -57,7 +57,8 @@ Measured phases:
 - A later metadata-only engine-state update with a durable manifest write.
 - Repeating that exact engine-state update without changing any data.
 - Appending one additional character-edit snapshot with a durable write.
-- Reopening the state store and fully validating its persisted contents.
+- Reopening the state store and checking its persisted contents. The same
+  build wrote the store, so this measures the trusted path described below.
 
 Reopening verifies that the engine state and added snapshot survived. A small
 payload change still requires durable storage; no benchmark weakens the
@@ -207,6 +208,65 @@ cross-device sync speedup. The fixtures use generated Automerge actor IDs and
 are semantically equivalent, not byte-identical.
 
 [maintenance-evidence]: benchmarks/sync-maintenance-2026-10-12.json
+
+## Trust records saved by the same build
+
+A Time Profiler recording of a Release build on an iPhone 12 Pro Max showed
+about 27 s of sync CPU at launch. About 21.5 s of it was spent opening the
+transport state: each saved record was decoded as a full Automerge document
+again, although it had passed the same check before it was saved. Catalog
+snapshots took about 50 ms each, and about 200 were stored.
+
+Each saved record lives in a payload file named by the SHA-256 of its exact
+bytes, and opening the store already checks every file against that digest.
+The store only writes records that passed full validation. The manifest now
+also records which build wrote it, using the Mach-O UUID of the app binary.
+When the same build opens a manifest it wrote, the digest check proves each
+record is unchanged since it was validated, so decoding it again is skipped.
+
+Everything else still runs on every launch: payload digests, record IDs
+matching their payload references, protocol version, deletion and cleanup
+rules, and canonical record checks. Records are also still validated when
+they are applied to the notebook and before they are uploaded.
+
+A different build, any app update, a manifest without a build stamp, or the
+older inline format still validates every record in full. After that full
+pass, a payload manifest is rewritten with the new stamp; if that write
+fails, the next launch validates in full again. Inline state keeps its
+existing migration: it is stamped with its first changed commit.
+
+With 100 notes and 30 revisions each (3,001 records), a release build on
+macOS 27 reopened the store in 219 ms instead of 593 ms (median of five).
+The remaining time reads and hashes the payload files.
+
+On the same iPhone 12 Pro Max with a real notebook, a Release build was
+profiled for two launches after installing it. The first launch validated in
+full and stamped the manifest; the second took the trusted path:
+
+| CPU during startup sync | First launch | Second launch |
+| --- | ---: | ---: |
+| Opening the transport state | 17.4 s | 0.37 s |
+| All of `NotebookWorkspace.start` | 21.6 s | 4.6 s |
+
+Most of what remains is the exchange itself (3.3 s), including the history
+check of saved checkpoints (2.0 s).
+
+## Compare checkpoint history as raw hashes
+
+Each exchange first confirms that the note files still contain every version
+sync last applied or confirmed; otherwise it replays from the start. On the
+iPhone launch above this check took 2.0 s, and about 1.1 s of it turned every
+change hash in every note's history into hex text, one byte at a time.
+
+The check now keeps each history as raw change hashes and parses only the
+saved checkpoint heads, usually one or a few per note, into the same form.
+The comparison and its result are unchanged. A head that is not lowercase
+hex of the right length still counts as missing and triggers a replay,
+exactly as it did when it could never match the hex text.
+
+On the same iPhone, the history check fell from 2.0 s to 0.95 s of CPU on a
+launch that trusted its saved state, and the whole startup sync from 4.6 s to
+3.7 s. What remains is decoding each note and listing its history.
 
 ## Scope and next layers
 
