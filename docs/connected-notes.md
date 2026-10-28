@@ -29,15 +29,18 @@ follow a link in the same window. See [Obsidian link controls][obsidian-tabs].
 
 [obsidian-tabs]: https://obsidian.md/help/tabs
 
-On compact iPhone and iPad layouts, following a link adds a native navigation
-step. The standard Back button and edge swipe return to the preceding note,
-then to Files after reaching the start of the journey. There is no separate
-pair of navigation arrows. Mac and wide iPad show a Back button only while a
-link journey has an earlier visit. Mac also offers Go Forward in Note Actions
+On iPhone and iPad, following a link adds a native navigation step in the
+note column. The standard Back button returns to the preceding note, and so
+does the edge swipe while the note column reaches the screen edge; iPadOS
+does not offer it next to a visible sidebar. Command-[ also goes Back. On a
+single column, Back from the first note returns to Files. Every
+width uses the same split view, so folding iPhone Duo or resizing a window
+keeps the open note and its visits. The Mac shows a Back button only while a
+link journey has an earlier visit. It also offers Go Forward in Note Actions
 with Command-]; Command-[ goes Back. Opening a note directly through Files,
 Recents, Search, or New Note starts a fresh journey.
 Each visit stores its own reading position; history belongs to the window.
-On compact layouts, the positioned transition preview remains visible until
+On iPhone and iPad, the positioned transition preview remains visible until
 the live editor has restored its reading anchor, preventing a flash at the top.
 A retained preview applies its captured position during its first native
 layout, so it is ready when a link transition exposes the preceding visit.

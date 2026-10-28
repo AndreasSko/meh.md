@@ -570,8 +570,8 @@ struct NotebookView: View {
                         }
                     }
                     .toolbar {
-                        if historyBrowser == nil, !isCompact,
-                           linkHistory.backTarget != nil {
+                        #if os(macOS)
+                        if historyBrowser == nil, linkHistory.backTarget != nil {
                             ToolbarItemGroup(placement: .navigation) {
                                 Button { navigateLinkHistory(back: true) } label: {
                                     Label("Previous Note", systemImage: "chevron.backward")
@@ -582,6 +582,7 @@ struct NotebookView: View {
                                 .accessibilityIdentifier("note-link-back")
                             }
                         }
+                        #endif
                         if let placement = selectedPlacement, historyBrowser == nil {
                             #if os(iOS)
                             if isCompact {
@@ -710,61 +711,72 @@ struct NotebookView: View {
         #endif
     }
 
-    @ViewBuilder
     private var notebookNavigationContainer: some View {
-        #if os(iOS)
-        if isCompact {
-            NavigationStack(path: Binding<[NotebookLinkRoute]>(
-                get: {
-                    guard preferredCompactColumn == .detail, let linkRootRoute else { return [] }
-                    return [linkRootRoute] + linkRoutes
-                },
-                set: { routes in
-                    if routes.isEmpty {
-                        guard !busy else { return }
-                        // Commit composition synchronously while its editor
-                        // is still attached; the note session remains open.
-                        guard editorNavigation.prepareToLeave?() != false, !unrecordedEdit else {
-                            errorMessage = NotebookNavigationError.unrecordedEdit.localizedDescription
-                            return
-                        }
-                        rememberEditorPosition()
-                        preferredCompactColumn = .sidebar
-                    } else if routes.first == linkRootRoute {
-                        navigateCompactLinks(to: Array(routes.dropFirst()))
-                    }
-                }
-            )) {
-                notebookSidebar
-                    .navigationDestination(for: NotebookLinkRoute.self) { route in
-                        compactLinkScreen(route, isCurrent: activeLinkRouteID == route.id)
-                    }
-            }
-        } else {
-            NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
-                notebookSidebar
-            } detail: {
-                notebookDetail
-            }
-        }
-        #else
-        NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
+        NavigationSplitView(preferredCompactColumn: compactColumn) {
             notebookSidebar
         } detail: {
+            #if os(iOS)
+            // One container for every width, so folding iPhone Duo or
+            // resizing a window keeps the editor and its link visits.
+            NavigationStack(path: Binding(
+                // A single column showing Files pops every visit at once.
+                get: { showsFilesColumn ? [] : linkRoutes },
+                set: { routes in
+                    guard !showsFilesColumn else { return }
+                    navigateLinkRoutes(to: routes)
+                }
+            )) {
+                linkScreen(linkRootRoute, isRoot: true)
+                    .navigationDestination(for: NotebookLinkRoute.self) { route in
+                        linkScreen(route)
+                    }
+            }
+            #else
             notebookDetail
+            #endif
         }
-        #endif
+    }
+
+    private var canGoBack: Bool {
+        historyBrowser == nil && !busy && linkHistory.backTarget != nil
+    }
+
+    private var showsFilesColumn: Bool {
+        isCompact && preferredCompactColumn == .sidebar
+    }
+
+    private var compactColumn: Binding<NavigationSplitViewColumn> {
+        Binding(get: { preferredCompactColumn }, set: { column in
+            #if os(iOS)
+            if column == .sidebar, preferredCompactColumn == .detail, isCompact {
+                // A collapsed split view also reports Files while it pops a
+                // link visit inside the note column; the path update follows.
+                // Only leaving the first visit returns to Files.
+                guard linkRoutes.isEmpty, !busy else { return }
+                // Commit composition synchronously while its editor
+                // is still attached; the note session remains open.
+                guard editorNavigation.prepareToLeave?() != false, !unrecordedEdit else {
+                    errorMessage = NotebookNavigationError.unrecordedEdit.localizedDescription
+                    editorNavigation.resumeEditing?()
+                    return
+                }
+                rememberEditorPosition()
+            }
+            #endif
+            preferredCompactColumn = column
+        })
     }
 
     #if os(iOS)
-    private func compactLinkScreen(_ route: NotebookLinkRoute?,
-                                   isCurrent: Bool) -> some View {
+    private func linkScreen(_ route: NotebookLinkRoute?, isRoot: Bool = false) -> some View {
         let title = route.flatMap { route in
             replica.placements.first { $0.item.id == route.noteID }
         }.map { NotebookNoteName.title(from: $0.displayName) } ?? ""
         // Opening the incoming session can publish before the route changes.
         // A departing screen must keep its own preview throughout that gap.
-        let showsLiveEditor = isCurrent && route?.noteID == selectedID
+        // Without a selection the root shows the empty detail instead.
+        let showsLiveEditor = (isRoot && selectedID == nil)
+            || (activeLinkRouteID == route?.id && route?.noteID == selectedID)
         let showsHistory = showsLiveEditor && historyBrowser != nil
         let showsSnippetReturn = showsLiveEditor && visibleSnippetReturn != nil
         let isRestoring = session?.isEditingEnabled == true
@@ -808,8 +820,8 @@ struct NotebookView: View {
         }
     }
 
-    private func navigateCompactLinks(to routes: [NotebookLinkRoute],
-                                      onReturn: (@MainActor () -> Void)? = nil) {
+    private func navigateLinkRoutes(to routes: [NotebookLinkRoute],
+                                    onReturn: (@MainActor () -> Void)? = nil) {
         guard !busy, routes.count < linkRoutes.count,
               Array(linkRoutes.prefix(routes.count)) == routes else { return }
         let steps = linkRoutes.count - routes.count
@@ -842,6 +854,14 @@ struct NotebookView: View {
         .task(id: ObjectIdentifier(editorNavigation)) { configureLinkNavigation() }
         .focusedSceneValue(\.notebookSearch, search)
         .focusedSceneValue(\.notebookRecentCommands, recentCommands)
+        #if os(iOS)
+        .onChange(of: canGoBack, initial: true) { _, available in
+            search.canGoBack = available
+        }
+        .onChange(of: search.goBackRequest) { _, _ in
+            if canGoBack { navigateLinkHistory(back: true) }
+        }
+        #endif
         .onChange(of: focusedRecentID) { _, id in
             recentCommands.focusedNoteID = id
         }
@@ -1942,6 +1962,7 @@ struct NotebookView: View {
                 if let selectedID,
                    !replica.placements.contains(where: { $0.item.id == selectedID }) {
                     navigationState.clearSelection()
+                    resetLinkJourney()
                     unrecordedEdit = false
                     preferredCompactColumn = .sidebar
                 }
@@ -2526,12 +2547,6 @@ struct NotebookView: View {
             navigationState.pendingSnippetInsertion = snippetReturn
             insertPendingSnippet()
         }
-        #if os(iOS)
-        if isCompact {
-            navigateCompactLinks(to: Array(linkRoutes.dropLast()), onReturn: onReturn)
-            return
-        }
-        #endif
         navigateLinkHistory(back: true, onReturn: onReturn)
     }
 
@@ -2620,7 +2635,7 @@ struct NotebookView: View {
     }
 
     private func beginRenaming(id: UUID, name: String) {
-        preferredCompactColumn = .sidebar
+        if isCompact { preferredCompactColumn = .sidebar }
         editingID = id
         originalName = name
         proposedName = name
@@ -2767,6 +2782,7 @@ struct NotebookView: View {
             }
             if let selectedID, selection.ids.contains(selectedID) {
                 navigationState.clearSelection()
+                resetLinkJourney()
                 unrecordedEdit = false
                 preferredCompactColumn = .sidebar
             }
@@ -2787,20 +2803,22 @@ struct NotebookView: View {
         search.isPresented = false
         navigationState.isTreeExpanded = true
         reveal(id)
-        preferredCompactColumn = .sidebar
+        if isCompact { preferredCompactColumn = .sidebar }
         fileRevealRequest = NotebookFileReveal(id: id)
     }
 
     private func revealLinkedNoteInFiles(_ id: UUID) {
         navigationState.isTreeExpanded = true
         reveal(id)
+        #if os(macOS)
         // Keep deliberate batch selections intact. Otherwise the native Files
         // selection should track the note reached through links or history.
-        // A compact split view treats List selection as a new detail root;
-        // changing it during a link push would discard the native link stack.
-        if !isCompact, !selectingItems, browserSelection.count <= 1 {
+        // On iOS a sidebar List selection resets the note column's stack,
+        // which would discard the link visits.
+        if !selectingItems, browserSelection.count <= 1 {
             browserSelection.selectOnly(id)
         }
+        #endif
         fileRevealRequest = NotebookFileReveal(id: id, highlights: false)
     }
 
@@ -2987,7 +3005,7 @@ struct NotebookView: View {
             try await replica.resumePendingImport()
         }
         workspace?.contentDidSave(trigger: "import completed")
-        preferredCompactColumn = .sidebar
+        if isCompact { preferredCompactColumn = .sidebar }
     }
 
 
@@ -3235,6 +3253,16 @@ struct NotebookView: View {
             }
             return .ignored
         }
+        #if os(iOS)
+        .onChange(of: isCompact) { _, compact in
+            // Unfolding iPhone Duo on Files shows the open note next to it,
+            // so folding again keeps that note. Its link journey ended when
+            // Files opened, so drop the old visits.
+            guard !compact, preferredCompactColumn == .sidebar, selectedID != nil else { return }
+            resetLinkJourney()
+            preferredCompactColumn = .detail
+        }
+        #endif
         .onChange(of: preferredCompactColumn) { _, column in
             #if os(iOS)
             if isCompact {
@@ -3980,8 +4008,7 @@ struct NotebookView: View {
                     linkRoutes.append(NotebookLinkRoute(noteID: target.noteID))
                 }
                 let incomingRoute = linkRoutes.last ?? linkRootRoute
-                if isCompact, session?.isEditingEnabled == true,
-                   let incomingRoute,
+                if session?.isEditingEnabled == true, let incomingRoute,
                    target.position != nil, linkVisitPreviews[incomingRoute.id] != nil {
                     // Keep the already-positioned transition preview until
                     // TextKit finishes restoring the replacement editor.

@@ -20,6 +20,10 @@ final class NotebookSearchState {
     var canFind = false
     var quickOpenRequest = 0
     var findRequest = 0
+    #if os(iOS)
+    var canGoBack = false
+    var goBackRequest = 0
+    #endif
     private(set) var results: [NotebookSearchResult] = []
     private(set) var isPreparing = false
     private(set) var unavailableCount = 0

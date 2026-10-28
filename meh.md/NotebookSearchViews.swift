@@ -289,6 +289,15 @@ struct NotebookSearchCommands: Commands {
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(search?.canFind != true || search?.showingQuickOpen == true)
         }
+        #if os(iOS)
+        // iOS goes back with the note column's native Back button, which
+        // has no keyboard shortcut. The Mac's toolbar button already has one.
+        CommandGroup(after: .sidebar) {
+            Button("Go Back") { search?.goBackRequest += 1 }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(search?.canGoBack != true)
+        }
+        #endif
     }
 }
 
