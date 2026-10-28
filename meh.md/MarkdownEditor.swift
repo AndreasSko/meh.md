@@ -26,6 +26,7 @@ final class MarkdownEditorNavigation {
     var prepareSnippetInsertion: (() -> ((String) -> Bool)?)?
     let snippetMenu = EditorSnippetMenuState()
     var insertSnippet: ((UUID) -> Void)?
+    var editSnippet: ((UUID) -> Void)?
     let tableCommands = MarkdownTableCommandState()
     let headingCommands = MarkdownHeadingCommandState()
     let findPresentation = MarkdownEditorFindPresentation()
@@ -43,6 +44,9 @@ final class MarkdownEditorNavigation {
     var searchLandingPosition: MarkdownEditorPosition?
     var capturePosition: (() -> MarkdownEditorPosition?)?
     var restorePosition: ((MarkdownEditorPosition) -> Void)?
+    /// Calls back exactly once: when the selection is in place, or when a
+    /// newer restore, search reveal, or edit takes over first.
+    var restorePositionAndNotify: ((MarkdownEditorPosition, @escaping () -> Void) -> Void)?
     /// History's preview reports the text on screen as it scrolls.
     var visibleRangeChanged: ((NSRange) -> Void)?
     /// Floating controls cover the bottom of History's preview, which still
@@ -54,7 +58,6 @@ final class MarkdownEditorNavigation {
     #if os(iOS)
     // Present editor controls in the document window, never the keyboard window.
     weak var editorPresentationView: UIView?
-    var restorePositionAndNotify: ((MarkdownEditorPosition, @escaping () -> Void) -> Void)?
     var captureViewportInsets: (() -> UIEdgeInsets?)?
     var captureViewportOriginY: (() -> CGFloat?)?
     #endif
@@ -967,6 +970,7 @@ struct MarkdownEditor: NSViewRepresentable {
         private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
         private var pendingPosition: MarkdownEditorPosition?
+        private var pendingPositionCompletion: (() -> Void)?
         private var positionRestoreScheduled = false
         private var positionRestoreGeneration = 0
         private var pendingSearchMatch: NSRange?
@@ -1032,8 +1036,7 @@ struct MarkdownEditor: NSViewRepresentable {
             }
             installDestinationHighlightRendering(in: textView)
             textView.markdownDidBeginEditing = { [weak self] in
-                self?.positionRestoreGeneration &+= 1
-                self?.pendingPosition = nil
+                self?.cancelPositionRestore()
                 self?.parent.onBeginEditing()
             }
             textView.markdownDidLayout = { [weak self, weak textView] in
@@ -1101,6 +1104,11 @@ struct MarkdownEditor: NSViewRepresentable {
                 [weak self, weak textView] position in
                 guard let self, let textView else { return }
                 self.schedulePositionRestore(position, in: textView)
+            }
+            parent.navigation?.restorePositionAndNotify = {
+                [weak self, weak textView] position, completion in
+                guard let self, let textView else { return }
+                self.schedulePositionRestore(position, in: textView, completion: completion)
             }
             textView.markdownLinkNavigation = navigation
             navigation?.insertLink = { [weak textView] change, expected in
@@ -1253,8 +1261,7 @@ struct MarkdownEditor: NSViewRepresentable {
             _ range: NSRange,
             in textView: NSTextView
         ) {
-            positionRestoreGeneration &+= 1
-            pendingPosition = nil
+            cancelPositionRestore()
             parent.navigation?.searchLandingPosition = nil
             pendingSearchMatch = range
             schedulePendingSearchMatchReveal(in: textView)
@@ -1416,11 +1423,23 @@ struct MarkdownEditor: NSViewRepresentable {
 
         private func schedulePositionRestore(
             _ position: MarkdownEditorPosition,
-            in textView: NSTextView
+            in textView: NSTextView,
+            completion: (() -> Void)? = nil
         ) {
-            positionRestoreGeneration &+= 1
+            cancelPositionRestore()
             pendingPosition = position
+            pendingPositionCompletion = completion
             schedulePendingPositionRestore(in: textView)
+        }
+
+        private func cancelPositionRestore() {
+            positionRestoreGeneration &+= 1
+            pendingPosition = nil
+            let completion = pendingPositionCompletion
+            pendingPositionCompletion = nil
+            // As on iOS, the caller still hears back once an edit, reveal, or
+            // newer restore owns the selection.
+            completion?()
         }
 
         private func schedulePendingPositionRestore(in textView: NSTextView) {
@@ -1433,8 +1452,11 @@ struct MarkdownEditor: NSViewRepresentable {
                 self.positionRestoreScheduled = false
                 guard let textView, !textView.hasMarkedText(),
                       let position = self.pendingPosition else { return }
+                let completion = self.pendingPositionCompletion
                 self.pendingPosition = nil
+                self.pendingPositionCompletion = nil
                 self.restore(position, in: textView)
+                completion?()
             }
         }
 

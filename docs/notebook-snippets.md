@@ -57,6 +57,17 @@ and asks you to choose the snippet again. Snippets are unavailable while using
 History or when the note cannot be edited. For insertion inside an actively
 edited rendered table cell, switch to Source mode first.
 
+## Edit while writing
+
+On iPhone and iPad, touch and hold the Insert Snippet button. The same menu
+opens under the title **Edit Snippet**, and choosing a snippet opens its source
+note the same way a link does. Back returns to your note at the same place.
+While you edit, **Insert into "Note"** at the bottom goes back and inserts the
+updated snippet at your cursor. The bar disappears once you leave the snippet.
+Holding the button and moving your finger still rearranges it in the bar. On
+Mac, hold Option in the Insert Snippet menu to turn each snippet into its Edit
+item.
+
 ## Variables
 
 When editing a snippet source, type `{{` to see variable suggestions, including

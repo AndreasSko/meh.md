@@ -2,6 +2,11 @@ import Foundation
 import NoteCore
 import Observation
 
+struct NotebookSnippetReturn: Equatable {
+    let noteID: UUID
+    let snippetID: UUID
+}
+
 /// Scene-owned navigation preferences. Recents activity and pins live in the
 /// shared catalog; this state keeps only navigation and preview sessions local.
 @MainActor
@@ -20,7 +25,16 @@ final class NotebookNavigationState {
     @ObservationIgnored private var isLoadingPreferences = false
     @ObservationIgnored private var hasStoredPreferences = false
 
-    private(set) var selectedID: UUID?
+    private(set) var selectedID: UUID? {
+        didSet {
+            if selectedID != snippetReturn?.snippetID { snippetReturn = nil }
+        }
+    }
+    /// The note a selected snippet was opened from for editing. It ends once
+    /// the selection leaves the snippet.
+    private(set) var snippetReturn: NotebookSnippetReturn?
+    /// A snippet to insert once its note's editor is ready again.
+    @ObservationIgnored var pendingSnippetInsertion: NotebookSnippetReturn?
     private(set) var selectedSession: NoteSession?
     private(set) var lastNoteID: UUID?
     private(set) var restorationMessage: String?
@@ -43,6 +57,12 @@ final class NotebookNavigationState {
         notebookID = replica.catalogSnapshot?.notebookID
         loadPreferences()
         pruneUnavailable()
+    }
+
+    /// Call once the snippet is selected, after it was opened from `noteID`.
+    func beginSnippetEdit(_ snippetID: UUID, from noteID: UUID) {
+        guard selectedID == snippetID, noteID != snippetID else { return }
+        snippetReturn = NotebookSnippetReturn(noteID: noteID, snippetID: snippetID)
     }
 
     /// Call after the replica's catalog changes. It prunes vanished or trashed
