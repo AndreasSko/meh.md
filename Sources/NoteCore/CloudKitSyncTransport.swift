@@ -2701,6 +2701,11 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
                 try await fetchZoneChangesDirectly()
             } catch {
                 serverCheckRequested = true
+                // The committer now rejects every later commit. Halt so the
+                // workspace sees it and can rebuild the transport.
+                if !isRetired, let failure = await eventCommitter.failure {
+                    latchFailure(failure)
+                }
                 throw error
             }
         }

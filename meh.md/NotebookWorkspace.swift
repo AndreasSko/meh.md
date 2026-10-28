@@ -1444,7 +1444,9 @@ final class NotebookWorkspace {
                   let halt = await haltable.haltStatus() else { return }
             syncHalt = halt
             let accountRecheck = recheckAccount && halt.reason == .accountChanged
-            guard (recoverIfHalted && halt.isRecoverable) || accountRecheck else {
+            // An interruption needs no user action, so any refresh may rebuild.
+            let recover = recoverIfHalted || halt.reason == .interrupted
+            guard (recover && halt.isRecoverable) || accountRecheck else {
                 throw halt.underlyingError
             }
             // refresh owns the exchange throughout retirement and replacement.

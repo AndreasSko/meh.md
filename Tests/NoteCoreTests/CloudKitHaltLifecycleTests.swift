@@ -213,7 +213,7 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
         }
     }
 
-    func testOnlyKnownLocalWriteErrorsAllowReconstruction() {
+    func testOnlyKnownLocalWriteErrorsAndInterruptionsAllowReconstruction() {
         let noSpace = CloudKitSyncHaltStatus(error:
             CloudKitStateWriteFailure(underlyingError: POSIXError(.ENOSPC))
         )
@@ -232,6 +232,9 @@ final class CloudKitHaltLifecycleTests: XCTestCase {
         XCTAssertFalse(CloudKitSyncHaltStatus(
             error: CloudKitSyncTransportError.corruptState
         ).isRecoverable)
+        let interrupted = CloudKitSyncHaltStatus(error: CancellationError())
+        XCTAssertEqual(interrupted.reason, .interrupted)
+        XCTAssertTrue(interrupted.isRecoverable)
         XCTAssertEqual(CloudKitSyncHaltStatus(
             error: SyncError.scopeChanged
         ).reason, .accountChanged)

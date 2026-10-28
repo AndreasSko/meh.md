@@ -152,6 +152,26 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
         XCTAssertTrue(workspace.canRetrySync)
     }
 
+    func testAutomaticRefreshReconstructsInterruptedTransport() async throws {
+        let factory = RecoveryTransportFactory()
+        let original = HaltableRecordingTransport(
+            scope: "interrupted", remoteStore: factory.remoteStore
+        )
+        let workspace = makeWorkspace(transport: original, factory: factory)
+        await workspace.start()
+        await original.setHalt(.interrupted, underlyingError: CancellationError(), recoverable: true)
+
+        await workspace.refresh(manual: false)
+
+        XCTAssertEqual(factory.creationCount, 1)
+        XCTAssertEqual(factory.expectedScopes, ["interrupted"])
+        let isRetired = await original.isRetired
+        XCTAssertTrue(isRetired)
+        XCTAssertNil(workspace.syncHalt)
+        XCTAssertNil(workspace.syncFailure)
+        XCTAssertNil(workspace.syncSetupError)
+    }
+
     func testAccountAvailabilityAutomaticallyRejoinsTheSameAccount() async throws {
         let factory = RecoveryTransportFactory()
         let original = HaltableRecordingTransport(scope: "same-account", remoteStore: factory.remoteStore)
