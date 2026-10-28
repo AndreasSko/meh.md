@@ -24,7 +24,7 @@ final class EditorLineWidthTests: XCTestCase {
         for width: CGFloat in [500, 700, 1400, 600, 400] {
             textView.setFrameSize(NSSize(width: width, height: 400))
             let margin = EditorTextMargin.horizontal(
-                width: width, maxTextWidth: maxTextWidth
+                width: width, maxTextWidth: maxTextWidth, isCompact: false
             )
             XCTAssertEqual(textView.textContainerInset.width, margin - 4,
                            "inset at \(width)")

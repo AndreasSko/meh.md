@@ -307,7 +307,7 @@ struct NotebookView: View {
         if showsSelectionControls && !search.isPresented { return "" }
         #if os(iOS)
         // The app name repeats the window identity and crowds a split sidebar.
-        if horizontalSizeClass == .regular { return "" }
+        if !isCompact { return "" }
         #endif
         return "meh.md"
     }
@@ -315,7 +315,7 @@ struct NotebookView: View {
     private var notebookSidebar: some View {
             ZStack {
                 Group {
-                    if isPhoneLayout && isLibraryEmpty {
+                    if isCompact && isLibraryEmpty {
                         emptyLibraryView
                     } else {
                         libraryBrowser
@@ -337,7 +337,7 @@ struct NotebookView: View {
             .background(NotebookSidebarPalette.background.ignoresSafeArea())
             #if os(iOS)
             .overlay(alignment: .trailing) {
-                if horizontalSizeClass == .regular { NotebookSidebarDivider() }
+                if !isCompact { NotebookSidebarDivider() }
             }
             #endif
             .searchable(text: $search.query, isPresented: $search.isPresented,
@@ -347,7 +347,7 @@ struct NotebookView: View {
             .scrollIndicators(.automatic)
             #endif
             .overlay(alignment: .bottom) {
-                if !isPhoneLayout && !search.isPresented && !showsSelectionControls
+                if !isCompact && !search.isPresented && !showsSelectionControls
                     && !browsingAllRecents {
                     NotebookSidebarControls(
                         busy: busy,
@@ -392,7 +392,7 @@ struct NotebookView: View {
                         #endif
                     } else {
                         ToolbarItem(placement: .primaryAction) { applicationMenu }
-                        if isPhoneLayout {
+                        if isCompact {
                             #if os(iOS)
                             DefaultToolbarItem(kind: .search, placement: .bottomBar)
                             if !search.isPresented {
@@ -570,7 +570,7 @@ struct NotebookView: View {
                         }
                     }
                     .toolbar {
-                        if historyBrowser == nil, !usesCompactLinkNavigation,
+                        if historyBrowser == nil, !isCompact,
                            linkHistory.backTarget != nil {
                             ToolbarItemGroup(placement: .navigation) {
                                 Button { navigateLinkHistory(back: true) } label: {
@@ -584,7 +584,7 @@ struct NotebookView: View {
                         }
                         if let placement = selectedPlacement, historyBrowser == nil {
                             #if os(iOS)
-                            if horizontalSizeClass == .compact {
+                            if isCompact {
                                 ToolbarItem {
                                     libraryNewNote
                                 }
@@ -672,7 +672,8 @@ struct NotebookView: View {
                                 .popover(isPresented: $showingTextSize) {
                                     EditorTextSizeControl(
                                         fontSize: $editorFontSize,
-                                        fontFamily: editorFontFamilyBinding
+                                        fontFamily: editorFontFamilyBinding,
+                                        showsLineWidth: !isCompact
                                     )
                                         .presentationCompactAdaptation(.popover)
                                         .onDisappear { showingTextSize = false }
@@ -700,7 +701,8 @@ struct NotebookView: View {
             .background(MehStyle.paperColor.ignoresSafeArea())
     }
 
-    private var usesCompactLinkNavigation: Bool {
+    /// One column, like iPhone or a folded iPhone Duo.
+    private var isCompact: Bool {
         #if os(iOS)
         horizontalSizeClass == .compact
         #else
@@ -711,7 +713,7 @@ struct NotebookView: View {
     @ViewBuilder
     private var notebookNavigationContainer: some View {
         #if os(iOS)
-        if usesCompactLinkNavigation {
+        if isCompact {
             NavigationStack(path: Binding<[NotebookLinkRoute]>(
                 get: {
                     guard preferredCompactColumn == .detail, let linkRootRoute else { return [] }
@@ -1657,13 +1659,7 @@ struct NotebookView: View {
         }, onCompletion: onCompletion)
     }
 
-    private var showsCurrentNote: Bool {
-        #if os(macOS)
-        true
-        #else
-        horizontalSizeClass != .compact
-        #endif
-    }
+    private var showsCurrentNote: Bool { !isCompact }
 
     private func recentPreview(for id: UUID) -> String {
         guard let recent = navigationState.recentSessions[id] else {
@@ -2531,7 +2527,7 @@ struct NotebookView: View {
             insertPendingSnippet()
         }
         #if os(iOS)
-        if usesCompactLinkNavigation {
+        if isCompact {
             navigateCompactLinks(to: Array(linkRoutes.dropLast()), onReturn: onReturn)
             return
         }
@@ -2703,7 +2699,7 @@ struct NotebookView: View {
         if placement?.item.kind == .note, selectedID == id {
             // Inline rename reopens this note without selecting it again.
             // Replace the retained Files-transition path before pushing it.
-            if usesCompactLinkNavigation, preferredCompactColumn != .detail {
+            if isCompact, preferredCompactColumn != .detail {
                 resetLinkJourney()
             }
             preferredCompactColumn = .detail
@@ -2802,7 +2798,7 @@ struct NotebookView: View {
         // selection should track the note reached through links or history.
         // A compact split view treats List selection as a new detail root;
         // changing it during a link push would discard the native link stack.
-        if !usesCompactLinkNavigation, !selectingItems, browserSelection.count <= 1 {
+        if !isCompact, !selectingItems, browserSelection.count <= 1 {
             browserSelection.selectOnly(id)
         }
         fileRevealRequest = NotebookFileReveal(id: id, highlights: false)
@@ -2994,14 +2990,6 @@ struct NotebookView: View {
         preferredCompactColumn = .sidebar
     }
 
-
-    private var isPhoneLayout: Bool {
-        #if os(iOS)
-        UIDevice.current.userInterfaceIdiom == .phone
-        #else
-        false
-        #endif
-    }
 
     private var searchTaskID: SearchTaskID {
         SearchTaskID(revision: replica.searchRevision, query: search.activeQuery,
@@ -3249,7 +3237,7 @@ struct NotebookView: View {
         }
         .onChange(of: preferredCompactColumn) { _, column in
             #if os(iOS)
-            if horizontalSizeClass == .compact {
+            if isCompact {
                 if column == .detail {
                     browserReturnViewport = browserViewport
                     browserToolbarWasHidden = false
@@ -3257,7 +3245,7 @@ struct NotebookView: View {
                     restoreBrowserViewportIfReady()
                 }
             }
-            if horizontalSizeClass == .compact, column == .sidebar {
+            if isCompact, column == .sidebar {
                 rememberEditorPosition()
                 navigationState.recordClosed()
                 linkJourneyID = UUID()
@@ -3266,7 +3254,7 @@ struct NotebookView: View {
                 // Files transition. Direct selection starts a fresh journey.
             }
             #endif
-            if isPhoneLayout, column == .sidebar, !selectingItems {
+            if isCompact, column == .sidebar, !selectingItems {
                 browserSelection.clear()
             }
         }
@@ -3397,7 +3385,7 @@ struct NotebookView: View {
             .accessibilityIdentifier("notebook-import-browser")
             Divider()
             browserUndoActions
-            if isPhoneLayout {
+            if isCompact {
                 Button { openSettings() } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
@@ -3977,7 +3965,7 @@ struct NotebookView: View {
                 guard let current = currentLinkVisit() else { return }
                 rememberLinkVisitPreview(route: compactRoutesBeforePop?.last)
                 try await selectNote(target.noteID,
-                                     revealDetail: !usesCompactLinkNavigation, linkVisit: true)
+                                     revealDetail: !isCompact, linkVisit: true)
                 guard linkJourneyID == journeyID else { return }
                 guard selectedID == target.noteID else { throw NotebookLinkUIError.changed }
                 revealLinkedNoteInFiles(target.noteID)
@@ -3992,7 +3980,7 @@ struct NotebookView: View {
                     linkRoutes.append(NotebookLinkRoute(noteID: target.noteID))
                 }
                 let incomingRoute = linkRoutes.last ?? linkRootRoute
-                if usesCompactLinkNavigation, session?.isEditingEnabled == true,
+                if isCompact, session?.isEditingEnabled == true,
                    let incomingRoute,
                    target.position != nil, linkVisitPreviews[incomingRoute.id] != nil {
                     // Keep the already-positioned transition preview until

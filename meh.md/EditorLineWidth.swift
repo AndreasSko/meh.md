@@ -43,15 +43,6 @@ enum EditorLineWidth: String, CaseIterable, Identifiable {
         let average = alphabet.size(withAttributes: [.font: font]).width / 26
         return (characters * average).rounded()
     }
-
-    /// Only bigger screens offer the choice; iPhone keeps its fixed margins.
-    static var isAdjustable: Bool {
-        #if os(macOS)
-        true
-        #else
-        UIDevice.current.userInterfaceIdiom != .phone
-        #endif
-    }
 }
 
 enum EditorTextMargin {
@@ -62,9 +53,11 @@ enum EditorTextMargin {
     #endif
     static let regular: CGFloat = 32
 
-    /// The space from the editor's edge to the text on each side.
-    static func horizontal(width: CGFloat, maxTextWidth: CGFloat?) -> CGFloat {
-        guard EditorLineWidth.isAdjustable else { return compact }
+    /// The space from the editor's edge to the text on each side. Compact
+    /// widths keep fixed margins and ignore the line width setting.
+    static func horizontal(width: CGFloat, maxTextWidth: CGFloat?,
+                           isCompact: Bool) -> CGFloat {
+        guard !isCompact else { return compact }
         let minimum = width < 500 ? compact : regular
         guard let maxTextWidth else { return minimum }
         return max(minimum, ((width - maxTextWidth) / 2).rounded(.down))
