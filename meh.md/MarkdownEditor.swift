@@ -1791,6 +1791,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     override func layoutSubviews() {
         super.layoutSubviews()
         updateKeyboardInsets()
+        alignKeyboardToolbar()
         let padding = MarkdownEditorScrollPadding.bottom(
             for: max(0, bounds.height - adjustedContentInset.bottom)
         )

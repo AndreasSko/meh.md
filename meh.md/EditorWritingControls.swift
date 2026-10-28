@@ -1891,14 +1891,23 @@ extension MarkdownTextView {
             }
         }
         inputAccessoryView = MarkdownKeyboardAccessoryView(
-            navigation: commands, width: bounds.width
+            navigation: commands, editor: self
         )
+    }
+
+    func alignKeyboardToolbar() {
+        (inputAccessoryView as? MarkdownKeyboardAccessoryView)?.alignWithEditor()
     }
 }
 
 private final class MarkdownKeyboardAccessoryView: UIView {
-    init(navigation: MarkdownEditorNavigation, width: CGFloat) {
-        super.init(frame: CGRect(x: 0, y: 0, width: width, height: 58))
+    private weak var editor: UIView?
+    private var leading: NSLayoutConstraint!
+    private var trailing: NSLayoutConstraint!
+
+    init(navigation: MarkdownEditorNavigation, editor: UIView) {
+        self.editor = editor
+        super.init(frame: CGRect(x: 0, y: 0, width: editor.bounds.width, height: 58))
         autoresizingMask = [.flexibleWidth]
         backgroundColor = .clear
         let hosted = UIHostingConfiguration {
@@ -1909,12 +1918,32 @@ private final class MarkdownKeyboardAccessoryView: UIView {
         .makeContentView()
         hosted.translatesAutoresizingMaskIntoConstraints = false
         addSubview(hosted)
+        leading = hosted.leadingAnchor.constraint(equalTo: leadingAnchor)
+        trailing = hosted.trailingAnchor.constraint(equalTo: trailingAnchor)
         NSLayoutConstraint.activate([
-            hosted.leadingAnchor.constraint(equalTo: leadingAnchor),
-            hosted.trailingAnchor.constraint(equalTo: trailingAnchor),
+            leading, trailing,
             hosted.topAnchor.constraint(equalTo: topAnchor),
             hosted.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+    }
+
+    /// The system lays the bar across the whole window. Keep it over the
+    /// editor's column instead of a sidebar next to it. The bar lives in
+    /// the keyboard's window, so convert through the scene.
+    func alignWithEditor() {
+        guard window != nil, let editor,
+              let scene = editor.window?.windowScene?.effectiveGeometry.coordinateSpace else { return }
+        let column = convert(editor.convert(editor.bounds, to: scene), from: scene)
+        let left = max(0, column.minX)
+        let right = min(0, column.maxX - bounds.width)
+        guard leading.constant != left || trailing.constant != right else { return }
+        leading.constant = left
+        trailing.constant = right
+    }
+
+    override func layoutSubviews() {
+        alignWithEditor()
+        super.layoutSubviews()
     }
 
     required init?(coder: NSCoder) {
