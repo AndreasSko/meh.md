@@ -447,6 +447,83 @@ final class CloudKitSyncEngineTests: XCTestCase {
         )
     }
 
+    func testCancelledFetchHaltIsRecoverableAndReplaysEveryRecord()
+        async throws
+    {
+        let catalog = try makeCatalog()
+        let notes = try (0..<4).map { try makeNote("note \($0)") }
+        let first = try await open("device-a")
+        _ = try await first.bootstrap(proposing: catalog)
+        _ = try await first.publishBatch(notes)
+
+        let second = try await open("device-b")
+        _ = try await second.bootstrap(proposing: catalog)
+        let engine = try XCTUnwrap(server.latestEngine)
+        let stateURL = root.appending(path: "device-b/cloudkit-sync-state.json")
+        let durable = try Data(contentsOf: stateURL)
+        // iOS cancels the engine's callback when background time runs out.
+        try await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await engine.fetchChanges(.init())
+        }.value
+        // CKSyncEngine may report its newer state from an uncancelled task.
+        await engine.deliver(.stateUpdate(.success(Data("advanced".utf8))))
+        // Neither the records nor a newer engine state may reach disk, or
+        // the rebuilt engine would skip the interrupted changes.
+        XCTAssertEqual(try Data(contentsOf: stateURL), durable)
+
+        let status = await second.haltStatus()
+        let halt = try XCTUnwrap(status)
+        XCTAssertEqual(halt.reason, .interrupted)
+        XCTAssertTrue(halt.isRecoverable)
+        XCTAssertTrue(halt.underlyingError is CancellationError)
+        await second.retire()
+
+        let restarted = try await open("device-b")
+        let received = try await fetchAll(restarted).records
+        XCTAssertEqual(
+            Set(received.map(\.id)), Set(notes.map(\.id) + [catalog.id])
+        )
+        let restartedHalt = await restarted.haltStatus()
+        XCTAssertNil(restartedHalt)
+    }
+
+    func testCancelledServerCheckHaltIsRecoverable() async throws {
+        let catalog = try makeCatalog()
+        let first = try await open("device-a")
+        _ = try await first.bootstrap(proposing: catalog)
+        _ = try await first.publishBatch([try makeNote("note")])
+
+        let second = try await open("device-b")
+        _ = try await second.bootstrap(proposing: catalog)
+        let cursor = try await fetchAll(second).cursor
+        // Without a push, only the direct read finds the new note.
+        server.losesPushes = true
+        let note = try makeNote("lost push")
+        _ = try await first.publishBatch([note])
+        await second.requestServerCheck()
+        do {
+            try await Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                _ = try await second.fetch(after: cursor)
+            }.value
+            XCTFail("The cancelled server check should fail")
+        } catch is CancellationError {}
+
+        let status = await second.haltStatus()
+        let halt = try XCTUnwrap(status)
+        XCTAssertEqual(halt.reason, .interrupted)
+        XCTAssertTrue(halt.isRecoverable)
+        await second.retire()
+
+        let restarted = try await open("device-b")
+        await restarted.requestServerCheck()
+        let received = try await fetchAll(restarted).records
+        XCTAssertTrue(received.contains { $0.id == note.id })
+        let restartedHalt = await restarted.haltStatus()
+        XCTAssertNil(restartedHalt)
+    }
+
     func testAccountChangesHaltOnlyForAnotherUser() async throws {
         let transport = try await open("device")
         _ = try await transport.bootstrap(proposing: try makeCatalog())

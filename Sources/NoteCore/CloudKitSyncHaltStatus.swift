@@ -1,9 +1,13 @@
 import Foundation
 
 /// Why a CloudKit transport stopped accepting work. Only a known local write
-/// failure can be retried by constructing a new transport from durable state.
+/// failure or an interruption can be retried by constructing a new transport
+/// from durable state.
 public enum CloudKitSyncHaltReason: Equatable, Sendable {
     case localStorageFailure
+    /// Work was cancelled before it reached disk, such as when iOS ends
+    /// background time. A new transport replays it from durable state.
+    case interrupted
     case accountChanged
     case corruptState
     case invalidRemoteRecord
@@ -33,6 +37,10 @@ public struct CloudKitSyncHaltStatus: Sendable {
             underlyingError = failure.underlyingError
             reason = .localStorageFailure
             isRecoverable = failure.isRecoverable
+        } else if error is CancellationError {
+            underlyingError = error
+            reason = .interrupted
+            isRecoverable = true
         } else if error as? SyncError == .scopeChanged {
             underlyingError = error
             reason = .accountChanged

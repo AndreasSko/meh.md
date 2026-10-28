@@ -324,9 +324,16 @@ private struct NotebookSyncFailureView: View {
             } else if let failure = workspace.syncFailure {
                 Text(failure.message)
                     .accessibilityIdentifier("sync-failure-explanation")
-                if let hint = failure.actionHint,
-                   !(workspace.canRetrySync && hint == "Try syncing again.") {
-                    Text(hint).foregroundStyle(.secondary)
+                if let hint = failure.actionHint {
+                    if hint != "Try syncing again." {
+                        Text(hint).foregroundStyle(.secondary)
+                    } else if !workspace.canRetrySync,
+                              workspace.syncHalt?.reason == .other {
+                        // A relaunch rebuilds the transport; other halts
+                        // would stop again or have their own explanation.
+                        Text("Close and reopen the app to try again.")
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 if !failure.isWaitingForLocalSave,
                    workspace.replica?.catalogSnapshot != nil,
