@@ -24,6 +24,8 @@ final class NotebookUITestFixtureTests: XCTestCase {
             case .storageLarge: expected = ["Field journals"]
             case .historyRestore: expected = ["Recovery Sketch.md"]
             case .historyTour: expected = ["Packing list.md", "Lisbon in May.md"]
+            case .linkTour:
+                expected = ["Lisbon in May.md", "Packing list.md", "Camera gear.md"]
             case .writing: expected = ["Fictional field notes.md", "Save boundary.md"]
             case .syncStatus:
                 expected = ["Field notes.md", "Tide chart.md", "Island sketch.md"]
