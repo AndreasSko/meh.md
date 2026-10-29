@@ -1,6 +1,7 @@
 import XCTest
 
 #if os(macOS)
+import AppKit
 @MainActor
 final class MacFormattingUITests: XCTestCase {
     func testMacCompactFormattingRowAndHeadingControls() throws {
@@ -138,15 +139,11 @@ final class MacFormattingUITests: XCTestCase {
 
     func testSyncDetailsOpenBelowToolbar() {
         continueAfterFailure = false
-        let app = makeFixture()
-        let window = app.windows.firstMatch
-        let titleBar = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
-            .withOffset(CGVector(dx: 0, dy: 12))
-        titleBar.press(forDuration: 0.1, thenDragTo: titleBar
-            .withOffset(CGVector(dx: 0, dy: 220 - window.frame.minY)))
+        let app = makeFixture(windowTop: 220)
         let sync = element(app, "notebook-sync-details")
         XCTAssertTrue(sync.isHittable)
-        XCTAssertGreaterThanOrEqual(sync.frame.minY, 200)
+        XCTAssertGreaterThanOrEqual(sync.frame.minY, 200,
+                                    "The details need room to open above the toolbar")
         sync.click()
         let status = element(app, "note-sync-status")
         XCTAssertTrue(status.waitForExistence(timeout: 5))
@@ -173,7 +170,7 @@ final class MacFormattingUITests: XCTestCase {
         ]
     }
 
-    private func makeFixture() -> XCUIApplication {
+    private func makeFixture(windowTop: CGFloat? = nil) -> XCUIApplication {
         let fixturePath = ProcessInfo.processInfo.environment["MEH_MAC_UI_FIXTURE_APP_PATH"]
         let app = fixturePath.map { XCUIApplication(url: URL(fileURLWithPath: $0)) }
             ?? XCUIApplication()
@@ -184,6 +181,16 @@ final class MacFormattingUITests: XCTestCase {
                                 "-AppleShowScrollBars",
                                 ProcessInfo.processInfo.environment["MEH_MAC_UI_SCROLLBARS"]
                                     ?? "Always"]
+        if let windowTop, let screen = NSScreen.main?.frame {
+            // Dragging the title bar barely moves the window on the CI
+            // runner, so open it in place. The frame counts from the bottom.
+            let bottom = Int(screen.height - windowTop) - 450
+            app.launchArguments += [
+                "-ApplePersistenceIgnoreState", "YES",
+                "-NSWindow Frame notebook-AppWindow-1",
+                "62 \(bottom) 900 450 0 0 \(Int(screen.width)) \(Int(screen.height))",
+            ]
+        }
         app.launch()
         app.activate()
         let newNote = element(app, "notebook-new-item")
