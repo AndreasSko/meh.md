@@ -3,15 +3,19 @@ import SwiftUI
 struct EditorTextSizeControl: View {
     @Binding var fontSize: Double
     @Binding var fontFamily: EditorFontFamily
+    /// Compact widths keep fixed margins, so the line width has no effect.
+    let showsLineWidth: Bool
     @AppStorage(EditorLineWidth.key, store: NotebookEditorPreferences.store)
     private var lineWidth = EditorLineWidth.standard
 
     init(
         fontSize: Binding<Double>,
-        fontFamily: Binding<EditorFontFamily> = .constant(.system)
+        fontFamily: Binding<EditorFontFamily> = .constant(.system),
+        showsLineWidth: Bool
     ) {
         _fontSize = fontSize
         _fontFamily = fontFamily
+        self.showsLineWidth = showsLineWidth
     }
 
     private var displayedSize: Double {
@@ -66,7 +70,7 @@ struct EditorTextSizeControl: View {
                 .accessibilityLabel("Increase text size")
                 .disabled(displayedSize >= 28)
             }
-            if EditorLineWidth.isAdjustable {
+            if showsLineWidth {
                 Divider()
                 Text("Line width").font(.headline)
                 Picker("Line width", selection: $lineWidth) {

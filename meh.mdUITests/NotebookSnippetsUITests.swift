@@ -656,9 +656,9 @@ final class NotebookSnippetsUITests: XCTestCase {
     }
 
     private func showFiles(_ app: XCUIApplication) {
-        if !app.buttons["notebook-app-menu"].isHittable {
-            app.navigationBars.buttons.firstMatch.tap()
-        }
+        // The split view pushes a tapped row's note a moment later.
+        let back = app.buttons["BackButton"]
+        if back.waitForExistence(timeout: 2) { back.tap() }
         XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(
             timeout: 5))
     }

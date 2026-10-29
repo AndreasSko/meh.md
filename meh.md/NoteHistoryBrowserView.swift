@@ -367,11 +367,13 @@ private struct NoteHistoryHeading: View {
     @AppStorage(EditorLineWidth.key, store: NotebookEditorPreferences.store)
     private var lineWidth = EditorLineWidth.standard
     @State private var width: CGFloat = 0
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     private var margin: CGFloat {
         EditorTextMargin.horizontal(
             width: width,
-            maxTextWidth: lineWidth.maxTextWidth(fontSize: fontSize, fontFamily: fontFamily)
+            maxTextWidth: lineWidth.maxTextWidth(fontSize: fontSize, fontFamily: fontFamily),
+            isCompact: sizeClass == .compact
         )
     }
 

@@ -9,6 +9,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case syncStatus = "sync-status"
     case historyRestore = "history-restore"
     case historyTour = "history-tour"
+    case linkTour = "link-tour"
     case dragOrder = "drag-order"
     case dragNested = "drag-nested"
     case dragSubtree = "drag-subtree"
@@ -242,6 +243,8 @@ enum NotebookUITestFixture: String, CaseIterable {
             #if !NOTEBOOK_PERFORMANCE_HOST
             try await seedHistoryTour(replica)
             #endif
+        case .linkTour:
+            try await seedLinkTour(replica)
         case .dragSubtree:
             _ = try await replica.createNote(
                 name: "Packing list.md", text: Self.literalSource)
@@ -249,6 +252,31 @@ enum NotebookUITestFixture: String, CaseIterable {
             _ = try await replica.createFolder(name: "Island", parentID: trips)
             _ = try await replica.createFolder(name: "Archive")
         }
+    }
+
+    /// A trip note linking to a packing list that links on, for link
+    /// navigation recordings. Each link leads its note, so a test can tap it.
+    private func seedLinkTour(_ replica: NotebookReplica) async throws {
+        let days = [
+            ("Thursday", "Tram 28 up to the castle, then lunch in Alfama."),
+            ("Friday", "Belém in the morning, LX Factory, sunset at the river."),
+            ("Saturday", "Sintra by train. Cascais if there is time left."),
+            ("Sunday", "Nothing. Coffee, a book and a long walk."),
+        ]
+        let plan = days.map { day, text in
+            "## \(day)\n\n\(text) Leave room for getting lost on the way."
+        }
+        _ = try await replica.createNote(
+            name: "Lisbon in May.md",
+            text: (["[[Packing list]] first. Four days, no plans before ten."] + plan)
+                .joined(separator: "\n\n") + "\n")
+        _ = try await replica.createNote(
+            name: "Packing list.md",
+            text: "[[Camera gear]] goes in the small bag.\n\n"
+                + "- [x] Passport\n- [ ] Chargers\n- [ ] Sunscreen\n")
+        _ = try await replica.createNote(
+            name: "Camera gear.md",
+            text: "- The **good** camera\n- Two batteries\n- The small tripod\n")
     }
 
     #if !NOTEBOOK_PERFORMANCE_HOST

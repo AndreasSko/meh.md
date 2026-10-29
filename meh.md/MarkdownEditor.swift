@@ -362,7 +362,7 @@ final class MarkdownTextView: NSTextView {
     private func updateHorizontalInset(width: CGFloat) {
         guard managesHorizontalInset else { return }
         let inset = EditorTextMargin.horizontal(
-            width: width, maxTextWidth: markdownMaxTextWidth
+            width: width, maxTextWidth: markdownMaxTextWidth, isCompact: false
         ) - (textContainer?.lineFragmentPadding ?? 0)
         guard textContainerInset.width != inset else { return }
         // AppKit answers an inset change with a nested resize to the old
@@ -1739,7 +1739,8 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 
     private var markdownMargin: CGFloat {
         EditorTextMargin.horizontal(
-            width: bounds.width, maxTextWidth: markdownState.maxTextWidth
+            width: bounds.width, maxTextWidth: markdownState.maxTextWidth,
+            isCompact: traitCollection.horizontalSizeClass == .compact
         )
     }
 
@@ -1790,6 +1791,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     override func layoutSubviews() {
         super.layoutSubviews()
         updateKeyboardInsets()
+        alignKeyboardToolbar()
         let padding = MarkdownEditorScrollPadding.bottom(
             for: max(0, bounds.height - adjustedContentInset.bottom)
         )
@@ -2657,11 +2659,7 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.delegate = context.coordinator
         textView.isFindInteractionEnabled = true
         textView.keyboardLayoutGuide.usesBottomSafeArea = false
-        textView.keyboardDismissMode = UIDevice.current.userInterfaceIdiom == .pad
-            ? .none : .interactive
         textView.alwaysBounceVertical = true
-        textView.topEdgeEffect.isHidden =
-            UIDevice.current.userInterfaceIdiom == .pad
         textView.text = text
         textView.allowsEditingTextAttributes = false
         textView.isEditable = !isReadOnly
@@ -2698,6 +2696,15 @@ struct MarkdownEditor: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
+        // Folding iPhone Duo changes the size class while the editor stays.
+        let isCompact = context.environment.horizontalSizeClass == .compact
+        let dismissMode: UIScrollView.KeyboardDismissMode = isCompact ? .interactive : .none
+        if textView.keyboardDismissMode != dismissMode {
+            textView.keyboardDismissMode = dismissMode
+        }
+        if textView.topEdgeEffect.isHidden == isCompact {
+            textView.topEdgeEffect.isHidden = !isCompact
+        }
         context.coordinator.update(parent: self, textView: textView)
         (textView as? MarkdownTextView)?.markdownMaxTextWidth = maxTextWidth
         (textView as? MarkdownTextView)?.updateMarkdownTitle(

@@ -69,7 +69,8 @@ private struct EditorPreviewView: View {
                         Divider()
                         EditorTextSizeControl(
                             fontSize: $fontSize,
-                            fontFamily: $fontFamily
+                            fontFamily: $fontFamily,
+                            showsLineWidth: true
                         )
                     }
                     .padding()
