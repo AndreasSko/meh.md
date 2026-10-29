@@ -14,7 +14,9 @@ actor NotebookSyncStatusPreviewTransport: SyncTransport {
 
     init(
         runID: String,
-        phaseDelay: Duration = .seconds(5),
+        phaseDelay: Duration = .seconds(ProcessInfo.processInfo.environment[
+            "MEH_NOTEBOOK_SYNC_PHASE_SECONDS"
+        ].flatMap { Int($0) } ?? 5),
         retryNotBefore: Date? = nil
     ) {
         scope = "sync-status-preview-\(runID)"

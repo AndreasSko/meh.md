@@ -152,6 +152,9 @@ final class NotebookSyncStatusUITests: XCTestCase {
 
     func testToolbarOpensStatusAndShowsActiveFilesDuringSync() throws {
         let app = makeFixture()
+        // Each phase must outlast the checks and screenshots taken in it,
+        // which can take several seconds on a slow simulator.
+        app.launchEnvironment["MEH_NOTEBOOK_SYNC_PHASE_SECONDS"] = "12"
         app.launch()
         XCTAssertTrue(
             app.buttons["notebook-sync-details"].waitForExistence(timeout: 30),
@@ -177,7 +180,7 @@ final class NotebookSyncStatusUITests: XCTestCase {
             object: progress
         )
         XCTAssertEqual(
-            XCTWaiter.wait(for: [waiting, waitingPercent], timeout: 30), .completed,
+            XCTWaiter.wait(for: [waiting, waitingPercent], timeout: 45), .completed,
             "The active fetch should wait at the 20 percent phase boundary"
         )
         XCTAssertEqual(progress.label, "Overall sync progress")
@@ -201,7 +204,7 @@ final class NotebookSyncStatusUITests: XCTestCase {
         )
         XCTAssertEqual(
             XCTWaiter.wait(
-                for: [timerAdvanced, checkingHistory], timeout: 15,
+                for: [timerAdvanced, checkingHistory], timeout: 30,
                 enforceOrder: true
             ), .completed,
             "The waiting timer should advance before remote-history checking"
@@ -217,7 +220,7 @@ final class NotebookSyncStatusUITests: XCTestCase {
             object: progress
         )
         XCTAssertEqual(
-            XCTWaiter.wait(for: [sending, weightedUploadStart], timeout: 30), .completed,
+            XCTWaiter.wait(for: [sending, weightedUploadStart], timeout: 45), .completed,
             "The first toolbar tap should start the isolated upload"
         )
         XCTAssertEqual(progress.value as? String, "55 percent complete")
@@ -237,16 +240,16 @@ final class NotebookSyncStatusUITests: XCTestCase {
                 "notebook-sync-active-file-"
             )
         )
+        for filename in ["Field notes.md", "Tide chart.md", "Island sketch.md"] {
+            XCTAssertTrue(
+                app.staticTexts[filename].waitForExistence(timeout: 5),
+                "Expected the expanded list to include \(filename)"
+            )
+        }
         XCTAssertGreaterThanOrEqual(
             activeNames.count, 3,
             "Expected the three fictional active note names during upload"
         )
-        for filename in ["Field notes.md", "Tide chart.md", "Island sketch.md"] {
-            XCTAssertTrue(
-                app.staticTexts[filename].exists,
-                "Expected the expanded list to include \(filename)"
-            )
-        }
         capture(app, name: "After - all active filenames")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
         assertStatusClosed(status)
@@ -258,7 +261,7 @@ final class NotebookSyncStatusUITests: XCTestCase {
             object: status
         )
         XCTAssertEqual(
-            XCTWaiter.wait(for: [synced], timeout: 30), .completed,
+            XCTWaiter.wait(for: [synced], timeout: 90), .completed,
             "The status should return to its normal synced state"
         )
         XCTAssertTrue(app.staticTexts["notebook-sync-last-success"].exists)
