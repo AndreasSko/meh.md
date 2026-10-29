@@ -37,6 +37,16 @@ struct NotebookSidebar: View {
         return "meh.md"
     }
 
+    /// The iPad sidebar is too narrow for Select All, the count, Done and
+    /// the sidebar button in one row, and iOS would hide Done under More.
+    private var countsInBottomBar: Bool {
+        #if os(iOS)
+        !isCompact
+        #else
+        false
+        #endif
+    }
+
     var body: some View {
             ZStack {
                 Group {
@@ -86,6 +96,12 @@ struct NotebookSidebar: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(scene.showsSelectionControls ? .inline : .large)
             #endif
+            #if os(iOS)
+            // Frees room for Done next to Deselect All. Applied after the
+            // column width, it hides that width and the sidebar grows to 320.
+            .toolbar(removing: countsInBottomBar && scene.showsSelectionControls
+                     ? .sidebarToggle : nil)
+            #endif
             .navigationSplitViewColumnWidth(min: 220, ideal: 280)
             .toolbar {
                 #if os(iOS)
@@ -104,11 +120,17 @@ struct NotebookSidebar: View {
                     }
                     if scene.showsSelectionControls && !search.isPresented {
                         ToolbarItem(placement: .cancellationAction) { selectAllButton }
-                        ToolbarItem(placement: .principal) { selectionCount }
+                        if !countsInBottomBar {
+                            ToolbarItem(placement: .principal) { selectionCount }
+                        }
                         ToolbarItem(placement: .confirmationAction) { selectionDone }
                         #if os(iOS)
                         ToolbarItem(placement: .bottomBar) { moveSelectedButton }
                         ToolbarSpacer(.flexible, placement: .bottomBar)
+                        if countsInBottomBar {
+                            ToolbarItem(placement: .bottomBar) { selectionCount }
+                            ToolbarSpacer(.flexible, placement: .bottomBar)
+                        }
                         ToolbarItem(placement: .bottomBar) { trashSelectedButton }
                         #else
                         ToolbarItemGroup {
