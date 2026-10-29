@@ -79,7 +79,16 @@ final class EditorScrollTypingUITests: XCTestCase {
         let key = app.buttons.matching(NSPredicate(
             format: "label IN %@", ["Return", "return"]
         )).firstMatch
-        XCTAssertTrue(key.exists)
+        // After a hardware key press the keyboard slides back in, and its
+        // Return key sits below the screen for a moment.
+        let onScreen = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                key.exists && app.frame.contains(key.frame)
+            },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [onScreen], timeout: 5), .completed,
+                       "Expected the keyboard's Return key on screen")
         key.tap()
     }
 
