@@ -17,6 +17,16 @@ final class WelcomeNoteUITests: XCTestCase {
                       "Welcome note did not open: \(editor.value ?? "nil")")
 
         // A relaunch opens the existing notebook and restores the note.
+        // The window's identity is scene storage, which iOS saves when the
+        // app leaves the foreground, so quit the way a user would.
+        #if os(iOS)
+        XCUIDevice.shared.press(.home)
+        let deadline = Date().addingTimeInterval(10)
+        while app.state == .runningForeground, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        XCTAssertNotEqual(app.state, .runningForeground)
+        #endif
         app.terminate()
         app.launch()
         XCTAssertTrue(editor.waitForExistence(timeout: 30))
