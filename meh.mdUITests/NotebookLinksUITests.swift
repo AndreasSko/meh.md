@@ -1,4 +1,7 @@
 import XCTest
+#if os(iOS)
+import Vision
+#endif
 
 final class NotebookLinksUITests: XCTestCase {
     func testWikiNavigationBacklinksAndCompletion() throws {
@@ -86,9 +89,16 @@ final class NotebookLinksUITests: XCTestCase {
         let noLinks = app.staticTexts["No linked notes"]
         XCTAssertTrue(noLinks.waitForExistence(timeout: 10))
         XCTAssertFalse(backlink.exists)
+        // On iPad the sidebar's Recents preview stays visible next to the
+        // sheet and quotes the meeting's own link, so only look in the sheet.
+        let sheetBar = app.navigationBars["Linked from"]
+        XCTAssertTrue(sheetBar.exists)
+        let sheet = sheetBar.frame
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(
             format: "label CONTAINS %@", "the project"
-        )).firstMatch.exists)
+        )).allElementsBoundByIndex.contains {
+            $0.frame.minX >= sheet.minX && $0.frame.maxX <= sheet.maxX
+        })
         capture(app, name: "No linked notes for a fictional meeting")
         activate(app.buttons["Done"])
 
@@ -124,6 +134,7 @@ final class NotebookLinksUITests: XCTestCase {
 
 #if os(iOS)
     func testCompactBackTransitionKeepsNoteContent() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -176,6 +187,7 @@ final class NotebookLinksUITests: XCTestCase {
     }
 
     func testCompactBackAfterBacklinkKeepsScrolledAnchor() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -261,6 +273,7 @@ final class NotebookLinksUITests: XCTestCase {
     }
 
     func testCompactScrolledLinkOpeningKeepsVisitPosition() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -336,17 +349,11 @@ final class NotebookLinksUITests: XCTestCase {
         capture(app, name: "Long source at midpoint backlink destination")
         let sourceTitleY = sourceTitle.frame.minY
 
-        let midpointLink = app.links["OPEN PROJECT FROM MIDPOINT"]
-        if midpointLink.exists && midpointLink.isHittable {
-            midpointLink.tap()
-        } else {
-            // The captured screenshot places the link center at y≈478pt in
-            // the 874pt app viewport; use app coordinates because the editor's
-            // accessibility frame excludes part of that viewport.
-            app.coordinate(
-                withNormalizedOffset: CGVector(dx: 0.2, dy: 0.547)
-            ).tap()
-        }
+        // The editor doesn't expose links to accessibility, and where the
+        // link lands depends on the screen size, so find it on screen.
+        let midpoint = try screenText("OPEN PROJECT FROM MIDPOINT", in: app)
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: midpoint.midX, dy: midpoint.midY)).tap()
         assertTitle("Fictional Project", in: app)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
         capture(app, name: "Project opened from the scrolled source link")
@@ -360,6 +367,7 @@ final class NotebookLinksUITests: XCTestCase {
     }
 
     func testCompactBackReturnsToFilesAndManualSelectionResetsLinkChain() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -423,6 +431,7 @@ final class NotebookLinksUITests: XCTestCase {
     }
 
     func testCompactInlineRenameResetsLinkedNoteBackRoute() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -555,14 +564,32 @@ final class NotebookLinksUITests: XCTestCase {
     }
 
     private func followFixtureLink(in app: XCUIApplication) {
+        // "See the project." starts at the title's left edge; the link spans
+        // about 35–115 pt from there. A share of the title's width would miss
+        // it on iPad, where the title is wider.
         let title = app.buttons["note-title"]
         let linkPoint = title.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.25, dy: 1)
-        ).withOffset(CGVector(dx: 0, dy: 26))
+            withNormalizedOffset: CGVector(dx: 0, dy: 1)
+        ).withOffset(CGVector(dx: 75, dy: 26))
         linkPoint.tap()
     }
 
 #if os(iOS)
+    private func screenText(_ text: String, in app: XCUIApplication) throws -> CGRect {
+        let image = try XCTUnwrap(app.screenshot().image.cgImage)
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        try VNImageRequestHandler(cgImage: image).perform([request])
+        let box = try XCTUnwrap((request.results ?? []).first {
+            $0.topCandidates(1).first?.string.contains(text) == true
+        }?.boundingBox, "Expected \(text) on screen")
+        return CGRect(x: box.minX * app.frame.width,
+                      y: (1 - box.maxY) * app.frame.height,
+                      width: box.width * app.frame.width,
+                      height: box.height * app.frame.height)
+    }
+
     private func fileRow(_ title: String, in app: XCUIApplication) -> XCUIElement {
         app.staticTexts.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@",
