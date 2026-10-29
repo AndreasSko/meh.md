@@ -78,8 +78,16 @@ extension XCUIApplication {
             identifier: "notebook-settings", timeout: timeout
         ) else { return }
         activate(settings)
+#if os(iOS)
+        let title = navigationBars["Settings"]
+#else
+        // A Mac sheet has no navigation bar; its title is plain text.
+        let title = sheets.staticTexts.matching(
+            NSPredicate(format: "value == %@", "Settings")
+        ).firstMatch
+#endif
         XCTAssertTrue(
-            navigationBars["Settings"].waitForExistence(timeout: timeout),
+            title.waitForExistence(timeout: timeout),
             "Expected notebook Settings to open"
         )
     }

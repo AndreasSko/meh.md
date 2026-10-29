@@ -22,7 +22,7 @@ final class FlairUITests: XCTestCase {
         let version = app.staticTexts["notebook-settings-version"]
         for _ in 0..<6 where !version.exists { scrollDown(in: app) }
         XCTAssertTrue(version.waitForExistence(timeout: 5))
-        XCTAssertTrue(version.label.hasPrefix("meh.md "), version.label)
+        XCTAssertTrue(text(of: version).hasPrefix("meh.md "), text(of: version))
     }
 
     func testLibraryEndsWithTheNoteCount() throws {
@@ -34,7 +34,7 @@ final class FlairUITests: XCTestCase {
 #endif
         let footer = app.descendants(matching: .any)["notebook-library-footer"]
         XCTAssertTrue(footer.waitForExistence(timeout: 15))
-        XCTAssertEqual(footer.label, "3 notes")
+        XCTAssertEqual(text(of: footer), "3 notes")
     }
 
     func testAppearanceSwitchesTheInk() throws {
@@ -240,6 +240,15 @@ final class FlairUITests: XCTestCase {
 
     /// Faces are hidden from accessibility, so tap relative to the top of
     /// the element next to them.
+    /// The Mac shows a static text's words as its value, iOS as its label.
+    private func text(of element: XCUIElement) -> String {
+#if os(macOS)
+        element.value as? String ?? ""
+#else
+        element.label
+#endif
+    }
+
     private func tapFace(near element: XCUIElement, dy: CGFloat) {
         let face = element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
             .withOffset(CGVector(dx: 0, dy: dy))
