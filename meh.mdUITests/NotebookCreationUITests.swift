@@ -25,11 +25,8 @@ final class NotebookCreationUITests: XCTestCase {
         let alpha = title("Orbit Alpha", in: app)
         let beta = title("Orbit Beta", in: app)
         XCTAssertTrue(alpha.waitForExistence(timeout: 5))
-        alpha.press(forDuration: 1)
-        app.buttons.matching(NSPredicate(
-            format: "label == %@ AND identifier != %@",
-            "New Note", "notebook-new-item"
-        )).firstMatch.tap()
+        // The lower half of a row creates after it; the exact centre is a tie.
+        app.chooseRowAction("New Note", on: alpha, at: 0.75)
         let noteField = app.textFields["title-field"]
         XCTAssertTrue(noteField.waitForExistence(timeout: 10))
         replaceTitle(in: noteField, app: app, with: "Orbit Between")
@@ -42,9 +39,7 @@ final class NotebookCreationUITests: XCTestCase {
 
         func createFolder(_ name: String, at verticalOffset: CGFloat) {
             XCTAssertTrue(beta.isHittable)
-            beta.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: verticalOffset))
-                .press(forDuration: 1)
-            app.buttons["New Folder"].tap()
+            app.chooseRowAction("New Folder", on: beta, at: verticalOffset)
             let field = app.textFields["Name"]
             XCTAssertTrue(field.waitForExistence(timeout: 5))
             field.typeText(name + "\n")
@@ -109,10 +104,6 @@ final class NotebookCreationUITests: XCTestCase {
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
         XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(timeout: 15))
-        let recents = app.buttons["notebook-recents-toggle"]
-        if recents.value as? String == "Expanded" { recents.tap() }
-        let tree = app.buttons["notebook-tree-toggle"]
-        if tree.value as? String == "Collapsed" { tree.tap() }
         app.buttons["notebook-app-menu"].tap()
         app.buttons["New Folder"].tap()
         let name = app.textFields["Name"]
@@ -121,8 +112,7 @@ final class NotebookCreationUITests: XCTestCase {
         let parent = title("Orbit Folder", in: app)
         XCTAssertTrue(parent.waitForExistence(timeout: 5))
 
-        parent.press(forDuration: 1)
-        app.buttons["New Folder"].tap()
+        app.chooseRowAction("New Folder", on: parent)
         XCTAssertTrue(name.waitForExistence(timeout: 5))
         XCTAssertTrue(name.isHittable, "New folder must be revealed for naming")
         name.typeText("First Moon\n")
@@ -131,8 +121,7 @@ final class NotebookCreationUITests: XCTestCase {
         XCTAssertGreaterThan(child.frame.minY, parent.frame.minY)
         capture(app, name: "New child folder revealed for naming")
 
-        parent.press(forDuration: 1)
-        app.buttons["New Folder"].tap()
+        app.chooseRowAction("New Folder", on: parent)
         XCTAssertTrue(name.waitForExistence(timeout: 5))
         name.typeText("Earlier Moon\n")
         let firstChild = title("Earlier Moon", in: app)

@@ -348,12 +348,11 @@ final class NotebookOrderingUITests: XCTestCase {
         #if os(macOS)
         visibleRowCenter(item).rightClick()
         let restore = app.menuItems["Restore"]
-        #else
-        item.press(forDuration: 1.0)
-        let restore = app.buttons["Restore"]
-        #endif
         XCTAssertTrue(restore.waitForExistence(timeout: 5))
         activate(restore)
+        #else
+        app.chooseRowAction("Restore", on: item)
+        #endif
     }
 
     private func assertOrder(

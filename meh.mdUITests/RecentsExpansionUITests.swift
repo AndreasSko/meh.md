@@ -240,11 +240,13 @@ final class RecentsExpansionUITests: XCTestCase {
         if recentToggle.value as? String == "Expanded" { recentToggle.tap() }
         if filesToggle.value as? String == "Collapsed" { filesToggle.tap() }
         XCTAssertTrue(filesTitle.waitForExistence(timeout: 5))
-        filesTitle.press(forDuration: 1)
-        let show = app.buttons["Show in Recents"]
-        XCTAssertTrue(show.waitForExistence(timeout: 5))
-        capture(app, name: "Hidden note Show in Recents Files menu")
-        show.tap()
+        app.withoutIdleWait {
+            filesTitle.press(forDuration: 1)
+            let show = app.buttons["Show in Recents"]
+            XCTAssertTrue(show.waitForExistence(timeout: 5))
+            capture(app, name: "Hidden note Show in Recents Files menu")
+            show.tap()
+        }
         recentToggle.tap()
         XCTAssertTrue(target.waitForExistence(timeout: 5))
         capture(app, name: "Hidden note explicitly restored to Recents")

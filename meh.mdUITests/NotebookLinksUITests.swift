@@ -481,12 +481,7 @@ final class NotebookLinksUITests: XCTestCase {
     ) {
         let row = fileRow(oldTitle, in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 10))
-        row.press(forDuration: 1.0)
-        let rename = app.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH %@", "Rename"
-        )).firstMatch
-        XCTAssertTrue(rename.waitForExistence(timeout: 5))
-        activate(rename)
+        app.chooseRowAction("Rename…", on: row)
 
         let name = app.textFields["notebook-inline-name"]
         XCTAssertTrue(name.waitForExistence(timeout: 5))

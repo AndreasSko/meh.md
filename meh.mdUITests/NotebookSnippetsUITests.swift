@@ -387,8 +387,7 @@ final class NotebookSnippetsUITests: XCTestCase {
     private func createNote(in app: XCUIApplication, named name: String,
                             body: String, parent: String? = nil) {
         if let parent {
-            fileTitle(parent, in: app).press(forDuration: 1)
-            app.collectionViews.buttons["New Note"].firstMatch.tap()
+            app.chooseRowAction("New Note", on: fileTitle(parent, in: app))
         } else {
             let plus = app.buttons["notebook-new-item"].firstMatch
             XCTAssertTrue(plus.waitForExistence(timeout: 15))
@@ -408,11 +407,11 @@ final class NotebookSnippetsUITests: XCTestCase {
     private func createFolder(in app: XCUIApplication, named name: String,
                               parent: String? = nil) {
         if let parent {
-            fileTitle(parent, in: app).press(forDuration: 1)
+            app.chooseRowAction("New Folder", on: fileTitle(parent, in: app))
         } else {
             app.buttons["notebook-app-menu"].tap()
+            app.buttons["New Folder"].tap()
         }
-        app.buttons["New Folder"].tap()
         let field = app.textFields["Name"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.typeText(name + "\n")
@@ -445,25 +444,29 @@ final class NotebookSnippetsUITests: XCTestCase {
 
     private func markSnippet(_ id: String, named name: String,
                              in app: XCUIApplication, isFolder: Bool = false) {
-        fileTitle(name, in: app).press(forDuration: 1)
-        openTemplatesAndSnippetsSubmenu(in: app)
-        let identified = app.buttons["notebook-use-as-snippet-" + id]
-        let label = isFolder ? "Use as Snippet Folder" : "Use as Snippet"
-        let action = identified.waitForExistence(timeout: 1)
-            ? identified : app.buttons[label].firstMatch
-        XCTAssertTrue(action.waitForExistence(timeout: 5))
-        action.tap()
+        app.withoutIdleWait {
+            fileTitle(name, in: app).press(forDuration: 1)
+            openTemplatesAndSnippetsSubmenu(in: app)
+            let identified = app.buttons["notebook-use-as-snippet-" + id]
+            let label = isFolder ? "Use as Snippet Folder" : "Use as Snippet"
+            let action = identified.waitForExistence(timeout: 1)
+                ? identified : app.buttons[label].firstMatch
+            XCTAssertTrue(action.waitForExistence(timeout: 5))
+            action.tap()
+        }
     }
 
     private func markTemplate(_ id: String, named name: String,
                               in app: XCUIApplication) {
-        fileTitle(name, in: app).press(forDuration: 1)
-        openTemplatesAndSnippetsSubmenu(in: app)
-        let identified = app.buttons["notebook-use-as-template-" + id]
-        let action = identified.waitForExistence(timeout: 1) ? identified
-            : app.buttons["Use as Template"].firstMatch
-        XCTAssertTrue(action.waitForExistence(timeout: 5))
-        action.tap()
+        app.withoutIdleWait {
+            fileTitle(name, in: app).press(forDuration: 1)
+            openTemplatesAndSnippetsSubmenu(in: app)
+            let identified = app.buttons["notebook-use-as-template-" + id]
+            let action = identified.waitForExistence(timeout: 1) ? identified
+                : app.buttons["Use as Template"].firstMatch
+            XCTAssertTrue(action.waitForExistence(timeout: 5))
+            action.tap()
+        }
     }
 
     private func openTemplatesAndSnippetsSubmenu(in app: XCUIApplication) {

@@ -286,8 +286,7 @@ final class NotebookTemplatesUITests: XCTestCase {
     private func createNote(in app: XCUIApplication, named name: String,
                             body: String, parent: String? = nil) {
         if let parent {
-            fileTitle(parent, in: app).press(forDuration: 1)
-            app.collectionViews.buttons["New Note"].firstMatch.tap()
+            app.chooseRowAction("New Note", on: fileTitle(parent, in: app))
         } else {
             let newNote = app.buttons["notebook-new-item"].firstMatch
             XCTAssertTrue(newNote.waitForExistence(timeout: 15))
@@ -306,11 +305,11 @@ final class NotebookTemplatesUITests: XCTestCase {
     private func createFolder(in app: XCUIApplication, named name: String,
                               parent: String? = nil) {
         if let parent {
-            fileTitle(parent, in: app).press(forDuration: 1)
+            app.chooseRowAction("New Folder", on: fileTitle(parent, in: app))
         } else {
             app.buttons["notebook-app-menu"].tap()
+            app.buttons["New Folder"].tap()
         }
-        app.buttons["New Folder"].tap()
         let field = app.textFields["Name"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.typeText(name + "\n")
@@ -335,18 +334,20 @@ final class NotebookTemplatesUITests: XCTestCase {
 
     private func markTemplate(_ id: String, named name: String,
                               in app: XCUIApplication) {
-        fileTitle(name, in: app).press(forDuration: 1)
-        let submenu = app.buttons["Templates & Snippets"].firstMatch
-        XCTAssertTrue(submenu.waitForExistence(timeout: 5))
-        submenu.tap()
-        let identified = app.buttons["notebook-use-as-template-" + id]
-        let action = identified.waitForExistence(timeout: 1) ? identified
-            : app.buttons.matching(NSPredicate(
-                format: "label == %@ OR label == %@",
-                "Use as Template", "Use as Template Folder"
-            )).firstMatch
-        XCTAssertTrue(action.waitForExistence(timeout: 5))
-        action.tap()
+        app.withoutIdleWait {
+            fileTitle(name, in: app).press(forDuration: 1)
+            let submenu = app.buttons["Templates & Snippets"].firstMatch
+            XCTAssertTrue(submenu.waitForExistence(timeout: 5))
+            submenu.tap()
+            let identified = app.buttons["notebook-use-as-template-" + id]
+            let action = identified.waitForExistence(timeout: 1) ? identified
+                : app.buttons.matching(NSPredicate(
+                    format: "label == %@ OR label == %@",
+                    "Use as Template", "Use as Template Folder"
+                )).firstMatch
+            XCTAssertTrue(action.waitForExistence(timeout: 5))
+            action.tap()
+        }
     }
 
     private func fileTitle(_ name: String, in app: XCUIApplication) -> XCUIElement {

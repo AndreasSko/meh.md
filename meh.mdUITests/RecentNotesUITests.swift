@@ -80,12 +80,9 @@ final class RecentNotesUITests: XCTestCase {
         let disclosure = app.descendants(matching: .any)[
             "notebook-disclosure-" + folderID
         ]
-        app.staticTexts["notebook-sidebar-title-" + folderID]
-            .press(forDuration: 1.0)
-        app.buttons.matching(NSPredicate(
-            format: "label == %@ AND identifier != %@",
-            "New Note", "notebook-new-item"
-        )).firstMatch.tap()
+        app.chooseRowAction(
+            "New Note", on: app.staticTexts["notebook-sidebar-title-" + folderID]
+        )
         commitDefaultTitle(in: app)
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
@@ -201,12 +198,15 @@ final class RecentNotesUITests: XCTestCase {
         let pinTarget = recents.element(boundBy: 1)
         XCTAssertTrue(pinTarget.waitForExistence(timeout: 5))
         let pinTargetIdentifier = pinTarget.identifier
-        pinTarget.press(forDuration: 1.0)
-        let pinAction = app.buttons["Pin in Recents"]
-        XCTAssertTrue(pinAction.waitForExistence(timeout: 5))
-        XCTAssertEqual(app.textViews["markdown-editor"].value as? String, secondSource)
+        app.withoutIdleWait {
+            pinTarget.press(forDuration: 1.0)
+            let pinAction = app.buttons["Pin in Recents"]
+            XCTAssertTrue(pinAction.waitForExistence(timeout: 5))
+            XCTAssertEqual(app.textViews["markdown-editor"].value as? String,
+                           secondSource)
 
-        pinAction.tap()
+            pinAction.tap()
+        }
         let pinnedRecent = recents.element(boundBy: 0)
         XCTAssertTrue(pinnedRecent.waitForExistence(timeout: 5))
         XCTAssertEqual(pinnedRecent.identifier, pinTargetIdentifier)

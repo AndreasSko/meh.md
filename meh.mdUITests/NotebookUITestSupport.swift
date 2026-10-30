@@ -431,4 +431,25 @@ extension XCUIApplication {
             )
         }
     }
+
+    /// Long-presses a sidebar row and taps one of its menu actions without
+    /// XCTest's idle waits, which stall while the row menu is open.
+    func chooseRowAction(
+        _ label: String, on row: XCUIElement, at verticalOffset: CGFloat = 0.5,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        withoutIdleWait {
+            row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: verticalOffset))
+                .press(forDuration: 1)
+            // The toolbar New Note button shares the "New Note" label.
+            let action = buttons.matching(NSPredicate(
+                format: "label == %@ AND identifier != %@",
+                label, "notebook-new-item"
+            )).firstMatch
+            guard action.waitForExistence(timeout: 5) else {
+                return XCTFail("Row action \(label) missing", file: file, line: line)
+            }
+            action.tap()
+        }
+    }
 }
