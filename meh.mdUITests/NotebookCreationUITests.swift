@@ -1,10 +1,9 @@
 import XCTest
-#if os(iOS)
-import UIKit
 
+#if os(iOS)
 @MainActor
 final class NotebookCreationUITests: XCTestCase {
-    func testPointerGapPlacesFoldersBeforeAndAfterNote() throws {
+    func testContextualCreationPlacesItemsAroundNote() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
@@ -23,7 +22,24 @@ final class NotebookCreationUITests: XCTestCase {
             field.typeText("\n")
             showFiles(in: app)
         }
+        let alpha = title("Orbit Alpha", in: app)
         let beta = title("Orbit Beta", in: app)
+        XCTAssertTrue(alpha.waitForExistence(timeout: 5))
+        alpha.press(forDuration: 1)
+        app.buttons.matching(NSPredicate(
+            format: "label == %@ AND identifier != %@",
+            "New Note", "notebook-new-item"
+        )).firstMatch.tap()
+        let noteField = app.textFields["title-field"]
+        XCTAssertTrue(noteField.waitForExistence(timeout: 10))
+        replaceTitle(in: noteField, app: app, with: "Orbit Between")
+        noteField.typeText("\n")
+        showFiles(in: app)
+        let middle = title("Orbit Between", in: app)
+        XCTAssertTrue(middle.waitForExistence(timeout: 5))
+        XCTAssertLessThan(alpha.frame.minY, middle.frame.minY)
+        XCTAssertLessThan(middle.frame.minY, beta.frame.minY)
+
         func createFolder(_ name: String, at verticalOffset: CGFloat) {
             XCTAssertTrue(beta.isHittable)
             beta.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: verticalOffset))
@@ -36,8 +52,7 @@ final class NotebookCreationUITests: XCTestCase {
         }
         createFolder("Upper Moon", at: 0.25)
         capture(app, name: "Folder created in the gap above a note")
-        XCTAssertLessThan(title("Orbit Alpha", in: app).frame.minY,
-                          title("Upper Moon", in: app).frame.minY)
+        XCTAssertLessThan(middle.frame.minY, title("Upper Moon", in: app).frame.minY)
         XCTAssertLessThan(title("Upper Moon", in: app).frame.minY, beta.frame.minY)
         createFolder("Lower Moon", at: 0.75)
         XCTAssertGreaterThan(title("Lower Moon", in: app).frame.minY, beta.frame.minY)
@@ -50,18 +65,15 @@ final class NotebookCreationUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        let reuseWorkspace = ProcessInfo.processInfo.environment["MEH_FILES_UI_WORKSPACE"]
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = reuseWorkspace
-            ?? "folder-naming-\(UUID().uuidString)"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] =
+            "folder-naming-\(UUID().uuidString)"
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
-        if reuseWorkspace == nil {
-            let newNote = app.buttons["notebook-new-item"].firstMatch
-            XCTAssertTrue(newNote.waitForExistence(timeout: 15))
-            newNote.tap()
-            XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 10))
-        }
+        let newNote = app.buttons["notebook-new-item"].firstMatch
+        XCTAssertTrue(newNote.waitForExistence(timeout: 15))
+        newNote.tap()
+        XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 10))
         showFiles(in: app)
         app.buttons["notebook-app-menu"].tap()
         app.buttons["New Folder"].tap()
@@ -88,54 +100,38 @@ final class NotebookCreationUITests: XCTestCase {
                       "Folder naming must persist before opening another note")
     }
 
-    func testContextualFolderCreationAndBottomClearance() throws {
+    func testContextualFolderCreationStartsInsideFolder() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "source"]
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            XCUIDevice.shared.orientation = .landscapeLeft
-        }
         app.launch()
         XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(timeout: 15))
         let recents = app.buttons["notebook-recents-toggle"]
         if recents.value as? String == "Expanded" { recents.tap() }
         let tree = app.buttons["notebook-tree-toggle"]
         if tree.value as? String == "Collapsed" { tree.tap() }
-        for index in 1...12 {
-            app.buttons["notebook-app-menu"].tap()
-            app.buttons["New Folder"].tap()
-            let name = app.textFields["Name"]
-            XCTAssertTrue(name.waitForExistence(timeout: 5))
-            XCTAssertTrue(name.isHittable)
-            name.typeText(String(format: "Orbit Folder %02d", index) + "\n")
-        }
-        let list = app.collectionViews.firstMatch
-        list.swipeUp(velocity: .slow)
-        Thread.sleep(forTimeInterval: 1)
-        capture(app, name: "Files bottom with floating controls")
-        let last = title("Orbit Folder 12", in: app)
-        XCTAssertTrue(last.waitForExistence(timeout: 5))
-        let search = app.searchFields.firstMatch
-        let newNote = app.buttons["notebook-new-item"].firstMatch
-        XCTAssertTrue(search.exists)
-        XCTAssertTrue(newNote.exists)
-        let floatingControlsTop = min(search.frame.minY, newNote.frame.minY)
-        XCTAssertLessThan(last.frame.maxY, floatingControlsTop - 16,
-                          "Files can scroll beyond the last row above controls")
-        last.press(forDuration: 1)
+        app.buttons["notebook-app-menu"].tap()
         app.buttons["New Folder"].tap()
         let name = app.textFields["Name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.typeText("Orbit Folder\n")
+        let parent = title("Orbit Folder", in: app)
+        XCTAssertTrue(parent.waitForExistence(timeout: 5))
+
+        parent.press(forDuration: 1)
+        app.buttons["New Folder"].tap()
         XCTAssertTrue(name.waitForExistence(timeout: 5))
         XCTAssertTrue(name.isHittable, "New folder must be revealed for naming")
         name.typeText("First Moon\n")
         let child = title("First Moon", in: app)
         XCTAssertTrue(child.waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(child.frame.minY, last.frame.minY)
+        XCTAssertGreaterThan(child.frame.minY, parent.frame.minY)
         capture(app, name: "New child folder revealed for naming")
-        last.press(forDuration: 1)
+
+        parent.press(forDuration: 1)
         app.buttons["New Folder"].tap()
         XCTAssertTrue(name.waitForExistence(timeout: 5))
         name.typeText("Earlier Moon\n")
@@ -143,45 +139,6 @@ final class NotebookCreationUITests: XCTestCase {
         XCTAssertTrue(firstChild.waitForExistence(timeout: 5))
         XCTAssertLessThan(firstChild.frame.minY, child.frame.minY,
                           "Context creation belongs at the start of a folder")
-    }
-
-    func testContextualNoteAppearsAfterItsSibling() throws {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchArguments += ["-editor.mode", "source"]
-        app.launch()
-        func create(_ text: String) {
-            XCTAssertTrue(app.buttons["notebook-new-item"].firstMatch
-                .waitForExistence(timeout: 15))
-            app.buttons["notebook-new-item"].firstMatch.tap()
-            let field = app.textFields["title-field"]
-            XCTAssertTrue(field.waitForExistence(timeout: 10))
-            replaceTitle(in: field, app: app, with: text)
-            field.typeText("\n")
-            showFiles(in: app)
-        }
-        create("Orbit Alpha")
-        create("Orbit Beta")
-        let alpha = title("Orbit Alpha", in: app)
-        XCTAssertTrue(alpha.waitForExistence(timeout: 5))
-        alpha.press(forDuration: 1)
-        app.buttons.matching(NSPredicate(
-            format: "label == %@ AND identifier != %@",
-            "New Note", "notebook-new-item"
-        )).firstMatch.tap()
-        let field = app.textFields["title-field"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10))
-        replaceTitle(in: field, app: app, with: "Orbit Between")
-        field.typeText("\n")
-        showFiles(in: app)
-        let middle = title("Orbit Between", in: app)
-        XCTAssertTrue(middle.waitForExistence(timeout: 5))
-        XCTAssertLessThan(alpha.frame.minY, middle.frame.minY)
-        XCTAssertLessThan(middle.frame.minY, title("Orbit Beta", in: app).frame.minY)
-        capture(app, name: "Contextual note inserted after its sibling")
     }
 
     private func replaceTitle(

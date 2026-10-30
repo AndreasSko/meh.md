@@ -54,9 +54,9 @@ final class NewNoteDestinationUITests: XCTestCase {
         XCTAssertTrue(note.waitForExistence(timeout: 5))
 
         folderTitle.press(forDuration: 1.0)
-        let useRoot = app.buttons["Use Root for New Notes"]
-        XCTAssertTrue(useRoot.waitForExistence(timeout: 5))
-        useRoot.tap()
+        let useTopLevel = app.buttons["Use Top Level for New Notes"]
+        XCTAssertTrue(useTopLevel.waitForExistence(timeout: 5))
+        useTopLevel.tap()
         folderTitle.press(forDuration: 1.0)
         XCTAssertTrue(useForNewNotes.waitForExistence(timeout: 5))
     }

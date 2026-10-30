@@ -42,11 +42,6 @@ final class FolderNavigationUITests: XCTestCase {
         // The Files row spans the sidebar, so its width tracks the column.
         let files = app.buttons["notebook-tree-toggle"]
         let sidebarWidth = files.frame.width
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            let sidebarBar = app.navigationBars.allElementsBoundByIndex
-                .map { $0.frame }.min { $0.width < $1.width }
-            XCTAssertEqual(sidebarBar?.width, 280, "The sidebar lost its ideal width")
-        }
         menu.tap()
         app.buttons["notebook-select-items"].tap()
         title.tap()

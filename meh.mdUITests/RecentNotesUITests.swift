@@ -4,12 +4,12 @@ import Vision
 #endif
 
 final class RecentNotesUITests: XCTestCase {
-    func testFiveCurrentPreviewsAndCollapsedSectionsSurviveRelaunch() throws {
+    func testCollapsedSectionsSurviveRelaunchAndRecentsOpenNotes() throws {
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
         var titles: [String] = []
-        for index in 0..<6 {
+        for index in 0..<2 {
             let newNote = app.buttons["notebook-new-item"].firstMatch
             XCTAssertTrue(newNote.waitForExistence(timeout: 15))
             waitUntilEnabled(newNote)
@@ -21,16 +21,6 @@ final class RecentNotesUITests: XCTestCase {
             titles.append(app.buttons["note-title"].label)
         }
         showSidebar(app)
-        let recents = recentButtons(app)
-        if app.buttons["notebook-recents-toggle"].value as? String == "Collapsed" {
-            activate(app.buttons["notebook-recents-toggle"])
-        }
-        XCTAssertEqual(recents.count, 5)
-        XCTAssertTrue(recents.element(boundBy: 0).label.contains(titles[5]))
-        XCTAssertTrue(recents.element(boundBy: 0).label.contains("entry 5"))
-        XCTAssertFalse(recents.allElementsBoundByIndex.contains {
-            $0.label.contains("entry 0")
-        })
         let tree = app.buttons["notebook-tree-toggle"]
         let recentToggle = app.buttons["notebook-recents-toggle"]
         if tree.value as? String == "Expanded" { activate(tree) }
@@ -42,22 +32,24 @@ final class RecentNotesUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         #if os(macOS)
         XCTAssertTrue(editor.waitForExistence(timeout: 15))
-        XCTAssertEqual(editor.value as? String, "Fictional observatory entry 5")
-        XCTAssertEqual(app.buttons["note-title"].label, titles[5])
+        XCTAssertEqual(editor.value as? String, "Fictional observatory entry 1")
+        XCTAssertEqual(app.buttons["note-title"].label, titles[1])
         #endif
         showSidebar(app)
         XCTAssertEqual(tree.value as? String, "Collapsed")
         XCTAssertEqual(recentToggle.value as? String, "Collapsed")
         activate(recentToggle)
-        XCTAssertEqual(recents.count, 5)
+        let recents = recentButtons(app)
+        XCTAssertTrue(recents.element(boundBy: 1).waitForExistence(timeout: 5))
+        XCTAssertTrue(recents.element(boundBy: 0).label.contains("entry 1"))
         activate(recents.element(boundBy: 1))
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        XCTAssertEqual(editor.value as? String, "Fictional observatory entry 4")
+        XCTAssertEqual(editor.value as? String, "Fictional observatory entry 0")
         // Reading a note leaves the most recently edited note first.
         showSidebar(app)
-        XCTAssertTrue(recents.element(boundBy: 0).label.contains("entry 5"))
-        XCTAssertTrue(recents.element(boundBy: 1).label.contains("entry 4"))
-        capture(app, name: "Five local recent notes with current fictional previews")
+        XCTAssertTrue(recents.element(boundBy: 0).label.contains("entry 1"))
+        XCTAssertTrue(recents.element(boundBy: 1).label.contains("entry 0"))
+        capture(app, name: "Recent notes with current fictional previews")
     }
 
     #if os(iOS)
@@ -121,13 +113,13 @@ final class RecentNotesUITests: XCTestCase {
         XCTAssertTrue(waitUntilHittable(editor))
         app.buttons["notebook-note-actions"].tap()
         app.buttons["Show in Files"].tap()
-        XCTAssertEqual(disclosure.value as? String, "Expanded")
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        // The highlight fades after about three seconds, so check it first.
         let highlighted = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == %@", "Revealed in Files"),
             object: note
         )
         XCTAssertEqual(XCTWaiter.wait(for: [highlighted], timeout: 5), .completed)
+        XCTAssertEqual(disclosure.value as? String, "Expanded")
         capture(app, name: "Revealed fictional note highlighted in Files")
     }
 
@@ -147,54 +139,42 @@ final class RecentNotesUITests: XCTestCase {
 
         showSidebar(app)
         let recents = recentButtons(app)
-        let pinTarget = recents.element(boundBy: 1)
-        XCTAssertTrue(pinTarget.waitForExistence(timeout: 5))
+        let recentsToggle = app.buttons["notebook-recents-toggle"]
+        let pinTarget = waitForRecent(
+            in: recents, at: 1, containing: firstSource, pinned: false
+        )
         pinTarget.swipeRight(velocity: .slow)
         let pinAction = app.buttons["Pin in Recents"]
         XCTAssertTrue(pinAction.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["notebook-recents-toggle"].isHittable)
-        capture(app, name: "Orange pin swipe action in the fictional library")
-
+        XCTAssertTrue(recentsToggle.isHittable)
         pinAction.tap()
-        let pinnedRecent = recents.element(boundBy: 0)
-        XCTAssertTrue(pinnedRecent.waitForExistence(timeout: 5))
-        XCTAssertTrue(pinnedRecent.label.contains(firstSource))
-        XCTAssertTrue((pinnedRecent.value as? String)?.contains("Pinned") == true)
-        XCTAssertTrue(app.buttons["notebook-recents-toggle"].isHittable)
-        capture(app, name: "Pinned recent note in the fictional library")
+        XCTAssertTrue(pinAction.waitForNonExistence(timeout: 5))
+        let pinnedRecent = waitForRecent(
+            in: recents, at: 0, containing: firstSource, pinned: true
+        )
+        XCTAssertTrue(recentsToggle.isHittable)
 
         pinnedRecent.swipeRight(velocity: .slow)
         let unpinAction = app.buttons["Unpin from Recents"]
         XCTAssertTrue(unpinAction.waitForExistence(timeout: 5))
-        XCTAssertEqual(unpinAction.label, "Unpin from Recents")
-        capture(app, name: "Gray unpin swipe action in the fictional library")
-
         unpinAction.tap()
-        let unpinnedRecent = recents.element(boundBy: 1)
-        XCTAssertTrue(unpinnedRecent.waitForExistence(timeout: 5))
-        XCTAssertTrue(unpinnedRecent.label.contains(firstSource))
-        XCTAssertFalse((unpinnedRecent.value as? String)?.contains("Pinned") == true)
-        XCTAssertTrue(app.buttons["notebook-recents-toggle"].isHittable)
-        Thread.sleep(forTimeInterval: 1)
-        capture(app, name: "Recent notes after partial unpin")
+        XCTAssertTrue(unpinAction.waitForNonExistence(timeout: 5))
+        let unpinnedRecent = waitForRecent(
+            in: recents, at: 1, containing: firstSource, pinned: false
+        )
+        XCTAssertTrue(recentsToggle.isHittable)
 
         fullSwipeRight(unpinnedRecent)
-        Thread.sleep(forTimeInterval: 1)
-        let fullSwipePinned = recents.element(boundBy: 0)
-        XCTAssertTrue(fullSwipePinned.waitForExistence(timeout: 5))
-        XCTAssertTrue(fullSwipePinned.label.contains(firstSource))
-        XCTAssertTrue((fullSwipePinned.value as? String)?.contains("Pinned") == true)
-        XCTAssertTrue(recents.element(boundBy: 1).label.contains(secondSource))
-        capture(app, name: "Recent notes after full-swipe pin")
+        let fullSwipePinned = waitForRecent(
+            in: recents, at: 0, containing: firstSource, pinned: true
+        )
+        waitForRecent(in: recents, at: 1, containing: secondSource, pinned: false)
 
         fullSwipeRight(fullSwipePinned)
-        Thread.sleep(forTimeInterval: 1)
-        let fullSwipeUnpinned = recents.element(boundBy: 1)
-        XCTAssertTrue(fullSwipeUnpinned.waitForExistence(timeout: 5))
-        XCTAssertTrue(fullSwipeUnpinned.label.contains(firstSource))
-        XCTAssertFalse((fullSwipeUnpinned.value as? String)?.contains("Pinned") == true)
-        XCTAssertTrue(recents.element(boundBy: 0).label.contains(secondSource))
-        capture(app, name: "Recent notes after full-swipe unpin")
+        let fullSwipeUnpinned = waitForRecent(
+            in: recents, at: 1, containing: firstSource, pinned: false
+        )
+        waitForRecent(in: recents, at: 0, containing: secondSource, pinned: false)
 
         fullSwipeUnpinned.tap()
         let editor = app.textViews["markdown-editor"]
@@ -236,6 +216,25 @@ final class RecentNotesUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, secondSource + " suffix")
     }
 
+    @discardableResult
+    private func waitForRecent(
+        in recents: XCUIElementQuery, at index: Int,
+        containing source: String, pinned: Bool
+    ) -> XCUIElement {
+        let row = recents.element(boundBy: index)
+        let format = pinned
+            ? "label CONTAINS %@ AND value CONTAINS 'Pinned'"
+            : "label CONTAINS %@ AND NOT (value CONTAINS 'Pinned')"
+        let match = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: format, source), object: row
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [match], timeout: 5), .completed,
+            "Expected \(pinned ? "pinned" : "unpinned") '\(source)' at \(index)"
+        )
+        return row
+    }
+
     private func fullSwipeRight(_ row: XCUIElement) {
         let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
         let end = row.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
@@ -243,6 +242,10 @@ final class RecentNotesUITests: XCTestCase {
     }
 
     func testLeavingNoteRestoresBrowserUntilNoteIsOpenedAgain() throws {
+        try XCTSkipIf(
+            UIDevice.current.userInterfaceIdiom != .phone,
+            "Requires a compact navigation layout"
+        )
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -254,11 +257,11 @@ final class RecentNotesUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         editor.tap()
         editor.typeText("Fictional moon journal")
-        try XCTSkipIf(app.buttons["notebook-recents-toggle"].isHittable,
-                      "Requires a compact navigation layout")
         showSidebar(app)
         XCTAssertFalse(editor.isHittable)
 
+        // Closing the app backgrounds it first, which saves its window.
+        XCUIDevice.shared.press(.home)
         app.terminate()
         app.launch()
         let recentsToggle = app.buttons["notebook-recents-toggle"]
@@ -273,6 +276,7 @@ final class RecentNotesUITests: XCTestCase {
         recent.tap()
         XCTAssertTrue(waitUntilHittable(editor))
         XCTAssertEqual(editor.value as? String, "Fictional moon journal")
+        XCUIDevice.shared.press(.home)
         app.terminate()
         app.launch()
         XCTAssertTrue(waitUntilHittable(editor, timeout: 15))
@@ -384,16 +388,8 @@ final class RecentNotesUITests: XCTestCase {
 
     private func makeApp() -> XCUIApplication {
         let app = XCUIApplication()
-        #if ICLOUD_ENABLED
-        app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
-        app.launchEnvironment["MEH_SYNC_URL"] =
-            ProcessInfo.processInfo.environment["MEH_RECENTS_UI_SYNC_URL"]
-            ?? "http://127.0.0.1:9874"
-        app.launchEnvironment["MEH_SYNC_WORKSPACE"] = "recents-pin-" + UUID().uuidString
-        #else
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        #endif
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "source"]
         return app

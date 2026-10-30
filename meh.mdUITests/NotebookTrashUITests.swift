@@ -148,6 +148,49 @@ final class NotebookTrashUITests: XCTestCase {
         XCTAssertFalse(title(ids[4], in: app).exists)
     }
 
+    func testEmptyTrashRequiresConfirmation() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        app.launch()
+
+        let id = createNote(in: app)
+        app.buttons["notebook-app-menu"].tap()
+        app.buttons["notebook-select-items"].tap()
+        title(id, in: app).tap()
+        app.buttons["notebook-trash-selected"].tap()
+        XCTAssertTrue(title(id, in: app).waitForNonExistence(timeout: 5))
+
+        app.openTrash()
+        let note = trashRow(id, in: app)
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        let emptyTrash = app.buttons["notebook-empty-trash"]
+        XCTAssertTrue(emptyTrash.waitForExistence(timeout: 5))
+        emptyTrash.tap()
+        let delete = app.buttons["Delete Permanently"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        let cancel = app.buttons["Cancel"]
+        if cancel.exists {
+            cancel.tap()
+        } else {
+            // iPad confirmations cancel by dismissing the popover.
+            let dismiss = try XCTUnwrap(app.otherElements.matching(
+                identifier: "PopoverDismissRegion"
+            ).allElementsBoundByIndex.last)
+            dismiss.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(delete.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(note.exists)
+
+        emptyTrash.tap()
+        XCTAssertTrue(delete.waitForExistence(timeout: 5))
+        delete.tap()
+        XCTAssertTrue(app.staticTexts["Trash is empty"].waitForExistence(timeout: 10))
+        XCTAssertFalse(note.exists)
+    }
+
     private func createNote(in app: XCUIApplication) -> String {
         let newNote = app.buttons["notebook-new-item"].firstMatch
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
