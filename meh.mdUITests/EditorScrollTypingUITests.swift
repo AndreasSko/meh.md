@@ -75,7 +75,8 @@ final class EditorScrollTypingUITests: XCTestCase {
         return editor
     }
 
-    private func tapReturn(in app: XCUIApplication) {
+    @discardableResult
+    private func waitForReturnKey(in app: XCUIApplication) -> XCUIElement {
         let key = app.buttons.matching(NSPredicate(
             format: "label IN %@", ["Return", "return"]
         )).firstMatch
@@ -89,7 +90,11 @@ final class EditorScrollTypingUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [onScreen], timeout: 5), .completed,
                        "Expected the keyboard's Return key on screen")
-        key.tap()
+        return key
+    }
+
+    private func tapReturn(in app: XCUIApplication) {
+        waitForReturnKey(in: app).tap()
     }
 
     private func assertVisibleInsertion(
@@ -156,12 +161,16 @@ final class EditorScrollTypingUITests: XCTestCase {
         // until TARGET shows or the note's last line does: TARGET sits just
         // above it. The count only stops a runaway loop.
         var target: CGRect?
-        for _ in 0..<80 {
+        for _ in 0..<40 {
             let lines = try recognizedLines(in: app, editor: editor)
             target = lines.first { $0.text.localizedCaseInsensitiveContains("TARGET") }?.frame
             if target != nil || lines.contains(where: { $0.text.contains("Close the fictional") }) {
                 break
             }
+            // Each check takes a screenshot. Two swipes cannot pass TARGET:
+            // the note ends eight lines below it, and the editor stops there
+            // with TARGET still on screen.
+            editor.swipeUp()
             editor.swipeUp()
         }
         if target == nil {
@@ -217,6 +226,10 @@ final class EditorScrollTypingUITests: XCTestCase {
             .components(separatedBy: "\n").count
         print("Cold focus \(mode): inserted \(inserted) on source line \(insertionLine)")
         if checkEndReturn {
+            // The simulator can drop the first hardware key while it
+            // switches keyboards. Moving to the end twice is harmless.
+            editor.typeKey(.downArrow, modifierFlags: .command)
+            waitForReturnKey(in: app)
             editor.typeKey(.downArrow, modifierFlags: .command)
             tapReturn(in: app)
             var suffix = "\n"
