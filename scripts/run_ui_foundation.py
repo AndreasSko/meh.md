@@ -30,6 +30,28 @@ def retry_arguments(cases):
     return [f"-only-testing:meh.mdUITests/{case}" for case in sorted(cases)]
 
 
+def in_background(function):
+    """Start `function` on a thread; the returned call waits and re-raises."""
+    outcome = {}
+
+    def run():
+        try:
+            outcome["value"] = function()
+        except BaseException as error:
+            outcome["error"] = error
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+    def wait():
+        thread.join()
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("value")
+
+    return wait
+
+
 def report_retries(manifest, retried):
     manifest["retriedTests"] = sorted(retried)
     for identifier, results in retried.items():
@@ -166,6 +188,7 @@ def main():
         "verified": False,
     }
     udid = None
+    startup = None
     validation_complete = False
 
     def stage(name, command, timeout):
@@ -327,11 +350,13 @@ def main():
                     "deviceType": device,
                 }
                 stage("simulator-boot", ["xcrun", "simctl", "boot", udid], 60)
-                stage(
+                # The build needs only the device's identity, so let the
+                # simulator finish booting while it compiles.
+                startup = in_background(lambda: stage(
                     "startup",
                     ["xcrun", "simctl", "bootstatus", udid, "-b"],
                     WATCHDOG_SECONDS["startup"],
-                )
+                ))
                 destination = "platform=iOS Simulator,id=" + udid
                 signing = ["CODE_SIGNING_ALLOWED=NO"]
             common = [
@@ -358,6 +383,8 @@ def main():
                 ],
                 WATCHDOG_SECONDS["build"],
             )
+            if startup:
+                startup()
             products = work / "build/Build/Products"
             runs = list(products.glob("*.xctestrun"))
             if len(runs) != 1:

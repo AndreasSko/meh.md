@@ -18,6 +18,7 @@ from check_ui_foundation_results import (
 )
 from run_ui_foundation import (
     WATCHDOG_SECONDS,
+    in_background,
     report_retries,
     retry_arguments,
     bounded,
@@ -173,6 +174,15 @@ class FoundationTests(unittest.TestCase):
                     check(first, self.expected, retry)
         with self.assertRaises(ValueError):
             check({c: "Passed" for c in self.expected}, self.expected, {})
+
+    def test_background_work_returns_and_reraises(self):
+        self.assertEqual(in_background(lambda: 3)(), 3)
+
+        def fail():
+            raise RuntimeError("boot failed")
+
+        with self.assertRaisesRegex(RuntimeError, "boot failed"):
+            in_background(fail)()
 
     def test_native_repetitions_are_rejected(self):
         case = self.tests["testNodes"][0]

@@ -91,7 +91,9 @@ The `meh.md CI` scheme uses Debug-iCloud. Each lane builds its platform
 plan once, enumerates that compiled selection, and runs the unmodified native
 `.xctestrun` without rebuilding. Test selection, ordering, parallelism, capture
 and per-test timeouts live in the Xcode plans. A missing or disabled selector
-fails before execution. No source-text parser defines coverage.
+fails before execution. No source-text parser defines coverage. iOS lanes
+boot their simulator while the app builds. Two simulators on one runner
+overloaded it, so tests stay serial.
 
 A small result checker rejects missing, extra, duplicate, skipped or ultimately
 failed selected UI cases and unexpected devices. The suite runs once. The
