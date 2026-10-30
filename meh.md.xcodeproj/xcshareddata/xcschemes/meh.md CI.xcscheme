@@ -31,6 +31,7 @@
          <TestPlanReference reference="container:TestPlans/CIIPhone.xctestplan"/>
          <TestPlanReference reference="container:TestPlans/CIIPad.xctestplan"/>
          <TestPlanReference reference="container:TestPlans/CIMac.xctestplan" default="YES"/>
+         <TestPlanReference reference="container:TestPlans/Nightly.xctestplan"/>
       </TestPlans>
    </TestAction>
    <LaunchAction

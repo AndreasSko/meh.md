@@ -656,9 +656,12 @@ final class NotebookSnippetsUITests: XCTestCase {
     }
 
     private func showFiles(_ app: XCUIApplication) {
-        // The split view pushes a tapped row's note a moment later.
+        // The split view pushes a tapped row's note a moment later. On iPhone
+        // that push always comes, so wait for it however slow it is.
         let back = app.buttons["BackButton"]
-        if back.waitForExistence(timeout: 2) { back.tap() }
+        let pushTimeout: TimeInterval =
+            UIDevice.current.userInterfaceIdiom == .phone ? 10 : 2
+        if back.waitForExistence(timeout: pushTimeout) { back.tap() }
         XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(
             timeout: 5))
     }

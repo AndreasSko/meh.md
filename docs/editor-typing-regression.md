@@ -50,12 +50,13 @@ later distribution is claimed here.
 
 ## CI contract
 
-`Editor performance guard` runs on every pull request using the repository's
-Xcode 27 runner. It opens the actual `NotebookView` editor in a new iPhone
-iOS 27 or newer simulator and removes only that simulator afterward. It runs
-a mixed 50 KB live-preview note, a standard 500 KB note, and a 50 KB note
-near a table. The runs are serial and use local storage, without opening a
-user's notebook or contacting CloudKit.
+`Editor regressions and performance` runs on every pull request using the
+repository's Xcode 27 runner. Its performance part opens the actual
+`NotebookView` editor in a new iPhone iOS 27 or newer simulator and removes
+only that simulator afterward. It runs a mixed 50 KB live-preview note, a
+standard 500 KB note, and a 50 KB note near a table. The runs are serial
+and use local storage, without opening a user's notebook or contacting
+CloudKit.
 
 The regression escaped because the large-note benchmark was opt-in, outside
 the regular Swift test run, and had no timing ceiling. CI now runs

@@ -645,9 +645,48 @@ public final class NotebookReplica {
     public func createNote(
         name: String, history: [FixtureEdit], parentID: UUID? = nil
     ) async throws -> UUID {
-        guard let first = history.first else {
+        guard !history.isEmpty else {
             return try await createNote(name: name, parentID: parentID)
         }
+        return try await createNotes([
+            FixtureNote(name: name, history: history, parentID: parentID)
+        ])[0]
+    }
+
+    public struct FixtureNote: Sendable {
+        public let name: String
+        public let history: [FixtureEdit]
+        public let parentID: UUID?
+
+        public init(name: String, history: [FixtureEdit], parentID: UUID? = nil) {
+            precondition(!history.isEmpty, "A fixture note needs its first text")
+            self.name = name
+            self.history = history
+            self.parentID = parentID
+        }
+    }
+
+    /// Adds many fixture notes in one catalog write. Every write saves the
+    /// whole catalog, so one write per note made seeding hundreds of notes
+    /// take minutes.
+    public func createNotes(_ notes: [FixtureNote]) async throws -> [UUID] {
+        let documents = try notes.map { try Self.fixtureDocument($0.history) }
+        return try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.add(zip(notes, documents).map {
+                (id: $1.noteID, kind: .note, name: $0.name, parentID: $0.parentID)
+            })
+            for document in documents {
+                try await self.noteStorage(document.noteID).save(document.snapshot())
+            }
+            try await self.persistCatalog(next)
+            return documents.map(\.noteID)
+        }
+    }
+
+    private static func fixtureDocument(_ history: [FixtureEdit]) throws -> NoteDocument {
+        let first = history[0]
         let note = try NoteDocument(
             text: first.text,
             metadata: NoteMetadata(createdAt: first.date, modifiedAt: first.date)
@@ -675,14 +714,7 @@ public final class NotebookReplica {
                 location += value.utf16.count
             }
         }
-        return try await withCatalogWrite {
-            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
-            let next = try catalog.fork()
-            try next.add(id: note.noteID, kind: .note, name: name, parentID: parentID)
-            try await self.noteStorage(note.noteID).save(note.snapshot())
-            try await self.persistCatalog(next)
-            return note.noteID
-        }
+        return note
     }
     #endif
 

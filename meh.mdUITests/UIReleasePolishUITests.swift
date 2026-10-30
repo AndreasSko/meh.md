@@ -210,17 +210,22 @@ final class UIReleasePolishUITests: XCTestCase {
             "notebook-sidebar-title-", "Fictional field notes"
         )).firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 10))
-        note.press(forDuration: 1)
-        let newFolderID = app.buttons["notebook-menu-new-folder"]
-        let newFolderFallback = app.buttons["New Folder"]
-        let newFolder = newFolderID.exists ? newFolderID : newFolderFallback
-        if isBeforeCapture && !newFolder.waitForExistence(timeout: 2) {
+        var opened = false
+        app.withoutIdleWait {
+            note.press(forDuration: 1)
+            let newFolderID = app.buttons["notebook-menu-new-folder"]
+            let newFolderFallback = app.buttons["New Folder"]
+            let newFolder = newFolderID.exists ? newFolderID : newFolderFallback
+            if isBeforeCapture && !newFolder.waitForExistence(timeout: 2) {
+                capture("Before - note context actions")
+                return
+            }
+            XCTAssertTrue(newFolder.waitForExistence(timeout: 5))
             capture("Before - note context actions")
-            return
+            newFolder.tap()
+            opened = true
         }
-        XCTAssertTrue(newFolder.waitForExistence(timeout: 5))
-        capture("Before - note context actions")
-        newFolder.tap()
+        guard opened else { return }
 
         let folderName = app.textFields["Name"]
         XCTAssertTrue(folderName.waitForExistence(timeout: 5))
@@ -250,14 +255,16 @@ final class UIReleasePolishUITests: XCTestCase {
             "notebook-sidebar-title-", "Fictional field notes"
         )).firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 10))
-        note.press(forDuration: 1)
-        let templates = app.buttons["Templates & Snippets"]
-        XCTAssertTrue(templates.waitForExistence(timeout: 10))
-        capture("After - Templates and Snippets submenu is reachable")
-        templates.tap()
-        let useAsTemplate = app.buttons["Use as Template"]
-        XCTAssertTrue(useAsTemplate.waitForExistence(timeout: 5))
-        useAsTemplate.tap()
+        app.withoutIdleWait {
+            note.press(forDuration: 1)
+            let templates = app.buttons["Templates & Snippets"]
+            XCTAssertTrue(templates.waitForExistence(timeout: 10))
+            capture("After - Templates and Snippets submenu is reachable")
+            templates.tap()
+            let useAsTemplate = app.buttons["Use as Template"]
+            XCTAssertTrue(useAsTemplate.waitForExistence(timeout: 5))
+            useAsTemplate.tap()
+        }
 
         note.tap()
         let noteActions = app.buttons["notebook-note-actions"]

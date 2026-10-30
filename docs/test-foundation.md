@@ -85,24 +85,44 @@ these plans. Their existing tests are retained for later goal-by-goal review.
 Native table commands do not prove physical keyboard delivery or gestures.
 The live iCloud development plan remains separate.
 
+## Nightly run
+
+The UI tests outside the PR plans still run once a night on `main`, so a
+broken feature shows up within a day instead of only when someone runs its
+test by hand. The `Nightly` plan skips the PR goals and a short list of
+tools: live iCloud, README screenshots, recorded tours and an evidence
+helper. Everything else that compiles for the lane runs, about 95 tests on
+iPhone. A unit test keeps that skip list equal to the PR plans plus the
+tools, so a test moved into a PR plan leaves the nightly run.
+
+The nightly run uses the same script with `--nightly`. Unlike PR lanes it
+accepts tests that skip themselves on a device they do not target, and it
+allows each test 10 minutes instead of 30, so a hung test cannot use up the
+run. A PR goal is skipped nightly on every platform, including ones its PR
+plan leaves out. Scheduled runs need the workflow on `main`; it can also be
+started by hand from the Actions tab.
+
 ## Execution and evidence
 
 The `meh.md CI` scheme uses Debug-iCloud. Each lane builds its platform
 plan once, enumerates that compiled selection, and runs the unmodified native
 `.xctestrun` without rebuilding. Test selection, ordering, parallelism, capture
 and per-test timeouts live in the Xcode plans. A missing or disabled selector
-fails before execution. No source-text parser defines coverage.
+fails before execution. No source-text parser defines coverage. iOS lanes
+boot their simulator while the app builds. Two simulators on one runner
+overloaded it, so tests stay serial.
 
 A small result checker rejects missing, extra, duplicate, skipped or ultimately
-failed selected UI cases and unexpected devices. Xcode retries a failed UI test
-once in a fresh process; retries are reported visibly. This applies to UI
-tests, not performance measurements. A successful retry passes with a warning;
-a test that fails both attempts remains red. Xcode can repeat passing cases
-in the same batch and retain their earlier pass if an extra attempt fails.
-The native parent result is authoritative; warnings show every repeated case
-and its attempt results, including a failed extra attempt. Videos remain only
-for failures. A missing video cannot fail a functional check. Logs stream into
-the Actions job and are also saved. Artifacts contain raw results, failure
+failed selected UI cases and unexpected devices. The suite runs once. The
+script then reruns only the failed cases, once, in a new `xcodebuild` run
+selected with `-only-testing`. Xcode's own retry is not used: with a fresh
+process per attempt it reran the whole suite, which doubled a lane's time
+for a single flaky test. A case that passes on retry passes with a warning;
+a case that fails both attempts remains red. More than five failures skip
+the retry, since that points at a broken change. This applies to UI tests,
+not performance measurements. Videos remain only for failures. A missing
+video cannot fail a functional check. Logs stream into the Actions job and
+are also saved. Artifacts contain raw results, failure
 attachments, the native test run, source revision/tree, toolchain and stage
 times. There are no whole-tree, product or artifact hash passes or plist
 selection rewrites.

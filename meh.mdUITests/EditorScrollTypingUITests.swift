@@ -75,12 +75,26 @@ final class EditorScrollTypingUITests: XCTestCase {
         return editor
     }
 
-    private func tapReturn(in app: XCUIApplication) {
+    @discardableResult
+    private func waitForReturnKey(in app: XCUIApplication) -> XCUIElement {
         let key = app.buttons.matching(NSPredicate(
             format: "label IN %@", ["Return", "return"]
         )).firstMatch
-        XCTAssertTrue(key.exists)
-        key.tap()
+        // After a hardware key press the keyboard slides back in, and its
+        // Return key sits below the screen for a moment.
+        let onScreen = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                key.exists && app.frame.contains(key.frame)
+            },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [onScreen], timeout: 5), .completed,
+                       "Expected the keyboard's Return key on screen")
+        return key
+    }
+
+    private func tapReturn(in app: XCUIApplication) {
+        waitForReturnKey(in: app).tap()
     }
 
     private func assertVisibleInsertion(
@@ -131,7 +145,10 @@ final class EditorScrollTypingUITests: XCTestCase {
 
         // Real scrolling leaves TextKit estimating offscreen paragraphs.
         // Do not query caret geometry or materialize document layout here.
-        for _ in 0..<20 { editor.swipeDown() }
+        // Ten swipes move about 30 weeks (150 lines, five screens) away from
+        // TARGET, far outside the laid-out viewport. Each swipe and its way
+        // back costs about six seconds, so go no further than needed.
+        for _ in 0..<10 { editor.swipeDown() }
         let closedViewport = editor.frame.intersection(app.frame)
         let minimumY = closedViewport.minY + closedViewport.height * 0.65
         let maximumY = closedViewport.minY + closedViewport.height * 0.9
@@ -139,11 +156,25 @@ final class EditorScrollTypingUITests: XCTestCase {
         let preferredY = closedViewport.minY + closedViewport.height * 0.8
         let dragX = closedViewport.maxX - closedViewport.width * 0.08
         let dragY = closedViewport.midY
+        // A swipe's distance depends on simulator timing, so the swipes
+        // down and the swipes back up rarely cover the same distance. Swipe
+        // until TARGET shows or the note's last line does: TARGET sits just
+        // above it. The count only stops a runaway loop.
         var target: CGRect?
-        for _ in 0..<25 {
-            target = try textRects("TARGET", in: app, editor: editor).first
-            if target != nil { break }
+        for _ in 0..<40 {
+            let lines = try recognizedLines(in: app, editor: editor)
+            target = lines.first { $0.text.localizedCaseInsensitiveContains("TARGET") }?.frame
+            if target != nil || lines.contains(where: { $0.text.contains("Close the fictional") }) {
+                break
+            }
+            // Each check takes a screenshot. Two swipes cannot pass TARGET:
+            // the note ends eight lines below it, and the editor stops there
+            // with TARGET still on screen.
             editor.swipeUp()
+            editor.swipeUp()
+        }
+        if target == nil {
+            capture(app, name: "\(mode)-cold-focus-target-missing")
         }
         for _ in 0..<4 {
             guard let current = target else { break }
@@ -158,7 +189,7 @@ final class EditorScrollTypingUITests: XCTestCase {
             )
             target = try textRects("TARGET", in: app, editor: editor).first
         }
-        let closedTarget = try XCTUnwrap(target)
+        let closedTarget = try XCTUnwrap(target, "Scrolling never brought TARGET on screen")
         XCTAssertTrue(lowerBand.contains(closedTarget.midY))
         XCTAssertFalse(keyboard.exists)
         capture(app, name: "\(mode)-cold-focus-before-tap")
@@ -195,6 +226,10 @@ final class EditorScrollTypingUITests: XCTestCase {
             .components(separatedBy: "\n").count
         print("Cold focus \(mode): inserted \(inserted) on source line \(insertionLine)")
         if checkEndReturn {
+            // The simulator can drop the first hardware key while it
+            // switches keyboards. Moving to the end twice is harmless.
+            editor.typeKey(.downArrow, modifierFlags: .command)
+            waitForReturnKey(in: app)
             editor.typeKey(.downArrow, modifierFlags: .command)
             tapReturn(in: app)
             var suffix = "\n"
@@ -338,6 +373,14 @@ final class EditorScrollTypingUITests: XCTestCase {
     private func textRects(
         _ text: String, in app: XCUIApplication, editor: XCUIElement
     ) throws -> [CGRect] {
+        try recognizedLines(in: app, editor: editor)
+            .filter { $0.text.localizedCaseInsensitiveContains(text) }
+            .map { $0.frame }
+    }
+
+    private func recognizedLines(
+        in app: XCUIApplication, editor: XCUIElement
+    ) throws -> [(text: String, frame: CGRect)] {
         let screenshot = app.screenshot()
         let image = try XCTUnwrap(UIImage(data: screenshot.pngRepresentation))
         let cgImage = try XCTUnwrap(image.cgImage)
@@ -345,19 +388,22 @@ final class EditorScrollTypingUITests: XCTestCase {
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false
         try VNImageRequestHandler(cgImage: cgImage).perform([request])
+        // Each frame read is an accessibility query; read them once per
+        // screenshot rather than once per recognized line.
+        let screen = app.frame.size
+        let editorFrame = editor.frame
         return (request.results ?? []).compactMap { result in
-            guard result.topCandidates(1).first?.string
-                .localizedCaseInsensitiveContains(text) == true else { return nil }
+            guard let text = result.topCandidates(1).first?.string else { return nil }
             let box = result.boundingBox
             let frame = CGRect(
-                x: box.minX * app.frame.width,
-                y: (1 - box.maxY) * app.frame.height,
-                width: box.width * app.frame.width,
-                height: box.height * app.frame.height
+                x: box.minX * screen.width,
+                y: (1 - box.maxY) * screen.height,
+                width: box.width * screen.width,
+                height: box.height * screen.height
             )
-            return editor.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
-                ? frame : nil
-        }.sorted { $0.midY < $1.midY }
+            return editorFrame.contains(CGPoint(x: frame.midX, y: frame.midY))
+                ? (text, frame) : nil
+        }.sorted { $0.frame.midY < $1.frame.midY }
     }
 
     private func capture(_ app: XCUIApplication, name: String) {

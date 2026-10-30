@@ -13,11 +13,14 @@ from check_ui_foundation_results import (
     check,
     discovered,
     expected_cases,
+    failed,
+    results,
 )
 from run_ui_foundation import (
     WATCHDOG_SECONDS,
-    NATIVE_RETRY_ARGUMENTS,
+    in_background,
     report_retries,
+    retry_arguments,
     bounded,
     finalize,
     select_simulator,
@@ -56,11 +59,18 @@ class FoundationTests(unittest.TestCase):
         }
 
     def test_watchdogs_leave_export_and_cleanup_headroom(self):
+        for workflow_name, test_key in [
+            ("ui-regressions.yml", "test"), ("nightly-ui.yml", "nightly_test"),
+        ]:
+            with self.subTest(workflow_name):
+                self.assert_headroom(workflow_name, test_key)
+
+    def assert_headroom(self, workflow_name, test_key):
         workflow = (
-            Path(__file__).resolve().parents[1] / ".github/workflows/ui-regressions.yml"
+            Path(__file__).resolve().parents[1] / ".github/workflows" / workflow_name
         ).read_text()
         job_minutes = int(re.search(r"timeout-minutes: (\d+)", workflow)[1])
-        # Two JSON exports, two simulator cleanup commands and four minutes
+        # Both passes' exports, two simulator cleanup commands and four minutes
         # for metadata/setup must fit even if every major phase hits its cap.
         maximum_lane = (
             sum(
@@ -69,11 +79,12 @@ class FoundationTests(unittest.TestCase):
                     "startup",
                     "build",
                     "discovery",
-                    "test",
-                    "attachment_export",
+                    test_key,
+                    "retry",
                 )
             )
-            + 2 * WATCHDOG_SECONDS["json_export"]
+            + 2 * WATCHDOG_SECONDS["attachment_export"]
+            + 4 * WATCHDOG_SECONDS["json_export"]
             + 2 * WATCHDOG_SECONDS["cleanup"]
             + 240
         )
@@ -126,136 +137,144 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(device["identifier"], identifier)
 
     def test_valid_exact_results(self):
-        self.assertEqual(
-            check(self.summary, self.tests, self.expected, "iphone"),
-            {},
+        first = results(self.summary, self.tests, "iphone")
+        self.assertEqual(first, {case: "Passed" for case in self.expected})
+        self.assertEqual(check(first, self.expected), {})
+
+    def fail(self, summary, tests, case):
+        node = next(
+            n for n in tests["testNodes"] if n["nodeIdentifier"] == case + "()"
         )
+        node["result"] = "Failed"
+        summary["passedTests"] -= 1
+        summary["failedTests"] += 1
+        summary["result"] = "Failed"
 
-    def retry_case(self):
-        # Minimal shape observed in the standalone Xcode 27 XCTest probe.
-        case = self.tests["testNodes"][0]
-        case["nodeIdentifierURL"] = "test://com.apple.xcode/Probe/Case/testA"
-        case["children"] = [
-            {
-                "nodeType": "Repetition", "nodeIdentifier": str(index),
-                "nodeIdentifierURL": case["nodeIdentifierURL"],
-                "name": name, "result": result,
-            }
-            for index, name, result in [
-                (1, "First Run", "Failed"), (2, "Retry 1", "Passed")
-            ]
-        ]
-        case["children"][0]["children"] = [{
-            "nodeType": "Failure Message", "name": "Synthetic failure",
-        }]
-        return case
-
-    def test_native_retry_is_bounded_and_reported(self):
-        case = self.retry_case()
-        retried = check(self.summary, self.tests, self.expected, "iphone")
-        identifier = case["nodeIdentifier"].removesuffix("()")
-        self.assertEqual(retried, {identifier: ["Failed", "Passed"]})
+    def test_only_failed_cases_are_retried_and_reported(self):
+        self.fail(self.summary, self.tests, "Case/testA")
+        first = results(self.summary, self.tests, "iphone")
+        self.assertEqual(failed(first, self.expected), {"Case/testA"})
+        self.assertEqual(
+            retry_arguments({"Case/testA"}),
+            ["-only-testing:meh.mdUITests/Case/testA"],
+        )
+        retry = {"Case/testA": "Passed"}
+        retried = check(first, self.expected, retry)
+        self.assertEqual(retried, {"Case/testA": ["Failed", "Passed"]})
         manifest = {}
         with patch("run_ui_foundation.print") as output:
             report_retries(manifest, retried)
-        self.assertEqual(manifest["retriedTests"], [identifier])
+        self.assertEqual(manifest["retriedTests"], ["Case/testA"])
         self.assertIn("::warning", output.call_args.args[0])
-        self.assertIn("Failed -> Passed", output.call_args.args[0])
-        self.assertIn(identifier, output.call_args.args[0])
-        self.assertEqual(NATIVE_RETRY_ARGUMENTS, [
-            "-retry-tests-on-failure", "-test-iterations", "2",
-            "-test-repetition-relaunch-enabled", "YES",
-        ])
+        self.assertIn("Case/testA: Failed -> Passed", output.call_args.args[0])
 
-    def test_single_native_repetition_passes(self):
-        case = self.retry_case()
-        case["children"] = case["children"][:1]
-        case["children"][0]["result"] = "Passed"
-        self.assertEqual(check(self.summary, self.tests, self.expected, "iphone"), {})
-
-    def test_native_retry_passed_then_passed_is_reported(self):
-        case = self.retry_case()
-        case["children"] = case["children"][:1] + [
-            {
-                "nodeType": "Repetition",
-                "nodeIdentifier": "2",
-                "nodeIdentifierURL": case["nodeIdentifierURL"],
-                "name": "Retry 1",
-                "result": "Passed",
-            }
-        ]
-        case["children"][0]["result"] = "Passed"
-        case["children"][0].pop("children")
-        self.assertEqual(
-            check(self.summary, self.tests, self.expected, "iphone"),
-            {case["nodeIdentifier"].removesuffix("()"): ["Passed", "Passed"]},
-        )
-
-    def test_native_retry_passed_then_failed_is_reported(self):
-        case = self.retry_case()
-        case["children"][0]["result"] = "Passed"
-        case["children"][0].pop("children")
-        case["children"][1]["result"] = "Failed"
-        identifier = case["nodeIdentifier"].removesuffix("()")
-        retried = check(self.summary, self.tests, self.expected, "iphone")
-        self.assertEqual(retried, {identifier: ["Passed", "Failed"]})
-        manifest = {}
-        with patch("run_ui_foundation.print") as output:
-            report_retries(manifest, retried)
-        self.assertEqual(manifest["retriedTests"], [identifier])
-        self.assertIn("Passed -> Failed", output.call_args.args[0])
-
-    def test_invalid_native_retries_fail_closed(self):
-        for mutation in [
-            "all_failed", "extra", "unknown", "duplicate_parent",
-            "parent_failed", "skipped", "identifier", "url",
-        ]:
-            with self.subTest(mutation=mutation):
-                self.setUp()
-                case = self.retry_case()
-                runs = case["children"]
-                if mutation == "all_failed":
-                    runs[0]["result"] = runs[1]["result"] = "Failed"
-                elif mutation == "unknown":
-                    runs[0]["result"] = "Unexpected"
-                elif mutation == "parent_failed":
-                    case["result"] = "Failed"
-                elif mutation == "extra":
-                    runs.append(copy.deepcopy(runs[1]))
-                elif mutation == "duplicate_parent":
-                    self.tests["testNodes"].append(copy.deepcopy(case))
-                elif mutation == "skipped":
-                    runs[0]["result"] = "Skipped"
-                elif mutation == "identifier":
-                    runs[1]["nodeIdentifier"] = "1"
-                elif mutation == "url":
-                    runs[1]["nodeIdentifierURL"] += "Different"
+    def test_invalid_retries_fail_closed(self):
+        first = {"Case/testA": "Failed", "Case/testB": "Passed"}
+        for name, retry in {
+            "missing retry": None,
+            "failed again": {"Case/testA": "Failed"},
+            "extra case": {"Case/testA": "Passed", "Case/testB": "Passed"},
+            "other case": {"Case/testB": "Passed"},
+        }.items():
+            with self.subTest(name):
                 with self.assertRaises(ValueError):
-                    check(self.summary, self.tests, self.expected, "iphone")
+                    check(first, self.expected, retry)
+        with self.assertRaises(ValueError):
+            check({c: "Passed" for c in self.expected}, self.expected, {})
 
-    def test_missing_unexpected_duplicate_skipped_failed(self):
-        for kind in ["missing", "unexpected", "duplicate", "skipped", "failed"]:
+    def test_background_work_returns_and_reraises(self):
+        self.assertEqual(in_background(lambda: 3)(), 3)
+
+        def fail():
+            raise RuntimeError("boot failed")
+
+        with self.assertRaisesRegex(RuntimeError, "boot failed"):
+            in_background(fail)()
+
+    def test_nightly_allows_runtime_skips_only_when_asked(self):
+        self.tests["testNodes"][0]["result"] = "Skipped"
+        self.summary["passedTests"] = 1
+        self.summary["skippedTests"] = 1
+        with self.assertRaises(ValueError):
+            results(self.summary, self.tests, "iphone")
+        first = results(self.summary, self.tests, "iphone", allow_skips=True)
+        self.assertEqual(sorted(first.values()), ["Passed", "Skipped"])
+        self.assertEqual(failed(first, self.expected), set())
+        self.assertEqual(check(first, self.expected), {})
+
+    def test_nightly_skips_exactly_pr_goals_and_tools(self):
+        # Nightly runs every UI test that no PR plan runs. A test added to
+        # a PR plan, or a new tool, must be skipped here as well.
+        plans = Path(__file__).resolve().parents[1] / "TestPlans"
+
+        def target(name):
+            return json.loads((plans / f"{name}.xctestplan").read_text())[
+                "testTargets"][0]
+
+        pr_goals = set().union(*(
+            target(name)["selectedTests"] for name in ["CIIPhone", "CIIPad", "CIMac"]
+        ))
+        tools = {
+            "FlairUITests/testShowcaseScreens",
+            "FlairUITests/testShowcaseWalkthrough",
+            "ICloudDevelopmentUITests",
+            "NoteHistoryTourUITests",
+            "NoteLinkTourUITests",
+            "NotebookStorageUITests/testCaptureSettingsBeforeStorage",
+            "ReadmeScreenshotUITests",
+        }
+        nightly = target("Nightly")
+        self.assertNotIn("selectedTests", nightly)
+        self.assertEqual(set(nightly["skippedTests"]), pr_goals | tools)
+
+    def test_skip_only_plan_runs_every_compiled_case(self):
+        plan = {"testTargets": [{
+            "target": {"name": "meh.mdUITests"},
+            "skippedTests": ["Tools"],
+        }]}
+        self.assertEqual(expected_cases(plan, self.expected), self.expected)
+        with self.assertRaisesRegex(ValueError, "still enumerated"):
+            expected_cases(plan, self.expected | {"Tools/testCapture"})
+        plan["testTargets"][0]["skippedTests"] = []
+        with self.assertRaises(ValueError):
+            expected_cases(plan, self.expected)
+
+    def test_native_repetitions_are_rejected(self):
+        case = self.tests["testNodes"][0]
+        case["children"] = [{"nodeType": "Repetition", "result": "Passed"}]
+        with self.assertRaisesRegex(ValueError, "native repetition"):
+            results(self.summary, self.tests, "iphone")
+
+    def test_summary_must_match_case_results(self):
+        self.tests["testNodes"][0]["result"] = "Failed"
+        with self.assertRaises(ValueError):
+            results(self.summary, self.tests, "iphone")
+
+    def test_missing_unexpected_duplicate_skipped(self):
+        for kind in ["missing", "unexpected", "duplicate", "skipped"]:
             with self.subTest(kind=kind):
+                summary = copy.deepcopy(self.summary)
                 tests = copy.deepcopy(self.tests)
                 if kind == "missing":
                     tests["testNodes"].pop()
+                    summary["passedTests"] = summary["totalTestCount"] = 1
                 if kind == "unexpected":
                     tests["testNodes"][0]["nodeIdentifier"] = "Case/testC()"
                 if kind == "duplicate":
                     tests["testNodes"][1] = tests["testNodes"][0]
-                if kind in {"skipped", "failed"}:
-                    tests["testNodes"][0]["result"] = kind.title()
+                if kind == "skipped":
+                    tests["testNodes"][0]["result"] = "Skipped"
                 with self.assertRaises(ValueError):
-                    check(self.summary, tests, self.expected, "iphone")
+                    check(results(summary, tests, "iphone"), self.expected)
 
     def test_wrong_device_and_false_zero_pass(self):
         self.summary["devicesAndConfigurations"][0]["device"][
             "modelName"
         ] = "iPhone 17 Pro"
         with self.assertRaises(ValueError):
-            check(self.summary, self.tests, self.expected, "iphone")
+            results(self.summary, self.tests, "iphone")
         with self.assertRaises(ValueError):
-            check({}, {"testNodes": []}, set(), "iphone")
+            check({}, set())
 
     def test_independent_discovery_and_missing_selector(self):
         universe = discovered(

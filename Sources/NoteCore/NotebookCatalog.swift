@@ -753,6 +753,47 @@ final class NotebookCatalogDocument {
         return id
     }
 
+    #if DEBUG
+    /// Appends many new items like repeated `add` calls, but reads each
+    /// parent's siblings once instead of once per item.
+    func add(_ items: [(id: UUID, kind: NotebookItemKind, name: String, parentID: UUID?)]) throws {
+        let byParent = Dictionary(grouping: items, by: \.parentID)
+        for (parentID, siblings) in byParent {
+            for item in siblings { try NotebookName.validate(item.name) }
+            try validateParent(parentID, for: nil)
+            try ensureOrder(parentID: parentID)
+            let lower = try orderedChildren(parentID: parentID, inTrash: false)
+                .filter { $0.item.parentID == parentID }.last?.item.orderKey
+            let importRootID = try parentID.flatMap { parent in
+                try self.items().first(where: { $0.id == parent })?.importRootID
+            }
+            let ranks = try NotebookOrderKeyFactory.distribute(
+                itemIDs: siblings.map(\.id), lower: lower, upper: nil)
+            for item in siblings {
+                guard try document.get(obj: itemsObject, key: item.id.uuidString) == nil else {
+                    throw NotebookCatalogError.duplicateIdentity
+                }
+                let object = try document.putObject(
+                    obj: itemsObject, key: item.id.uuidString, ty: .Map)
+                try document.put(obj: object, key: "kind", value: .String(item.kind.rawValue))
+                try document.put(obj: object, key: "name", value: .String(item.name))
+                try document.put(
+                    obj: object, key: "parent",
+                    value: parentID.map { .String($0.uuidString) } ?? .Null)
+                try document.put(
+                    obj: object, key: "visibility",
+                    value: .String("active:\(UUID().uuidString)"))
+                if let importRootID {
+                    try document.put(
+                        obj: object, key: "importRootID",
+                        value: .String(importRootID.uuidString))
+                }
+                try writeOrder(ranks[item.id]!, parentID: parentID, object: object)
+            }
+        }
+    }
+    #endif
+
     /// Builds an import on an isolated fork after validating the complete
     /// tree. This avoids recomputing placements after every inserted item.
     func forkAddingImportEntries(

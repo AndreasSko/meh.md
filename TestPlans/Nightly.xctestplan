@@ -1,0 +1,73 @@
+{
+  "configurations": [
+    {
+      "id": "F22B86B1-3DE9-4EFE-B9EA-4EA47FF71F5A",
+      "name": "Nightly",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "testTimeoutsEnabled": true,
+    "defaultTestExecutionTimeAllowance": 600,
+    "maximumTestExecutionTimeAllowance": 900,
+    "testExecutionOrdering": "lexical",
+    "preferredScreenCaptureFormat": "video",
+    "uiTestingScreenshotsLifetime": "deleteOnSuccess",
+    "userAttachmentLifetime": "deleteOnSuccess"
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:meh.md.xcodeproj",
+        "identifier": "000000000000000100000001",
+        "name": "meh.mdUITests"
+      },
+      "parallelizable": false,
+      "skippedTests": [
+        "EditorScrollTypingUITests/testPreviewColdFocusTypesIntoTappedParagraph",
+        "EditorScrollTypingUITests/testPreviewTypingAndListReturnKeepInsertionVisible",
+        "EditorScrollTypingUITests/testSourceColdFocusAndReturnKeepInsertionVisible",
+        "FlairUITests/testAppearanceSwitchesTheInk",
+        "FlairUITests/testLibraryEndsWithTheNoteCount",
+        "FlairUITests/testSearchWithoutResultsNamesTheQuery",
+        "FlairUITests/testSettingsEndWithTheVersion",
+        "FlairUITests/testShowcaseScreens",
+        "FlairUITests/testShowcaseWalkthrough",
+        "ICloudDevelopmentUITests",
+        "LargeNoteHistoryUITests/testLargeHistoryCanCloseWhileIndexingAndBrowseWithoutChangingNote",
+        "MacFormattingUITests",
+        "NoteHistoryTourUITests",
+        "NoteHistoryUITests/testRestoreAsNewNoteKeepsOriginalCurrentText",
+        "NoteLinkTourUITests",
+        "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
+        "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
+        "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",
+        "NotebookDragUITests/testSelectedNotesDragTogetherAndKeepTheirSource",
+        "NotebookReleaseMenuUITests/testFileMenuPickersAndNewWindowPreserveWriting",
+        "NotebookReleaseMenuUITests/testSelectionCommandsRespectEditorAndTitleFocus",
+        "NotebookStorageUITests/testCaptureSettingsBeforeStorage",
+        "NotebookStorageUITests/testEmptyStorageCanCloseAndReopen",
+        "NotebookStorageUITests/testStorageCleanupControlsAndPreserveNote",
+        "NotebookStorageUITests/testStorageOverviewReopenAndOpenNote",
+        "NotebookSyncStatusUITests/testAutomaticSyncRecoversAfterExtendedBackground",
+        "NotebookSyncStatusUITests/testNoteNavigationAfterClosingSyncRecoversToolbarPresentation",
+        "NotebookSyncStatusUITests/testNotebookNavigationAllowsToolbarPopoversToReopen",
+        "NotebookSyncStatusUITests/testSettingsContainsTheSyncEventLog",
+        "NotebookSyncStatusUITests/testToolbarOpensStatusAndShowsActiveFilesDuringSync",
+        "ReadmeScreenshotUITests",
+        "UIReleasePolishUITests/testBrowserActionsExposeSettingsImportAndCreateAnotherNote",
+        "UIReleasePolishUITests/testEmptyLibraryCanCreateAndEditItsFirstNote",
+        "UIReleasePolishUITests/testEmptyLibraryImportOpensPickerAndCanCancel",
+        "UIReleasePolishUITests/testFormattingCommandChangesTheNoteSource",
+        "UIReleasePolishUITests/testLongNoteTitleRemainsAccessibleInTheToolbar",
+        "UIReleasePolishUITests/testNoteContextActionCreatesFolderBesideTheNote",
+        "UIReleasePolishUITests/testNoteMenusExposeTemplatesAndEditorDisplay",
+        "UIReleasePolishUITests/testPlusContextActionCreatesFolder",
+        "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow",
+        "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
+        "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote"
+      ]
+    }
+  ],
+  "version": 1
+}

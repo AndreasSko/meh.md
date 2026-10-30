@@ -37,20 +37,25 @@ final class WritingDurabilityUITests: XCTestCase {
         assertEditor(editor, title: title, source: initial, in: app)
 
         activate(editor)
-        editor.typeKey(.downArrow, modifierFlags: .command)
-        editor.typeText("\n\nAurora watch")
         let appended = initial + "\n\nAurora watch"
-        assertEditor(editor, title: title, source: appended, in: app)
-        editor.typeKey(.leftArrow, modifierFlags: [.command, .shift])
-        editor.typeKey("b", modifierFlags: .command)
-        assertEditor(editor, title: title, source: initial + "\n\n**Aurora watch**", in: app)
-        editor.typeKey("z", modifierFlags: .command)
-        assertEditor(editor, title: title, source: appended, in: app)
-        editor.typeKey(.downArrow, modifierFlags: .command)
         let addition = "\n\nUnicode: café naïve 👋🏽 日本語"
-        editor.typeText(addition)
         let expected = appended + addition
-        assertEditor(editor, title: title, source: expected, in: app)
+        // On iPad, XCUITest sometimes never sees the app go idle while
+        // typing and waits 60 s after every key. Each step below waits for
+        // the exact source instead.
+        typingWithoutIdleWait {
+            editor.typeKey(.downArrow, modifierFlags: .command)
+            editor.typeText("\n\nAurora watch")
+            assertEditor(editor, title: title, source: appended, in: app)
+            editor.typeKey(.leftArrow, modifierFlags: [.command, .shift])
+            editor.typeKey("b", modifierFlags: .command)
+            assertEditor(editor, title: title, source: initial + "\n\n**Aurora watch**", in: app)
+            editor.typeKey("z", modifierFlags: .command)
+            assertEditor(editor, title: title, source: appended, in: app)
+            editor.typeKey(.downArrow, modifierFlags: .command)
+            editor.typeText(addition)
+            assertEditor(editor, title: title, source: expected, in: app)
+        }
 
         let identifier = "notebook-sidebar-note-" + noteID
         app.revealNotebookSidebar()
@@ -119,6 +124,14 @@ final class WritingDurabilityUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [exact], timeout: 10), .completed,
                        "Expected the opened note’s exact literal UTF-8 source: \(source)")
+    }
+
+    private func typingWithoutIdleWait(_ body: () -> Void) {
+#if os(iOS)
+        app.withoutIdleWait(body)
+#else
+        body()
+#endif
     }
 
     private func activate(_ element: XCUIElement) {

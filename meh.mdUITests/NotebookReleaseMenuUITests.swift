@@ -26,6 +26,12 @@ final class NotebookReleaseMenuUITests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        // macOS restores every open window on the next launch, so a window
+        // left open here would turn up in all later tests.
+        for _ in 0..<3 where app.state == .runningForeground && app.windows.count > 1 {
+            app.windows.element(boundBy: app.windows.count - 1)
+                .buttons[XCUIIdentifierCloseWindow].click()
+        }
         if app.state == .runningForeground { app.terminate() }
     }
 
@@ -97,6 +103,9 @@ final class NotebookReleaseMenuUITests: XCTestCase {
         waitForExpectations(timeout: 10)
         capture("Mac second notebook window")
         app.typeKey("w", modifierFlags: .command)
+        let closed = NSPredicate { _, _ in self.app.windows.count == windows }
+        expectation(for: closed, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
         XCTAssertTrue((app.textViews["markdown-editor"].firstMatch.value as? String)?
             .contains("Saved after export cancellation.") == true)
     }

@@ -42,6 +42,19 @@ def expected_cases(plan, universe):
     targets = plan["testTargets"]
     if len(targets) != 1 or targets[0]["target"]["name"] != "meh.mdUITests":
         raise ValueError("Expected exactly the UI test target")
+    if "selectedTests" not in targets[0]:
+        # A plan that only skips tools runs everything else it compiles;
+        # the enumeration has already removed the skipped cases.
+        skipped = targets[0].get("skippedTests")
+        if not skipped or len(skipped) != len(set(skipped)):
+            raise ValueError("Missing or duplicate skipped selectors")
+        leaked = {
+            case for case in universe for selector in skipped
+            if case == selector or case.startswith(selector + "/")
+        }
+        if leaked:
+            raise ValueError(f"Skipped selectors still enumerated: {sorted(leaked)}")
+        return set(universe)
     selected = targets[0]["selectedTests"]
     if not selected or len(selected) != len(set(selected)):
         raise ValueError("Missing or duplicate plan selectors")
@@ -58,57 +71,46 @@ def expected_cases(plan, universe):
     return expected
 
 
-def check(summary, tests, expected, platform):
-    if not expected:
-        raise ValueError("Empty expected inventory")
-    for key, value in {
-        "passedTests": len(expected),
-        "totalTestCount": len(expected),
-        "failedTests": 0,
-        "skippedTests": 0,
-        "expectedFailures": 0,
-    }.items():
-        if summary.get(key) != value:
-            raise ValueError(f"{key}: expected {value}, got {summary.get(key)}")
-    if summary.get("result") != "Passed":
-        raise ValueError("Test summary did not pass")
-    cases = []
-    retried = {}
+def results(summary, tests, platform, allow_skips=False):
+    """Map each executed case to Passed, Failed or Skipped for one bundle.
+
+    Only nightly runs allow skips: they include every compiled case, and
+    some skip themselves on devices they do not apply to.
+    """
+    cases = {}
 
     def visit(node):
         if node.get("nodeType") == "Test Case":
-            if node.get("result") != "Passed":
-                raise ValueError(f"Test did not pass: {node}")
             identifier = canonical(node.get("nodeIdentifier"))
-            repetitions = [
-                child for child in node.get("children", [])
-                if child.get("nodeType") == "Repetition"
-            ]
-            if repetitions:
-                results = [run.get("result") for run in repetitions]
-                if (
-                    len(results) not in {1, 2}
-                    or any(result not in {"Passed", "Failed"} for result in results)
-                    or "Passed" not in results
-                ):
-                    raise ValueError(f"Unexpected native retry sequence: {identifier}")
-                for index, run in enumerate(repetitions, 1):
-                    if (
-                        run.get("nodeIdentifier") != str(index)
-                        or not node.get("nodeIdentifierURL")
-                        or run.get("nodeIdentifierURL") != node["nodeIdentifierURL"]
-                    ):
-                        raise ValueError(f"Mismatched native retry: {identifier}")
-                if len(repetitions) == 2:
-                    retried[identifier] = results
-            cases.append(identifier)
+            if identifier in cases:
+                raise ValueError(f"Duplicate case: {identifier}")
+            allowed = {"Passed", "Failed"} | ({"Skipped"} if allow_skips else set())
+            if node.get("result") not in allowed:
+                raise ValueError(f"Unexpected test result: {node}")
+            if any(
+                child.get("nodeType") == "Repetition"
+                for child in node.get("children", [])
+            ):
+                raise ValueError(f"Unexpected native repetition: {identifier}")
+            cases[identifier] = node["result"]
         for child in node.get("children", []):
             visit(child)
 
     for node in tests.get("testNodes", []):
         visit(node)
-    if collections.Counter(cases) != collections.Counter(expected):
-        raise ValueError(f"Missing/unexpected/duplicate cases: {cases}")
+    failed = sum(result == "Failed" for result in cases.values())
+    skipped = sum(result == "Skipped" for result in cases.values())
+    for key, value in {
+        "passedTests": len(cases) - failed - skipped,
+        "totalTestCount": len(cases),
+        "failedTests": failed,
+        "skippedTests": skipped,
+        "expectedFailures": 0,
+    }.items():
+        if summary.get(key) != value:
+            raise ValueError(f"{key}: expected {value}, got {summary.get(key)}")
+    if summary.get("result") != ("Failed" if failed else "Passed"):
+        raise ValueError(f"Unexpected summary result: {summary.get('result')}")
     configurations = summary.get("devicesAndConfigurations", [])
     if len(configurations) != 1:
         raise ValueError("Expected one device configuration")
@@ -126,4 +128,30 @@ def check(summary, tests, expected, platform):
         )
     if not valid:
         raise ValueError(f"Unexpected device: {device}")
-    return {identifier: retried[identifier] for identifier in sorted(retried)}
+    return cases
+
+
+def failed(first, expected):
+    """Cases to retry after the full run; every expected case must have run."""
+    if not expected:
+        raise ValueError("Empty expected inventory")
+    if set(first) != set(expected):
+        raise ValueError(
+            f"Missing/unexpected cases: {sorted(set(first) ^ set(expected))}"
+        )
+    return {case for case, result in first.items() if result == "Failed"}
+
+
+def check(first, expected, retry=None):
+    """Pass when every case passed, once or on its single retry."""
+    retried = failed(first, expected)
+    if not retried:
+        if retry is not None:
+            raise ValueError("Retry results without a failed case")
+        return {}
+    if retry is None or set(retry) != retried:
+        raise ValueError(f"Retry must run exactly the failed cases: {sorted(retried)}")
+    still_failing = sorted(case for case in retried if retry[case] != "Passed")
+    if still_failing:
+        raise ValueError(f"Failed again on retry: {still_failing}")
+    return {case: ["Failed", "Passed"] for case in sorted(retried)}
