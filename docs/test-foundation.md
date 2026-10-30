@@ -94,15 +94,16 @@ and per-test timeouts live in the Xcode plans. A missing or disabled selector
 fails before execution. No source-text parser defines coverage.
 
 A small result checker rejects missing, extra, duplicate, skipped or ultimately
-failed selected UI cases and unexpected devices. Xcode retries a failed UI test
-once in a fresh process; retries are reported visibly. This applies to UI
-tests, not performance measurements. A successful retry passes with a warning;
-a test that fails both attempts remains red. Xcode can repeat passing cases
-in the same batch and retain their earlier pass if an extra attempt fails.
-The native parent result is authoritative; warnings show every repeated case
-and its attempt results, including a failed extra attempt. Videos remain only
-for failures. A missing video cannot fail a functional check. Logs stream into
-the Actions job and are also saved. Artifacts contain raw results, failure
+failed selected UI cases and unexpected devices. The suite runs once. The
+script then reruns only the failed cases, once, in a new `xcodebuild` run
+selected with `-only-testing`. Xcode's own retry is not used: with a fresh
+process per attempt it reran the whole suite, which doubled a lane's time
+for a single flaky test. A case that passes on retry passes with a warning;
+a case that fails both attempts remains red. More than five failures skip
+the retry, since that points at a broken change. This applies to UI tests,
+not performance measurements. Videos remain only for failures. A missing
+video cannot fail a functional check. Logs stream into the Actions job and
+are also saved. Artifacts contain raw results, failure
 attachments, the native test run, source revision/tree, toolchain and stage
 times. There are no whole-tree, product or artifact hash passes or plist
 selection rewrites.
