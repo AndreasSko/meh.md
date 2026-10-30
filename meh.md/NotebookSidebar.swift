@@ -713,7 +713,9 @@ private struct NotebookLibraryBrowser: View {
             scene.browserViewportChanged(to: viewport)
         }
         .onScrollPhaseChange { _, phase in
-            if phase == .tracking || phase == .interacting {
+            // Includes scroll-to-top from the status bar, which never pans.
+            // An offscreen list scrolling under an open note doesn't count.
+            if phase != .idle, scene.preferredCompactColumn == .sidebar {
                 scene.browserScrollBegan()
             }
         }

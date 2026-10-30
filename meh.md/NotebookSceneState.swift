@@ -134,7 +134,6 @@ final class NotebookSceneState {
     var browserViewport: NotebookBrowserViewport?
     var browserViewportHeight: CGFloat = 0
     var browserReturnViewport: NotebookBrowserViewport?
-    var browserToolbarWasHidden = false
     #endif
 
     // MARK: Detail title
