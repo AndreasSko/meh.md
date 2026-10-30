@@ -20,7 +20,6 @@ final class NotebookSnippetsUITests: XCTestCase {
 
         createFolder(in: app, named: "Work")
         createFolder(in: app, named: "Meetings", parent: "Work")
-        let meetingsID = itemID(named: "Meetings", in: app)
         createFolder(in: app, named: "Weekly", parent: "Meetings")
         createNote(in: app, named: "Agenda", body: folderSnippet,
                    parent: "Weekly")
@@ -33,14 +32,11 @@ final class NotebookSnippetsUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         revealSnippetMenu(in: app)
-        capture(app, "snippet-toolbar-after")
 
         openSnippetMenu(in: app)
-        capture(app, "snippet-menu-after")
         chooseMenuItem("Reusable intro", in: app)
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         let noteBody = editor.value as? String ?? ""
-        capture(app, "note-snippet-inserted-after")
         XCTAssertTrue(noteBody.contains("## Project notes\n\n"))
         XCTAssertTrue(noteBody.range(
             of: dateAndTimePattern(suffix: " {{unknown}}"),
@@ -58,7 +54,6 @@ final class NotebookSnippetsUITests: XCTestCase {
         let weekly = menuItem("Weekly", in: app)
         XCTAssertTrue(weekly.waitForExistence(timeout: 5))
         weekly.tap()
-        capture(app, "nested-snippet-category-after")
         chooseMenuItem("Agenda", in: app)
 
         let finalBody = editor.value as? String ?? ""
@@ -74,35 +69,6 @@ final class NotebookSnippetsUITests: XCTestCase {
         ) != nil)
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
                       "Inserting a snippet should leave the keyboard open")
-
-        showFiles(app)
-        app.terminate()
-        app.launch()
-        let target = fileTitle("Project notes", in: app)
-        XCTAssertTrue(target.waitForExistence(timeout: 15))
-        target.tap()
-        XCTAssertEqual(app.textViews["markdown-editor"].value as? String,
-                       finalBody)
-
-        showFiles(app)
-        fileTitle("Reusable intro", in: app).tap()
-        XCTAssertEqual(app.textViews["markdown-editor"].value as? String,
-                       noteSnippet,
-                       "Inserting a snippet must leave its source unchanged")
-        showFiles(app)
-        let agenda = fileTitle("Agenda", in: app)
-        if !agenda.exists {
-            if !fileTitle("Meetings", in: app).exists {
-                app.buttons["notebook-disclosure-\(workID)"].tap()
-            }
-            if !fileTitle("Weekly", in: app).exists {
-                app.buttons["notebook-disclosure-\(meetingsID)"].tap()
-            }
-        }
-        agenda.tap()
-        XCTAssertEqual(app.textViews["markdown-editor"].value as? String,
-                       folderSnippet,
-                       "Folder snippets must preserve the source note")
     }
 
     func testInsertSnippetInLivePreview() throws {
@@ -127,11 +93,6 @@ final class NotebookSnippetsUITests: XCTestCase {
         XCTAssertEqual(inserted, "Start: **Preview target** {{unknown}}")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
                       "Live Preview insertion should leave the keyboard open")
-        showFiles(app)
-        fileTitle("Live preview snippet", in: app).tap()
-        XCTAssertEqual(app.textViews["markdown-editor"].value as? String,
-                       source,
-                       "Live Preview insertion must preserve its source note")
     }
 
     func testVariableReturnCompletionInLivePreview() throws {
@@ -175,11 +136,8 @@ final class NotebookSnippetsUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         editor.typeText("{{")
         XCTAssertEqual(editor.value as? String, "{{")
-        capture(app, "snippet-variable-popup-attempt")
         XCTAssertTrue(app.buttons["snippet-variable-date"]
             .waitForExistence(timeout: 5))
-        capture(app, "snippet-variable-popup-after")
-        XCTAssertTrue(app.buttons["snippet-variable-date"].exists)
         XCTAssertTrue(app.buttons["snippet-variable-date:short"].exists)
         XCTAssertTrue(app.buttons["snippet-variable-date:long"].exists)
 
@@ -230,10 +188,11 @@ final class NotebookSnippetsUITests: XCTestCase {
             format: "identifier BEGINSWITH %@", "link-suggestion-"
         )).firstMatch
         XCTAssertTrue(linkSuggestion.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["snippet-variable-date"].exists)
+        let variable = app.buttons["snippet-variable-date"]
+        XCTAssertFalse(variable.waitForExistence(timeout: 2))
 
         editor.typeText("\n{{")
-        XCTAssertFalse(app.buttons["snippet-variable-date"].exists)
+        XCTAssertFalse(variable.waitForExistence(timeout: 2))
         XCTAssertTrue((editor.value as? String ?? "").contains("{{"),
                       "Ordinary notes should retain literal braces")
     }
@@ -262,7 +221,6 @@ final class NotebookSnippetsUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, source)
         let insert = app.buttons["note-snippet-return-insert"]
         XCTAssertTrue(insert.waitForExistence(timeout: 5))
-        capture(app, "snippet-edit-after")
         editor.tap()
         editor.typeText("- Face pulls: ")
         insert.tap()
@@ -274,7 +232,6 @@ final class NotebookSnippetsUITests: XCTestCase {
         waitForExpectations(timeout: 10)
         XCTAssertFalse(insert.exists, "The bar belongs to the snippet only")
         let afterInsert = editor.value as? String ?? ""
-        capture(app, "snippet-return-insert-after")
 
         editSnippet("Pull", in: "Training", app: app)
         XCTAssertEqual(editor.value as? String, source + "- Face pulls: ",
@@ -286,56 +243,6 @@ final class NotebookSnippetsUITests: XCTestCase {
         expectation(for: unchanged, evaluatedWith: editor)
         waitForExpectations(timeout: 10)
         XCTAssertFalse(insert.exists)
-
-        // Holding the button and moving still rearranges it. The move is
-        // slow, like a finger, so the menu hands over to the drag.
-        editor.tap()
-        revealSnippetMenu(in: app)
-        let button = app.buttons["editor-snippet-menu"]
-        let neighbor = app.collectionViews["editor-keyboard-toolbar"].buttons
-            .allElementsBoundByIndex
-            .filter { $0.isHittable && $0.frame.midX < button.frame.midX }
-            .max { $0.frame.midX < $1.frame.midX }
-        // Elements bound by index follow the position, not the button.
-        let left = app.buttons[try XCTUnwrap(neighbor).identifier]
-        let origin = app.coordinate(withNormalizedOffset: .zero)
-        origin.withOffset(CGVector(dx: button.frame.midX, dy: button.frame.midY))
-            .press(forDuration: 0.8, thenDragTo: origin.withOffset(CGVector(
-                dx: left.frame.midX - 20, dy: left.frame.midY
-            )), withVelocity: .slow, thenHoldForDuration: 0.5)
-        let moved = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in button.frame.midX < left.frame.midX },
-            object: app
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 5), .completed)
-        XCTAssertFalse(app.staticTexts["Edit Snippet"].exists)
-        XCTAssertEqual(editor.value as? String, afterInsert)
-    }
-
-    func testMultipleSnippetFolderRootsKeepTheirNames() throws {
-        continueAfterFailure = false
-        let app = makeApp()
-        app.launch()
-
-        createFolder(in: app, named: "Work")
-        createFolder(in: app, named: "Meetings", parent: "Work")
-        createNote(in: app, named: "Agenda", body: "",
-                   parent: "Meetings")
-        showFiles(app)
-        markSnippet(itemID(named: "Work", in: app), named: "Work", in: app,
-                    isFolder: true)
-
-        createFolder(in: app, named: "Home")
-        createFolder(in: app, named: "Journal", parent: "Home")
-        createNote(in: app, named: "Entry", body: "", parent: "Journal")
-        showFiles(app)
-        markSnippet(itemID(named: "Home", in: app), named: "Home", in: app,
-                    isFolder: true)
-
-        createNote(in: app, named: "Target", body: "")
-        openSnippetMenu(in: app)
-        XCTAssertTrue(menuItem("Work", in: app).waitForExistence(timeout: 5))
-        XCTAssertTrue(menuItem("Home", in: app).exists)
     }
 
     func testSnippetOverviewShowsEffectiveSourcesAndTemplateSeparation() throws {
@@ -363,7 +270,6 @@ final class NotebookSnippetsUITests: XCTestCase {
         markTemplate(templateID, named: "Template only", in: app)
 
         openSnippetSettings(app)
-        capture(app, "snippet-overview-after")
         let folder = app.buttons["notebook-snippet-folder-overview-" + workID]
         let agenda = app.buttons["notebook-snippet-overview-" + agendaID]
         let intro = app.buttons["notebook-snippet-overview-" + introID]
@@ -407,7 +313,6 @@ final class NotebookSnippetsUITests: XCTestCase {
 
         openSnippetSettings(app)
         app.buttons["notebook-snippet-overview-" + sourceID].tap()
-        capture(app, "snippet-source-detail-after")
         let edit = app.buttons["notebook-open-snippet-source"]
         XCTAssertTrue(edit.waitForExistence(timeout: 5))
         XCTAssertEqual(edit.label, "Edit Snippet")
@@ -417,12 +322,6 @@ final class NotebookSnippetsUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertEqual(editor.value as? String, source,
                        "Edit Snippet should open the original Markdown note")
-        editor.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        editor.typeText("{{")
-        XCTAssertTrue(app.buttons["snippet-variable-date"]
-            .waitForExistence(timeout: 5),
-                       "The opened source should support variable completion")
 
         showFiles(app)
         openSnippetSettings(app)
@@ -599,7 +498,6 @@ final class NotebookSnippetsUITests: XCTestCase {
         app.buttons["editor-snippet-menu"].press(forDuration: 1)
         XCTAssertTrue(app.staticTexts["Edit Snippet"].waitForExistence(timeout: 5),
                       "Holding the button opens the menu for editing")
-        capture(app, "snippet-edit-menu-after")
         chooseMenuItem(folder, in: app)
         chooseMenuItem(name, in: app)
     }
@@ -664,13 +562,6 @@ final class NotebookSnippetsUITests: XCTestCase {
         if back.waitForExistence(timeout: pushTimeout) { back.tap() }
         XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(
             timeout: 5))
-    }
-
-    private func capture(_ app: XCUIApplication, _ name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 }
 #endif

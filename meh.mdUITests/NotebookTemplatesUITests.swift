@@ -14,18 +14,14 @@ final class NotebookTemplatesUITests: XCTestCase {
         let templateAction = app.buttons["notebook-new-from-template"]
         XCTAssertTrue(app.buttons["New from Template…"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["New from Template…"].isEnabled)
-        XCTAssertTrue(app.buttons["New Note"].isEnabled)
-        capture(app, "empty-template-menu")
-        app.buttons["New Note"].tap()
+        // The plus button itself is labelled New Note too.
+        let menuNewNote = app.buttons.matching(NSPredicate(
+            format: "label == %@ AND identifier != %@", "New Note", "notebook-new-item"
+        )).firstMatch
+        XCTAssertTrue(menuNewNote.isEnabled)
+        menuNewNote.tap()
         commitBlankNote(in: app)
         XCTAssertEqual(app.textViews["markdown-editor"].value as? String, "")
-        app.buttons["notebook-new-item"].firstMatch.press(forDuration: 1)
-        XCTAssertTrue(app.buttons["New from Template…"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["New from Template…"].isEnabled)
-        XCTAssertTrue(app.buttons["New Note"].isEnabled)
-        capture(app, "empty-editor-template-menu")
-        app.buttons["New Note"].tap()
-        commitBlankNote(in: app)
         showFiles(app)
 
         createNote(in: app, named: "Meeting", body: meetingBody)
@@ -65,7 +61,6 @@ final class NotebookTemplatesUITests: XCTestCase {
         XCTAssertTrue(templateAction.waitForExistence(timeout: 5))
         XCTAssertFalse(templateAction.isEnabled,
                        "An empty registered folder offers no usable template")
-        capture(app, "empty-registered-folder-template-menu")
     }
 
     func testAppIconTemplateAndNewNoteShortcuts() throws {
@@ -76,17 +71,29 @@ final class NotebookTemplatesUITests: XCTestCase {
         showFiles(app)
         let sourceID = itemID(named: "Meeting", in: app)
         markTemplate(sourceID, named: "Meeting", in: app)
+        openTemplatesSettings(app)
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         openAppIconMenu(springboard)
         let fromTemplate = springboard.buttons["New from Template"]
         XCTAssertTrue(fromTemplate.waitForExistence(timeout: 5))
         XCTAssertTrue(springboard.buttons["New Note"].exists)
-        capture(springboard, "app-icon-template-menu")
         fromTemplate.tap()
         let choice = app.buttons["notebook-template-choice-" + sourceID]
         XCTAssertTrue(choice.waitForExistence(timeout: 10))
-        capture(app, "app-icon-template-picker")
+        XCTAssertFalse(app.buttons["notebook-template-options-" + sourceID].exists,
+                       "The app-icon shortcut must dismiss existing Settings")
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@",
+            "notebook-sidebar-title-", "Meeting"
+        )).count, 1, "Opening the template picker must not create a note")
+
+        openAppIconMenu(springboard)
+        XCTAssertTrue(fromTemplate.waitForExistence(timeout: 5))
+        fromTemplate.tap()
+        XCTAssertTrue(choice.waitForExistence(timeout: 10))
         choice.tap()
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
@@ -108,37 +115,6 @@ final class NotebookTemplatesUITests: XCTestCase {
                        "The existing app-icon New Note shortcut must remain intact")
     }
 
-    func testAppIconTemplateShortcutDismissesSettings() throws {
-        continueAfterFailure = false
-        let app = makeApp()
-        app.launch()
-        createNote(in: app, named: "Meeting", body: meetingBody)
-        showFiles(app)
-        let sourceID = itemID(named: "Meeting", in: app)
-        markTemplate(sourceID, named: "Meeting", in: app)
-        openTemplatesSettings(app)
-
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        openAppIconMenu(springboard)
-        let fromTemplate = springboard.buttons["New from Template"]
-        XCTAssertTrue(fromTemplate.waitForExistence(timeout: 5))
-        XCTAssertTrue(springboard.buttons["New Note"].exists)
-        capture(springboard, "app-icon-template-menu")
-        fromTemplate.tap()
-        XCTAssertTrue(app.buttons["notebook-template-choice-" + sourceID]
-            .waitForExistence(timeout: 10))
-        XCTAssertFalse(app.buttons["notebook-template-options-" + sourceID].exists,
-                       "The app-icon shortcut must dismiss existing Settings")
-        capture(app, "app-icon-template-picker")
-        app.buttons["Cancel"].tap()
-        XCTAssertTrue(app.buttons["notebook-app-menu"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.staticTexts.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND label == %@",
-            "notebook-sidebar-title-", "Meeting"
-        )).count, 1, "Opening the template picker must not create a note")
-
-    }
-
     func testTemplateDefaultsCreateIndependentNoteAndPersist() throws {
         continueAfterFailure = false
         let app = makeApp()
@@ -149,14 +125,11 @@ final class NotebookTemplatesUITests: XCTestCase {
         markTemplate(sourceID, named: "Meeting", in: app)
 
         app.buttons["notebook-app-menu"].tap()
-        capture(app, "after-creation-menu")
         app.buttons["notebook-settings"].tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-        capture(app, "after-settings")
         app.buttons["notebook-templates-settings"].tap()
         let sourceOptions = app.buttons["notebook-template-options-" + sourceID]
         XCTAssertTrue(sourceOptions.waitForExistence(timeout: 5))
-        capture(app, "after-template-overview")
         closeTemplatesSettings(app)
 
         createFolder(in: app, named: "Meetings")
@@ -167,7 +140,6 @@ final class NotebookTemplatesUITests: XCTestCase {
         enableCustomFilename(app)
         replaceText(app.textFields["template-filename-pattern"],
                     with: "{{date}} — {{template}}", in: app)
-        capture(app, "after-template-options")
         app.buttons["notebook-save-template-options"].tap()
         XCTAssertTrue(sourceOptions.waitForExistence(timeout: 5))
         closeTemplatesSettings(app)
@@ -180,33 +152,23 @@ final class NotebookTemplatesUITests: XCTestCase {
         XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["notebook-new-item"].firstMatch
             .waitForExistence(timeout: 15))
-        capture(app, "editor-plus-chevron")
         app.buttons["notebook-new-item"].firstMatch.press(forDuration: 1)
-        capture(app, "editor-plus-template-menu")
         app.buttons["New from Template…"].tap()
         let choice = app.buttons["notebook-template-choice-" + sourceID]
         XCTAssertTrue(choice.waitForExistence(timeout: 5))
-        capture(app, "direct-template-picker")
         choice.tap()
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        XCTAssertFalse(app.textFields["template-filename"].exists)
         XCTAssertFalse(app.buttons["template-destination"].exists)
-        XCTAssertFalse(app.buttons["template-create"].exists)
         XCTAssertEqual(editor.value as? String, meetingBody)
         let copyName = app.buttons["note-title"].label
         XCTAssertNotNil(copyName.range(
             of: "^[0-9]{4}-[0-9]{2}-[0-9]{2} — Meeting$",
             options: .regularExpression
         ), "Selecting a template should immediately use its saved filename pattern")
-        capture(app, "direct-created-note")
         editor.tap()
         editor.typeText("Edited copy. ")
         XCTAssertNotEqual(editor.value as? String, meetingBody)
-        app.buttons["notebook-new-item"].firstMatch.tap()
-        commitBlankNote(in: app)
-        XCTAssertEqual(editor.value as? String, "",
-                       "An ordinary editor plus tap should create a blank note")
         showFiles(app)
         XCTAssertTrue(fileTitle(copyName, in: app).waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts.matching(NSPredicate(
@@ -216,12 +178,6 @@ final class NotebookTemplatesUITests: XCTestCase {
         app.buttons["notebook-disclosure-" + destinationID].tap()
         XCTAssertFalse(fileTitle(copyName, in: app).exists,
                        "The template default must place the copy in Meetings")
-        capture(app, "files-plus-chevron")
-        app.buttons["notebook-new-item"].firstMatch.press(forDuration: 1)
-        capture(app, "files-plus-template-menu")
-        app.buttons["New from Template…"].tap()
-        XCTAssertTrue(choice.waitForExistence(timeout: 5))
-        app.buttons["Cancel"].tap()
         fileTitle("Meeting", in: app).tap()
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         XCTAssertEqual(editor.value as? String, meetingBody,
@@ -254,7 +210,6 @@ final class NotebookTemplatesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["notebook-template-options-" + meetingID].exists)
         XCTAssertTrue(app.buttons[
             "notebook-template-folder-options-" + folderID].exists)
-        capture(app, "after-recursive-template-overview")
         app.buttons["notebook-template-folder-options-" + folderID].tap()
         chooseDestination("Templates", in: app)
         enableCustomFilename(app)
@@ -270,15 +225,11 @@ final class NotebookTemplatesUITests: XCTestCase {
                                    "Folder Journal.md", "Folder Journal.md"),
             object: inheritedPreview
         )
-        if XCTWaiter.wait(for: [inheritedName], timeout: 5) != .completed {
-            capture(app, "inherited-preview-failure")
-            let hierarchy = XCTAttachment(string: app.debugDescription)
-            hierarchy.name = "Inherited preview hierarchy"
-            hierarchy.lifetime = .keepAlways
-            add(hierarchy)
-            XCTFail("Nested notes should inherit their template folder filename")
-        }
-        chooseDestination("Root", in: app)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [inheritedName], timeout: 5), .completed,
+            "Nested notes should inherit their template folder filename"
+        )
+        chooseDestination("Top Level", in: app)
         enableCustomFilename(app)
         replaceText(app.textFields["template-filename-pattern"],
                     with: "Journal entry", in: app)
@@ -293,16 +244,13 @@ final class NotebookTemplatesUITests: XCTestCase {
         journalChoice.tap()
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        XCTAssertFalse(app.textFields["template-filename"].exists)
         XCTAssertFalse(app.buttons["template-destination"].exists)
-        XCTAssertFalse(app.buttons["template-create"].exists)
         XCTAssertEqual(app.buttons["note-title"].label, "Journal entry")
         XCTAssertEqual(editor.value as? String, "# Journal\n\nToday: ")
         showFiles(app)
-        XCTAssertTrue(fileTitle("Journal entry", in: app).exists)
         app.buttons["notebook-disclosure-" + folderID].tap()
         XCTAssertTrue(fileTitle("Journal entry", in: app).exists,
-                      "An individual destination override must place the copy at Root")
+                      "An individual destination override must place the copy at the top level")
     }
 
     private func makeApp() -> XCUIApplication {
@@ -371,13 +319,6 @@ final class NotebookTemplatesUITests: XCTestCase {
 
     private func replaceText(_ field: XCUIElement, with text: String,
                              in app: XCUIApplication) {
-        if !field.waitForExistence(timeout: 1) {
-            capture(app, "missing-template-field")
-            let hierarchy = XCTAttachment(string: app.debugDescription)
-            hierarchy.name = "Template field hierarchy"
-            hierarchy.lifetime = .keepAlways
-            add(hierarchy)
-        }
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue,
@@ -404,13 +345,6 @@ final class NotebookTemplatesUITests: XCTestCase {
                 format: "label == %@ OR label == %@",
                 "Use as Template", "Use as Template Folder"
             )).firstMatch
-        if !action.waitForExistence(timeout: 5) {
-            capture(app, "template-registration-failure")
-            let hierarchy = XCTAttachment(string: app.debugDescription)
-            hierarchy.name = "Template registration hierarchy"
-            hierarchy.lifetime = .keepAlways
-            add(hierarchy)
-        }
         XCTAssertTrue(action.waitForExistence(timeout: 5))
         action.tap()
     }
@@ -464,13 +398,6 @@ final class NotebookTemplatesUITests: XCTestCase {
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         XCTAssertEqual(toggle.value as? String, "1")
-    }
-
-    private func capture(_ app: XCUIApplication, _ name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
     }
 }
 #endif

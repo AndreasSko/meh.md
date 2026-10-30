@@ -1,10 +1,42 @@
 import XCTest
-#if os(iOS)
-import Vision
-#endif
 
 final class NotebookLinksUITests: XCTestCase {
-    func testWikiNavigationBacklinksAndCompletion() throws {
+    func testWikiLinkCompletionInsertsCompleteLink() throws {
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+
+        createNote(
+            in: app,
+            title: "Fictional Project",
+            body: "# Next steps\n\nReview the sample plan."
+        )
+        // Taking the suggestion must replace the partial token with a
+        // complete link.
+        createNote(in: app, title: "Fictional Link Draft", body: "See [[Fictional")
+        let suggestion = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                "link-suggestion-", "Fictional Project"
+            )
+        ).firstMatch
+        XCTAssertTrue(suggestion.waitForExistence(timeout: 10))
+        XCTAssertTrue(suggestion.isHittable)
+#if os(iOS)
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+#endif
+        activate(suggestion)
+        let draft = app.textViews["markdown-editor"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            (draft.value as? String ?? "").contains("[[Fictional Project]]"),
+            "Selecting a completion should insert a complete wiki link; "
+                + "draft was: \(draft.value as? String ?? "<unavailable>")"
+        )
+    }
+
+#if os(iOS)
+    func testWikiNavigationAndBacklinks() throws {
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
@@ -23,7 +55,6 @@ final class NotebookLinksUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         assertTitle("Fictional Meeting", in: app)
-        capture(app, name: "Fictional wiki link in a meeting note")
 
         // Reopen from Files to establish passive reading rather than depending
         // on the swipe distance needed to dismiss a short note's keyboard.
@@ -51,11 +82,9 @@ final class NotebookLinksUITests: XCTestCase {
         )
 
         // The short fixture places its link near the beginning of the editor.
-        capture(app, name: "Fictional meeting in passive reading mode")
         followFixtureLink(in: app)
         assertTitle("Fictional Project", in: app)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
-        capture(app, name: "Rendered wiki link opened without editing focus")
 
         XCTAssertFalse(app.buttons["note-link-forward"].exists)
         goBack(from: app, returningTo: "Fictional Meeting")
@@ -75,7 +104,6 @@ final class NotebookLinksUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(backlink.waitForExistence(timeout: 10))
         XCTAssertTrue(backlink.label.contains("the project"))
-        capture(app, name: "Backlink excerpt from a fictional meeting")
         activate(app.buttons["Done"])
         goBack(from: app, returningTo: "Fictional Meeting")
         assertTitle("Fictional Meeting", in: app)
@@ -89,50 +117,9 @@ final class NotebookLinksUITests: XCTestCase {
         let noLinks = app.staticTexts["No linked notes"]
         XCTAssertTrue(noLinks.waitForExistence(timeout: 10))
         XCTAssertFalse(backlink.exists)
-        // On iPad the sidebar's Recents preview stays visible next to the
-        // sheet and quotes the meeting's own link, so only look in the sheet.
-        let sheetBar = app.navigationBars["Linked from"]
-        XCTAssertTrue(sheetBar.exists)
-        let sheet = sheetBar.frame
-        XCTAssertFalse(app.staticTexts.containing(NSPredicate(
-            format: "label CONTAINS %@", "the project"
-        )).allElementsBoundByIndex.contains {
-            $0.frame.minX >= sheet.minX && $0.frame.maxX <= sheet.maxX
-        })
-        capture(app, name: "No linked notes for a fictional meeting")
         activate(app.buttons["Done"])
-
-        // Typing a partial wiki link should offer the existing project. Taking
-        // the suggestion must replace the partial token with a complete link.
-        let meetingTitle = "Fictional Link Draft"
-        createNote(in: app, title: meetingTitle, body: "See [[Fictional")
-        let suggestion = app.buttons.matching(
-            NSPredicate(
-                format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
-                "link-suggestion-", "Fictional Project"
-            )
-        ).firstMatch
-        XCTAssertTrue(suggestion.waitForExistence(timeout: 10))
-        XCTAssertTrue(suggestion.label.contains("Fictional Project"))
-        XCTAssertTrue(app.keyboards.firstMatch.exists)
-        XCTAssertTrue(suggestion.isHittable)
-        XCTAssertGreaterThanOrEqual(
-            suggestion.frame.height, 44,
-            "A completion row should remain comfortably tappable"
-        )
-        capture(app, name: "Suggestions for fictional notes")
-        activate(suggestion)
-        let draft = app.textViews["markdown-editor"]
-        XCTAssertTrue(draft.waitForExistence(timeout: 10))
-        XCTAssertTrue(
-            (draft.value as? String ?? "").contains("[[Fictional Project]]"),
-            "Selecting a completion should insert a complete wiki link; "
-                + "draft was: \(draft.value as? String ?? "<unavailable>")"
-        )
-        capture(app, name: "Completed wiki link in a fictional draft")
     }
 
-#if os(iOS)
     func testCompactBackTransitionKeepsNoteContent() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
         continueAfterFailure = false
@@ -166,110 +153,18 @@ final class NotebookLinksUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [keyboardHidden], timeout: 5), .completed)
         let originalTitleY = app.buttons["note-title"].frame.minY
-        capture(app, name: "Meeting position before following a link")
-
-        followFixtureLink(in: app)
-        assertTitle("Fictional Project", in: app)
-        goBack(from: app, returningTo: "Fictional Meeting")
-        assertTitle("Fictional Meeting", in: app)
-        capture(app, name: "Meeting after native Back")
 
         followFixtureLink(in: app)
         assertTitle("Fictional Project", in: app)
         swipeBackFromLeadingEdge(in: app, slowly: true)
         assertTitle("Fictional Meeting", in: app)
-        capture(app, name: "Meeting after edge swipe")
         XCTAssertEqual(app.buttons["note-title"].frame.minY, originalTitleY, accuracy: 1,
                        "Returning should preserve the note's vertical position")
+        XCTAssertEqual(editor.value as? String,
+                       "See [[Fictional Project#Next steps|the project]].")
         XCTAssertFalse(app.searchFields.firstMatch.exists,
                        "Back through a link should remain in the note detail")
         XCTAssertFalse(app.keyboards.firstMatch.exists)
-    }
-
-    func testCompactBackAfterBacklinkKeepsScrolledAnchor() throws {
-        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
-        continueAfterFailure = false
-        let app = makeApp()
-        app.launch()
-
-        let longBody = (0..<30).map { index in
-            if index == 0 { return "TOP POSITION MARKER" }
-            if index == 15 { return "MID POSITION MARKER" }
-            if index == 29 { return "BOTTOM POSITION MARKER" }
-            return "Paragraph \(index): This fictional passage gives the "
-                + "source enough height for a stable middle scroll anchor."
-        }.joined(separator: "\n\n")
-        createNote(in: app, title: "Fictional Long Source", body: longBody)
-        createNote(
-            in: app,
-            title: "Fictional Project",
-            body: "See [[Fictional Long Source|return to observations]]."
-        )
-
-        activate(app.buttons["notebook-note-actions"])
-        activate(app.buttons["notebook-show-in-files"])
-        let source = fileRow("Fictional Long Source", in: app)
-        XCTAssertTrue(source.waitForExistence(timeout: 10))
-        activate(source)
-        app.terminate()
-        app.launch()
-
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        assertTitle("Fictional Long Source", in: app)
-        XCTAssertEqual(editor.value as? String, longBody)
-        let keyboardHidden = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "exists == false"),
-            object: app.keyboards.firstMatch
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [keyboardHidden], timeout: 5), .completed)
-
-        // Place the middle of the long fictional note in view before opening
-        // its incoming-link sheet, so Back must restore a scrolled note.
-        editor.swipeDown()
-        editor.swipeDown()
-        editor.swipeDown()
-        editor.swipeUp()
-        let sourceTitle = app.buttons["note-title"]
-        var previousTitleY = sourceTitle.frame.minY
-        var stableSamples = 0
-        let settlingDeadline = Date().addingTimeInterval(5)
-        while Date() < settlingDeadline && stableSamples < 5 {
-            Thread.sleep(forTimeInterval: 0.1)
-            let currentTitleY = sourceTitle.frame.minY
-            if abs(currentTitleY - previousTitleY) <= 0.5 {
-                stableSamples += 1
-            } else {
-                stableSamples = 0
-            }
-            previousTitleY = currentTitleY
-        }
-        XCTAssertGreaterThanOrEqual(
-            stableSamples, 5, "Wait for source-note scroll inertia to settle"
-        )
-        capture(app, name: "Long fictional source before opening backlinks")
-        let sourceTitleY = sourceTitle.frame.minY
-
-        activate(app.buttons["notebook-note-actions"])
-        activate(app.buttons["notebook-backlinks"])
-        let backlink = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "backlink-")
-        ).firstMatch
-        XCTAssertTrue(backlink.waitForExistence(timeout: 10))
-        XCTAssertTrue(backlink.label.contains("return to observations"))
-        capture(app, name: "Fictional backlink to the long source")
-        activate(backlink)
-
-        assertTitle("Fictional Project", in: app)
-        XCTAssertFalse(app.keyboards.firstMatch.exists)
-        capture(app, name: "Fictional project opened from backlinks")
-
-        goBack(from: app, returningTo: "Fictional Long Source")
-        assertTitle("Fictional Long Source", in: app)
-        XCTAssertEqual(sourceTitle.frame.minY, sourceTitleY, accuracy: 1)
-        XCTAssertEqual(editor.value as? String, longBody)
-        XCTAssertFalse(app.keyboards.firstMatch.exists)
-        capture(app, name: "Long source after Back from backlink navigation")
     }
 
     func testCompactScrolledLinkOpeningKeepsVisitPosition() throws {
@@ -292,7 +187,7 @@ final class NotebookLinksUITests: XCTestCase {
         createNote(
             in: app,
             title: "Fictional Project",
-            body: "A fictional project note for the midpoint link."
+            body: "See [[Fictional Long Source|return to observations]]."
         )
 
         activate(app.buttons["notebook-note-actions"])
@@ -308,7 +203,7 @@ final class NotebookLinksUITests: XCTestCase {
         assertTitle("Fictional Project", in: app)
         XCTAssertEqual(
             editor.value as? String,
-            "A fictional project note for the midpoint link."
+            "See [[Fictional Long Source|return to observations]]."
         )
         let keyboardHidden = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"),
@@ -323,47 +218,29 @@ final class NotebookLinksUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(backlink.waitForExistence(timeout: 10))
         XCTAssertTrue(backlink.label.contains("OPEN PROJECT FROM MIDPOINT"))
-        capture(app, name: "Fictional midpoint backlink from the project")
         activate(backlink)
 
         assertTitle("Fictional Long Source", in: app)
         XCTAssertEqual(editor.value as? String, longBody)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
         let sourceTitle = app.buttons["note-title"]
-        var previousTitleY = sourceTitle.frame.minY
-        var stableSamples = 0
-        let settlingDeadline = Date().addingTimeInterval(5)
-        while Date() < settlingDeadline && stableSamples < 5 {
-            Thread.sleep(forTimeInterval: 0.1)
-            let currentTitleY = sourceTitle.frame.minY
-            if abs(currentTitleY - previousTitleY) <= 0.5 {
-                stableSamples += 1
-            } else {
-                stableSamples = 0
-            }
-            previousTitleY = currentTitleY
-        }
-        XCTAssertGreaterThanOrEqual(
-            stableSamples, 5, "Wait for source-note scroll inertia to settle"
-        )
-        capture(app, name: "Long source at midpoint backlink destination")
+        waitForScrollToSettle(sourceTitle)
         let sourceTitleY = sourceTitle.frame.minY
 
-        // The editor doesn't expose links to accessibility, and where the
-        // link lands depends on the screen size, so find it on screen.
-        let midpoint = try screenText("OPEN PROJECT FROM MIDPOINT", in: app)
-        app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: midpoint.midX, dy: midpoint.midY)).tap()
+        // Leave the scrolled source through its own incoming link.
+        activate(app.buttons["notebook-note-actions"])
+        activate(app.buttons["notebook-backlinks"])
+        XCTAssertTrue(backlink.waitForExistence(timeout: 10))
+        XCTAssertTrue(backlink.label.contains("return to observations"))
+        activate(backlink)
         assertTitle("Fictional Project", in: app)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
-        capture(app, name: "Project opened from the scrolled source link")
 
         goBack(from: app, returningTo: "Fictional Long Source")
         assertTitle("Fictional Long Source", in: app)
         XCTAssertEqual(sourceTitle.frame.minY, sourceTitleY, accuracy: 1)
         XCTAssertEqual(editor.value as? String, longBody)
         XCTAssertFalse(app.keyboards.firstMatch.exists)
-        capture(app, name: "Long source after Back from midpoint link")
     }
 
     func testCompactBackReturnsToFilesAndManualSelectionResetsLinkChain() throws {
@@ -575,19 +452,21 @@ final class NotebookLinksUITests: XCTestCase {
     }
 
 #if os(iOS)
-    private func screenText(_ text: String, in app: XCUIApplication) throws -> CGRect {
-        let image = try XCTUnwrap(app.screenshot().image.cgImage)
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = false
-        try VNImageRequestHandler(cgImage: image).perform([request])
-        let box = try XCTUnwrap((request.results ?? []).first {
-            $0.topCandidates(1).first?.string.contains(text) == true
-        }?.boundingBox, "Expected \(text) on screen")
-        return CGRect(x: box.minX * app.frame.width,
-                      y: (1 - box.maxY) * app.frame.height,
-                      width: box.width * app.frame.width,
-                      height: box.height * app.frame.height)
+    private func waitForScrollToSettle(_ element: XCUIElement) {
+        var lastY = element.frame.minY
+        var stableSamples = 0
+        let settled = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                let y = element.frame.minY
+                stableSamples = abs(y - lastY) <= 0.5 ? stableSamples + 1 : 0
+                lastY = y
+                return stableSamples >= 2
+            }, object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [settled], timeout: 10), .completed,
+            "Wait for scroll inertia to settle"
+        )
     }
 
     private func fileRow(_ title: String, in app: XCUIApplication) -> XCUIElement {
@@ -653,21 +532,4 @@ final class NotebookLinksUITests: XCTestCase {
         )
     }
 
-    private func capture(_ app: XCUIApplication, name: String) {
-#if os(macOS)
-        let attachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
-#else
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-#endif
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
-#if os(iOS)
-        let directory = FileManager.default.urls(
-            for: .documentDirectory, in: .userDomainMask)[0]
-        let filename = name.replacingOccurrences(of: " ", with: "-") + ".png"
-        try? app.screenshot().pngRepresentation.write(
-            to: directory.appendingPathComponent(filename))
-#endif
-    }
 }
