@@ -238,16 +238,24 @@ final class NotebookStorageUITests: XCTestCase {
 
     @MainActor
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<8 where !element.isHittable {
+        // `for … where` would keep checking after the element shows, and
+        // each check is a slow accessibility query.
+        var swipes = 0
+        while swipes < 8, !element.isHittable {
             if element.exists, element.frame.maxY < app.frame.minY + 100 {
                 app.swipeDown()
             } else {
                 app.swipeUp()
             }
+            swipes += 1
         }
         // SwiftUI can discard accessibility nodes above the viewport. Search
         // back toward the top after exhausting the forward direction.
-        for _ in 0..<8 where !element.isHittable { app.swipeDown() }
+        swipes = 0
+        while swipes < 8, !element.isHittable {
+            app.swipeDown()
+            swipes += 1
+        }
         XCTAssertTrue(element.waitForExistence(timeout: 10))
         XCTAssertTrue(element.isHittable)
     }
