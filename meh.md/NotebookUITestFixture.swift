@@ -87,38 +87,9 @@ enum NotebookUITestFixture: String, CaseIterable {
     private func seed(_ replica: NotebookReplica) async throws {
         switch self {
         case .storageLarge:
-            let field = try await replica.createFolder(name: "Field journals")
-            let coast = try await replica.createFolder(name: "Coastal surveys", parentID: field)
-            let station = try await replica.createFolder(name: "Station logbooks", parentID: field)
-            let destinations = [field, coast, station]
-            for number in 1 ... 320 {
-                let title = String(format: "%03d Fictional observation", number)
-                let paragraph = "Observation \(number): imaginary tide charts, lantern signals, "
-                    + "and migrating paper boats at the fictional Northwind station.\n"
-                // Vary content and history independently: disk-heavy notes need
-                // not have the longest current Markdown source.
-                let repeats = number % 16 == 0 ? 1_000 : 4 + number % 28
-                let source = "# \(title)\n\n" + String(repeating: paragraph, count: repeats)
-                let id = try await replica.createNote(
-                    name: "\(title).md", text: source,
-                    parentID: destinations[(number - 1) % destinations.count])
-                if number % 16 == 0 {
-                    let note = try await replica.openNote(id)
-                    for revision in 1 ... 4 {
-                        try note.replaceAll(with: source + "\nFictional revision \(revision).\n")
-                        try await note.flush()
-                    }
-                }
-            }
-            var trash: [UUID] = []
-            for number in 1 ... 7 {
-                let id = try await replica.createNote(
-                    name: "Discarded fictional draft \(number).md",
-                    text: "# Discarded fictional draft\n\n"
-                        + String(repeating: "Imaginary harbor planning.\n", count: number * 90))
-                trash.append(id)
-            }
-            _ = try await replica.trashItems(trash)
+            #if !NOTEBOOK_PERFORMANCE_HOST
+            try await seedStorageLarge(replica)
+            #endif
         case .historyRestore:
             let id = try await replica.createNote(
                 name: "Recovery Sketch.md", text: Self.historyOriginalSource)
@@ -278,6 +249,47 @@ enum NotebookUITestFixture: String, CaseIterable {
             name: "Camera gear.md",
             text: "- The **good** camera\n- Two batteries\n- The small tripod\n")
     }
+
+    #if !NOTEBOOK_PERFORMANCE_HOST
+    /// Hundreds of notes in one write; the fixture batch API is DEBUG-only.
+    private func seedStorageLarge(_ replica: NotebookReplica) async throws {
+        let field = try await replica.createFolder(name: "Field journals")
+        let coast = try await replica.createFolder(name: "Coastal surveys", parentID: field)
+        let station = try await replica.createFolder(name: "Station logbooks", parentID: field)
+        let destinations = [field, coast, station]
+        let now = Date()
+        var notes: [NotebookReplica.FixtureNote] = []
+        for number in 1 ... 320 {
+            let title = String(format: "%03d Fictional observation", number)
+            let paragraph = "Observation \(number): imaginary tide charts, lantern signals, "
+                + "and migrating paper boats at the fictional Northwind station.\n"
+            // Vary content and history independently: disk-heavy notes need
+            // not have the longest current Markdown source.
+            let repeats = number % 16 == 0 ? 1_000 : 4 + number % 28
+            let source = "# \(title)\n\n" + String(repeating: paragraph, count: repeats)
+            // Revisions an hour after the created text give History a
+            // separate earlier version, as later editing would.
+            let revisions = number % 16 == 0 ? Array(1 ... 4) : []
+            let created = now.addingTimeInterval(revisions.isEmpty ? 0 : -3600)
+            let history = [.init(date: created, text: source)] + revisions.map {
+                NotebookReplica.FixtureEdit(
+                    date: now.addingTimeInterval(Double($0)),
+                    text: source + "\nFictional revision \($0).\n")
+            }
+            notes.append(.init(
+                name: "\(title).md", history: history,
+                parentID: destinations[(number - 1) % destinations.count]))
+        }
+        for number in 1 ... 7 {
+            notes.append(.init(
+                name: "Discarded fictional draft \(number).md",
+                history: [.init(date: now, text: "# Discarded fictional draft\n\n"
+                    + String(repeating: "Imaginary harbor planning.\n", count: number * 90))]))
+        }
+        let trash = Array(try await replica.createNotes(notes).suffix(7))
+        _ = try await replica.trashItems(trash)
+    }
+    #endif
 
     #if !NOTEBOOK_PERFORMANCE_HOST
     /// The Lisbon trip note and its packing list, for History recordings.
