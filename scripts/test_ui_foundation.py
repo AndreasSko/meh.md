@@ -59,8 +59,15 @@ class FoundationTests(unittest.TestCase):
         }
 
     def test_watchdogs_leave_export_and_cleanup_headroom(self):
+        for workflow_name, test_key in [
+            ("ui-regressions.yml", "test"), ("nightly-ui.yml", "nightly_test"),
+        ]:
+            with self.subTest(workflow_name):
+                self.assert_headroom(workflow_name, test_key)
+
+    def assert_headroom(self, workflow_name, test_key):
         workflow = (
-            Path(__file__).resolve().parents[1] / ".github/workflows/ui-regressions.yml"
+            Path(__file__).resolve().parents[1] / ".github/workflows" / workflow_name
         ).read_text()
         job_minutes = int(re.search(r"timeout-minutes: (\d+)", workflow)[1])
         # Both passes' exports, two simulator cleanup commands and four minutes
@@ -72,7 +79,7 @@ class FoundationTests(unittest.TestCase):
                     "startup",
                     "build",
                     "discovery",
-                    "test",
+                    test_key,
                     "retry",
                 )
             )
@@ -183,6 +190,54 @@ class FoundationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "boot failed"):
             in_background(fail)()
+
+    def test_nightly_allows_runtime_skips_only_when_asked(self):
+        self.tests["testNodes"][0]["result"] = "Skipped"
+        self.summary["passedTests"] = 1
+        self.summary["skippedTests"] = 1
+        with self.assertRaises(ValueError):
+            results(self.summary, self.tests, "iphone")
+        first = results(self.summary, self.tests, "iphone", allow_skips=True)
+        self.assertEqual(sorted(first.values()), ["Passed", "Skipped"])
+        self.assertEqual(failed(first, self.expected), set())
+        self.assertEqual(check(first, self.expected), {})
+
+    def test_nightly_skips_exactly_pr_goals_and_tools(self):
+        # Nightly runs every UI test that no PR plan runs. A test added to
+        # a PR plan, or a new tool, must be skipped here as well.
+        plans = Path(__file__).resolve().parents[1] / "TestPlans"
+
+        def target(name):
+            return json.loads((plans / f"{name}.xctestplan").read_text())[
+                "testTargets"][0]
+
+        pr_goals = set().union(*(
+            target(name)["selectedTests"] for name in ["CIIPhone", "CIIPad", "CIMac"]
+        ))
+        tools = {
+            "FlairUITests/testShowcaseScreens",
+            "FlairUITests/testShowcaseWalkthrough",
+            "ICloudDevelopmentUITests",
+            "NoteHistoryTourUITests",
+            "NoteLinkTourUITests",
+            "NotebookStorageUITests/testCaptureSettingsBeforeStorage",
+            "ReadmeScreenshotUITests",
+        }
+        nightly = target("Nightly")
+        self.assertNotIn("selectedTests", nightly)
+        self.assertEqual(set(nightly["skippedTests"]), pr_goals | tools)
+
+    def test_skip_only_plan_runs_every_compiled_case(self):
+        plan = {"testTargets": [{
+            "target": {"name": "meh.mdUITests"},
+            "skippedTests": ["Tools"],
+        }]}
+        self.assertEqual(expected_cases(plan, self.expected), self.expected)
+        with self.assertRaisesRegex(ValueError, "still enumerated"):
+            expected_cases(plan, self.expected | {"Tools/testCapture"})
+        plan["testTargets"][0]["skippedTests"] = []
+        with self.assertRaises(ValueError):
+            expected_cases(plan, self.expected)
 
     def test_native_repetitions_are_rejected(self):
         case = self.tests["testNodes"][0]

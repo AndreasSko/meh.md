@@ -1,0 +1,47 @@
+name: Nightly UI tests
+
+# Pull requests run a focused set of UI goals. This runs every other UI test
+# on main once a night, so features without a PR goal still get checked.
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-ui-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ui:
+    name: Nightly UI (${{ matrix.platform }})
+    runs-on: xcode-27
+    # A 220-minute test watchdog plus build, retry, export and cleanup
+    # headroom, within GitHub's six-hour job limit.
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [iphone, ipad, mac]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check execution and result gates
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s scripts -p 'test_ui_foundation.py'
+      - name: Build once and run every UI test except tools
+        run: |
+          python3 scripts/run_ui_foundation.py '${{ matrix.platform }}' --nightly \
+            --evidence-root "$RUNNER_TEMP/ui-nightly"
+      - name: Preserve inventory, timings and UI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-nightly-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-nightly
+          if-no-files-found: error
+          retention-days: 14

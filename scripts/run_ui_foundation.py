@@ -68,6 +68,7 @@ WATCHDOG_SECONDS = {
     "build": 1800,
     "discovery": 300,
     "test": 4200,
+    "nightly_test": 13200,
     "retry": 1800,
     "json_export": 120,
     "attachment_export": 300,
@@ -165,6 +166,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("platform", choices=["iphone", "ipad", "mac"])
     parser.add_argument("--evidence-root", required=True, type=Path)
+    parser.add_argument(
+        "--nightly", action="store_true",
+        help="Run every compiled UI test except tools, via the Nightly plan",
+    )
     args = parser.parse_args()
 
     def interrupted(signum, frame):
@@ -276,7 +281,10 @@ def main():
             raise test_error or RuntimeError(
                 "Result export failed: " + "; ".join(export_errors)
             )
-        cases = results(exported["summary"], exported["tests"], args.platform)
+        cases = results(
+            exported["summary"], exported["tests"], args.platform,
+            allow_skips=args.nightly,
+        )
         # A failing exit is expected for failed cases, not for a passing run.
         if test_error and "Failed" not in cases.values():
             raise test_error
@@ -305,9 +313,9 @@ def main():
             manifest["toolchain"] = version
             if not version.startswith("Xcode 27"):
                 raise ValueError("Xcode 27 required")
-            plan_name = {"iphone": "CIIPhone", "ipad": "CIIPad", "mac": "CIMac"}[
-                args.platform
-            ]
+            plan_name = "Nightly" if args.nightly else {
+                "iphone": "CIIPhone", "ipad": "CIIPad", "mac": "CIMac"
+            }[args.platform]
             plan_path = ROOT / "TestPlans" / (plan_name + ".xctestplan")
             manifest["testPlan"] = plan_name
             if args.platform == "mac":
@@ -421,7 +429,13 @@ def main():
             )
             (evidence / "platform.xctestrun").write_bytes(runs[0].read_bytes())
             xctestrun = runs[0]
-            first = run_pass("test", [], WATCHDOG_SECONDS["test"])
+            first = run_pass(
+                "test", [],
+                WATCHDOG_SECONDS["nightly_test" if args.nightly else "test"],
+            )
+            manifest["skippedTests"] = sorted(
+                case for case, result in first.items() if result == "Skipped"
+            )
             retry_cases = failed(first, expected)
             retry = None
             if retry_cases:

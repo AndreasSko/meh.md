@@ -42,6 +42,19 @@ def expected_cases(plan, universe):
     targets = plan["testTargets"]
     if len(targets) != 1 or targets[0]["target"]["name"] != "meh.mdUITests":
         raise ValueError("Expected exactly the UI test target")
+    if "selectedTests" not in targets[0]:
+        # A plan that only skips tools runs everything else it compiles;
+        # the enumeration has already removed the skipped cases.
+        skipped = targets[0].get("skippedTests")
+        if not skipped or len(skipped) != len(set(skipped)):
+            raise ValueError("Missing or duplicate skipped selectors")
+        leaked = {
+            case for case in universe for selector in skipped
+            if case == selector or case.startswith(selector + "/")
+        }
+        if leaked:
+            raise ValueError(f"Skipped selectors still enumerated: {sorted(leaked)}")
+        return set(universe)
     selected = targets[0]["selectedTests"]
     if not selected or len(selected) != len(set(selected)):
         raise ValueError("Missing or duplicate plan selectors")
@@ -58,8 +71,12 @@ def expected_cases(plan, universe):
     return expected
 
 
-def results(summary, tests, platform):
-    """Map each executed case to Passed or Failed for one result bundle."""
+def results(summary, tests, platform, allow_skips=False):
+    """Map each executed case to Passed, Failed or Skipped for one bundle.
+
+    Only nightly runs allow skips: they include every compiled case, and
+    some skip themselves on devices they do not apply to.
+    """
     cases = {}
 
     def visit(node):
@@ -67,8 +84,9 @@ def results(summary, tests, platform):
             identifier = canonical(node.get("nodeIdentifier"))
             if identifier in cases:
                 raise ValueError(f"Duplicate case: {identifier}")
-            if node.get("result") not in {"Passed", "Failed"}:
-                raise ValueError(f"Test neither passed nor failed: {node}")
+            allowed = {"Passed", "Failed"} | ({"Skipped"} if allow_skips else set())
+            if node.get("result") not in allowed:
+                raise ValueError(f"Unexpected test result: {node}")
             if any(
                 child.get("nodeType") == "Repetition"
                 for child in node.get("children", [])
@@ -81,11 +99,12 @@ def results(summary, tests, platform):
     for node in tests.get("testNodes", []):
         visit(node)
     failed = sum(result == "Failed" for result in cases.values())
+    skipped = sum(result == "Skipped" for result in cases.values())
     for key, value in {
-        "passedTests": len(cases) - failed,
+        "passedTests": len(cases) - failed - skipped,
         "totalTestCount": len(cases),
         "failedTests": failed,
-        "skippedTests": 0,
+        "skippedTests": skipped,
         "expectedFailures": 0,
     }.items():
         if summary.get(key) != value:
@@ -120,7 +139,7 @@ def failed(first, expected):
         raise ValueError(
             f"Missing/unexpected cases: {sorted(set(first) ^ set(expected))}"
         )
-    return {case for case, result in first.items() if result != "Passed"}
+    return {case for case, result in first.items() if result == "Failed"}
 
 
 def check(first, expected, retry=None):

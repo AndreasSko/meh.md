@@ -85,6 +85,23 @@ these plans. Their existing tests are retained for later goal-by-goal review.
 Native table commands do not prove physical keyboard delivery or gestures.
 The live iCloud development plan remains separate.
 
+## Nightly run
+
+The UI tests outside the PR plans still run once a night on `main`, so a
+broken feature shows up within a day instead of only when someone runs its
+test by hand. The `Nightly` plan skips the PR goals and a short list of
+tools: live iCloud, README screenshots, recorded tours and an evidence
+helper. Everything else that compiles for the lane runs, about 95 tests on
+iPhone. A unit test keeps that skip list equal to the PR plans plus the
+tools, so a test moved into a PR plan leaves the nightly run.
+
+The nightly run uses the same script with `--nightly`. Unlike PR lanes it
+accepts tests that skip themselves on a device they do not target, and it
+allows each test 10 minutes instead of 30, so a hung test cannot use up the
+run. A PR goal is skipped nightly on every platform, including ones its PR
+plan leaves out. Scheduled runs need the workflow on `main`; it can also be
+started by hand from the Actions tab.
+
 ## Execution and evidence
 
 The `meh.md CI` scheme uses Debug-iCloud. Each lane builds its platform
