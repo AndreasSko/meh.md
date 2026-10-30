@@ -140,7 +140,10 @@ final class EditorScrollTypingUITests: XCTestCase {
 
         // Real scrolling leaves TextKit estimating offscreen paragraphs.
         // Do not query caret geometry or materialize document layout here.
-        for _ in 0..<20 { editor.swipeDown() }
+        // Ten swipes move about 30 weeks (150 lines, five screens) away from
+        // TARGET, far outside the laid-out viewport. Each swipe and its way
+        // back costs about six seconds, so go no further than needed.
+        for _ in 0..<10 { editor.swipeDown() }
         let closedViewport = editor.frame.intersection(app.frame)
         let minimumY = closedViewport.minY + closedViewport.height * 0.65
         let maximumY = closedViewport.minY + closedViewport.height * 0.9
@@ -148,7 +151,7 @@ final class EditorScrollTypingUITests: XCTestCase {
         let preferredY = closedViewport.minY + closedViewport.height * 0.8
         let dragX = closedViewport.maxX - closedViewport.width * 0.08
         let dragY = closedViewport.midY
-        // A swipe's distance depends on simulator timing, so the 20 swipes
+        // A swipe's distance depends on simulator timing, so the swipes
         // down and the swipes back up rarely cover the same distance. Swipe
         // until TARGET shows or the note's last line does: TARGET sits just
         // above it. The count only stops a runaway loop.
@@ -372,16 +375,20 @@ final class EditorScrollTypingUITests: XCTestCase {
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false
         try VNImageRequestHandler(cgImage: cgImage).perform([request])
+        // Each frame read is an accessibility query; read them once per
+        // screenshot rather than once per recognized line.
+        let screen = app.frame.size
+        let editorFrame = editor.frame
         return (request.results ?? []).compactMap { result in
             guard let text = result.topCandidates(1).first?.string else { return nil }
             let box = result.boundingBox
             let frame = CGRect(
-                x: box.minX * app.frame.width,
-                y: (1 - box.maxY) * app.frame.height,
-                width: box.width * app.frame.width,
-                height: box.height * app.frame.height
+                x: box.minX * screen.width,
+                y: (1 - box.maxY) * screen.height,
+                width: box.width * screen.width,
+                height: box.height * screen.height
             )
-            return editor.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
+            return editorFrame.contains(CGPoint(x: frame.midX, y: frame.midY))
                 ? (text, frame) : nil
         }.sorted { $0.frame.midY < $1.frame.midY }
     }
