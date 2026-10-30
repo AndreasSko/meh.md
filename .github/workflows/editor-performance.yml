@@ -1,4 +1,4 @@
-name: Editor performance guard
+name: Editor regressions and performance
 
 on:
   pull_request:
@@ -18,18 +18,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  editor-performance:
+  # Regressions and performance share one runner, which keeps a macOS
+  # runner free for the UI lanes. Together they still finish before the
+  # iPhone UI lane.
+  editor:
+    name: Editor regressions and performance
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostic_only }}
     runs-on: xcode-27
-    timeout-minutes: 90
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Check native result gates
+        run: python3 -m unittest discover -s scripts -p 'test_*native_editor_baseline_parity.py'
+      - name: Check Mac formatting wheel input
+        run: swift test --filter EditorMacFormattingScrollTests
+      - name: Run full native suite against recorded inventory
+        id: native_parity
+        # Allow broad runner variance
+        # and cleanup while retaining a finite watchdog and all result gates.
+        timeout-minutes: 45
+        run: scripts/run_native_editor_baseline_parity.sh
+      - name: Preserve full native result evidence
+        if: always() && steps.native_parity.outputs.evidence_root != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-editor-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.native_parity.outputs.evidence_root }}
+          if-no-files-found: error
+          retention-days: 14
       - name: Check report gate
+        if: ${{ !cancelled() }}
         run: python3 -m unittest discover -s scripts -p 'test_*performance*.py'
       - name: Guard large-document History in Swift
+        if: ${{ !cancelled() }}
         env:
           MEH_HISTORY_BENCHMARK_EDITS: "600"
           MEH_HISTORY_BENCHMARK_LINES: "1800"
@@ -44,6 +68,7 @@ jobs:
             --filter 'NoteHistory(Tests|ReaderTests|PerformanceTests)' \
             2>&1 | tee "$RUNNER_TEMP/history-performance.log"
       - name: Guard 500 KB History in Swift
+        if: ${{ !cancelled() }}
         env:
           MEH_HISTORY_BENCHMARK_EDITS: "600"
           MEH_HISTORY_BENCHMARK_LINES: "7460"
@@ -57,6 +82,7 @@ jobs:
           swift test -c release --filter NoteHistoryPerformanceTests \
             2>&1 | tee "$RUNNER_TEMP/history-performance-500kb.log"
       - name: Guard catalog responsiveness
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
@@ -66,6 +92,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/catalog-performance.log"
           python3 scripts/check_catalog_performance.py "$RUNNER_TEMP/catalog-performance.json"
       - name: Guard Unicode initial parsing
+        if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -euo pipefail
