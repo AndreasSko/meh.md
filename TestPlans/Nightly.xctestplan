@@ -35,10 +35,12 @@
         "FlairUITests/testShowcaseWalkthrough",
         "ICloudDevelopmentUITests",
         "LargeNoteHistoryUITests/testLargeHistoryCanCloseWhileIndexingAndBrowseWithoutChangingNote",
+        "LocalSyncUITests",
         "MacFormattingUITests",
         "NoteHistoryTourUITests",
         "NoteHistoryUITests/testRestoreAsNewNoteKeepsOriginalCurrentText",
         "NoteLinkTourUITests",
+        "NotebookAutomaticCloudUITests",
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
         "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",
@@ -65,7 +67,8 @@
         "UIReleasePolishUITests/testPlusContextActionCreatesFolder",
         "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
-        "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote"
+        "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote",
+        "WritingFlowUITests/testSyncStatusLivesInCloudDetailsWhileWriting"
       ]
     }
   ],

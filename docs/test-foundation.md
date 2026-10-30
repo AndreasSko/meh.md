@@ -90,10 +90,12 @@ The live iCloud development plan remains separate.
 The UI tests outside the PR plans still run once a night on `main`, so a
 broken feature shows up within a day instead of only when someone runs its
 test by hand. The `Nightly` plan skips the PR goals and a short list of
-tools: live iCloud, README screenshots, recorded tours and an evidence
-helper. Everything else that compiles for the lane runs, about 95 tests on
-iPhone. A unit test keeps that skip list equal to the PR plans plus the
-tools, so a test moved into a PR plan leaves the nightly run.
+tools: live iCloud, README screenshots, recorded tours, an evidence helper,
+the cloud outage lab, and the tests that need a local sync server
+(`LocalSyncUITests` and the writing test's cloud details check).
+Everything else that compiles for the lane runs, about 75 tests on iPhone.
+A unit test keeps that skip list equal to the PR plans plus the tools, so a
+test moved into a PR plan leaves the nightly run.
 
 The nightly run uses the same script with `--nightly`. Unlike PR lanes it
 accepts tests that skip themselves on a device they do not target, and it

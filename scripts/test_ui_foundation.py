@@ -218,6 +218,10 @@ class FoundationTests(unittest.TestCase):
             "FlairUITests/testShowcaseScreens",
             "FlairUITests/testShowcaseWalkthrough",
             "ICloudDevelopmentUITests",
+            # Need a local sync server or a lab build; see the nightly doc.
+            "LocalSyncUITests",
+            "NotebookAutomaticCloudUITests",
+            "WritingFlowUITests/testSyncStatusLivesInCloudDetailsWhileWriting",
             "NoteHistoryTourUITests",
             "NoteLinkTourUITests",
             "NotebookStorageUITests/testCaptureSettingsBeforeStorage",
