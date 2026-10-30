@@ -148,11 +148,21 @@ final class EditorScrollTypingUITests: XCTestCase {
         let preferredY = closedViewport.minY + closedViewport.height * 0.8
         let dragX = closedViewport.maxX - closedViewport.width * 0.08
         let dragY = closedViewport.midY
+        // A swipe's distance depends on simulator timing, so the 20 swipes
+        // down and the swipes back up rarely cover the same distance. Swipe
+        // until TARGET shows or the note's last line does: TARGET sits just
+        // above it. The count only stops a runaway loop.
         var target: CGRect?
-        for _ in 0..<25 {
-            target = try textRects("TARGET", in: app, editor: editor).first
-            if target != nil { break }
+        for _ in 0..<80 {
+            let lines = try recognizedLines(in: app, editor: editor)
+            target = lines.first { $0.text.localizedCaseInsensitiveContains("TARGET") }?.frame
+            if target != nil || lines.contains(where: { $0.text.contains("Close the fictional") }) {
+                break
+            }
             editor.swipeUp()
+        }
+        if target == nil {
+            capture(app, name: "\(mode)-cold-focus-target-missing")
         }
         for _ in 0..<4 {
             guard let current = target else { break }
@@ -167,7 +177,7 @@ final class EditorScrollTypingUITests: XCTestCase {
             )
             target = try textRects("TARGET", in: app, editor: editor).first
         }
-        let closedTarget = try XCTUnwrap(target)
+        let closedTarget = try XCTUnwrap(target, "Scrolling never brought TARGET on screen")
         XCTAssertTrue(lowerBand.contains(closedTarget.midY))
         XCTAssertFalse(keyboard.exists)
         capture(app, name: "\(mode)-cold-focus-before-tap")
@@ -347,6 +357,14 @@ final class EditorScrollTypingUITests: XCTestCase {
     private func textRects(
         _ text: String, in app: XCUIApplication, editor: XCUIElement
     ) throws -> [CGRect] {
+        try recognizedLines(in: app, editor: editor)
+            .filter { $0.text.localizedCaseInsensitiveContains(text) }
+            .map { $0.frame }
+    }
+
+    private func recognizedLines(
+        in app: XCUIApplication, editor: XCUIElement
+    ) throws -> [(text: String, frame: CGRect)] {
         let screenshot = app.screenshot()
         let image = try XCTUnwrap(UIImage(data: screenshot.pngRepresentation))
         let cgImage = try XCTUnwrap(image.cgImage)
@@ -355,8 +373,7 @@ final class EditorScrollTypingUITests: XCTestCase {
         request.usesLanguageCorrection = false
         try VNImageRequestHandler(cgImage: cgImage).perform([request])
         return (request.results ?? []).compactMap { result in
-            guard result.topCandidates(1).first?.string
-                .localizedCaseInsensitiveContains(text) == true else { return nil }
+            guard let text = result.topCandidates(1).first?.string else { return nil }
             let box = result.boundingBox
             let frame = CGRect(
                 x: box.minX * app.frame.width,
@@ -365,8 +382,8 @@ final class EditorScrollTypingUITests: XCTestCase {
                 height: box.height * app.frame.height
             )
             return editor.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
-                ? frame : nil
-        }.sorted { $0.midY < $1.midY }
+                ? (text, frame) : nil
+        }.sorted { $0.frame.midY < $1.frame.midY }
     }
 
     private func capture(_ app: XCUIApplication, name: String) {
