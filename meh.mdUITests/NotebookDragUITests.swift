@@ -362,8 +362,10 @@ final class NotebookDragUITests: XCTestCase {
         let source = app.descendants(matching: .any)[sourceRowID]
         XCTAssertTrue(source.exists,
                       "The cached source identity must resolve after native scrolling")
-        openContextMenu(on: source, in: app)
-        activate(menuAction("Move…", in: app))
+        app.withoutIdleWait {
+            openContextMenu(on: source, in: app)
+            activate(menuAction("Move…", in: app))
+        }
         let location = app.descendants(matching: .any)
             .matching(identifier: "notebook-move-path").firstMatch
         XCTAssertTrue(location.waitForExistence(timeout: 5))

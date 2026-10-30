@@ -405,3 +405,30 @@ extension XCUIApplication {
 #endif
     }
 }
+
+extension XCUIApplication {
+    /// Runs `body` without XCUITest's wait for the app to go idle.
+    ///
+    /// While a context menu is open on a draggable sidebar row, UIKit keeps
+    /// a paused drag-lift animation attached until the menu closes. The app
+    /// is idle, but XCUITest never hears "animations complete" and waits 60
+    /// seconds before and after every event. Callers wait for the next
+    /// element explicitly instead.
+    ///
+    /// XCUITest has no public switch for this, so this calls its private
+    /// interaction options (skip pre- and post-event waits). If they go
+    /// away, `body` runs normally and is only slow again.
+    func withoutIdleWait(_ body: () -> Void) {
+        typealias Perform = @convention(c) (
+            AnyObject, Selector, UInt, @convention(block) () -> Void
+        ) -> Void
+        let selector = NSSelectorFromString("_performWithInteractionOptions:block:")
+        guard responds(to: selector) else { return body() }
+        let skipPreAndPostEventWaits: UInt = 0b11
+        withoutActuallyEscaping(body) { body in
+            unsafeBitCast(method(for: selector), to: Perform.self)(
+                self, selector, skipPreAndPostEventWaits, body
+            )
+        }
+    }
+}
