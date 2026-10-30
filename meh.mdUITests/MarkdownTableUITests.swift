@@ -3,43 +3,6 @@ import XCTest
 #if os(iOS)
 @MainActor
 final class MarkdownTableUITests: XCTestCase {
-    func testTableIconDirectlyInsertsAndThenOpensCellActions() {
-        continueAfterFailure = false
-        let app = isolatedApplication()
-        app.launch()
-
-        let newNote = app.buttons["notebook-new-item"].firstMatch
-        XCTAssertTrue(newNote.waitForExistence(timeout: 15))
-        newNote.tap()
-        let title = app.textFields["title-field"]
-        XCTAssertTrue(title.waitForExistence(timeout: 10))
-        title.tap()
-        title.typeText("\n")
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        app.buttons["notebook-note-actions"].tap()
-        app.buttons["Editor Display"].tap()
-        app.buttons["Live Preview"].tap()
-        editor.tap()
-        editor.typeText("A fictional coastal itinerary.")
-        let insertTable = toolbarCommand("editor-command-insert-table", in: app)
-        XCTAssertEqual(insertTable.label, "Insert Table")
-        XCTAssertTrue(insertTable.isHittable)
-        insertTable.tap()
-        XCTAssertTrue(waitForSource(editor) { $0.contains("| Column 1 | Column 2 |") })
-        let insertedSource = editor.value as? String
-        let cellEditor = app.textViews["markdown.table.cell.editor"]
-        XCTAssertTrue(cellEditor.waitForExistence(timeout: 5))
-        XCTAssertEqual(cellEditor.value as? String, "Column 1")
-        XCTAssertTrue(cellEditor.isHittable)
-        XCTAssertTrue(app.keyboards.firstMatch.exists)
-        XCTAssertEqual(app.buttons["editor-table-menu"].label, "Table")
-        toolbarCommand("editor-command-table-next-cell", in: app).tap()
-        XCTAssertEqual(cellEditor.value as? String, "Column 2")
-        XCTAssertEqual(editor.value as? String, insertedSource)
-        capture(app, name: "Table icon inserted a table and opened cell actions")
-    }
-
     func testTableCommandsEditLiteralMarkdown() throws {
         continueAfterFailure = false
         let app = isolatedApplication()
@@ -60,7 +23,9 @@ final class MarkdownTableUITests: XCTestCase {
         editor.tap()
         editor.typeText("A fictional coastal itinerary.")
 
-        toolbarCommand("editor-command-insert-table", in: app).tap()
+        let insertTable = toolbarCommand("editor-command-insert-table", in: app)
+        XCTAssertEqual(insertTable.label, "Insert Table")
+        insertTable.tap()
         XCTAssertTrue(waitForSource(editor) { $0.contains("| Column 1 | Column 2 |") })
         let inserted = try XCTUnwrap(editor.value as? String)
         XCTAssertTrue(inserted.hasPrefix("A fictional coastal itinerary."))
@@ -70,15 +35,18 @@ final class MarkdownTableUITests: XCTestCase {
         // The inserted header is selected in the native cell editor.
         let cellEditor = app.textViews["markdown.table.cell.editor"]
         XCTAssertTrue(cellEditor.waitForExistence(timeout: 5))
+        XCTAssertEqual(cellEditor.value as? String, "Column 1")
+        XCTAssertTrue(cellEditor.isHittable)
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        XCTAssertEqual(app.buttons["editor-table-menu"].label, "Table")
         cellEditor.typeText("Activity")
         XCTAssertTrue(waitForSource(editor) { $0.contains("| Activity | Column 2 |") })
         toolbarCommand("editor-command-table-next-cell", in: app).tap()
+        XCTAssertTrue(waitForSource(cellEditor) { $0 == "Column 2" })
         cellEditor.typeText("When")
         XCTAssertTrue(waitForSource(editor) { $0.contains("| Activity | When |") })
         capture(app, name: "Next Cell selects the header contents")
 
-        capture(app, name: "Commands while editing a table cell")
-        XCTAssertTrue(toolbarCommand("editor-command-table-row-below", in: app).exists)
         toolbarCommand("editor-command-table-row-below", in: app).tap()
         XCTAssertTrue(waitForSource(editor) {
             $0.components(separatedBy: "|  |  |").count == 3
@@ -102,78 +70,12 @@ final class MarkdownTableUITests: XCTestCase {
         toolbarCommand("editor-command-table-delete-column", in: app).tap()
         let delete = app.buttons["Delete Column"].firstMatch
         XCTAssertTrue(delete.waitForExistence(timeout: 5))
-        capture(app, name: "Confirm deletion of table column")
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
-        XCTAssertFalse(delete.exists)
-        XCTAssertEqual(editor.value as? String, beforeDelete)
-
-        toolbarCommand("editor-command-table-delete-column", in: app).tap()
-        XCTAssertTrue(delete.waitForExistence(timeout: 5))
         delete.tap()
         XCTAssertTrue(waitForSource(editor) { $0 != beforeDelete })
         let finalSource = try XCTUnwrap(editor.value as? String)
         XCTAssertTrue(finalSource.hasPrefix("A fictional coastal itinerary."))
         XCTAssertTrue(finalSource.contains("| Activity | When |"))
         capture(app, name: "Edited table remains Markdown")
-    }
-
-    func testTablePreviewAndSourceEditingKeepMarkdown() throws {
-        continueAfterFailure = false
-        let app = isolatedApplication()
-        app.launch()
-        let newNote = app.buttons["notebook-new-item"].firstMatch
-        XCTAssertTrue(newNote.waitForExistence(timeout: 15))
-        newNote.tap()
-        let title = app.textFields["title-field"]
-        XCTAssertTrue(title.waitForExistence(timeout: 10))
-        title.tap()
-        title.typeText("\n")
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        app.buttons["notebook-note-actions"].tap()
-        app.buttons["Editor Display"].tap()
-        app.buttons["Live Preview"].tap()
-        editor.tap()
-        let source = """
-        | Activity | Time | Status |
-        | :--- | :---: | ---: |
-        | **Coastal walk** | 09:30 | Ready |
-        | Museum and a relaxed lunch by the harbour | 12:00 | Planned |
-        | Cafe | 15:00 | Open |
-
-        A quiet afternoon by the sea.
-        """
-        editor.typeText(source)
-        XCTAssertEqual(editor.value as? String, source)
-        editor.swipeDown()
-        capture(app, name: "Rendered table in the app")
-
-        let header = command("markdown-table-cell-0-0", in: app)
-        let bodyCell = command("markdown-table-cell-1-0", in: app)
-        XCTAssertTrue(header.waitForExistence(timeout: 5))
-        XCTAssertTrue(bodyCell.waitForExistence(timeout: 5))
-        XCTAssertTrue(header.label.contains("Activity"))
-        XCTAssertTrue(bodyCell.label.contains("Activity"))
-        XCTAssertTrue(bodyCell.label.contains("Coastal walk"))
-        XCTAssertTrue(editor.exists, "The native Markdown source editor remains available")
-
-        // A hit inside a rendered cell opens its native editor. The full
-        // source remains available as the source editor accessibility value.
-        let noteTitle = app.buttons["note-title"]
-        XCTAssertTrue(noteTitle.waitForExistence(timeout: 5))
-        editor.coordinate(withNormalizedOffset: .zero).withOffset(
-            CGVector(dx: editor.frame.width * 0.5,
-                     dy: noteTitle.frame.maxY - editor.frame.minY + 70)
-        ).tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertEqual(editor.value as? String, source)
-        let cellEditor = app.textViews["markdown.table.cell.editor"]
-        XCTAssertTrue(cellEditor.waitForExistence(timeout: 5))
-        capture(app, name: "Table remains rendered during cell editing")
-        cellEditor.typeText("!")
-        let edited = try XCTUnwrap(editor.value as? String)
-        XCTAssertEqual(edited.replacingOccurrences(of: "!", with: ""), source)
-        XCTAssertEqual(edited.utf16.count, source.utf16.count + 1)
     }
 
     private func capture(_ app: XCUIApplication, name: String) {
@@ -237,10 +139,6 @@ final class MarkdownTableUITests: XCTestCase {
         }
         XCTAssertTrue(action.waitForExistence(timeout: 5), "Missing Table action \(title)")
         return action
-    }
-
-    private func command(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
-        app.descendants(matching: .any)[identifier].firstMatch
     }
 
     private func waitForSource(

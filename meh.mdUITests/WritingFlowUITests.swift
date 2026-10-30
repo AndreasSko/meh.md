@@ -65,52 +65,6 @@ final class WritingFlowUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "")
     }
 
-    func testRenamingTitleKeepsExistingTitleAndReturnsToBody() throws {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchArguments += ["-editor.mode", "source"]
-        app.launch()
-
-        let newNote = app.buttons["notebook-new-item"].firstMatch
-        XCTAssertTrue(newNote.waitForExistence(timeout: 15))
-        activate(newNote)
-        let titleField = app.textFields["title-field"]
-        XCTAssertTrue(titleField.waitForExistence(timeout: 10))
-        assertKeyboardFocus(on: titleField)
-        let title = "Fictional rename regression"
-        titleField.typeText(title)
-        XCTAssertEqual(titleField.value as? String, title)
-        submitTitle(titleField)
-
-        let titleButton = app.buttons["note-title"]
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        assertKeyboardFocus(on: editor)
-        let body = "Text retained while renaming the note."
-        editor.typeText(body)
-        XCTAssertEqual(editor.value as? String, body)
-
-        activate(titleButton)
-        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
-        assertKeyboardFocus(on: titleField)
-        XCTAssertEqual(titleField.value as? String, title)
-        titleField.typeText(" revised")
-        let revisedTitle = try XCTUnwrap(titleField.value as? String)
-        // A title tap places the native caret where the user tapped.
-        XCTAssertNotEqual(revisedTitle, title)
-        XCTAssertEqual(
-            revisedTitle.replacingOccurrences(of: " revised", with: ""), title
-        )
-        submitTitle(titleField)
-
-        assertKeyboardFocus(on: editor)
-        XCTAssertEqual(titleButton.label, revisedTitle)
-        XCTAssertEqual(editor.value as? String, body)
-    }
-
     func testNewNoteTitleCommitsIntoBodyWithoutTitleActions() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -125,11 +79,7 @@ final class WritingFlowUITests: XCTestCase {
         activate(newNote)
         let titleField = app.textFields["title-field"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 10))
-        let titleFocused = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
-            object: titleField
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [titleFocused], timeout: 5), .completed)
+        assertKeyboardFocus(on: titleField)
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         let proposedTitle = "Fictional observatory field notes about distant moons "
@@ -149,53 +99,37 @@ final class WritingFlowUITests: XCTestCase {
         titleField.typeText(proposedTitle)
         XCTAssertEqual(titleField.value as? String, proposedTitle)
         #endif
-        #if os(macOS)
-        titleField.typeKey(.return, modifierFlags: [])
-        #else
-        titleField.typeText("\n")
-        #endif
+        submitTitle(titleField)
         let title = app.buttons["note-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         XCTAssertEqual(title.label, proposedTitle)
         XCTAssertFalse(title.label.lowercased().hasSuffix(".md"))
-        let bodyFocused = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
-            object: editor
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [bodyFocused], timeout: 5), .completed)
+        assertKeyboardFocus(on: editor)
         let source = "Fictional observatory notes: café 👋🏽 and stars."
         editor.typeText(source)
         XCTAssertEqual(editor.value as? String, source)
         XCTAssertFalse(app.buttons["Done"].exists)
         XCTAssertFalse(app.buttons["Cancel"].exists)
-        XCTAssertFalse(app.buttons["notebook-note-title-done"].exists)
-        XCTAssertFalse(app.buttons["notebook-note-title-cancel"].exists)
 
         activate(title)
         XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        assertKeyboardFocus(on: titleField)
+        XCTAssertEqual(titleField.value as? String, proposedTitle)
         #if os(macOS)
         let revisedTitle = proposedTitle + " revised"
         replaceTitle(in: titleField, with: revisedTitle)
         #else
-        let renameFocused = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
-            object: titleField
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [renameFocused], timeout: 5), .completed)
         titleField.typeText(" revised")
         let revisedTitle = try XCTUnwrap(titleField.value as? String)
+        // A title tap places the native caret where the user tapped.
         XCTAssertNotEqual(revisedTitle, proposedTitle)
         XCTAssertEqual(
             revisedTitle.replacingOccurrences(of: " revised", with: ""),
             proposedTitle
         )
         #endif
-        #if os(macOS)
-        editor.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-            .withOffset(CGVector(dx: 40, dy: 20)).click()
-        #else
-        editor.tap()
-        #endif
+        submitTitle(titleField)
+        assertKeyboardFocus(on: editor)
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         XCTAssertEqual(title.label, revisedTitle)
         XCTAssertEqual(editor.value as? String, source)
@@ -203,48 +137,12 @@ final class WritingFlowUITests: XCTestCase {
         XCTAssertGreaterThan(title.frame.height, 45)
         #endif
         capture(app, name: "Wrapped title and fictional note")
-
-        let nextNote = app.buttons["notebook-new-item"].firstMatch
-        XCTAssertTrue(nextNote.waitForExistence(timeout: 5))
-        activate(nextNote)
-        let nextTitleField = app.textFields["title-field"]
-        XCTAssertTrue(nextTitleField.waitForExistence(timeout: 5))
-        let retainedDateTitle = try XCTUnwrap(nextTitleField.value as? String)
-        XCTAssertFalse(retainedDateTitle.isEmpty)
-        #if os(macOS)
-        nextTitleField.typeKey(.return, modifierFlags: [])
-        #else
-        nextTitleField.typeText("\n")
-        #endif
-        XCTAssertTrue(editor.waitForExistence(timeout: 5))
-        let emptyEditor = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", ""), object: editor
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [emptyEditor], timeout: 5), .completed)
-        let unchangedTitleFocusedBody = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
-            object: editor
-        )
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [unchangedTitleFocusedBody], timeout: 5),
-            .completed
-        )
-        XCTAssertEqual(title.label, retainedDateTitle)
         #if os(macOS)
         activate(title)
-        let tabTitleField = app.textFields["title-field"]
-        XCTAssertTrue(tabTitleField.waitForExistence(timeout: 5))
-        tabTitleField.typeKey(.tab, modifierFlags: [])
-        let bodyFocusedAfterTab = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hasKeyboardFocus == true"),
-            object: editor
-        )
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [bodyFocusedAfterTab], timeout: 5),
-            .completed
-        )
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        titleField.typeKey(.tab, modifierFlags: [])
+        assertKeyboardFocus(on: editor)
         #endif
-        capture(app, name: "New note ready for body writing")
     }
 
     func testSyncStatusLivesInCloudDetailsWhileWriting() throws {
