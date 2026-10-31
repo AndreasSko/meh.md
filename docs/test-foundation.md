@@ -104,6 +104,32 @@ run. A PR goal is skipped nightly on every platform, including ones its PR
 plan leaves out. Scheduled runs need the workflow on `main`; it can also be
 started by hand from the Actions tab.
 
+## Picking PR goals from the diff
+
+A PR runs only the plan goals its changed files can affect. Docs, unit
+tests, other scripts and a version bump need none, so their macOS lanes
+are skipped. A file in a known area, such as the Storage view, runs that
+area's goals plus a short smoke set (the welcome note and writing
+durability). Anything not mapped, such as `NotebookView.swift`, any new
+or renamed file, and changes to the UI harness run the whole plan. A
+missing mapping therefore costs time, not coverage.
+
+An area mapped too narrowly can miss a goal on its PR. The nightly plan
+skips PR goals, so the same workflow also runs every PR goal on `main`
+each night. A missed goal then fails within a day.
+
+`TestPlans/ui-test-impact.json` holds the mapping and
+`scripts/select_ui_tests.py` applies it. A small job on Linux runs the
+harness unit tests, picks the goals and starts only the platform lanes
+with something to run. It passes the chosen goals to
+`run_ui_foundation.py --only` and lists them with a reason per file in
+the run summary. Scheduled and manual runs use the whole plan. Unit tests
+fail when a mapped path or test no longer exists.
+
+Locally, `scripts/select_ui_tests.py iphone` compares the branch and its
+uncommitted changes with `origin/main` and prints the matching
+`xcodebuild` arguments, with the reason for each file on stderr.
+
 ## Execution and evidence
 
 The `meh.md CI` scheme uses Debug-iCloud. Each lane builds its platform
