@@ -274,8 +274,9 @@ public final class NotebookReplica {
         try await load()
         try await withCatalogWrite {
             guard self.catalog == nil else { return }
-            let stateURL = self.directory.appending(path: "notebook-sync-state.json")
-            if FileManager.default.fileExists(atPath: stateURL.path) {
+            for name in NotebookSyncState.fileNames {
+                let stateURL = self.directory.appending(path: name)
+                guard FileManager.default.fileExists(atPath: stateURL.path) else { continue }
                 let state = try JSONDecoder().decode(NotebookSyncState.self,
                                                      from: Data(contentsOf: stateURL))
                 guard state.version == 2, state.notebookID == nil else {
@@ -337,6 +338,12 @@ public final class NotebookReplica {
         guard case .current(let snapshot) = await noteStorage(NotebookWelcomeNote.id)
             .load(reusing: nil).result else { return false }
         return snapshot.heads == NotebookWelcomeNote.heads
+    }
+
+    /// Whether this catalog may still be replaced by another notebook on
+    /// its first sync. Once joined, it only merges with its own notebook.
+    public func mayJoinAnotherNotebook() throws -> Bool {
+        try offlineJoinStorage.load() != nil
     }
 
     func validateOfflineJoinScope(_ scope: String) throws {
