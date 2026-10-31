@@ -1,7 +1,6 @@
 import XCTest
 #if os(iOS)
 import UIKit
-#endif
 
 @MainActor
 final class UIReleasePolishUITests: XCTestCase {
@@ -21,7 +20,6 @@ final class UIReleasePolishUITests: XCTestCase {
         if app.state == .runningForeground { app.terminate() }
     }
 
-#if os(iOS)
     func testEmptyLibraryCanCreateAndEditItsFirstNote() throws {
         app.launch()
         let startWriting = app.buttons["notebook-start-writing"]
@@ -379,7 +377,6 @@ final class UIReleasePolishUITests: XCTestCase {
         XCTAssertFalse(app.buttons["sync-now"].exists)
         capture("After - offline sync status")
     }
-#endif
 
     private func capture(_ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
@@ -392,3 +389,4 @@ final class UIReleasePolishUITests: XCTestCase {
         ProcessInfo.processInfo.environment["MEH_UI_POLISH_BASELINE"] == "1"
     }
 }
+#endif
