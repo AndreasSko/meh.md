@@ -145,7 +145,7 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
             $0 != self.source && $0.replacingOccurrences(of: "!", with: "") == self.source
         })
         // UIKit's native keyboard command uses the shared note undo manager.
-        app.typeKey("z", modifierFlags: .command)
+        undoWithKeyboard(in: app, focused: cellEditor, source: editor)
         XCTAssertTrue(waitForSource(editor) { $0 == self.source },
                       "Source after native undo: \(editor.value ?? "nil")")
         XCTAssertTrue(waitForSource(cellEditor) { $0 == "**Coastal walk**" })
@@ -157,7 +157,7 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
         XCTAssertTrue(waitForSource(editor) { $0 != self.source })
         switchToSource(in: app)
         XCTAssertTrue(cellEditor.waitForNonExistence(timeout: 5))
-        app.typeKey("z", modifierFlags: .command)
+        undoWithKeyboard(in: app, focused: editor, source: editor)
         XCTAssertTrue(waitForSource(editor) { $0 == self.source })
         app.buttons["notebook-note-actions"].tap()
         app.buttons["Editor Display"].tap()
@@ -424,6 +424,24 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
         let item = app.menuItems.matching(query).firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 3), "Missing Table menu action \(title)")
         return item
+    }
+
+    private func undoWithKeyboard(
+        in app: XCUIApplication, focused: XCUIElement, source editor: XCUIElement
+    ) {
+        let focus = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: focused
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [focus], timeout: 5), .completed)
+        let edited = editor.value as? String
+        // The first ⌘Z after typing on the software keyboard is often
+        // ignored, sometimes the second too, even after a long wait. It is
+        // unclear whether the simulator or the cell editor drops it. Resend
+        // only while nothing changed, so a slow undo can't run twice.
+        for _ in 0..<3 {
+            app.typeKey("z", modifierFlags: .command)
+            if waitForSource(editor, where: { $0 != edited }) { break }
+        }
     }
 
     private func waitForSource(_ editor: XCUIElement, where predicate: (String) -> Bool) -> Bool {

@@ -113,9 +113,13 @@ final class MarkdownTableUITests: XCTestCase {
         let action = app.buttons[title].firstMatch
         if action.exists { return action }
         let menu = app.buttons["editor-table-menu"].firstMatch
+        // iPad's sidebar is also a collection view; an open Table menu is
+        // the one listing table actions.
+        let menuTitles = Array(titles.values) + ["Row", "Column", "Column Alignment"]
         let nativeMenu = app.collectionViews.allElementsBoundByIndex.first {
-            $0.identifier != "editor-keyboard-toolbar" && $0.frame.width > 100
-                && $0.buttons.count > 0
+            $0.identifier != "editor-keyboard-toolbar" && $0.buttons.matching(
+                NSPredicate(format: "label IN %@", menuTitles)
+            ).count > 0
         }
         if nativeMenu != nil {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()

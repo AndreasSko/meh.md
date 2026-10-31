@@ -306,7 +306,9 @@ final class RecentsExpansionUITests: XCTestCase {
 
     private func showSidebar(_ app: XCUIApplication) {
         let recents = app.buttons["notebook-recents-toggle"]
-        if !recents.isHittable {
+        // Expanded Recents hides its toggle, but on iPad the sidebar is
+        // still on screen; its first bar button would open the app menu.
+        if !recents.isHittable && !app.buttons["notebook-recents-close"].isHittable {
             app.navigationBars.buttons.element(boundBy: 0).tap()
         }
         XCTAssertTrue(recents.waitForExistence(timeout: 10))

@@ -41,8 +41,7 @@ final class NotebookTrashUITests: XCTestCase {
         app.buttons["notebook-select-items"].tap()
         folderTitle.tap()
         app.buttons["notebook-trash-selected"].tap()
-        app.buttons["notebook-app-menu"].tap()
-        app.buttons["notebook-trash-toggle"].tap()
+        app.openTrash()
 
         let folderRow = app.collectionViews["notebook-trash-view"]
             .descendants(matching: .any)
@@ -82,20 +81,18 @@ final class NotebookTrashUITests: XCTestCase {
         app.buttons["notebook-select-items"].tap()
         for id in ids { title(id, in: app).tap() }
         app.buttons["notebook-trash-selected"].tap()
-        app.buttons["notebook-app-menu"].tap()
-        let openTrash = app.buttons["notebook-trash-toggle"]
-        XCTAssertTrue(openTrash.waitForExistence(timeout: 5))
-        openTrash.tap()
+        app.openTrash()
 
         let menu = app.buttons["notebook-trash-actions-" + ids[0]]
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        let shownNote = openedNote(in: app)
         XCTAssertGreaterThanOrEqual(menu.frame.width, 44)
         XCTAssertGreaterThanOrEqual(menu.frame.height, 44)
         capture(app, "Trash actions with larger touch target")
         menu.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
         let restore = app.buttons["notebook-trash-restore-" + ids[0]]
         XCTAssertTrue(restore.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.textViews["markdown-editor"].exists)
+        XCTAssertEqual(openedNote(in: app), shownNote)
         // Dismiss by tapping the navigation title, outside the action menu.
         app.navigationBars["Trash"].staticTexts["Trash"].tap()
 
@@ -106,7 +103,7 @@ final class NotebookTrashUITests: XCTestCase {
             .waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["notebook-trash-selection-count"].label,
                        "2 Selected")
-        XCTAssertFalse(app.textViews["markdown-editor"].exists)
+        XCTAssertEqual(openedNote(in: app), shownNote)
         capture(app, "Trash multiple selection")
         app.buttons["notebook-trash-restore-selected"].tap()
         XCTAssertTrue(trashRow(ids[0], in: app).waitForNonExistence(timeout: 5))
@@ -216,6 +213,13 @@ final class NotebookTrashUITests: XCTestCase {
         return rowTitle.identifier.replacingOccurrences(
             of: "notebook-sidebar-title-", with: ""
         )
+    }
+
+    /// Trash actions must not open a note. iPad keeps its editor beside
+    /// the sidebar, so compare what it shows instead of its presence.
+    private func openedNote(in app: XCUIApplication) -> String? {
+        let editor = app.textViews["markdown-editor"]
+        return editor.exists ? editor.value as? String : nil
     }
 
     private func title(_ id: String, in app: XCUIApplication) -> XCUIElement {

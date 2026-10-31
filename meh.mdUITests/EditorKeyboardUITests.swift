@@ -49,7 +49,7 @@ final class EditorKeyboardUITests: XCTestCase {
             choice.tap()
             let expected = String(repeating: "#", count: level)
                 + " Observatory plans"
-            XCTAssertEqual(editor.value as? String, expected)
+            assertSource(of: editor, becomes: expected)
             XCTAssertTrue(app.keyboards.firstMatch.exists)
 
             heading.tap()
@@ -63,13 +63,14 @@ final class EditorKeyboardUITests: XCTestCase {
                                "The middle active heading opens near its toolbar button")
             }
             choice.tap()
+            XCTAssertTrue(picker.waitForNonExistence(timeout: 5))
             XCTAssertEqual(editor.value as? String, expected,
                            "Selecting the active heading must be idempotent")
         }
         heading.tap()
         XCTAssertFalse(app.buttons["editor-command-body"].isSelected)
         horizontalHeadingPickerChoice(nil, in: app).tap()
-        XCTAssertEqual(editor.value as? String, "Observatory plans")
+        assertSource(of: editor, becomes: "Observatory plans")
         XCTAssertTrue(app.keyboards.firstMatch.exists)
         editor.typeText(" for tonight")
         XCTAssertEqual(editor.value as? String, "Observatory plans for tonight")
@@ -103,7 +104,7 @@ final class EditorKeyboardUITests: XCTestCase {
         XCTAssertTrue(h6.isHittable)
         capture(app, name: "Scrolled picker reaches H6 at large text size")
         h6.tap()
-        XCTAssertEqual(editor.value as? String, "###### Lunar watch")
+        assertSource(of: editor, becomes: "###### Lunar watch")
         XCTAssertTrue(app.keyboards.firstMatch.exists)
         editor.typeText(" tonight")
         XCTAssertEqual(editor.value as? String, "###### Lunar watch tonight")
@@ -111,7 +112,19 @@ final class EditorKeyboardUITests: XCTestCase {
         let body = horizontalHeadingPickerChoice(nil, in: app)
         XCTAssertTrue(body.isHittable)
         body.tap()
-        XCTAssertEqual(editor.value as? String, "Lunar watch tonight")
+        assertSource(of: editor, becomes: "Lunar watch tonight")
+    }
+
+    /// The picker applies its style once its popover finishes dismissing.
+    private func assertSource(
+        of editor: XCUIElement, becomes expected: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let applied = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", expected), object: editor
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [applied], timeout: 5), .completed,
+                       "Source: \(editor.value ?? "nil")", file: file, line: line)
     }
 
     private func horizontalHeadingPickerChoice(
@@ -385,13 +398,26 @@ final class EditorKeyboardUITests: XCTestCase {
         _ button: XCUIElement, onto target: XCUIElement, before: Bool,
         in app: XCUIApplication
     ) {
+        // Coordinates are taken from frames, so let the keyboard and toolbar
+        // finish moving first.
+        var lastFrames: [CGRect] = []
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard button.isHittable, target.exists else { return false }
+            let frames = [button.frame, target.frame]
+            defer { lastFrames = frames }
+            return frames == lastFrames
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed)
         let origin = app.coordinate(withNormalizedOffset: .zero)
         let start = origin.withOffset(CGVector(dx: button.frame.midX, dy: button.frame.midY))
         let end = origin.withOffset(CGVector(
             dx: before ? target.frame.minX - 6 : target.frame.maxX + 6,
             dy: target.frame.midY
         ))
-        start.press(forDuration: 0.8, thenDragTo: end)
+        // Move slowly and hold so the drop session sees the destination
+        // before the finger lifts.
+        start.press(forDuration: 0.8, thenDragTo: end, withVelocity: .slow,
+                    thenHoldForDuration: 0.5)
         // A drop may scroll the toolbar and briefly remove the button's AX cell.
         let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             button.exists && target.exists && button.isHittable
