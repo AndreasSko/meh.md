@@ -192,7 +192,7 @@ final class NotebookDragUITests: XCTestCase {
         } else {
             XCTAssertTrue(footer.exists && footer.isHittable,
                           "The native iPad footer must be visible before edge dragging")
-            edgeY = min(list.frame.maxY - 12, footer.frame.maxY)
+            edgeY = min(list.frame.maxY - 12, footer.frame.midY)
         }
         let geometry = XCTAttachment(string:
             "list=\(list.frame) newItem=\(newItem.frame) "
