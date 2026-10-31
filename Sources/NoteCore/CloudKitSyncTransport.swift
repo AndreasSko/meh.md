@@ -1832,11 +1832,20 @@ struct CloudKitAvailabilityCooldownStore {
 }
 
 @available(macOS 14.0, iOS 17.0, *)
-public final actor CloudKitSyncTransport: HaltableSyncTransport {
+public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTransport {
     public nonisolated let scope: String
-    public nonisolated let activity: AsyncStream<CloudKitSyncActivity>
+    public nonisolated let activity: AsyncStream<SyncActivity>
     public private(set) var recoveredRetryMetadata = false
     public private(set) var recoveredLegacySnapshotDeletionHalt = false
+
+    /// Posted when the device's iCloud account changes.
+    public static let accountChangedNotification = Notification.Name.CKAccountChanged
+
+    public func recoveryEvents() -> [String] {
+        (recoveredRetryMetadata ? ["cloud retry metadata recovered"] : [])
+            + (recoveredLegacySnapshotDeletionHalt
+                ? ["legacy snapshot deletion halt recovered"] : [])
+    }
 
     private static let pageSize = 100
 
@@ -3263,13 +3272,13 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         retryThrottle.notBefore
     }
 
-    public func haltStatus() async -> CloudKitSyncHaltStatus? {
+    public func haltStatus() async -> SyncHaltStatus? {
         if let failure = store.writeHealth.failure { latchFailure(failure) }
         if let delegateFailure {
-            return CloudKitSyncHaltStatus(error: delegateFailure)
+            return SyncHaltStatus(cloudKitError: delegateFailure)
         }
         if isRetired {
-            return CloudKitSyncHaltStatus(
+            return SyncHaltStatus(
                 reason: .retired,
                 underlyingError: CloudKitRetiredTransportError(),
                 isRecoverable: false
@@ -3278,11 +3287,11 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
         let hasUnexpectedDeletion = await store.snapshot().hasUnexpectedDeletion
         if let failure = store.writeHealth.failure { latchFailure(failure) }
         if let delegateFailure {
-            return CloudKitSyncHaltStatus(error: delegateFailure)
+            return SyncHaltStatus(cloudKitError: delegateFailure)
         }
         if hasUnexpectedDeletion {
-            return CloudKitSyncHaltStatus(
-                error: CloudKitSyncTransportError.unexpectedDeletion
+            return SyncHaltStatus(
+                cloudKitError: CloudKitSyncTransportError.unexpectedDeletion
             )
         }
         return nil
@@ -3732,7 +3741,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport {
     }
 
     private func yieldAfterDelegateReturns(
-        _ activities: [CloudKitSyncActivity]
+        _ activities: [SyncActivity]
     ) {
         guard !activities.isEmpty else { return }
         Task { [weak self] in
@@ -3888,7 +3897,7 @@ extension CloudKitSyncTransport {
                 return
             }
         }
-        var activities: [CloudKitSyncActivity] = []
+        var activities: [SyncActivity] = []
         defer { yieldAfterDelegateReturns(activities) }
         do {
             switch event {
@@ -4146,7 +4155,7 @@ extension CloudKitSyncTransport {
                     try await eventCommitter.finishFetch(
                         allowUnresolvedSnapshots: true
                     )
-                    let reason: CloudKitSyncReason =
+                    let reason: SyncActivity.Reason =
                         scheduled ? .scheduled : .manual
                     if let activity = activityTracker.finishFetch(
                         reason: reason
