@@ -1,0 +1,206 @@
+{
+  "noUIImpact": [
+    "*.md",
+    "LICENSE",
+    ".coderabbit.yaml",
+    ".gitignore",
+    "docs/**",
+    "Tests/**",
+    "Tools/**",
+    "scripts/**",
+    ".github/**",
+    "TestPlans/Nightly.xctestplan",
+    "meh.md/NotebookSyncLabApp.swift"
+  ],
+  "fullRun": [
+    "scripts/run_ui_foundation.py",
+    "scripts/check_ui_foundation_results.py",
+    "scripts/select_ui_tests.py",
+    "scripts/fixtures/ui_enumeration_xcode27.json",
+    ".github/workflows/ui-regressions.yml",
+    "TestPlans/CI*.xctestplan",
+    "TestPlans/ui-test-impact.json"
+  ],
+  "smoke": [
+    "WelcomeNoteUITests",
+    "WritingDurabilityUITests"
+  ],
+  "areas": [
+    {
+      "name": "Editor",
+      "paths": [
+        "meh.md/Markdown*.swift",
+        "meh.md/Editor*.swift",
+        "meh.md/NotebookNoteEditor.swift",
+        "meh.md/NotebookTitleField.swift",
+        "meh.md/NotebookEditorPreferences.swift",
+        "Sources/NoteCore/NoteEditorTextChange.swift",
+        "Sources/NoteCore/AutomergeTextIndex.swift"
+      ],
+      "tests": [
+        "EditorScrollTypingUITests",
+        "MacFormattingUITests",
+        "UIReleasePolishUITests/testFormattingCommandChangesTheNoteSource",
+        "UIReleasePolishUITests/testNoteMenusExposeTemplatesAndEditorDisplay",
+        "UIReleasePolishUITests/testLongNoteTitleRemainsAccessibleInTheToolbar"
+      ]
+    },
+    {
+      "name": "Version history",
+      "paths": [
+        "meh.md/MarkdownHistoryMarks.swift",
+        "meh.md/NoteHistory*.swift",
+        "meh.md/NotebookSceneHistory.swift",
+        "Sources/NoteCore/NoteHistory*.swift",
+        "Sources/NoteCore/NotebookHistoryChecker.swift"
+      ],
+      "tests": [
+        "NoteHistoryUITests",
+        "LargeNoteHistoryUITests"
+      ]
+    },
+    {
+      "name": "Storage",
+      "paths": [
+        "meh.md/NotebookStorageView.swift",
+        "meh.md/NotebookSnapshotMaintenancePolicy.swift",
+        "Sources/NoteCore/NotebookStorageReport.swift"
+      ],
+      "tests": [
+        "NotebookStorageUITests"
+      ]
+    },
+    {
+      "name": "Library browser",
+      "paths": [
+        "meh.md/NotebookBrowserDrag.swift",
+        "meh.md/NotebookBrowserDropInteraction.swift",
+        "meh.md/NotebookBrowserNativeDisclosure.swift",
+        "meh.md/NotebookBrowserOrdering.swift",
+        "meh.md/NotebookBrowserSelection.swift",
+        "meh.md/NotebookMoveSheet.swift",
+        "Sources/NoteCore/NotebookBrowserUndo.swift",
+        "Sources/NoteCore/NotebookOrdering.swift",
+        "Sources/NoteCore/NotebookSortOrder.swift"
+      ],
+      "tests": [
+        "NotebookDragUITests",
+        "UIReleasePolishUITests/testNoteContextActionCreatesFolderBesideTheNote",
+        "UIReleasePolishUITests/testPlusContextActionCreatesFolder"
+      ]
+    },
+    {
+      "name": "Mac drag and drop",
+      "platforms": [
+        "mac"
+      ],
+      "paths": [
+        "meh.md/NotebookBrowserNativeAppKitDrag.swift",
+        "meh.md/NotebookBrowserNativeAppKitDrop.swift"
+      ],
+      "tests": [
+        "NotebookDragUITests"
+      ]
+    },
+    {
+      "name": "iOS drag and drop",
+      "platforms": [
+        "iphone",
+        "ipad"
+      ],
+      "paths": [
+        "meh.md/NotebookBrowserNativeUIKitDrop.swift"
+      ],
+      "tests": [
+        "NotebookDragUITests"
+      ]
+    },
+    {
+      "name": "Sync status",
+      "paths": [
+        "meh.md/NotebookSyncStatusView.swift",
+        "meh.md/NotebookSyncIndicator.swift",
+        "Sources/NoteCore/NotebookSyncEventLog.swift",
+        "Sources/NoteCore/NotebookSyncProgress.swift",
+        "Sources/NoteCore/NotebookSyncRetryPolicy.swift",
+        "Sources/NoteCore/SyncFailurePresentation.swift",
+        "Sources/NoteCore/CloudKitSyncActivity.swift",
+        "Sources/NoteCore/CloudKitSyncHaltStatus.swift",
+        "meh.md/NotebookSyncPreviewTransport.swift"
+      ],
+      "tests": [
+        "NotebookSyncStatusUITests",
+        "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow"
+      ]
+    },
+    {
+      "name": "Settings",
+      "paths": [
+        "meh.md/NotebookSettingsView.swift",
+        "meh.md/NotebookFeedback.swift"
+      ],
+      "tests": [
+        "FlairUITests/testSettingsEndWithTheVersion",
+        "FlairUITests/testAppearanceSwitchesTheInk",
+        "NotebookSyncStatusUITests/testSettingsContainsTheSyncEventLog",
+        "UIReleasePolishUITests/testBrowserActionsExposeSettingsImportAndCreateAnotherNote"
+      ]
+    },
+    {
+      "name": "Empty library and import",
+      "paths": [
+        "meh.md/NotebookEmptyLibraryView.swift",
+        "meh.md/NotebookImportView.swift",
+        "meh.md/NotebookSharedImportView.swift",
+        "meh.md/NotebookIncomingImportRequests.swift",
+        "Sources/NoteCore/NotebookImport*.swift"
+      ],
+      "tests": [
+        "UIReleasePolishUITests/testEmptyLibraryCanCreateAndEditItsFirstNote",
+        "UIReleasePolishUITests/testEmptyLibraryImportOpensPickerAndCanCancel",
+        "UIReleasePolishUITests/testBrowserActionsExposeSettingsImportAndCreateAnotherNote"
+      ]
+    },
+    {
+      "name": "Search",
+      "paths": [
+        "meh.md/NotebookSearch*.swift",
+        "Sources/NoteCore/NotebookSearch.swift"
+      ],
+      "tests": [
+        "FlairUITests/testSearchWithoutResultsNamesTheQuery"
+      ]
+    },
+    {
+      "name": "Templates",
+      "paths": [
+        "meh.md/NotebookTemplateViews.swift",
+        "Sources/NoteCore/NotebookTemplates.swift"
+      ],
+      "tests": [
+        "UIReleasePolishUITests/testNoteMenusExposeTemplatesAndEditorDisplay"
+      ]
+    },
+    {
+      "name": "Look and feel",
+      "paths": [
+        "meh.md/Meh*.swift",
+        "meh.md/NotebookSidebarStyle.swift",
+        "meh.md/Assets.xcassets/**",
+        "icon.icon/**"
+      ],
+      "tests": [
+        "FlairUITests"
+      ]
+    },
+    {
+      "name": "Welcome note",
+      "paths": [
+        "Sources/NoteCore/NotebookWelcomeNote.swift"
+      ],
+      "tests": [
+        "WelcomeNoteUITests"
+      ]
+    }
+  ]
+}
