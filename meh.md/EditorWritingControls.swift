@@ -1044,7 +1044,16 @@ private struct KeyboardCommandDefinition: Identifiable {
     let image: String
     let command: MarkdownEditingCommand?
 
+    #if os(iOS)
+    // Mac writers paste with ⌘V; the Mac popover stays about formatting.
     static let all: [Self] = [
+        .init(id: "paste", title: "Paste", image: "doc.on.clipboard", command: nil),
+    ] + formatting
+    #else
+    static let all = formatting
+    #endif
+
+    private static let formatting: [Self] = [
         .init(id: "bold", title: "Bold", image: "bold", command: .bold),
         .init(id: "italic", title: "Italic", image: "italic", command: .italic),
         .init(id: "taskList", title: "Task List", image: "checklist",
@@ -1250,6 +1259,7 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
         private var needsReloadAfterDrag = false
         private var dragItemFrames: [(index: Int, frame: CGRect)] = []
         private let overflowMask = CAGradientLayer()
+        private let pasteTarget = KeyboardPasteTarget()
 
         init(
             navigation: MarkdownEditorNavigation,
@@ -1367,6 +1377,10 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             }
             if definition.command == .heading {
                 cell.configureHeadingPicker()
+            }
+            if definition.id == "paste" {
+                pasteTarget.editor = navigation.editorPresentationView as? MarkdownTextView
+                cell.configurePaste(target: pasteTarget)
             }
             return cell
         }
@@ -1738,6 +1752,8 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
         moveLeft: (() -> Bool)? = nil, moveRight: (() -> Bool)? = nil
     ) {
         self.action = action
+        pasteControl?.isHidden = true
+        button.isHidden = false
         button.isEnabled = enabled
         button.configuration = nil
         button.menu = nil
@@ -1824,7 +1840,36 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
     }
 
     private(set) var holdMenu: UIMenu?
+    private var pasteControl: UIPasteControl?
 
+    /// The system paste button reads the clipboard without asking each time,
+    /// which a custom button cannot do.
+    func configurePaste(target: KeyboardPasteTarget) {
+        let control = pasteControl ?? {
+            let configuration = UIPasteControl.Configuration()
+            configuration.displayMode = .iconOnly
+            configuration.cornerStyle = .capsule
+            configuration.baseForegroundColor = .label
+            // The system draws this control opaque, so match the bar's glass.
+            configuration.baseBackgroundColor = .systemGray6
+            let control = UIPasteControl(configuration: configuration)
+            control.translatesAutoresizingMaskIntoConstraints = false
+            contentView.addSubview(control)
+            NSLayoutConstraint.activate([
+                control.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+                control.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+                control.topAnchor.constraint(equalTo: contentView.topAnchor),
+                control.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            ])
+            pasteControl = control
+            return control
+        }()
+        control.target = target
+        control.isHidden = false
+        control.accessibilityIdentifier = "editor-command-paste"
+        control.accessibilityCustomActions = button.accessibilityCustomActions
+        button.isHidden = true
+    }
     var isEnabled: Bool { button.isEnabled }
 
     override var isHighlighted: Bool {
@@ -1842,6 +1887,30 @@ private final class KeyboardToolbarCell: UICollectionViewCell {
         } else {
             action?()
         }
+    }
+}
+
+/// Sends the toolbar's paste to the note, or to the table cell being edited.
+private final class KeyboardPasteTarget: UIResponder {
+    weak var editor: MarkdownTextView?
+
+    private var focused: UITextView? {
+        guard let editor else { return nil }
+        let cell = editor.markdownCellController
+        return cell.isActive ? cell.editor : editor
+    }
+
+    override var pasteConfiguration: UIPasteConfiguration? {
+        get { focused?.pasteConfiguration }
+        set {}
+    }
+
+    override func canPaste(_ itemProviders: [NSItemProvider]) -> Bool {
+        focused?.canPaste(itemProviders) ?? false
+    }
+
+    override func paste(itemProviders: [NSItemProvider]) {
+        focused?.paste(itemProviders: itemProviders)
     }
 }
 
