@@ -207,7 +207,16 @@ struct NotebookSidebarControls: View {
             )
         }
         .disabled(busy)
+        #if os(macOS)
         .padding(12)
+        #else
+        // A real toolbar would sit under the formatting bar's window,
+        // which swallows taps there. The keyboard safe area still applies,
+        // so the buttons rise above the keyboard and the formatting bar.
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+        .ignoresSafeArea(.container, edges: .bottom)
+        #endif
     }
 }
 
@@ -236,7 +245,7 @@ private struct NotebookFloatingButton: View {
         #if os(macOS)
         36
         #else
-        44
+        32
         #endif
     }
 }
