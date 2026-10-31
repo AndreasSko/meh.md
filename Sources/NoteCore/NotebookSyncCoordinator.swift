@@ -201,7 +201,7 @@ public final class NotebookSyncCoordinator {
     public func cleanupSnapshots() async throws -> SyncSnapshotCleanupReport {
         guard !inFlight, case .exchanged = status,
               let notebookID = try loadState().notebookID else {
-            throw SyncError.unavailable("Sync notes before cleaning up iCloud copies.")
+            throw SyncError.unavailable("Sync notes before cleaning up extra sync copies.")
         }
         try Task.checkCancellation()
         inFlight = true

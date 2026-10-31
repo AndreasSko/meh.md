@@ -10,6 +10,8 @@ import XCTest
 ///
 /// The local HTTP backend runs only when `MEH_NOTEBOOK_HTTP_URL` points at a
 /// disposable loopback service, as in `run_notebook_sync_validation.sh`.
+/// A real S3-compatible service, such as MinIO, joins when the
+/// `MEH_S3_TEST_*` variables in `S3TestService` are set.
 @MainActor
 final class SyncTransportContractTests: XCTestCase {
     func testConcurrentBootstrapAgreesOnOneDiscoverableSeed() async throws {
@@ -183,6 +185,30 @@ final class SyncTransportContractTests: XCTestCase {
             self.addTeardownBlock { await transport.retire() }
             return transport
         })
+
+        let s3 = FakeS3Server()
+        let s3Prefix = "contract-\(UUID().uuidString.lowercased())"
+        backends.append(Backend(name: "s3") { device in
+            S3SyncTransport(
+                configuration: S3SyncConfiguration(
+                    endpoint: s3.endpoint, region: "us-east-1",
+                    bucket: "contract", prefix: s3Prefix
+                ),
+                credentials: S3Credentials(accessKeyID: "test", secretAccessKey: "test"),
+                stateDirectory: root.appending(path: "s3-\(device)"),
+                session: s3.session, pageSize: 2
+            )
+        })
+
+        if let minio = S3TestService.fromEnvironment() {
+            let minioPrefix = "contract-\(UUID().uuidString.lowercased())"
+            backends.append(Backend(name: "s3-service") { device in
+                minio.transport(
+                    prefix: minioPrefix, stateDirectory: root.appending(path: "minio-\(device)"),
+                    pageSize: 2
+                )
+            })
+        }
 
         if let endpoint = ProcessInfo.processInfo.environment["MEH_NOTEBOOK_HTTP_URL"],
            let url = URL(string: endpoint), url.host == "127.0.0.1" {

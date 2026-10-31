@@ -6,11 +6,11 @@ enum NotebookOfflineJoinError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidReceipt:
-            "The saved iCloud connection record is damaged. Your local notes were left untouched."
+            "The saved sync connection record is damaged. Your local notes were left untouched."
         case .catalogChanged:
-            "The notebook changed while connecting to iCloud. Your local notes were left untouched."
+            "The notebook changed while connecting to sync. Your local notes were left untouched."
         case .needsRestart:
-            "Restart meh.md to finish connecting this notebook to iCloud. Saved notes stay on this device."
+            "Restart meh.md to finish connecting this notebook to sync. Saved notes stay on this device."
         }
     }
 }

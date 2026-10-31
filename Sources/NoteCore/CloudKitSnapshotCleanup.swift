@@ -181,19 +181,3 @@ private func cleanupHashID(_ id: String) -> Bool {
         (48...57).contains($0) || (97...102).contains($0)
     }
 }
-
-private func cleanupHistory(_ record: SyncRecord) throws -> Set<String> {
-    if let catalog = record.catalogSnapshot {
-        return try NotebookCatalogDocument(snapshot: catalog).historyHeads
-    }
-    return try NoteDocument(snapshot: record.snapshot).historyHeads
-}
-
-private func cleanupCovers(
-    victim: SyncRecord, history: Set<String>,
-    survivor: SyncRecord, survivorHistory: Set<String>
-) -> Bool {
-    history.isSubset(of: survivorHistory)
-        && (history.count < survivorHistory.count
-            || (history.count == survivorHistory.count && victim.id < survivor.id))
-}

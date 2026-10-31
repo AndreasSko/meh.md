@@ -348,7 +348,7 @@ public enum SyncError: Error, Equatable, LocalizedError {
         case .invalidCursor: "The sync cursor is invalid. A full replay is required."
         case .localSaveRequired: "Save this note locally before synchronizing."
         case .updateRequired:
-            "Update meh.md to resume iCloud sync. You can keep editing your notes on this device."
+            "Update meh.md to resume sync. You can keep editing your notes on this device."
         case .unavailable(let message): message
         }
     }
