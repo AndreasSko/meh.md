@@ -60,6 +60,21 @@ struct NotebookSettingsView: View {
                     }
                     .accessibilityIdentifier("notebook-backups-settings")
                 }
+                if workspace.canChooseSyncStorage {
+                    Section {
+                        NavigationLink {
+                            NotebookSyncSettingsView(workspace: workspace)
+                        } label: {
+                            LabeledContent {
+                                Text(workspace.syncStorage == .s3 ? "S3" : workspace.syncStorage.title)
+                            } label: {
+                                Label("Sync", systemImage: workspace.syncStorage == .off
+                                      ? "icloud.slash" : "arrow.triangle.2.circlepath")
+                            }
+                        }
+                        .accessibilityIdentifier("notebook-sync-storage-settings")
+                    }
+                }
                 Section {
                     NavigationLink {
                         NotebookStorageView(
@@ -77,7 +92,7 @@ struct NotebookSettingsView: View {
                     }
                     .foregroundStyle(.red)
                     .disabled(exporting || resetScheduled)
-                    Text("Removes local notes, settings, and sync data on the next launch. Unsynced changes will be lost. iCloud data and backups are kept.")
+                    Text("Removes local notes, settings, and sync data on the next launch. Unsynced changes will be lost. Synced notes and backups are kept.")
                         .font(.footnote)
                 }
                 Section("Diagnostics") {
@@ -122,7 +137,7 @@ struct NotebookSettingsView: View {
                 resetScheduled = true
             }
         } message: {
-            Text("This cannot be undone. All local notes, including unsynced changes, settings, and sync history will be removed when you reopen the app. Local backups and notes already in iCloud are kept.")
+            Text("This cannot be undone. All local notes, including unsynced changes, settings, and sync history will be removed when you reopen the app. Local backups and notes already in iCloud or S3 storage are kept.")
         }
         .alert("Reset Scheduled", isPresented: $resetScheduled) {
             #if os(macOS)
@@ -195,12 +210,12 @@ private struct NotebookBackupsView: View {
             Section {
                 #if os(macOS)
                 Text(workspace.usesSync
-                    ? "Your notes are saved on this Mac and in your iCloud account."
+                    ? "Your notes are saved on this Mac and in \(workspace.syncStorageDestination)."
                     : "Your notes are saved only on this Mac.")
                 Text("meh.md also keeps Markdown copies of your notes and regular backups on this Mac. To keep a copy somewhere else, export your notes.")
                 #else
                 Text(workspace.usesSync
-                    ? "Your notes are saved on this device and in your iCloud account. If you delete meh.md, they come back from iCloud when you install it again. Only changes that haven’t synced yet are lost."
+                    ? "Your notes are saved on this device and in \(workspace.syncStorageDestination). If you delete meh.md, they come back from \(workspace.syncStorageName) when you install it again. Only changes that haven’t synced yet are lost."
                     : "Your notes are saved only on this device. If you delete meh.md, they are deleted with it.")
                 Text("meh.md also keeps Markdown copies of your notes and regular backups on this device. They are deleted with the app, so export your notes to keep a copy somewhere else.")
                 #endif
