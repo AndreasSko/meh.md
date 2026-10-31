@@ -1,6 +1,14 @@
 import Foundation
 import Observation
 
+/// What to do when a storage holds a different notebook than this device.
+public enum NotebookOtherNotebookChoice: Equatable, Sendable {
+    /// Add this device's notes to the other notebook, in a new folder.
+    case combine(folderName: String)
+    /// Use the other notebook instead of this device's one.
+    case replace
+}
+
 public enum NotebookReplicaError: Error, Equatable, LocalizedError {
     case notJoined, busy, catalogNeedsRecovery, catalogUnavailable
     case noteUnavailable(UUID)
@@ -340,10 +348,65 @@ public final class NotebookReplica {
         return snapshot.heads == NotebookWelcomeNote.heads
     }
 
-    /// Whether this catalog may still be replaced by another notebook on
-    /// its first sync. Once joined, it only merges with its own notebook.
-    public func mayJoinAnotherNotebook() throws -> Bool {
-        try offlineJoinStorage.load() != nil
+    /// Whether this catalog may take on another notebook's identity in the
+    /// given storage: on its first sync, or after the user chose to combine
+    /// or replace it there. Otherwise it only merges with its own notebook.
+    public func mayJoinAnotherNotebook(
+        in scope: String? = nil, notebookID: UUID? = nil
+    ) throws -> Bool {
+        guard let receipt = try offlineJoinStorage.load() else { return false }
+        guard let choice = receipt.choice else { return true }
+        guard scope == nil || choice.scope == scope else { return false }
+        // The user chose about the notebook they were shown, not one that
+        // replaced it in the storage since.
+        guard let chosen = choice.notebookID, let notebookID else { return true }
+        return chosen == notebookID
+    }
+
+    /// A join with another notebook started and must finish before the
+    /// device can change storage.
+    public var isJoiningAnotherNotebook: Bool {
+        get throws { try offlineJoinStorage.load()?.transition != nil }
+    }
+
+    /// Records the user's choice for a storage that holds a different
+    /// notebook. The next exchange with that storage applies it; nothing
+    /// changes before then. A choice for another storage is replaced.
+    public func chooseOtherNotebook(
+        _ kind: NotebookOtherNotebookChoice, scope: String, notebookID: UUID? = nil
+    ) async throws {
+        try await withCatalogWrite {
+            guard let local = self.catalog else { throw NotebookReplicaError.notJoined }
+            if let retained = try self.offlineJoinStorage.load() {
+                guard retained.transition == nil else {
+                    throw NotebookOfflineJoinError.needsRestart
+                }
+                if retained.choice == nil {
+                    // An unsynced notebook joins automatically anyway.
+                    return
+                }
+            }
+            let choice: NotebookOfflineJoinReceipt.Choice
+            switch kind {
+            case .combine(let folderName):
+                choice = .init(kind: .combine, scope: scope, folderName: folderName,
+                               notebookID: notebookID)
+            case .replace:
+                choice = .init(kind: .replace, scope: scope, folderName: "Notes",
+                               notebookID: notebookID)
+            }
+            var receipt = NotebookOfflineJoinReceipt(initial: SyncRecord(catalog: local.snapshot()))
+            receipt.choice = choice
+            try self.offlineJoinStorage.save(receipt)
+        }
+    }
+
+    /// Drops a choice that was not applied, for example after switching to
+    /// another storage. A started join cannot be withdrawn.
+    public func withdrawOtherNotebookChoice() throws {
+        guard let receipt = try offlineJoinStorage.load(),
+              receipt.choice != nil, receipt.transition == nil else { return }
+        try offlineJoinStorage.remove()
     }
 
     func validateOfflineJoinScope(_ scope: String) throws {
@@ -354,9 +417,21 @@ public final class NotebookReplica {
     /// Catalogs with an established binding use normal strict acceptance.
     /// Only an offline-first receipt can authorize importing an unrelated
     /// catalog, and it is committed to one account before any files change.
-    func acceptFirstSyncSeed(_ record: SyncRecord, scope: String) async throws {
+    func hasOtherNotebookChoice(for scope: String) throws -> Bool {
+        try offlineJoinStorage.load()?.choice?.scope == scope
+    }
+
+    func acceptFirstSyncSeed(
+        _ record: SyncRecord, latest: SyncRecord? = nil, scope: String
+    ) async throws {
         try record.validate()
         guard let incoming = record.catalogSnapshot else { throw SyncError.invalidRecord }
+        let latestSnapshot = try latest.map { latest -> NotebookCatalogSnapshot in
+            try latest.validate()
+            guard let snapshot = latest.catalogSnapshot,
+                  snapshot.notebookID == incoming.notebookID else { throw SyncError.invalidRecord }
+            return snapshot
+        } ?? incoming
         guard let current = catalogSnapshot, current.notebookID != incoming.notebookID,
               var receipt = try offlineJoinStorage.load() else {
             try await acceptSeed(record)
@@ -374,13 +449,15 @@ public final class NotebookReplica {
             guard let local = self.catalog,
                   let initial = receipt.initial.catalogSnapshot,
                   initial.notebookID == local.notebookID,
-                  initial.heads.isSubset(of: local.historyHeads) else {
+                  initial.heads.isSubset(of: local.historyHeads),
+                  receipt.choice.map({ $0.scope == scope }) ?? true else {
                 throw SyncError.identityConflict
             }
             // The import recovery UI remains available offline. Let it
             // finish or discard a pending import before changing identity.
             guard !self.hasPendingImport else { throw NotebookImportError.pendingImportExists }
-            let canonical = try NotebookCatalogDocument(snapshot: incoming)
+            let canonical = try NotebookCatalogDocument(
+                snapshot: receipt.choice == nil ? incoming : latestSnapshot)
             let welcome = NotebookWelcomeNote.id
             let localWelcome = try local.items().contains { $0.id == welcome }
             // Another device's welcome note is this one, so the cloud state
@@ -391,11 +468,27 @@ public final class NotebookReplica {
             } else if localWelcome, try await self.isUntouchedWelcomeNote() {
                 omitted.insert(welcome)
             }
-            let joined = try canonical.forkJoiningOfflineNotebook(local, omitting: omitted)
-            let deleted = try self.deletedIDs
-            guard deleted.subtracting(omitted)
-                .isDisjoint(with: try canonical.items().map(\.id)) else {
-                throw SyncError.identityConflict
+            let joined: NotebookCatalogDocument
+            var deleted = try self.deletedIDs
+            if receipt.choice != nil {
+                // What this device deleted applies to its own notebook only.
+                // Shared items, such as the welcome note, stay in the other.
+                deleted.subtract(try canonical.items().map(\.id))
+            }
+            switch receipt.choice?.kind {
+            case nil:
+                joined = try canonical.forkJoiningOfflineNotebook(local, omitting: omitted)
+                guard deleted.subtracting(omitted)
+                    .isDisjoint(with: try canonical.items().map(\.id)) else {
+                    throw SyncError.identityConflict
+                }
+            case .combine:
+                joined = try canonical.forkCombining(
+                    local, omitting: omitted, intoFolderNamed: receipt.choice!.folderName)
+            case .replace:
+                // The other notebook is used as it is. This device's notes
+                // stay in its backup and in the storage it used before.
+                joined = try canonical.fork()
             }
             let transition = NotebookOfflineJoinReceipt.Transition(
                 scope: scope, source: SyncRecord(catalog: local.snapshot()),
@@ -429,8 +522,10 @@ public final class NotebookReplica {
         }
         try importStorage.rebindForOfflineJoin(from: sourceID, to: destinationID)
         try offlineJoinFaultInjector?(.importsRebound)
+        let choosesNotebook = (try? offlineJoinStorage.load())?.choice != nil
         try deletionStorage.rebindForOfflineJoin(
-            from: sourceID, to: destinationID, retaining: transition.deletedIDs)
+            from: sourceID, to: destinationID, retaining: transition.deletedIDs,
+            exactly: choosesNotebook)
         try offlineJoinFaultInjector?(.deletionsRebound)
         let installed = try await storage.installOfflineJoin(
             transition, afterStage: offlineJoinFaultInjector ?? { _ in })

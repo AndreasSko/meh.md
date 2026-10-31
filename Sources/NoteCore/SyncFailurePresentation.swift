@@ -97,6 +97,15 @@ public struct SyncFailurePresentation: Equatable, Sendable {
             )
         }
 
+        if error is NotebookStorageMismatch {
+            return Failure(
+                "Choose how to sync",
+                "This storage already holds a different notebook. Nothing has changed yet.",
+                actionHint: "Open Settings › Sync to combine the notebooks or use the other one.",
+                disposition: .unavailable
+            )
+        }
+
         if error is CancellationError {
             return Failure(
                 "Sync stopped",
