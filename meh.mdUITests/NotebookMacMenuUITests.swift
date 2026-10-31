@@ -12,7 +12,7 @@ final class NotebookMacMenuUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(
-            app.buttons["notebook-new-item"].firstMatch.waitForExistence(timeout: 15)
+            app.newNoteButton.waitForExistence(timeout: 15)
         )
         let fileMenu = app.menuBars.menuBarItems["File"]
         XCTAssertTrue(fileMenu.waitForExistence(timeout: 5))

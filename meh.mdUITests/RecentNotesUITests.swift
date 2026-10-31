@@ -10,7 +10,7 @@ final class RecentNotesUITests: XCTestCase {
         app.launch()
         var titles: [String] = []
         for index in 0..<2 {
-            let newNote = app.buttons["notebook-new-item"].firstMatch
+            let newNote = app.newNoteButton
             XCTAssertTrue(newNote.waitForExistence(timeout: 15))
             waitUntilEnabled(newNote)
             activate(newNote)
@@ -249,7 +249,7 @@ final class RecentNotesUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         waitUntilEnabled(newNote)
         newNote.tap()
@@ -288,7 +288,7 @@ final class RecentNotesUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         waitUntilEnabled(newNote)
         newNote.tap()
@@ -351,7 +351,7 @@ final class RecentNotesUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         waitUntilEnabled(newNote)
         newNote.click()
@@ -404,7 +404,7 @@ final class RecentNotesUITests: XCTestCase {
     }
 
     private func createRecentNote(in app: XCUIApplication, source: String) {
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         waitUntilEnabled(newNote)
         activate(newNote)

@@ -218,7 +218,7 @@ final class NotebookOrderingUITests: XCTestCase {
         named title: String,
         in app: XCUIApplication
     ) throws -> XCUIElement {
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         activate(newNote)
         let field = app.textFields["title-field"]

@@ -113,7 +113,7 @@ final class MacRecentsUITests: XCTestCase {
                          "Reading list", "Garden plans", "Weekend ideas", "Meteor shower",
                          "Sketchbook", "Travel notes", "Observatory log", "Aurora watch"]
             for (index, name) in names.enumerated() {
-                let newNote = app.buttons["notebook-new-item"].firstMatch
+                let newNote = app.newNoteButton
                 XCTAssertTrue(newNote.waitForExistence(timeout: 15))
                 let enabled = XCTNSPredicateExpectation(
                     predicate: NSPredicate(format: "enabled == true"), object: newNote

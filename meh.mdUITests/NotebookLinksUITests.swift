@@ -376,7 +376,7 @@ final class NotebookLinksUITests: XCTestCase {
     private func createNote(
         in app: XCUIApplication, title: String, body: String
     ) {
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         activate(newNote)
         let titleField = app.textFields["title-field"]

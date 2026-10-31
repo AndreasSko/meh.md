@@ -10,7 +10,7 @@ final class WritingFlowUITests: XCTestCase {
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
 
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         activate(newNote)
 
@@ -74,7 +74,7 @@ final class WritingFlowUITests: XCTestCase {
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
 
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
         activate(newNote)
         let titleField = app.textFields["title-field"]
@@ -155,7 +155,7 @@ final class WritingFlowUITests: XCTestCase {
         app.launchEnvironment["MEH_SYNC_WORKSPACE"] = "writing-ui-" + UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launch()
-        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let newNote = app.newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 20))
         activate(newNote)
         let titleField = app.textFields["title-field"]
