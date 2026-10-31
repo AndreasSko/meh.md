@@ -350,6 +350,9 @@ final class RecentNotesUITests: XCTestCase {
     func testCaretRestoresAcrossNoteSwitchAndRelaunch() throws {
         continueAfterFailure = false
         let app = makeApp()
+        // Restoring the open note relies on macOS keeping windows on quit,
+        // which a user setting can turn off.
+        app.launchArguments += ["-NSQuitAlwaysKeepsWindows", "YES"]
         app.launch()
         let newNote = app.newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: 15))
@@ -369,7 +372,10 @@ final class RecentNotesUITests: XCTestCase {
         if recentToggle.value as? String == "Collapsed" { recentToggle.click() }
         let firstNote = recentButtons(app).element(boundBy: 1)
         firstNote.click()
-        XCTAssertEqual(editor.value as? String, "Moon star")
+        let opened = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "Moon star"), object: editor
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 5), .completed)
         app.typeKey(.tab, modifierFlags: [])
         editor.typeText("bright ")
         XCTAssertEqual(editor.value as? String, "Moon bright star")
@@ -396,9 +402,10 @@ final class RecentNotesUITests: XCTestCase {
     }
 
     private func recentButtons(_ app: XCUIApplication) -> XCUIElementQuery {
+        // The Mac also gives each row's disabled inner button the same id.
         app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND NOT identifier BEGINSWITH %@ "
-                + "AND NOT identifier BEGINSWITH %@",
+                + "AND NOT identifier BEGINSWITH %@ AND enabled == true",
             "notebook-recent-", "notebook-recent-pin-", "notebook-recent-swipe-"
         ))
     }
