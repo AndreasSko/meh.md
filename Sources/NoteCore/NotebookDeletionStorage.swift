@@ -64,8 +64,10 @@ struct NotebookDeletionStorage {
         return ledger.ids
     }
 
+    /// `exactly` keeps only `ids`, for a notebook whose own deletions must
+    /// not carry over into the one it switches to.
     func rebindForOfflineJoin(from sourceID: UUID, to destinationID: UUID,
-                              retaining ids: Set<UUID>) throws {
+                              retaining ids: Set<UUID>, exactly: Bool = false) throws {
         var combined = ids
         if hasLedger {
             let ledger = try JSONDecoder().decode(Ledger.self, from: Data(contentsOf: ledgerURL))
@@ -73,7 +75,7 @@ struct NotebookDeletionStorage {
                   ledger.notebookID == sourceID || ledger.notebookID == destinationID else {
                 throw NotebookDeletionStorageError.notebookIdentityMismatch
             }
-            combined.formUnion(ledger.ids)
+            if !exactly { combined.formUnion(ledger.ids) }
         }
         let ledger = Ledger(schemaVersion: 1, notebookID: destinationID, ids: combined)
         try SyncFileIO.replace(JSONEncoder().encode(ledger), at: ledgerURL)
