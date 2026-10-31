@@ -1044,43 +1044,45 @@ private struct KeyboardCommandDefinition: Identifiable {
     let image: String
     let command: MarkdownEditingCommand?
 
-    #if os(iOS)
-    // Mac writers paste with ⌘V; the Mac popover stays about formatting.
+    // Text formatting comes first, then structure, then inserted content.
     static let all: [Self] = [
-        .init(id: "paste", title: "Paste", image: "doc.on.clipboard", command: nil),
-    ] + formatting
-    #else
-    static let all = formatting
-    #endif
-
-    private static let formatting: [Self] = [
         .init(id: "bold", title: "Bold", image: "bold", command: .bold),
         .init(id: "italic", title: "Italic", image: "italic", command: .italic),
-        .init(id: "taskList", title: "Task List", image: "checklist",
-              command: .taskList),
-        .init(id: "insertTable", title: "Insert Table", image: "tablecells",
-              command: .insertTable),
-        .init(id: "heading", title: "Heading", image: "h.square",
-              command: .heading),
-        .init(id: "snippets", title: "Insert Snippet", image: "text.badge.plus",
-              command: nil),
-        .init(id: "indent", title: "Indent", image: "increase.indent",
-              command: .indent),
-        .init(id: "outdent", title: "Outdent", image: "decrease.indent",
-              command: .outdent),
-        .init(id: "link", title: "Link", image: "link", command: .link),
         .init(id: "strikethrough", title: "Strikethrough",
               image: "strikethrough", command: .strikethrough),
         .init(id: "highlight", title: "Highlight", image: "highlighter",
               command: .highlight),
+        .init(id: "heading", title: "Heading", image: "h.square",
+              command: .heading),
+        .init(id: "indent", title: "Indent", image: "increase.indent",
+              command: .indent),
+        .init(id: "outdent", title: "Outdent", image: "decrease.indent",
+              command: .outdent),
+        .init(id: "taskList", title: "Task List", image: "checklist",
+              command: .taskList),
+        .init(id: "link", title: "Link", image: "link", command: .link),
         .init(id: "inlineCode", title: "Inline Code",
               image: "chevron.left.forwardslash.chevron.right",
               command: .inlineCode),
         .init(id: "codeBlock", title: "Code Block",
               image: "curlybraces.square", command: .codeBlock),
+        .init(id: "insertTable", title: "Insert Table", image: "tablecells",
+              command: .insertTable),
+    ] + paste + [
+        .init(id: "snippets", title: "Insert Snippet", image: "text.badge.plus",
+              command: nil),
         .init(id: "toggleTask", title: "Toggle Task",
               image: "checkmark.square", command: .toggleTask),
     ]
+
+    // Mac writers paste with ⌘V; the Mac popover stays about formatting.
+    #if os(iOS)
+    private static let paste: [Self] = [
+        .init(id: "paste", title: "Paste", image: "doc.on.clipboard", command: nil),
+    ]
+    #else
+    private static let paste: [Self] = []
+    #endif
 }
 
 #if os(iOS)

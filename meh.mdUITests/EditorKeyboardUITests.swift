@@ -453,9 +453,9 @@ final class EditorKeyboardUITests: XCTestCase {
         let toolbar = toolbarContainer(in: app)
         XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
         let expectedCommands = [
-            "bold", "italic", "task-list", "insert-table", "indent",
-            "outdent", "heading", "link", "strikethrough", "highlight",
-            "inline-code", "code-block", "toggle-task",
+            "bold", "italic", "strikethrough", "highlight", "heading",
+            "indent", "outdent", "task-list", "link", "inline-code",
+            "code-block", "insert-table", "paste", "toggle-task",
         ]
         assertToolbarCommandsReachable(expectedCommands, in: app, toolbar: toolbar)
         let bold = app.buttons["editor-command-bold"]
