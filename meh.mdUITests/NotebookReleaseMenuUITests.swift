@@ -32,7 +32,11 @@ final class NotebookReleaseMenuUITests: XCTestCase {
             app.windows.element(boundBy: app.windows.count - 1)
                 .buttons[XCUIIdentifierCloseWindow].click()
         }
-        if app.state == .runningForeground { app.terminate() }
+        guard app.state == .runningForeground else { return }
+        // Force-quitting keeps the window state saved while two windows were
+        // open. Quitting normally saves the single remaining window instead.
+        app.typeKey("q", modifierFlags: .command)
+        if !app.wait(for: .notRunning, timeout: 10) { app.terminate() }
     }
 
     func testFileMenuPickersAndNewWindowPreserveWriting() throws {

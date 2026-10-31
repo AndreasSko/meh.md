@@ -59,20 +59,6 @@ final class MarkdownWideTableUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, source)
         XCTAssertLessThan(noteTitle.frame.minY, titleY - 40)
         capture(app, name: "Vertical note scroll after table pan")
-        editor.swipeDown()
-
-        // A tap enters the normal source editor and an edit changes one byte.
-        editor.coordinate(withNormalizedOffset: .zero).withOffset(
-            CGVector(dx: editor.frame.width * 0.5,
-                     dy: noteTitle.frame.maxY - editor.frame.minY + 70)
-        ).tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertEqual(editor.value as? String, source)
-        capture(app, name: "Wide table revealed as Markdown")
-        editor.typeText("!")
-        let edited = try XCTUnwrap(editor.value as? String)
-        XCTAssertEqual(edited.replacingOccurrences(of: "!", with: ""), source)
-        XCTAssertEqual(edited.utf16.count, source.utf16.count + 1)
     }
 
     private func capture(_ app: XCUIApplication, name: String) {

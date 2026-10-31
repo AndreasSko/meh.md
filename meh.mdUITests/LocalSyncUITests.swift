@@ -2,20 +2,25 @@ import XCTest
 
 /// Run these phases in order: publish on iPhone, receive/reply on iPad,
 /// then verify on the original iPhone. Use a fresh server data directory and
-/// disposable simulators, or override the workspace through the test runner.
+/// disposable simulators. The test runner sets the sync workspace.
 final class LocalSyncUITests: XCTestCase {
     private var app: XCUIApplication!
     private let first = "From iPhone: café 👋🏽 日本語\n"
     private let second = "From iPad: naïve 世界\n"
 
     override func setUpWithError() throws {
+        let workspace = ProcessInfo.processInfo
+            .environment["MEH_SYNC_TEST_WORKSPACE"]
+        try XCTSkipUnless(
+            workspace != nil,
+            "Needs the local sync server; run "
+                + "Tools/LocalSyncServer/run_simulator_checks.py"
+        )
         app = XCUIApplication()
         continueAfterFailure = false
         app.launchEnvironment["MEH_SYNC_TEST_TRANSPORT"] = "loopback"
         app.launchEnvironment["MEH_SYNC_URL"] = "http://127.0.0.1:8765"
-        app.launchEnvironment["MEH_SYNC_WORKSPACE"] =
-            ProcessInfo.processInfo.environment["MEH_SYNC_TEST_WORKSPACE"]
-            ?? "milestone2-ui"
+        app.launchEnvironment["MEH_SYNC_WORKSPACE"] = workspace
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
     }
 

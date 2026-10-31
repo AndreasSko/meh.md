@@ -27,10 +27,7 @@ final class NewNoteDestinationUITests: XCTestCase {
         let folderID = folderTitle.identifier.replacingOccurrences(
             of: "notebook-sidebar-title-", with: ""
         )
-        folderTitle.press(forDuration: 1.0)
-        let useForNewNotes = app.buttons["Use for New Notes"]
-        XCTAssertTrue(useForNewNotes.waitForExistence(timeout: 5))
-        useForNewNotes.tap()
+        app.chooseRowAction("Use for New Notes", on: folderTitle)
 
         app.buttons["notebook-new-item"].firstMatch.tap()
         let title = app.textFields["title-field"]
@@ -39,9 +36,7 @@ final class NewNoteDestinationUITests: XCTestCase {
         let noteName = title.value as? String ?? ""
         XCTAssertFalse(noteName.isEmpty)
         title.typeText("\n")
-        let back = app.navigationBars.buttons.firstMatch
-        XCTAssertTrue(back.waitForExistence(timeout: 5))
-        back.tap()
+        app.revealNotebookSidebar()
 
         let note = app.staticTexts.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@",
@@ -53,12 +48,12 @@ final class NewNoteDestinationUITests: XCTestCase {
         app.buttons["notebook-disclosure-" + folderID].tap()
         XCTAssertTrue(note.waitForExistence(timeout: 5))
 
-        folderTitle.press(forDuration: 1.0)
-        let useRoot = app.buttons["Use Root for New Notes"]
-        XCTAssertTrue(useRoot.waitForExistence(timeout: 5))
-        useRoot.tap()
-        folderTitle.press(forDuration: 1.0)
-        XCTAssertTrue(useForNewNotes.waitForExistence(timeout: 5))
+        app.chooseRowAction("Use Top Level for New Notes", on: folderTitle)
+        app.withoutIdleWait {
+            folderTitle.press(forDuration: 1.0)
+            XCTAssertTrue(app.buttons["Use for New Notes"]
+                .waitForExistence(timeout: 5))
+        }
     }
 }
 #endif

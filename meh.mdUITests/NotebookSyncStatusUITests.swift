@@ -5,7 +5,6 @@ final class NotebookSyncStatusUITests: XCTestCase {
         let app = makeSaveFixture(state: "waiting")
         app.launch()
         XCTAssertTrue(app.buttons["notebook-sync-details"].waitForExistence(timeout: 30))
-        capture(app, name: "After - neutral waiting toolbar")
         app.openSyncDetails()
         let status = app.staticTexts["note-sync-status"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))
@@ -16,7 +15,6 @@ final class NotebookSyncStatusUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts.containing(NSPredicate(
             format: "label CONTAINS[c] %@", "Save before syncing"
         )).firstMatch.exists)
-        capture(app, name: "After - waiting to sync")
         app.terminate()
     }
 
@@ -31,7 +29,6 @@ final class NotebookSyncStatusUITests: XCTestCase {
         // The fixture's retry cooldown shows a countdown until Try Again.
         XCTAssertTrue(app.staticTexts["sync-retry-countdown"].exists)
         XCTAssertFalse(app.buttons["sync-now"].exists)
-        capture(app, name: "After - actionable device storage warning")
         app.terminate()
     }
 
@@ -42,11 +39,13 @@ final class NotebookSyncStatusUITests: XCTestCase {
         let status = app.staticTexts["note-sync-status"]
         XCTAssertTrue(status.waitForExistence(timeout: 10))
         XCTAssertEqual(status.label, "Sync is still waiting")
-        XCTAssertTrue(app.staticTexts["sync-failure-explanation"].exists)
+        XCTAssertEqual(
+            app.staticTexts["sync-failure-explanation"].label,
+            "Sync will continue when changes are saved on this device."
+        )
         // The fixture's retry cooldown shows a countdown until Try Again.
         XCTAssertTrue(app.staticTexts["sync-retry-countdown"].exists)
         XCTAssertFalse(app.buttons["sync-now"].exists)
-        capture(app, name: "After - prolonged save wait")
         app.terminate()
     }
 

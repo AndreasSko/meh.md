@@ -12,13 +12,12 @@ final class NotebookBrowserScrollUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        let reuseWorkspace = ProcessInfo.processInfo.environment["MEH_FILES_UI_WORKSPACE"]
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = reuseWorkspace
-            ?? "files-return-\(UUID().uuidString)"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] =
+            "files-return-\(UUID().uuidString)"
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
 
-        for index in (reuseWorkspace == nil ? Array(1...16) : []) {
+        for index in 1...16 {
             let newNote = app.buttons["notebook-new-item"].firstMatch
             XCTAssertTrue(newNote.waitForExistence(timeout: 15))
             newNote.tap()
@@ -40,12 +39,22 @@ final class NotebookBrowserScrollUITests: XCTestCase {
         if files.value as? String == "Collapsed" { files.tap() }
         let list = app.collectionViews.firstMatch
         XCTAssertTrue(list.waitForExistence(timeout: 5))
-        list.swipeUp(velocity: .slow)
-        // Compare settled viewports after native deceleration finishes.
-        Thread.sleep(forTimeInterval: 1)
         let notes = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "notebook-sidebar-note-"
         ))
+        list.swipeUp(velocity: .slow)
+        waitForScrollToSettle(notes)
+        let last = app.staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@",
+            "notebook-sidebar-title-", "Moon Journal 16"
+        )).firstMatch
+        let newNote = app.buttons["notebook-new-item"].firstMatch
+        let searchField = app.searchFields.firstMatch
+        let controlsTop = searchField.exists
+            ? min(searchField.frame.minY, newNote.frame.minY) : newNote.frame.minY
+        XCTAssertTrue(last.isHittable)
+        XCTAssertLessThan(last.frame.maxY, controlsTop - 16,
+                          "Files must scroll the last row clear of the floating controls")
         let bottom = notes.allElementsBoundByIndex
             .filter { $0.isHittable && $0.frame.maxY < app.frame.maxY - 65 }
             .max { $0.frame.midY < $1.frame.midY }
@@ -53,13 +62,13 @@ final class NotebookBrowserScrollUITests: XCTestCase {
         let identifier = note.identifier
         let original = note.frame
         capture(app, name: "Files before opening bottom note")
-        for cycle in 0..<3 {
+        for usesEdgeSwipe in [false, true] {
             let target = app.descendants(matching: .any)[identifier]
             XCTAssertTrue(target.isHittable)
             target.tap()
             let editor = app.textViews["markdown-editor"]
             XCTAssertTrue(editor.waitForExistence(timeout: 10))
-            if cycle == 2 {
+            if usesEdgeSwipe {
                 edgeBack(in: app, completing: false)
                 let cancelled = XCTNSPredicateExpectation(
                     predicate: NSPredicate(format: "hittable == true"), object: editor
@@ -75,9 +84,9 @@ final class NotebookBrowserScrollUITests: XCTestCase {
             XCTAssertTrue(files.waitForExistence(timeout: 10))
             let returned = app.descendants(matching: .any)[identifier]
             XCTAssertTrue(returned.waitForExistence(timeout: 10))
-            capture(app, name: cycle == 0
-                    ? "Files after returning from bottom note"
-                    : "Files after return cycle \(cycle + 1)")
+            capture(app, name: usesEdgeSwipe
+                    ? "Files after returning with an edge swipe"
+                    : "Files after returning with Back")
             XCTAssertEqual(
                 returned.frame.minY, original.minY, accuracy: 2,
                 "Returning should preserve the Files list viewport"
@@ -92,7 +101,7 @@ final class NotebookBrowserScrollUITests: XCTestCase {
             notes.allElementsBoundByIndex.first { $0.isHittable }
         ).identifier
         list.swipeDown(velocity: .slow)
-        Thread.sleep(forTimeInterval: 1)
+        waitForScrollToSettle(notes)
         let firstAfterPan = try XCTUnwrap(
             notes.allElementsBoundByIndex.first { $0.isHittable }
         ).identifier
@@ -100,6 +109,22 @@ final class NotebookBrowserScrollUITests: XCTestCase {
             firstAfterPan, firstBeforePan,
             "A new pan must move Files instead of restoring the old viewport"
         )
+    }
+
+    /// XCTest can finish a swipe while the list still decelerates. Rows are
+    /// settled once their frames match between two polls.
+    private func waitForScrollToSettle(_ rows: XCUIElementQuery) {
+        var previous: [CGRect] = []
+        let settled = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                let frames = rows.allElementsBoundByIndex.map { $0.frame }
+                defer { previous = frames }
+                return !frames.isEmpty && frames == previous
+            },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed,
+                       "Expected Files to stop scrolling")
     }
 
     private func edgeBack(in app: XCUIApplication, completing: Bool) {

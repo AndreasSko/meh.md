@@ -1,6 +1,16 @@
 import XCTest
 
 extension XCUIApplication {
+    /// The New Note button. On the Mac it is a pop-up button whose inner
+    /// button creates the note, as a tap on iPhone and iPad does.
+    var newNoteButton: XCUIElement {
+#if os(macOS)
+        descendants(matching: .any)["notebook-new-item"].buttons.firstMatch
+#else
+        buttons["notebook-new-item"].firstMatch
+#endif
+    }
+
     func openSyncDetails(timeout: TimeInterval = 15) {
 #if os(iOS)
         revealNotebookSidebar(timeout: timeout)
@@ -11,7 +21,7 @@ extension XCUIApplication {
             "Expected the notebook sync details button"
         )
         let files = buttons["notebook-tree-toggle"]
-        let newNote = buttons["notebook-new-item"].firstMatch
+        let newNote = newNoteButton
         XCTAssertTrue(newNote.waitForExistence(timeout: timeout))
 #if os(iOS)
         XCTAssertTrue(
@@ -201,7 +211,7 @@ extension XCUIApplication {
         if other.exists {
             activate(other)
         } else {
-            let newNote = buttons["notebook-new-item"].firstMatch
+            let newNote = newNoteButton
             XCTAssertTrue(newNote.waitForExistence(timeout: timeout))
             activate(newNote)
             let titleField = textFields["title-field"]
@@ -234,7 +244,7 @@ extension XCUIApplication {
         let editor = textViews["markdown-editor"]
         if editor.waitForExistence(timeout: 1) { return editor }
 
-        let sidebar = buttons["notebook-new-item"]
+        let sidebar = newNoteButton
         XCTAssertTrue(
             sidebar.waitForExistence(timeout: timeout),
             "Expected the notebook sidebar to finish loading"
@@ -429,6 +439,27 @@ extension XCUIApplication {
             unsafeBitCast(method(for: selector), to: Perform.self)(
                 self, selector, skipPreAndPostEventWaits, body
             )
+        }
+    }
+
+    /// Long-presses a sidebar row and taps one of its menu actions without
+    /// XCTest's idle waits, which stall while the row menu is open.
+    func chooseRowAction(
+        _ label: String, on row: XCUIElement, at verticalOffset: CGFloat = 0.5,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        withoutIdleWait {
+            row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: verticalOffset))
+                .press(forDuration: 1)
+            // The toolbar New Note button shares the "New Note" label.
+            let action = buttons.matching(NSPredicate(
+                format: "label == %@ AND identifier != %@",
+                label, "notebook-new-item"
+            )).firstMatch
+            guard action.waitForExistence(timeout: 5) else {
+                return XCTFail("Row action \(label) missing", file: file, line: line)
+            }
+            action.tap()
         }
     }
 }

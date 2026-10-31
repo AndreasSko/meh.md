@@ -225,7 +225,6 @@ extension NotebookSceneState {
         if isCompact {
             if column == .detail {
                 browserReturnViewport = browserViewport
-                browserToolbarWasHidden = false
             } else if column == .sidebar {
                 restoreBrowserViewportIfReady()
             }
@@ -257,7 +256,6 @@ extension NotebookSceneState {
 
     func browserScrollBegan() {
         browserReturnViewport = nil
-        browserToolbarWasHidden = false
     }
 
     private func restoreBrowserViewportIfReady() {
@@ -266,20 +264,24 @@ extension NotebookSceneState {
             browserReturnViewport = nil
             return
         }
-        if viewport.bottomInset < saved.bottomInset - 0.5 {
-            browserToolbarWasHidden = true
-            return
-        }
-        guard browserToolbarWasHidden, preferredCompactColumn == .sidebar,
+        guard preferredCompactColumn == .sidebar,
               viewport.bottomInset >= saved.bottomInset - 0.5,
-              abs(viewport.offset - saved.offset) > 0.5,
               let scrollView = browserScrollView.value else { return }
-        // Hiding the bottom toolbar can clamp an offscreen list's offset.
-        // Restore only once its search toolbar has returned to the safe area.
+        // The list may have become shorter while the note was open.
+        let maxOffset = max(
+            -scrollView.adjustedContentInset.top,
+            scrollView.contentSize.height + scrollView.adjustedContentInset.bottom
+                - scrollView.bounds.height
+        )
+        let offset = min(saved.offset, maxOffset)
+        guard abs(viewport.offset - offset) > 0.5 else { return }
+        // An open note can clamp the offscreen list's offset, also without
+        // hiding the bottom toolbar first. Restore only once its search
+        // toolbar has returned to the safe area.
         // Keep the snapshot through cancelled swipe-back transitions until
-        // the next browser pan or note opening establishes a new position.
+        // the list scrolls again or a note opening establishes a new position.
         scrollView.setContentOffset(
-            CGPoint(x: scrollView.contentOffset.x, y: saved.offset), animated: false
+            CGPoint(x: scrollView.contentOffset.x, y: offset), animated: false
         )
     }
     #endif

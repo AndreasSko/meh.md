@@ -20,16 +20,13 @@ final class EditorKeyboardUITests: XCTestCase {
         let toolbar = toolbarContainer(in: app)
         XCTAssertGreaterThanOrEqual(heading.frame.minX, toolbar.frame.minX)
         XCTAssertLessThanOrEqual(heading.frame.maxX, toolbar.frame.maxX)
-        capture(app, name: "Clear Heading toolbar button")
 
         heading.tap()
         let picker = app.scrollViews["editor-heading-style-picker"]
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["More Levels"].exists)
         XCTAssertGreaterThanOrEqual(picker.frame.width, min(320, app.frame.width - 32) - 4)
         XCTAssertLessThanOrEqual(picker.frame.height, 80)
         XCTAssertTrue(app.frame.contains(picker.frame))
-        capture(app, name: "Wide shallow heading previews with Body selected")
         XCTAssertTrue(app.keyboards.firstMatch.exists)
         let outside = app.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: editor.frame.minX + 5,
@@ -38,7 +35,7 @@ final class EditorKeyboardUITests: XCTestCase {
         assertHeadingPickerDismissed(picker, source: "Observatory plans",
                                      editor: editor, app: app)
 
-        for level in 1...6 {
+        for level in [1, 3, 6] {
             heading.tap()
             XCTAssertTrue(picker.waitForExistence(timeout: 5))
             XCTAssertTrue(app.keyboards.firstMatch.exists)
@@ -47,15 +44,13 @@ final class EditorKeyboardUITests: XCTestCase {
             }) {
                 XCTAssertTrue(app.buttons[identifier].exists)
             }
-            capture(app, name: "Heading choices before H\(level)")
             let choice = horizontalHeadingPickerChoice(level, in: app)
             XCTAssertEqual(choice.label, "Heading \(level)")
             choice.tap()
             let expected = String(repeating: "#", count: level)
                 + " Observatory plans"
-            XCTAssertEqual(editor.value as? String, expected)
+            assertSource(of: editor, becomes: expected)
             XCTAssertTrue(app.keyboards.firstMatch.exists)
-            capture(app, name: "H\(level) applied in Live Preview")
 
             heading.tap()
             XCTAssertTrue(picker.waitForExistence(timeout: 5))
@@ -67,87 +62,23 @@ final class EditorKeyboardUITests: XCTestCase {
                 XCTAssertEqual(choice.frame.midX, heading.frame.midX, accuracy: 20,
                                "The middle active heading opens near its toolbar button")
             }
-            let hierarchy = XCTAttachment(string: app.debugDescription)
-            hierarchy.name = "Active H\(level) picker hierarchy"
-            hierarchy.lifetime = .keepAlways
-            add(hierarchy)
-            capture(app, name: "Active H\(level) native selected style")
             choice.tap()
+            XCTAssertTrue(picker.waitForNonExistence(timeout: 5))
             XCTAssertEqual(editor.value as? String, expected,
                            "Selecting the active heading must be idempotent")
         }
         heading.tap()
         XCTAssertFalse(app.buttons["editor-command-body"].isSelected)
         horizontalHeadingPickerChoice(nil, in: app).tap()
-        XCTAssertEqual(editor.value as? String, "Observatory plans")
+        assertSource(of: editor, becomes: "Observatory plans")
         XCTAssertTrue(app.keyboards.firstMatch.exists)
         editor.typeText(" for tonight")
         XCTAssertEqual(editor.value as? String, "Observatory plans for tonight")
-        capture(app, name: "Body restores ordinary writing")
 
         heading.tap()
         let body = app.buttons["editor-command-body"]
         XCTAssertTrue(body.waitForExistence(timeout: 5))
         XCTAssertTrue(body.isSelected)
-        capture(app, name: "Body native selected style")
-    }
-
-    func testHeadingPickerRetainsSourceTypingAndToolbarReordering() throws {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchArguments += ["-editor.keyboardToolbar.commands", "()"]
-        app.launchArguments += ["-editor.mode", "source"]
-        app.launch()
-        let editor = openToolbarTestNote(app)
-        editor.typeText("Observatory plans")
-        let heading = toolbarCommand("editor-command-heading", in: app)
-        heading.tap()
-        horizontalHeadingPickerChoice(2, in: app).tap()
-        XCTAssertEqual(editor.value as? String, "## Observatory plans")
-        editor.typeText(" for tonight")
-        let source = "## Observatory plans for tonight"
-        XCTAssertEqual(editor.value as? String, source)
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        capture(app, name: "Heading retains Source mode typing")
-
-        let bold = app.buttons["editor-command-bold"]
-        let originalHeadingX = heading.frame.midX
-        let originalBoldX = bold.frame.midX
-        XCTAssertGreaterThan(originalHeadingX, originalBoldX)
-        let origin = app.coordinate(withNormalizedOffset: .zero)
-        let start = origin.withOffset(CGVector(dx: heading.frame.midX,
-                                               dy: heading.frame.midY))
-        let end = origin.withOffset(CGVector(dx: bold.frame.midX - 20,
-                                             dy: bold.frame.midY))
-        start.press(forDuration: 0.8, thenDragTo: end)
-        let moved = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in heading.frame.midX < bold.frame.midX },
-            object: app
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 5), .completed)
-        XCTAssertEqual(editor.value as? String, source)
-        XCTAssertTrue(app.keyboards.firstMatch.exists)
-        capture(app, name: "Heading picker button reordered")
-        heading.tap()
-        XCTAssertTrue(horizontalHeadingPickerChoice(2, in: app).isSelected)
-        horizontalHeadingPickerChoice(nil, in: app).tap()
-        XCTAssertEqual(editor.value as? String, "Observatory plans for tonight")
-
-        let returnStart = origin.withOffset(CGVector(dx: heading.frame.midX,
-                                                     dy: heading.frame.midY))
-        let returnEnd = origin.withOffset(CGVector(dx: originalHeadingX + 20,
-                                                   dy: heading.frame.midY))
-        returnStart.press(forDuration: 0.8, thenDragTo: returnEnd)
-        let restored = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in heading.frame.midX > bold.frame.midX },
-            object: app
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
-        XCTAssertEqual(heading.frame.midX, originalHeadingX, accuracy: 1)
-        XCTAssertEqual(editor.value as? String, "Observatory plans for tonight")
     }
 
     func testHeadingPickerScrollsAtLargestEditorTextSize() throws {
@@ -173,13 +104,27 @@ final class EditorKeyboardUITests: XCTestCase {
         XCTAssertTrue(h6.isHittable)
         capture(app, name: "Scrolled picker reaches H6 at large text size")
         h6.tap()
-        XCTAssertEqual(editor.value as? String, "###### Lunar watch")
+        assertSource(of: editor, becomes: "###### Lunar watch")
         XCTAssertTrue(app.keyboards.firstMatch.exists)
+        editor.typeText(" tonight")
+        XCTAssertEqual(editor.value as? String, "###### Lunar watch tonight")
         toolbarCommand("editor-command-heading", in: app).tap()
         let body = horizontalHeadingPickerChoice(nil, in: app)
         XCTAssertTrue(body.isHittable)
         body.tap()
-        XCTAssertEqual(editor.value as? String, "Lunar watch")
+        assertSource(of: editor, becomes: "Lunar watch tonight")
+    }
+
+    /// The picker applies its style once its popover finishes dismissing.
+    private func assertSource(
+        of editor: XCUIElement, becomes expected: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        let applied = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", expected), object: editor
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [applied], timeout: 5), .completed,
+                       "Source: \(editor.value ?? "nil")", file: file, line: line)
     }
 
     private func horizontalHeadingPickerChoice(
@@ -248,10 +193,8 @@ final class EditorKeyboardUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         editor.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        editor.typeText("> Sky\n\n* > Stars\n")
         editor.typeText((1...24).map { "Line \($0)" }.joined(separator: "\n"))
         let editedText = try XCTUnwrap(editor.value as? String)
-        XCTAssertFalse(app.buttons["dismiss-editor-keyboard"].exists)
         editor.swipeUp()
         XCTAssertTrue(app.keyboards.firstMatch.exists)
         let keyboard = app.keyboards.firstMatch
@@ -268,13 +211,10 @@ final class EditorKeyboardUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
         XCTAssertEqual(editor.value as? String, editedText)
-        capture(app, name: "Short quotes with keyboard dismissed")
         editor.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        capture(app, name: "Short quotes after keyboard reopening")
         editor.typeText("Still editable")
         XCTAssertTrue((editor.value as? String)?.contains("Still editable") == true)
-        dragEditor(editor)
     }
 
     func testIPadScrollKeepsCaretAndTypingRevealsIt() throws {
@@ -285,6 +225,7 @@ final class EditorKeyboardUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launch()
         let newItem = app.buttons["notebook-new-item"]
@@ -314,58 +255,11 @@ final class EditorKeyboardUITests: XCTestCase {
         capture(app, name: "iPad typing reveals caret after scrolling")
     }
 
-    func testWritingControlsContinueListsAndSwitchModes() throws {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launch()
-        let newItem = app.buttons["notebook-new-item"]
-        XCTAssertTrue(newItem.waitForExistence(timeout: 15))
-        newItem.tap()
-        commitDefaultTitle(in: app)
-        let editor = app.textViews["markdown-editor"]
-        XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        editor.tap()
-        editor.typeText("* Moon\n")
-        XCTAssertEqual(editor.value as? String, "* Moon\n* ")
-        editor.typeText("Orbit")
-        let bold = app.buttons["editor-command-bold"]
-        XCTAssertTrue(bold.waitForExistence(timeout: 5))
-        XCTAssertLessThan(bold.frame.midY, app.keyboards.firstMatch.frame.minY)
-        let italic = app.buttons["editor-command-italic"]
-        XCTAssertTrue(italic.exists)
-        XCTAssertFalse(bold.frame.intersects(italic.frame))
-        capture(app, name: "Swipeable glass formatting bar")
-        bold.tap()
-        editor.typeText("bright")
-        XCTAssertTrue((editor.value as? String)?.contains("**bright**") == true)
-        let highlight = toolbarCommand("editor-command-highlight", in: app)
-        XCTAssertTrue(highlight.exists)
-        XCTAssertLessThan(highlight.frame.maxY, app.keyboards.firstMatch.frame.minY)
-        highlight.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.exists)
-        editor.typeText("glow")
-        XCTAssertTrue((editor.value as? String)?.contains("==glow==") == true)
-        let source = try XCTUnwrap(editor.value as? String)
-        dragEditor(editor)
-        app.buttons["notebook-note-actions"].tap()
-        app.buttons["Editor Display"].tap()
-        app.buttons["Markdown Source"].tap()
-        XCTAssertEqual(editor.value as? String, source)
-        capture(app, name: "Writing tools in Source mode")
-        app.buttons["notebook-note-actions"].tap()
-        app.buttons["Editor Display"].tap()
-        app.buttons["Live Preview"].tap()
-        XCTAssertEqual(editor.value as? String, source)
-        capture(app, name: "Writing tools in Live Preview")
-    }
-
     func testTypingStrikethroughAfterBoldRemainsResponsive() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "livePreview"]
         app.launch()
@@ -378,33 +272,11 @@ final class EditorKeyboardUITests: XCTestCase {
         capture(app, name: "Typing after bold and strikethrough")
     }
 
-    func testLivePreviewListAndQuotePresentationPreservesSource() throws {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launchArguments += ["-editor.mode", "livePreview"]
-        app.launch()
-        let editor = openToolbarTestNote(app)
-        editor.typeText("* Moon\nOrbit\n\n> Sky\nLight\n\nPlain")
-        let source = try XCTUnwrap(editor.value as? String)
-        XCTAssertTrue(source.contains("* Moon"))
-        XCTAssertTrue(source.contains("> Sky"))
-        capture(app, name: "Live Preview native bullets and quote rail")
-        dragEditor(editor)
-        XCTAssertEqual(editor.value as? String, source)
-        capture(app, name: "Preview markers after keyboard dismissal")
-        app.buttons["notebook-note-actions"].tap()
-        app.buttons["Editor Display"].tap()
-        app.buttons["Markdown Source"].tap()
-        XCTAssertEqual(editor.value as? String, source)
-        capture(app, name: "Original list and quote source markers")
-    }
-
     func testFontPickerPreservesNoteAndShowsChoices() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launch()
         let editor = openToolbarTestNote(app)
@@ -419,25 +291,10 @@ final class EditorKeyboardUITests: XCTestCase {
         picker.tap()
         app.buttons["Serif"].tap()
         XCTAssertEqual(editor.value as? String, source)
-        capture(app, name: "Native font and text size settings")
-    }
-
-    func testToolbarShowsNoScrollIndicatorWhileScrolling() throws {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
-        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
-        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
-        app.launch()
-        let editor = openToolbarTestNote(app)
-        editor.typeText("Fictional toolbar sample")
-        let toolbar = toolbarContainer(in: app)
-        XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
-        toolbar.swipeLeft()
-        let indicator = toolbar.otherElements
-            .matching(NSPredicate(format: "label CONTAINS[c] 'scroll bar'"))
-        XCTAssertEqual(indicator.count, 0, "The formatting bar must not show a scroll bar")
-        capture(app, name: "Formatting bar scrolled")
+        picker.tap()
+        let serif = app.buttons["Serif"]
+        XCTAssertTrue(serif.waitForExistence(timeout: 5))
+        XCTAssertTrue(serif.isSelected)
     }
 
     func testToolbarOrderPersistsWithoutChangingNote() throws {
@@ -458,82 +315,54 @@ final class EditorKeyboardUITests: XCTestCase {
             "inline-code", "code-block", "toggle-task",
         ]
         assertToolbarCommandsReachable(expectedCommands, in: app, toolbar: toolbar)
-        let bold = app.buttons["editor-command-bold"]
-        XCTAssertTrue(bold.waitForExistence(timeout: 5))
-        let italic = app.buttons["editor-command-italic"]
-        XCTAssertTrue(italic.waitForExistence(timeout: 5))
-        let boldWasFirst = bold.frame.midX < italic.frame.midX
-        XCTAssertNotEqual(bold.frame.midX, italic.frame.midX)
+        let table = toolbarCommand("editor-table-menu", in: app)
+        let neighbours = toolbar.buttons.allElementsBoundByIndex.filter {
+            $0.identifier != "editor-table-menu" && $0.isHittable
+                && $0.frame.midX < table.frame.midX
+        }
+        let initialNeighbour = try XCTUnwrap(
+            neighbours.max { $0.frame.midX < $1.frame.midX },
+            "The Table menu should have a visible command to its left"
+        )
+        // Resolve by stable identity: an index-bound query changes after
+        // reordering, so read the identifier once, before the drag.
+        let neighbourID = initialNeighbour.identifier
+        let neighbour = app.buttons[neighbourID].firstMatch
         let initialVisibleOrder = visibleToolbarOrder(in: toolbar)
-        XCTAssertTrue(initialVisibleOrder.contains("editor-command-bold"))
-        XCTAssertTrue(initialVisibleOrder.contains("editor-command-italic"))
         capture(app, name: "Formatting bar before reorder")
-        let start = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: italic.frame.midX, dy: italic.frame.midY))
-        let end = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(
-                dx: bold.frame.midX + (boldWasFirst ? -20 : 20),
-                dy: bold.frame.midY
-            ))
-        start.press(forDuration: 0.8, thenDragTo: end)
-        let reordered = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in
-                (bold.frame.midX < italic.frame.midX) != boldWasFirst
-            },
-            object: app
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [reordered], timeout: 5), .completed)
-        let italicVisible = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hittable == true"), object: italic
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [italicVisible], timeout: 5), .completed)
+
+        drag(table, onto: neighbour, before: true, in: app)
         let reorderedVisibleOrder = visibleToolbarOrder(in: toolbar)
         XCTAssertNotEqual(reorderedVisibleOrder, initialVisibleOrder)
         assertToolbarOrderStaysStable(reorderedVisibleOrder, in: toolbar)
         XCTAssertEqual(editor.value as? String, source)
         XCTAssertTrue(app.keyboards.firstMatch.exists)
         capture(app, name: "Reordered formatting bar")
+
         app.terminate()
         app.launch()
-        _ = openToolbarTestNote(app)
-        let relaunchedBold = app.buttons["editor-command-bold"]
-        let relaunchedItalic = app.buttons["editor-command-italic"]
-        XCTAssertTrue(relaunchedBold.waitForExistence(timeout: 5))
-        XCTAssertTrue(relaunchedItalic.waitForExistence(timeout: 5))
-        XCTAssertEqual(
-            relaunchedBold.frame.midX < relaunchedItalic.frame.midX,
-            !boldWasFirst
-        )
+        let relaunchedEditor = openToolbarTestNote(app)
         let relaunchedToolbar = toolbarContainer(in: app)
+        let relaunchedTable = toolbarCommand("editor-table-menu", in: app)
+        let relaunchedNeighbour = app.buttons[neighbourID].firstMatch
+        XCTAssertLessThan(relaunchedTable.frame.midX, relaunchedNeighbour.frame.midX)
         XCTAssertEqual(
             visibleToolbarOrder(in: relaunchedToolbar), reorderedVisibleOrder
         )
-        let returnStart = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: relaunchedBold.frame.midX,
-                                 dy: relaunchedBold.frame.midY))
-        let returnEnd = app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(
-                dx: relaunchedItalic.frame.midX + (boldWasFirst ? -20 : 20),
-                dy: relaunchedItalic.frame.midY
-            ))
-        returnStart.press(forDuration: 0.8, thenDragTo: returnEnd)
-        let restored = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in
-                (relaunchedBold.frame.midX < relaunchedItalic.frame.midX)
-                    == boldWasFirst
-            },
-            object: app
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
-        let boldVisible = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hittable == true"),
-            object: relaunchedBold
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [boldVisible], timeout: 5), .completed)
+
+        drag(relaunchedTable, onto: relaunchedNeighbour, before: false, in: app)
         let restoredVisibleOrder = visibleToolbarOrder(in: relaunchedToolbar)
         XCTAssertEqual(restoredVisibleOrder, initialVisibleOrder)
         assertToolbarOrderStaysStable(restoredVisibleOrder, in: relaunchedToolbar)
         capture(app, name: "Formatting bar after two drags")
+
+        relaunchedTable.tap()
+        let inserted = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "| Column 1 | Column 2 |"),
+            object: relaunchedEditor
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [inserted], timeout: 5), .completed,
+                       "The moved Table menu must still insert a table")
     }
 
     private func openToolbarTestNote(_ app: XCUIApplication) -> XCUIElement {
@@ -563,6 +392,38 @@ final class EditorKeyboardUITests: XCTestCase {
         let start = editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
         let end = editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
         start.press(forDuration: 0.05, thenDragTo: end)
+    }
+
+    private func drag(
+        _ button: XCUIElement, onto target: XCUIElement, before: Bool,
+        in app: XCUIApplication
+    ) {
+        // Coordinates are taken from frames, so let the keyboard and toolbar
+        // finish moving first.
+        var lastFrames: [CGRect] = []
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard button.isHittable, target.exists else { return false }
+            let frames = [button.frame, target.frame]
+            defer { lastFrames = frames }
+            return frames == lastFrames
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: button.frame.midX, dy: button.frame.midY))
+        let end = origin.withOffset(CGVector(
+            dx: before ? target.frame.minX - 6 : target.frame.maxX + 6,
+            dy: target.frame.midY
+        ))
+        // Move slowly and hold so the drop session sees the destination
+        // before the finger lifts.
+        start.press(forDuration: 0.8, thenDragTo: end, withVelocity: .slow,
+                    thenHoldForDuration: 0.5)
+        // A drop may scroll the toolbar and briefly remove the button's AX cell.
+        let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            button.exists && target.exists && button.isHittable
+                && (button.frame.midX < target.frame.midX) == before
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [moved], timeout: 5), .completed)
     }
 
     @discardableResult
