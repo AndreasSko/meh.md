@@ -105,7 +105,8 @@ struct NotebookOfflineJoinStorage {
         catch CocoaError.fileReadNoSuchFile { return nil }
         let binding = try JSONDecoder().decode(Binding.self, from: data)
         let state = try JSONDecoder().decode(NotebookSyncState.self, from:
-            Data(contentsOf: directory.appending(path: "notebook-sync-state.json")))
+            Data(contentsOf: directory.appending(
+                path: NotebookSyncState.fileName(forScope: binding.scope))))
         guard binding.version == 1, !binding.catalogHeads.isEmpty,
               binding.localNotebookID != binding.notebookID,
               state.version == 2, state.scope == binding.scope,
@@ -141,7 +142,10 @@ struct NotebookOfflineJoinStorage {
     /// A crashed join must never reopen a catalog against another account.
     func validateBinding(for transition: NotebookOfflineJoinReceipt.Transition) throws {
         let data: Data
-        do { data = try Data(contentsOf: directory.appending(path: "notebook-sync-state.json")) }
+        do {
+            data = try Data(contentsOf: directory.appending(
+                path: NotebookSyncState.fileName(forScope: transition.scope)))
+        }
         catch CocoaError.fileReadNoSuchFile { return }
         let state = try JSONDecoder().decode(NotebookSyncState.self, from: data)
         guard state.version == 2 else { throw SyncError.invalidRecord }

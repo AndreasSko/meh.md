@@ -11,6 +11,22 @@ struct NotebookSyncState: Codable {
     var deletedIDs: Set<UUID> = []
 }
 
+extension NotebookSyncState {
+    /// S3 keeps its own progress next to iCloud's, so a notebook can move
+    /// between them or sync with both without losing either binding.
+    static func fileName(forScope scope: String) -> String {
+        isS3(scope) ? "notebook-sync-state-s3.json" : "notebook-sync-state.json"
+    }
+
+    static func proposalFileName(forScope scope: String) -> String {
+        isS3(scope) ? "notebook-proposal-s3.json" : "notebook-proposal.json"
+    }
+
+    static let fileNames = ["notebook-sync-state.json", "notebook-sync-state-s3.json"]
+
+    private static func isS3(_ scope: String) -> Bool { scope.hasPrefix("s3://") }
+}
+
 /// Finite whole-notebook exchanges. Cloud scheduling can invoke this same
 /// coordinator later; cursor progress always follows durable document writes.
 @MainActor
@@ -46,8 +62,10 @@ public final class NotebookSyncCoordinator {
         self.replica = replica
         self.transport = transport
         self.diagnosticLog = diagnosticLog
-        stateURL = replica.directory.appending(path: "notebook-sync-state.json")
-        proposalURL = replica.directory.appending(path: "notebook-proposal.json")
+        stateURL = replica.directory.appending(
+            path: NotebookSyncState.fileName(forScope: transport.scope))
+        proposalURL = replica.directory.appending(
+            path: NotebookSyncState.proposalFileName(forScope: transport.scope))
     }
 
     /// A local catalog is remotely joined only after its canonical V2 seed
@@ -60,8 +78,12 @@ public final class NotebookSyncCoordinator {
 
     /// Reads an existing local binding without account discovery or network work.
     /// A provisional state without an accepted notebook has no bound scope.
-    public static func boundScope(for replica: NotebookReplica) throws -> String? {
-        let url = replica.directory.appending(path: "notebook-sync-state.json")
+    /// `likeScope` picks the backend whose binding to read; iCloud by default.
+    public static func boundScope(
+        for replica: NotebookReplica, likeScope: String = ""
+    ) throws -> String? {
+        let url = replica.directory.appending(
+            path: NotebookSyncState.fileName(forScope: likeScope))
         let state: NotebookSyncState
         do {
             state = try JSONDecoder().decode(
@@ -232,6 +254,12 @@ public final class NotebookSyncCoordinator {
             let notebookID = seed.notebookID
         else { throw SyncError.invalidRecord }
         if let expected = state.notebookID, expected != notebookID {
+            throw SyncError.identityConflict
+        }
+        // A notebook joined elsewhere, such as in iCloud, cannot take over
+        // another notebook's storage. Fail before changing anything.
+        if state.notebookID == nil, let current = replica.catalogSnapshot,
+           current.notebookID != notebookID, try !replica.mayJoinAnotherNotebook() {
             throw SyncError.identityConflict
         }
         // Acceptance validates the record or reuses an exact, durable match.
@@ -631,7 +659,7 @@ public final class NotebookSyncCoordinator {
     /// Remove a single-note body left in the proposal by an older build,
     /// e.g. after permanent deletion, even when cloud setup is unavailable.
     static func removeLegacyProposalBody(in directory: URL) throws {
-        let url = directory.appending(path: "notebook-proposal.json")
+        let url = directory.appending(path: NotebookSyncState.proposalFileName(forScope: ""))
         let data: Data
         do { data = try Data(contentsOf: url) }
         catch CocoaError.fileReadNoSuchFile { return }
