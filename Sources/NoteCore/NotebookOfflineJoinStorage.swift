@@ -6,11 +6,11 @@ enum NotebookOfflineJoinError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidReceipt:
-            "The saved iCloud connection record is damaged. Your local notes were left untouched."
+            "The saved sync connection record is damaged. Your local notes were left untouched."
         case .catalogChanged:
-            "The notebook changed while connecting to iCloud. Your local notes were left untouched."
+            "The notebook changed while connecting to sync. Your local notes were left untouched."
         case .needsRestart:
-            "Restart meh.md to finish connecting this notebook to iCloud. Saved notes stay on this device."
+            "Restart meh.md to finish connecting this notebook to sync. Saved notes stay on this device."
         }
     }
 }
@@ -41,9 +41,23 @@ struct NotebookOfflineJoinReceipt: Codable {
         let deletedIDs: Set<UUID>
     }
 
+    /// What the user chose for a notebook that already synced elsewhere.
+    /// Without one, the receipt belongs to a fresh offline-first notebook.
+    struct Choice: Codable, Equatable {
+        enum Kind: String, Codable { case combine, replace }
+        let kind: Kind
+        /// Only this storage may receive the other notebook.
+        let scope: String
+        /// Combining puts this device's top-level items in this folder.
+        let folderName: String
+        /// The stored notebook the user saw; nil applies to any.
+        var notebookID: UUID?
+    }
+
     var version = 1
     let initial: SyncRecord
     var transition: Transition?
+    var choice: Choice?
 
     func validate() throws {
         guard version == 1, initial.kind == .catalog,
@@ -55,7 +69,15 @@ struct NotebookOfflineJoinReceipt: Codable {
             throw NotebookOfflineJoinError.invalidReceipt
         }
         let initialCatalog = try NotebookCatalogDocument(snapshot: initialSnapshot)
-        guard try initialCatalog.items().isEmpty else {
+        if let choice {
+            guard !choice.scope.isEmpty else { throw NotebookOfflineJoinError.invalidReceipt }
+            if choice.kind == .combine { try NotebookName.validate(choice.folderName) }
+        } else {
+            guard try initialCatalog.items().isEmpty else {
+                throw NotebookOfflineJoinError.invalidReceipt
+            }
+        }
+        if let transition, let choice, transition.scope != choice.scope {
             throw NotebookOfflineJoinError.invalidReceipt
         }
         if let transition {
@@ -104,13 +126,19 @@ struct NotebookOfflineJoinStorage {
         do { data = try Data(contentsOf: bindingURL) }
         catch CocoaError.fileReadNoSuchFile { return nil }
         let binding = try JSONDecoder().decode(Binding.self, from: data)
-        let state = try JSONDecoder().decode(NotebookSyncState.self, from:
-            Data(contentsOf: directory.appending(path: "notebook-sync-state.json")))
+        let stateData: Data
+        do {
+            stateData = try Data(contentsOf: directory.appending(
+                path: NotebookSyncState.fileName(forScope: binding.scope)))
+        } catch CocoaError.fileReadNoSuchFile { return nil }
+        let state = try JSONDecoder().decode(NotebookSyncState.self, from: stateData)
+        // A later switch or combine can replace that storage's binding. The
+        // old local identity then no longer describes this catalog.
+        guard state.notebookID == binding.notebookID,
+              snapshot.notebookID == binding.notebookID else { return nil }
         guard binding.version == 1, !binding.catalogHeads.isEmpty,
               binding.localNotebookID != binding.notebookID,
               state.version == 2, state.scope == binding.scope,
-              state.notebookID == binding.notebookID,
-              snapshot.notebookID == binding.notebookID,
               binding.catalogHeads.isSubset(of: historyHeads()) else {
             throw NotebookOfflineJoinError.invalidReceipt
         }
@@ -141,7 +169,10 @@ struct NotebookOfflineJoinStorage {
     /// A crashed join must never reopen a catalog against another account.
     func validateBinding(for transition: NotebookOfflineJoinReceipt.Transition) throws {
         let data: Data
-        do { data = try Data(contentsOf: directory.appending(path: "notebook-sync-state.json")) }
+        do {
+            data = try Data(contentsOf: directory.appending(
+                path: NotebookSyncState.fileName(forScope: transition.scope)))
+        }
         catch CocoaError.fileReadNoSuchFile { return }
         let state = try JSONDecoder().decode(NotebookSyncState.self, from: data)
         guard state.version == 2 else { throw SyncError.invalidRecord }

@@ -56,7 +56,7 @@ final class SyncFailurePresentationTests: XCTestCase {
         XCTAssertEqual(String(localized: presentation.title), "Update required")
         XCTAssertEqual(
             String(localized: presentation.message),
-            "Update meh.md to resume iCloud sync. You can keep editing your notes on this device."
+            "Update meh.md to resume sync. You can keep editing your notes on this device."
         )
         XCTAssertEqual(presentation.retryDisposition, .unavailable)
         XCTAssertNil(presentation.actionHint)

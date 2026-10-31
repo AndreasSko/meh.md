@@ -1,9 +1,9 @@
 # Sync backends
 
-iCloud is the only production sync backend today. We want to be able to add
-others later, such as a self-hosted S3 or WebDAV server, without changing how
-notes are merged or how the app schedules sync. This page describes what a
-backend has to provide and where it plugs in.
+iCloud is the default sync backend, and [S3](s3-sync.md) is a beta. We want
+to be able to add others, such as WebDAV, without changing how notes are
+merged or how the app schedules sync. This page describes what a backend has
+to provide and where it plugs in.
 
 ## What a backend stores
 
@@ -51,38 +51,48 @@ Shared sync code does not know any backend's error types. A backend that
 throws its own errors adds a `SyncBackendErrors` type and registers it in
 `SyncBackends.errors`. It answers, for errors it recognizes, with a stable
 event log code, whether to retry, a plain-language explanation, and which
-document is too large to upload. `CloudKitSyncErrors` is the example.
-Network errors from `URLSession` and shared `SyncError` values are already
-handled.
+document is too large to upload. `CloudKitSyncErrors` and `S3SyncErrors` are
+examples. Network errors from `URLSession` and shared `SyncError` values are
+already handled.
 
 A test fails if a NoteCore file outside the CloudKit backend imports
 CloudKit, so shared code stays usable by every backend.
 
 ## Choosing a backend in the app
 
-`NotebookWorkspace.Mode` selects the backend, and `prepareNotebookTransport`
-creates its transport. A new backend adds a mode, creates its transport there,
-and can name a notification to observe for account changes through
-`Mode.accountChangedNotification`. There is no user-facing setting for this
-yet.
+`NotebookWorkspace.Mode` selects the kind of build, and in iCloud builds
+`NotebookSyncStorage` selects iCloud, S3, or no sync. Settings › Sync changes
+it while the app runs; `prepareNotebookTransport` creates the transport. A
+mode can name a notification to observe for account changes through
+`Mode.accountChangedNotification`.
+
+Each backend keeps its own sync state next to the notebook, chosen by the
+scope: `notebook-sync-state.json` for iCloud and `notebook-sync-state-s3.json`
+for S3. That is what lets a notebook move between them. A notebook that is
+bound to one backend never silently joins a different notebook on another;
+the coordinator stops with `NotebookStorageMismatch` before changing
+anything. The user can then combine the notebooks or use the stored one,
+which the replica records as a choice on the offline-join receipt, bound to
+that backend's scope. The next exchange applies it with the same durable
+steps as a first offline join.
 
 ## Testing a backend
 
 `SyncTransportContractTests` runs the same checks against every backend:
-in-memory, CloudKit on the fake server, and the
+in-memory, CloudKit on the fake server, S3 on an in-process fake, the
 [local HTTP service](local-sync-service.md) when `MEH_NOTEBOOK_HTTP_URL` is
-set. It covers the shared seed, delivery to other devices, cursors,
-scope, validation, purges, and two devices converging after concurrent edits.
+set, and a real S3-compatible service such as MinIO when the
+`MEH_S3_TEST_ENDPOINT`, `MEH_S3_TEST_BUCKET`, `MEH_S3_TEST_ACCESS_KEY`, and
+`MEH_S3_TEST_SECRET_KEY` variables are set. It covers the shared seed,
+delivery to other devices, cursors, scope, validation, purges, and two
+devices converging after concurrent edits.
 A new backend joins by adding itself to `backends()` in that test.
 
 ## Still specific to iCloud
 
-Some parts remain iCloud-only and need work when a second backend arrives:
-
-- User-facing text says "iCloud" in the sync status, settings, and some
-  shared messages.
-- The upgrade check that pauses older app versions ("Update required") is
-  implemented inside the CloudKit transport. A new backend needs its own,
-  based on a conditional write to one record.
-- Redundant snapshot cleanup is implemented inside the CloudKit transport.
-  Without it, a backend keeps every snapshot it receives.
+- Some shared messages, such as "Update meh.md to resume iCloud sync", and
+  the toolbar symbols still name iCloud. Status text uses the chosen
+  storage's name.
+- The upgrade check ("Update required") and redundant snapshot cleanup are
+  implemented per backend. CloudKit and S3 each have their own; a new
+  backend needs both, or it keeps every snapshot it receives.
