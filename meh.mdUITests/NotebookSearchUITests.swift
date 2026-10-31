@@ -20,7 +20,11 @@ final class NotebookSearchUITests: XCTestCase {
             search.placeholderValue == "Search all notes"
                 || search.label == "Search all notes"
         )
+#if os(macOS)
+        search.click()
+#else
         search.tap()
+#endif
         search.typeText(marker)
 
         let result = app.buttons.matching(
@@ -82,7 +86,13 @@ final class NotebookSearchUITests: XCTestCase {
             .matching(identifier: "notebook-find").firstMatch
         XCTAssertTrue(find.waitForExistence(timeout: 10))
         activate(find)
-        let findField = app.searchFields.firstMatch.exists
+        // The Mac's native Find bar takes focus; the toolbar search field
+        // is a search field too.
+        let focused = app.searchFields.matching(
+            NSPredicate(format: "hasKeyboardFocus == true")
+        ).firstMatch
+        let findField = focused.waitForExistence(timeout: 3) ? focused
+            : app.searchFields.firstMatch.exists
             ? app.searchFields.firstMatch : app.textFields.firstMatch
         XCTAssertTrue(
             findField.waitForExistence(timeout: 5),
@@ -90,16 +100,24 @@ final class NotebookSearchUITests: XCTestCase {
         )
         findField.typeText("lantern")
 #if os(macOS)
-        let matchIndicator = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH[c] %@", "3 matches")
-        ).firstMatch
+        // macOS 27's Find bar doesn't expose its match count, so check that
+        // it closes again and writing resumes.
+        XCTAssertEqual(findField.value as? String, "lantern")
+        let done = app.buttons["Done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        done.click()
+        XCTAssertTrue(findField.waitForNonExistence(timeout: 5))
+        let editor = app.textViews["markdown-editor"]
+        editor.click()
+        editor.typeText(" Written after Find.")
+        XCTAssertTrue((editor.value as? String ?? "").contains(" Written after Find."),
+                      "Writing must resume after closing Find")
 #else
-        let matchIndicator = app.staticTexts["1 of 3"]
-#endif
         XCTAssertTrue(
-            matchIndicator.waitForExistence(timeout: 5),
+            app.staticTexts["1 of 3"].waitForExistence(timeout: 5),
             "Expected native Find to report the matching occurrence"
         )
+#endif
 #if os(iOS)
         let next = app.buttons["find.nextButton"]
         let previous = app.buttons["find.previousButton"]

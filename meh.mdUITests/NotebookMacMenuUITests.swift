@@ -40,7 +40,10 @@ final class NotebookMacMenuUITests: XCTestCase {
         let noteCount = sidebarNoteCount(in: app)
         XCTAssertEqual(noteCount, 1)
 
-        let appMenu = app.menuBars.menuBarItems["meh.md"]
+        // The app menu carries the build's name, such as "meh.md iCloud Dev".
+        let appMenu = app.menuBars.menuBarItems.matching(
+            NSPredicate(format: "title BEGINSWITH %@", "meh.md")
+        ).firstMatch
         XCTAssertTrue(appMenu.waitForExistence(timeout: 5))
         appMenu.click()
         let settingsItem = app.menuItems["Settings…"]

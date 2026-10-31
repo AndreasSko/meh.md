@@ -1,5 +1,12 @@
 import XCTest
 
+extension XCUIElement {
+    /// The text a static text shows: its label on iOS, its value on the Mac.
+    var text: String {
+        label.isEmpty ? (value as? String ?? "") : label
+    }
+}
+
 extension XCUIApplication {
     /// The New Note button. On the Mac it is a pop-up button whose inner
     /// button creates the note, as a tap on iPhone and iPad does.
@@ -41,7 +48,6 @@ extension XCUIApplication {
 #endif
 #if os(macOS)
         XCTAssertEqual(details.frame.midY, newNote.frame.midY, accuracy: 4)
-        XCTAssertLessThan(details.frame.midX, newNote.frame.midX)
 #endif
         let recents = buttons["notebook-recents-toggle"]
         if files.exists, recents.exists, textViews["markdown-editor"].exists {

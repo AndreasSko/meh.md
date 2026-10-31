@@ -24,11 +24,9 @@ final class NotebookOrderingUITests: XCTestCase {
         select(alpha, in: app)
         select(bravo, addingToSelection: true, in: app)
         XCTAssertTrue(app.buttons["2 selected"].waitForExistence(timeout: 5))
-        let trashSelected = app.descendants(matching: .any)[
-            "notebook-trash-selected"
-        ]
-        XCTAssertTrue(trashSelected.waitForExistence(timeout: 5))
-        activate(trashSelected)
+        chooseSelectionAction(
+            "notebook-trash-selected", menuItem: "Move Selected to Trash", in: app
+        )
         XCTAssertFalse(app.buttons["notebook-browser-undo"].exists)
         XCTAssertFalse(app.buttons["notebook-browser-redo"].exists)
         XCTAssertFalse(alpha.exists)
@@ -66,7 +64,8 @@ final class NotebookOrderingUITests: XCTestCase {
         let bravo = try createNote(named: "Bravo \(suffix)", in: app)
         activate(appMenu(in: app))
         #if os(macOS)
-        activate(app.menuItems["New Folder"])
+        // The File menu has New Folder too.
+        activate(app.toolbars.menuItems["New Folder"])
         #else
         activate(app.buttons["New Folder"])
         #endif
@@ -87,21 +86,20 @@ final class NotebookOrderingUITests: XCTestCase {
         select(bravo, addingToSelection: true, in: app)
         XCTAssertTrue(app.buttons["2 selected"].waitForExistence(timeout: 5))
 
-        openMoveSheet(in: app)
+        let moveSheet = openMoveSheet(in: app)
         let path = app.staticTexts["notebook-move-path"]
         XCTAssertTrue(path.waitForExistence(timeout: 5))
-        XCTAssertEqual(path.label, "Notebook")
-        XCTAssertEqual(app.staticTexts["notebook-move-source"].label, "2 items")
+        XCTAssertEqual(path.text, "Notebook")
+        XCTAssertEqual(app.staticTexts["notebook-move-source"].text, "2 items")
         browseMoveSheet(to: folder, in: app)
-        XCTAssertEqual(path.label, "Notebook / Folder \(suffix)")
+        XCTAssertEqual(path.text, "Notebook / Folder \(suffix)")
         let moveUp = app.buttons["notebook-move-up"]
         XCTAssertTrue(moveUp.waitForExistence(timeout: 5))
         activate(moveUp)
-        XCTAssertEqual(path.label, "Notebook")
+        XCTAssertEqual(path.text, "Notebook")
         XCTAssertFalse(moveUp.exists)
         browseMoveSheet(to: folder, in: app)
-        XCTAssertEqual(path.label, "Notebook / Folder \(suffix)")
-        let moveSheet = app.descendants(matching: .any)["notebook-move-sheet"]
+        XCTAssertEqual(path.text, "Notebook / Folder \(suffix)")
         let confirm = app.buttons["notebook-confirm-move"]
         let idleSize = confirm.frame.size
         capture(app, name: "Move confirmation before submission")
@@ -245,8 +243,8 @@ final class NotebookOrderingUITests: XCTestCase {
     ) -> XCUIElement {
         let title = app.staticTexts.matching(
             NSPredicate(
-                format: "identifier BEGINSWITH %@ AND label == %@",
-                "notebook-sidebar-title-", name
+                format: "identifier BEGINSWITH %@ AND (label == %@ OR value == %@)",
+                "notebook-sidebar-title-", name, name
             )
         ).firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 5))
@@ -316,12 +314,32 @@ final class NotebookOrderingUITests: XCTestCase {
         #endif
     }
 
+    /// On the Mac the narrow sidebar toolbar moves the selection buttons
+    /// into its overflow menu, so use the menu bar command there.
+    private func chooseSelectionAction(
+        _ identifier: String, menuItem: String, in app: XCUIApplication
+    ) {
+        #if os(macOS)
+        let item = app.menuBars.menuItems[menuItem]
+        XCTAssertTrue(item.waitForExistence(timeout: 5))
+        XCTAssertTrue(item.isEnabled)
+        item.click()
+        #else
+        let button = app.descendants(matching: .any)[identifier]
+        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        activate(button)
+        #endif
+    }
+
     @discardableResult
     private func openMoveSheet(in app: XCUIApplication) -> XCUIElement {
-        let move = app.descendants(matching: .any)["notebook-move-selected"]
-        XCTAssertTrue(move.waitForExistence(timeout: 5))
-        activate(move)
+        chooseSelectionAction("notebook-move-selected", menuItem: "Move Selected…", in: app)
+        #if os(macOS)
+        // The Mac exposes the sheet without its identifier.
+        let sheet = app.sheets.firstMatch
+        #else
         let sheet = app.descendants(matching: .any)["notebook-move-sheet"]
+        #endif
         XCTAssertTrue(sheet.waitForExistence(timeout: 5))
         return sheet
     }
@@ -409,7 +427,7 @@ final class NotebookOrderingUITests: XCTestCase {
 
     private func appMenu(in app: XCUIApplication) -> XCUIElement {
         #if os(macOS)
-        app.menuButtons["notebook-app-menu"]
+        app.menuButtons["notebook-app-menu"].firstMatch
         #else
         app.buttons["notebook-app-menu"]
         #endif
