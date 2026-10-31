@@ -48,7 +48,7 @@ final class NotebookAutomaticCloudUITests: XCTestCase {
         // CloudKit account setup runs before the simulated-outage wrapper.
         // Give a freshly restored simulator account a bounded startup window.
         XCTAssertEqual(XCTWaiter.wait(for: [outage], timeout: 120), .completed)
-        XCTAssertTrue(app.staticTexts["sync-local-saving-explanation"]
+        XCTAssertTrue(app.staticTexts["sync-failure-explanation"]
             .waitForExistence(timeout: 10))
         closeSyncDetails(app, body: body)
 

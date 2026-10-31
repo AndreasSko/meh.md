@@ -422,7 +422,11 @@ final class NotebookWorkspace {
 
     private var isPreviewRetryFixture: Bool {
         isPreviewSyncStatusFixture
-            && ProcessInfo.processInfo.environment["MEH_NOTEBOOK_RETRY_TEST"] == "1"
+            && ["1", "offline"].contains(previewRetryTest)
+    }
+
+    private var previewRetryTest: String? {
+        ProcessInfo.processInfo.environment["MEH_NOTEBOOK_RETRY_TEST"]
     }
 
     private var previewRetryDelay: TimeInterval {
@@ -804,9 +808,10 @@ final class NotebookWorkspace {
                     retryNotBefore: retryNotBefore
                 )
                 syncRetryNotBefore = retryNotBefore
+                let offline = previewRetryTest == "offline"
                 recordSyncFailure(
-                    URLError(.timedOut),
-                    retryWillOccurAutomatically: false
+                    URLError(offline ? .notConnectedToInternet : .timedOut),
+                    retryWillOccurAutomatically: offline
                 )
                 didSeedPreviewRetryFixture = true
             }

@@ -139,6 +139,10 @@ struct NotebookSyncDetailsView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         if let mood = presentation.mood {
                             MehFace(mood: mood, size: 17)
+                        } else if let symbol = presentation.failureSymbol {
+                            Image(systemName: symbol)
+                                .foregroundStyle(.orange)
+                                .accessibilityHidden(true)
                         }
                         Text(presentation.title)
                             .font(.headline)
@@ -324,35 +328,40 @@ private struct NotebookSyncFailureView: View {
             } else if let failure = workspace.syncFailure {
                 Text(failure.message)
                     .accessibilityIdentifier("sync-failure-explanation")
-                if let hint = failure.actionHint {
-                    if hint != "Try syncing again." {
-                        Text(hint).foregroundStyle(.secondary)
-                    } else if !workspace.canRetrySync,
-                              workspace.syncHalt?.reason == .other {
-                        // A relaunch rebuilds the transport; other halts
-                        // would stop again or have their own explanation.
-                        Text("Close and reopen the app to try again.")
-                            .foregroundStyle(.secondary)
+                if workspace.canRetrySync,
+                   let deadline = workspace.syncRetryNotBefore, deadline > now {
+                    // The countdown replaces a disabled Try Again button.
+                    Group {
+                        if failure.retryDisposition == .automatic {
+                            Text("Trying again in \(deadline, style: .timer)")
+                        } else {
+                            Text("You can try again in \(deadline, style: .timer)")
+                        }
                     }
-                }
-                if !failure.isWaitingForLocalSave,
-                   workspace.replica?.catalogSnapshot != nil,
-                   workspace.replica?.localEditsSuspended == false {
-                    Text("Notes stay on this device while sync is unavailable.")
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("sync-local-saving-explanation")
-                }
-                if workspace.canRetrySync {
-                    if let deadline = workspace.syncRetryNotBefore, deadline > now {
-                        Text("Try Again will be available in \(deadline, style: .timer).")
-                            .foregroundStyle(.secondary)
-                            .accessibilityIdentifier("sync-retry-countdown")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("sync-retry-countdown")
+                } else {
+                    if let hint = failure.actionHint {
+                        // Try Again and the message already cover the
+                        // generic retry hints.
+                        if hint != "Try syncing again.",
+                           hint != "Sync will retry automatically." {
+                            Text(hint).foregroundStyle(.secondary)
+                        } else if !workspace.canRetrySync,
+                                  workspace.syncHalt?.reason == .other {
+                            // A relaunch rebuilds the transport; other halts
+                            // would stop again or have their own explanation.
+                            Text("Close and reopen the app to try again.")
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    Button("Try Again") {
-                        Task { await workspace.requestSyncFromStatus() }
+                    if workspace.canRetrySync {
+                        Button("Try Again") {
+                            Task { await workspace.requestSyncFromStatus() }
+                        }
+                        .disabled(workspace.isRefreshing)
+                        .accessibilityIdentifier("sync-now")
                     }
-                    .disabled(workspace.isRefreshing || workspace.syncRetryNotBefore.map { $0 > now } == true)
-                    .accessibilityIdentifier("sync-now")
                 }
             } else if workspace.syncSetupError != nil {
                 Text("Sync is paused. Open Settings → Diagnostics for details.")
@@ -426,6 +435,13 @@ private struct NotebookSyncPresentation {
             hasPendingChanges: pending,
             isWaitingForLocalSave: waitingForSave
         )
+    }
+
+    var failureSymbol: String? {
+        guard let failure = workspace.syncFailure, !showsActivity,
+              !workspace.isWaitingForLocalSave(at: now) else { return nil }
+        return failure.isOffline
+            ? "wifi.slash" : NotebookSyncIndicator.failed.symbol
     }
 
     /// A face only when nothing needs attention; problems keep plain text.
