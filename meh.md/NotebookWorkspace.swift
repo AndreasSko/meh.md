@@ -255,6 +255,23 @@ final class NotebookWorkspace {
     private let cloudUITestScope = NotebookCloudUITestScope(bundle: .main)
     #endif
     private var notebookTransport: (any SyncTransport)?
+    /// Where the notebook syncs. Only iCloud builds offer a choice.
+    private(set) var syncStorage: NotebookSyncStorage
+    private(set) var s3Configuration: S3SyncConfiguration?
+    /// The storage holds a different notebook; the user chooses what to do.
+    private(set) var storageMismatch: NotebookStorageMismatch?
+    /// The storage used before the latest switch, to offer going back.
+    private(set) var previousSyncStorage: NotebookSyncStorage?
+    /// Set after a switch, to remind the user of their other devices.
+    private(set) var recentStorageSwitch: (from: NotebookSyncStorage, to: NotebookSyncStorage)?
+    @ObservationIgnored private var storageStore = NotebookSyncStorageStore()
+    /// Tests replace how S3 transports are created.
+    @ObservationIgnored private var s3TransportFactory:
+        (@MainActor () async throws -> any SyncTransport)?
+    @ObservationIgnored private var storagePollTask: Task<Void, Never>?
+    @ObservationIgnored private var isChangingStorage = false
+    /// S3 has no push notifications, so the app checks this often while open.
+    @ObservationIgnored var storagePollInterval: Duration = .seconds(60)
     @ObservationIgnored private var transportFactory:
         (@MainActor (String?) async throws -> any SyncTransport)?
 #if DEBUG
@@ -368,6 +385,7 @@ final class NotebookWorkspace {
         #if DEBUG
         if isPreviewSyncStatusFixture || isPreviewUpdateRequirementFixture { return true }
         #endif
+        if syncStorage == .off { return false }
         switch mode {
         case .cloud, .development: return true
         default: return false
@@ -441,8 +459,33 @@ final class NotebookWorkspace {
             && ProcessInfo.processInfo.environment["MEH_NOTEBOOK_UPDATE_REQUIRED_TEST"] == "1"
     }
     #endif
+    /// Whether Settings may switch between iCloud and S3.
+    var canChooseSyncStorage: Bool {
+        #if NOTEBOOK_CLOUD_UI_LAB
+        return false
+        #else
+        if case .cloud = mode { return true }
+        return false
+        #endif
+    }
+
+    /// Names the storage in status text, such as "Synced with iCloud".
+    var syncStorageName: String { syncStorage.name }
+
+    /// Completes "Your notes are saved on this device and in …".
+    var syncStorageDestination: String {
+        switch syncStorage {
+        case .iCloud, .off: "your iCloud account"
+        case .s3: "your S3 storage"
+        }
+    }
+
     var label: String {
         switch mode {
+        case .cloud where syncStorage == .s3:
+            syncStorage.name
+        case .cloud where syncStorage == .off:
+            "On this device"
         case .cloud:
             #if NOTEBOOK_CLOUD_UI_LAB
             "iCloud Test"
@@ -459,6 +502,10 @@ final class NotebookWorkspace {
 
     init(preview: Bool = false) {
         syncClock = .live
+        let store = NotebookSyncStorageStore()
+        syncStorage = store.storage
+        s3Configuration = store.s3Configuration
+        previousSyncStorage = store.previousStorage
         storageBoundary = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         backupFrequency = Self.savedBackupFrequency
         backupRetentionCount = Self.savedBackupRetentionCount
@@ -469,6 +516,7 @@ final class NotebookWorkspace {
         let component = cloudUITestScope?.directoryComponent
             ?? "CloudKitUITests/invalid-configuration"
         self.mode = cloudUITestScope == nil ? .invalid : .cloud
+        syncStorage = .iCloud
         directory = URL.applicationSupportDirectory.appending(path: component + "/Notebook")
         documentsDirectory = URL.documentsDirectory.appending(path: component)
         #else
@@ -515,6 +563,7 @@ final class NotebookWorkspace {
         }
         #endif
         self.mode = mode
+        if case .cloud = mode {} else { syncStorage = .iCloud }
         let support = URL.applicationSupportDirectory
         if case .development(let endpoint, let name) = mode {
             // Keep the established on-disk workspace key while the transport
@@ -565,8 +614,16 @@ final class NotebookWorkspace {
          storageBoundary: URL? = nil,
          syncSchedule: NotebookSyncSchedule = NotebookSyncSchedule(),
          syncClock: NotebookSyncClock = .live,
-         transportFactory: (@MainActor (String?) async throws -> any SyncTransport)? = nil) {
+         transportFactory: (@MainActor (String?) async throws -> any SyncTransport)? = nil,
+         syncStorage: NotebookSyncStorage = .iCloud,
+         s3TransportFactory: (@MainActor () async throws -> any SyncTransport)? = nil) {
         self.directory = directory
+        self.syncStorage = syncStorage
+        self.s3TransportFactory = s3TransportFactory
+        storageStore = NotebookSyncStorageStore(
+            defaults: UserDefaults(suiteName: "meh.md.tests." + UUID().uuidString)!,
+            usesKeychain: false
+        )
         self.syncSchedule = syncSchedule
         self.syncClock = syncClock
         self.documentsDirectory = documentsDirectory
@@ -579,6 +636,7 @@ final class NotebookWorkspace {
     }
 
     isolated deinit {
+        storagePollTask?.cancel()
         accountAvailabilityTask?.cancel()
         snapshotMaintenanceTask?.cancel()
     }
@@ -639,6 +697,19 @@ final class NotebookWorkspace {
 
     func backupNow(beforeBackup: (() async throws -> Void)? = nil) async throws {
         guard !isBackingUp else { return }
+        try await createBackup(beforeBackup: beforeBackup)
+    }
+
+    /// A backup that reflects the notes as they are now, for changes that
+    /// replace the notebook. A running backup may have started earlier.
+    private func backupBeforeChange() async throws {
+        while isBackingUp { try await Task.sleep(for: .milliseconds(100)) }
+        do { try await createBackup(beforeBackup: nil) } catch {
+            throw NotebookStorageChangeError.backupFailed(error.localizedDescription)
+        }
+    }
+
+    private func createBackup(beforeBackup: (() async throws -> Void)?) async throws {
         isBackingUp = true
         defer { isBackingUp = false }
         do {
@@ -719,6 +790,7 @@ final class NotebookWorkspace {
                 for path in paths where manager.fileExists(atPath: path.path) {
                     try manager.removeItem(at: path)
                 }
+                storageStore.removeCredentials()
                 // Keep the request until every removal succeeds, so failures
                 // block startup and can be retried without opening partial data.
                 if let identifier = Bundle.main.bundleIdentifier {
@@ -726,6 +798,13 @@ final class NotebookWorkspace {
                 }
                 UserDefaults.standard.removeObject(forKey: "meh.md.resetLocalStorage")
                 UserDefaults.standard.synchronize()
+                // The choice was read at launch; the reset returns to iCloud.
+                if canChooseSyncStorage {
+                    syncStorage = storageStore.storage
+                    s3Configuration = storageStore.s3Configuration
+                    previousSyncStorage = nil
+                    recentStorageSwitch = nil
+                }
             }
             if usesSync { syncEventLog.record("workspace opening") }
             if replica == nil {
@@ -768,7 +847,8 @@ final class NotebookWorkspace {
             }
             if usesSync, let replica {
                 lastSuccessfulSync = nil
-                if let scope = try? NotebookSyncCoordinator.boundScope(for: replica),
+                if let scope = try? NotebookSyncCoordinator.boundScope(
+                    for: replica, likeScope: syncStorage == .s3 ? "s3://" : ""),
                    let notebookID = replica.catalogSnapshot?.notebookID {
                     loadLastSuccessfulSync(scope: scope, notebookID: notebookID)
                 }
@@ -926,6 +1006,8 @@ final class NotebookWorkspace {
         replica?.suspendLocalEditsForPendingReset()
         scheduledRefresh?.cancel()
         scheduledRefresh = nil
+        storagePollTask?.cancel()
+        storagePollTask = nil
         syncSchedule.clearPending()
         needsAnotherRefresh = false
         needsImmediateRefresh = false
@@ -945,7 +1027,7 @@ final class NotebookWorkspace {
 
     private func scheduleRefresh(trigger: String, notBefore: Date? = nil) {
         cancelSnapshotMaintenance()
-        guard !isResetPending else { return }
+        guard !isResetPending, !isChangingStorage else { return }
         if isSyncUpdateRequired {
             Task { await publishCopies() }
             return
@@ -956,7 +1038,7 @@ final class NotebookWorkspace {
     }
 
     private func armScheduledRefresh(notBefore: Date? = nil) {
-        guard !isResetPending else { return }
+        guard !isResetPending, !isChangingStorage else { return }
         guard !isSyncUpdateRequired else { return }
         guard let policyDelay = syncSchedule.delay(at: syncTime) else { return }
         scheduledRefresh?.cancel()
@@ -1055,6 +1137,8 @@ final class NotebookWorkspace {
             // at the next activation; their durable pending work stays saved.
             scheduledRefresh?.cancel()
             scheduledRefresh = nil
+            storagePollTask?.cancel()
+            storagePollTask = nil
             if usesSync {
                 startRefresh {
                     do { try await self.replica?.flushOpenNotes() }
@@ -1123,11 +1207,13 @@ final class NotebookWorkspace {
     func refresh(
         whileLoading: Bool = false, manual: Bool = false, trigger: String = "recovery"
     ) async {
-        guard !isResetPending else { return }
+        guard !isResetPending, !isChangingStorage else { return }
         guard whileLoading || !isLoading else { return }
         guard let replica else { return }
         if manual { pendingServerCheck = true }
-        if isSyncUpdateRequired {
+        // While the user decides about another notebook in the storage, only
+        // a manual pass reads it again; each one lists the whole folder.
+        if isSyncUpdateRequired || (!manual && storageMismatch != nil) {
             try? await replica.cleanupDeletedContent()
             await publishCopies()
             return
@@ -1148,6 +1234,8 @@ final class NotebookWorkspace {
         }
         scheduledRefresh?.cancel()
         scheduledRefresh = nil
+        storagePollTask?.cancel()
+        storagePollTask = nil
         syncSchedule.clearPending()
         plannedRetryDate = nil
         plannedRetryUptime = nil
@@ -1250,6 +1338,13 @@ final class NotebookWorkspace {
             if syncHalt?.reason == .accountChanged {
                 lastSuccessfulSync = nil
             }
+            // Another failure, such as being offline, says nothing new about
+            // which notebook the storage holds, so the choice stays offered.
+            if let mismatch = failure as? NotebookStorageMismatch {
+                storageMismatch = mismatch
+            } else if failure == nil {
+                storageMismatch = nil
+            }
             if let failure {
                 if let syncError = failure as? SyncError,
                    syncError == .scopeChanged || syncError == .identityConflict {
@@ -1291,6 +1386,7 @@ final class NotebookWorkspace {
                 await schedulePublicationRetry(generation: transportGeneration)
             }
             endSyncPresentation()
+            armStoragePoll()
             syncEventLog.record("refresh ended", counts: [
                 "duration_ms": Int(syncClock.now().timeIntervalSince(refreshStarted) * 1_000)
             ])
@@ -1475,10 +1571,14 @@ final class NotebookWorkspace {
             // manual attempt retains both the halt reason and expected scope.
         }
         let transport: any SyncTransport
-        if let transportFactory {
+        if syncStorage == .s3, let s3TransportFactory {
+            transport = try await s3TransportFactory()
+        } else if let transportFactory {
             transport = try await transportFactory(expectedScope)
         } else {
             switch mode {
+            case .cloud where syncStorage == .s3:
+                transport = try makeS3Transport()
             case .cloud:
                 #if NOTEBOOK_CLOUD_UI_LAB
                 guard let scope = cloudUITestScope else { throw SyncError.invalidRecord }
@@ -1703,6 +1803,256 @@ final class NotebookWorkspace {
         let notebookID: UUID
     }
 
+    // MARK: - Sync storage
+
+    private func makeS3Transport() throws -> S3SyncTransport {
+        guard let configuration = s3Configuration else {
+            throw S3SyncTransportError.invalidConfiguration("Set up S3 storage in Settings.")
+        }
+        try configuration.validate()
+        guard let credentials = try storageStore.credentials() else {
+            throw S3SyncTransportError.missingCredentials
+        }
+        return S3SyncTransport(
+            configuration: configuration, credentials: credentials,
+            stateDirectory: directory.appending(path: "S3")
+        )
+    }
+
+    /// Checks S3 settings before they are used. Nothing in the notebook or
+    /// its saved sync state changes.
+    func checkS3Connection(
+        _ configuration: S3SyncConfiguration, credentials: S3Credentials
+    ) async throws -> S3ConnectionReport {
+        try configuration.validate()
+        let transport = S3SyncTransport(
+            configuration: configuration, credentials: credentials,
+            stateDirectory: FileManager.default.temporaryDirectory
+                .appending(path: "meh-s3-check-\(UUID().uuidString)"),
+            timeout: 15
+        )
+        return try await transport.checkConnection()
+    }
+
+    enum StoredNotebook: Equatable {
+        /// The storage is empty, or holds this device's notebook.
+        case none, same
+        /// This device has not synced yet and joins the stored notebook.
+        case joins
+        /// After switching, the user chooses to combine or use it.
+        case different
+    }
+
+    /// How a notebook found in a storage relates to this device's notebook.
+    func storedNotebook(_ notebookID: UUID?) -> StoredNotebook {
+        guard let notebookID else { return .none }
+        guard let replica, let local = replica.catalogSnapshot?.notebookID else { return .joins }
+        if local == notebookID { return .same }
+        // A choice made for another storage does not count here.
+        if (try? replica.mayJoinAnotherNotebook(in: "")) == true { return .joins }
+        return .different
+    }
+
+    /// S3 was set up before, so it can be chosen again without its form.
+    var hasSavedS3Settings: Bool { s3Configuration != nil }
+
+    func savedS3Credentials() -> S3Credentials? {
+        try? storageStore.credentials()
+    }
+
+    /// Switches storage while the app runs. Saved progress for each storage
+    /// is kept, so switching back resumes where it left off; new S3 settings
+    /// start that storage fresh. The first exchange uploads what is missing.
+    /// A backup is made first.
+    func changeSyncStorage(
+        _ storage: NotebookSyncStorage,
+        s3 configuration: S3SyncConfiguration? = nil,
+        credentials: S3Credentials? = nil,
+        goingBack: Bool = false
+    ) async throws {
+        guard canChooseSyncStorage || s3TransportFactory != nil, !isResetPending else { return }
+        if storage.usesS3 {
+            guard let configuration = configuration ?? s3Configuration else {
+                throw S3SyncTransportError.invalidConfiguration("Set up S3 storage first.")
+            }
+            try configuration.validate()
+            guard try credentials ?? storageStore.credentials() != nil else {
+                throw S3SyncTransportError.missingCredentials
+            }
+        }
+        guard !isChangingStorage else { return }
+        if try replica?.isJoiningAnotherNotebook == true {
+            throw NotebookStorageChangeError.joinInProgress
+        }
+        // No new exchange may start against the old transports from here on.
+        isChangingStorage = true
+        defer { isChangingStorage = false }
+        while isRefreshing || isLoading || startingRefreshes > 0 {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        cancelSnapshotMaintenance()
+        await snapshotMaintenanceTask?.value
+        if replica != nil {
+            try await backupBeforeChange()
+        }
+        let movesS3Folder = storage == .s3 && syncStorage == .s3
+            && configuration.map { $0.scope != s3Configuration?.scope } == true
+        if let configuration, configuration.scope != s3Configuration?.scope {
+            // Before saving, so a failure leaves the old settings in place.
+            try removeS3SyncState()
+        }
+        try removeStaleSyncState(for: storage)
+        try replica?.withdrawOtherNotebookChoice()
+        if let credentials { try storageStore.saveCredentials(credentials) }
+        try storageStore.save(storage: storage, s3: configuration)
+        if let configuration { s3Configuration = configuration }
+        await retireTransports()
+        let previous = syncStorage
+        syncStorage = storage
+        if goingBack || movesS3Folder {
+            // Going back, nothing reached the storage left. A new S3 folder
+            // has no earlier storage to return to.
+            previousSyncStorage = nil
+            recentStorageSwitch = nil
+        } else if previous != storage {
+            previousSyncStorage = previous
+            recentStorageSwitch = (previous, storage)
+        }
+        storageStore.previousStorage = previousSyncStorage
+        storageMismatch = nil
+        isChangingStorage = false
+        syncEventLog.record("sync storage changed: " + storage.rawValue)
+        guard storage != .off else { return }
+        startConnectivityMonitoring()
+        startAccountAvailabilityMonitoring()
+        await refresh(manual: true, trigger: "sync storage changed")
+    }
+
+    enum StorageMismatchChoice: Equatable {
+        /// Add this device's notes to the stored notebook, in a folder.
+        case combine
+        /// Use the stored notebook instead of this device's one.
+        case useStored
+        /// Return to the storage used before the switch.
+        case switchBack
+    }
+
+    /// The folder that holds this device's notes after combining.
+    var combineFolderName: String {
+        switch previousSyncStorage {
+        case .iCloud: "From iCloud"
+        case .s3: "From S3"
+        case .off, nil: "From This Device"
+        }
+    }
+
+    /// Applies the user's choice for a storage that holds another notebook.
+    /// Combining and using the stored notebook make a backup first.
+    func resolveStorageMismatch(_ choice: StorageMismatchChoice) async throws {
+        guard let mismatch = storageMismatch, let replica else {
+            throw NotebookStorageChangeError.choiceUnavailable
+        }
+        if choice == .switchBack {
+            try await changeSyncStorage(previousSyncStorage ?? .off, goingBack: true)
+            return
+        }
+        try await backupBeforeChange()
+        try await replica.chooseOtherNotebook(
+            choice == .combine ? .combine(folderName: combineFolderName) : .replace,
+            scope: mismatch.scope, notebookID: mismatch.notebookID
+        )
+        syncEventLog.record("storage notebook chosen: "
+            + (choice == .combine ? "combine" : "use stored"))
+        storageMismatch = nil
+        syncFailure = nil
+        syncSetupError = nil
+        await refresh(manual: true, trigger: "storage notebook chosen")
+    }
+
+    func dismissStorageSwitchHint() {
+        recentStorageSwitch = nil
+    }
+
+    /// A storage whose saved progress belongs to another notebook, for
+    /// example after combining into a different storage, starts fresh. The
+    /// next exchange then finds out which notebook it holds.
+    private func removeStaleSyncState(for storage: NotebookSyncStorage) throws {
+        guard storage != .off, let replica else { return }
+        let scopeFamily = storage == .s3 ? "s3://" : ""
+        do {
+            _ = try NotebookSyncCoordinator.boundScope(for: replica, likeScope: scopeFamily)
+        } catch SyncError.identityConflict {
+            let names = storage == .s3
+                ? ["notebook-sync-state-s3.json", "notebook-proposal-s3.json"]
+                : ["notebook-sync-state.json", "notebook-proposal.json"]
+            for name in names {
+                let url = directory.appending(path: name)
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
+                }
+            }
+            syncEventLog.record("stale sync state removed: " + storage.rawValue)
+        }
+    }
+
+    private func retireTransports() async {
+        transportGeneration = UUID()
+        cloudActivityTask?.cancel()
+        cloudActivityTask = nil
+        storagePollTask?.cancel()
+        storagePollTask = nil
+        scheduledRefresh?.cancel()
+        scheduledRefresh = nil
+        cancelSnapshotMaintenance()
+        await snapshotMaintenanceTask?.value
+        if let haltable = notebookTransport as? any HaltableSyncTransport {
+            await haltable.retire()
+        }
+        notebookTransport = nil
+        sync = nil
+        syncHalt = nil
+        syncFailure = nil
+        syncWaitStartedAt = nil
+        syncSetupError = nil
+        syncUpdateRequiredVersion = nil
+        snapshotMaintenanceStatus = nil
+        cloudCleanupError = nil
+        publicationRetryPending = false
+        lastSuccessfulSync = nil
+        retryPolicy.reset()
+        plannedRetryDate = nil
+        plannedRetryUptime = nil
+        plannedRetryDelay = nil
+        syncRetryNotBefore = nil
+    }
+
+    /// Other S3 settings may point at a different notebook, so their sync
+    /// starts from scratch. iCloud's saved progress is never touched.
+    private func removeS3SyncState() throws {
+        let manager = FileManager.default
+        for name in ["notebook-sync-state-s3.json", "notebook-proposal-s3.json", "S3"] {
+            let url = directory.appending(path: name)
+            if manager.fileExists(atPath: url.path) { try manager.removeItem(at: url) }
+        }
+    }
+
+    private func armStoragePoll() {
+        storagePollTask?.cancel()
+        storagePollTask = nil
+        // While the user decides about another notebook, every pass would
+        // read the whole storage again to count its notes.
+        guard syncStorage.usesS3, automaticSync, isForeground, !isResetPending,
+              !isSyncUpdateRequired, storageMismatch == nil else { return }
+        let deadline = syncTime + storagePollInterval
+        let sleepUntil = syncClock.sleepUntil
+        storagePollTask = Task { @MainActor [weak self] in
+            do { try await sleepUntil(deadline) } catch { return }
+            guard let self, !Task.isCancelled else { return }
+            self.storagePollTask = nil
+            self.requestAutomaticRefresh(trigger: "S3 change check")
+        }
+    }
+
     private func publishCopies() async {
         guard !isResetPending, !isPreview, replica != nil else { return }
         guard !isPublishingCopies else {
@@ -1735,6 +2085,23 @@ final class NotebookWorkspace {
             copiesURL = output.appending(path: "Markdown")
             copyError = nil
         } catch { copyError = error.localizedDescription }
+    }
+}
+
+enum NotebookStorageChangeError: Error, LocalizedError {
+    case backupFailed(String)
+    case joinInProgress
+    case choiceUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .backupFailed(let reason):
+            "Your notes couldn’t be backed up first, so nothing was changed. \(reason)"
+        case .joinInProgress:
+            "This device is still combining notebooks. Let it finish syncing, then try again."
+        case .choiceUnavailable:
+            "Sync has changed in the meantime. Check Settings › Sync and try again."
+        }
     }
 }
 

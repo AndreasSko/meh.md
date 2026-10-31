@@ -30,8 +30,19 @@ nonisolated enum NotebookSyncIndicator: Equatable {
         }
     }
 
-    var symbol: String {
-        switch self {
+    var symbol: String { symbol(usesS3: false) }
+
+    /// S3 storage gets drive symbols, so the toolbar never suggests iCloud.
+    func symbol(usesS3: Bool) -> String {
+        if usesS3 {
+            return switch self {
+            case .synced, .waiting: "externaldrive"
+            case .syncing: "arrow.triangle.2.circlepath"
+            case .disabled: "externaldrive.badge.xmark"
+            case .failed: "externaldrive.badge.exclamationmark"
+            }
+        }
+        return switch self {
         case .synced, .waiting: "icloud"
         case .syncing: "arrow.triangle.2.circlepath.icloud"
         case .disabled: "icloud.slash"
@@ -44,9 +55,11 @@ nonisolated enum NotebookSyncIndicator: Equatable {
 /// snapshot is useful for diagnostics, but must not appear to be live work.
 nonisolated struct NotebookSyncActivityPresentation {
     let progress: NotebookSyncProgress?
+    let storageName: String
 
-    init(isActive: Bool, progress: NotebookSyncProgress?) {
+    init(isActive: Bool, progress: NotebookSyncProgress?, storageName: String = "iCloud") {
         self.progress = isActive ? progress : nil
+        self.storageName = storageName
     }
 
     var fraction: Double? {
@@ -63,11 +76,11 @@ nonisolated struct NotebookSyncActivityPresentation {
 
     var title: LocalizedStringResource {
         guard let progress else { return "Checking for changes…" }
-        if progress.waitingSince != nil { return "Waiting for iCloud…" }
+        if progress.waitingSince != nil { return "Waiting for \(storageName)…" }
         switch progress.phase {
         case .verifyingSavedState: return "Verifying saved sync data…"
         case .checking: return "Checking for changes…"
-        case .checkingRemoteHistory: return "Checking iCloud history…"
+        case .checkingRemoteHistory: return "Checking \(storageName) history…"
         case .receiving:
             return progress.activeNoteIDs.isEmpty
                 ? "Receiving changes…" : "Updating this device…"
@@ -90,7 +103,7 @@ nonisolated struct NotebookSyncActivityPresentation {
             if count == 1 { return "Removing copies of 1 deleted note" }
             return count > 0 ? "Removing copies of \(count) deleted notes"
                 : "Removing copies of deleted notes"
-        case .cleaningUpSnapshots: return "Removing extra sync copies from iCloud"
+        case .cleaningUpSnapshots: return "Removing extra sync copies from \(storageName)"
         case .verifyingSavedState:
             return "Usually once after an app update, before sync starts"
         case .checking, .checkingRemoteHistory, .receiving, .uploadingNotes,

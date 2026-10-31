@@ -64,6 +64,7 @@ let package = Package(
                 "NotebookQuickActionRequests.swift",
                 "NotebookBackupBackgroundScheduler.swift",
                 "NotebookSettingsView.swift", "NotebookStorageView.swift",
+                "NotebookSyncStorageView.swift",
                 "NotebookFeedback.swift",
                 "NotebookEmptyLibraryView.swift", "NotebookMarkdownExporter.swift",
                 "NotebookTemplateViews.swift",
@@ -89,6 +90,7 @@ let package = Package(
             ],
             sources: [
                 "NotebookWorkspace.swift",
+                "NotebookSyncStorage.swift",
                 "NotebookSnapshotMaintenancePolicy.swift",
                 "NotebookUITestFixture.swift",
                 "NotebookSyncPreviewTransport.swift",
@@ -143,6 +145,7 @@ let package = Package(
                 "NotebookMacRecentsExpansion.swift",
                 "NotebookApplicationView.swift", "UnavailableDevelopmentTransport.swift",
                 "NotebookSettingsView.swift", "NotebookStorageView.swift",
+                "NotebookSyncStorage.swift", "NotebookSyncStorageView.swift",
                 "NotebookFeedback.swift",
                 "NotebookEmptyLibraryView.swift", "NotebookMarkdownExporter.swift",
                 "NotebookSharing.swift",

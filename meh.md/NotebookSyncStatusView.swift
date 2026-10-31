@@ -26,7 +26,7 @@ struct NotebookSyncButton: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("notebook-sync-details")
-        .accessibilityLabel("Sync with iCloud")
+        .accessibilityLabel("Sync with \(workspace.syncStorageName)")
         .popover(isPresented: $showingDetails, arrowEdge: preferredPopoverEdge) {
             NotebookSyncDetailsView(workspace: workspace)
                 .presentationCompactAdaptation(.popover)
@@ -51,8 +51,10 @@ private struct NotebookSyncButtonLabel: View {
             minimumInterval: 1, paused: workspace.syncRetryNotBefore == nil
         )) { context in
             let presentation = NotebookSyncPresentation(workspace: workspace, now: context.date)
+            let usesS3 = workspace.syncStorage == .s3
             Image(systemName: presentation.activity.fraction != nil
-                  ? "icloud" : presentation.indicator.symbol)
+                  ? (usesS3 ? "externaldrive" : "icloud")
+                  : presentation.indicator.symbol(usesS3: usesS3))
                 .foregroundStyle(presentation.indicatorColor)
                 .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
@@ -127,6 +129,7 @@ struct NotebookSyncDetailsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 if presentation.showsActivity {
                     NotebookSyncOverallProgressView(
+                        storageName: workspace.syncStorageName,
                         fraction: presentation.activity.fraction,
                         accessibilityValue: presentation.accessibilityValue
                     )
@@ -161,13 +164,14 @@ struct NotebookSyncDetailsView: View {
 }
 
 private struct NotebookSyncOverallProgressView: View {
+    let storageName: String
     let fraction: Double?
     let accessibilityValue: LocalizedStringResource
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text("Syncing with iCloud…")
+                Text("Syncing with \(storageName)…")
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("notebook-sync-overall-status")
@@ -315,7 +319,7 @@ private struct NotebookSyncFailureView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if workspace.isSyncUpdateRequired {
-                Text("Update meh.md to resume iCloud sync. You can keep editing your notes on this device.")
+                Text("Update meh.md to resume \(workspace.syncStorageName) sync. You can keep editing your notes on this device.")
                     .accessibilityIdentifier("sync-update-required")
             } else if workspace.isWaitingForLocalSave(at: now),
                       let failure = workspace.syncFailure {
@@ -382,7 +386,8 @@ private struct NotebookSyncPresentation {
     var activity: NotebookSyncActivityPresentation {
         NotebookSyncActivityPresentation(
             isActive: showsActivity,
-            progress: workspace.preparationProgress ?? workspace.sync?.progress
+            progress: workspace.preparationProgress ?? workspace.sync?.progress,
+            storageName: workspace.syncStorageName
         )
     }
 
@@ -406,7 +411,7 @@ private struct NotebookSyncPresentation {
         if case .failed = workspace.sync?.status { return "Sync needs attention" }
         if workspace.notificationRegistrationError != nil { return "Sync notifications unavailable" }
         if case .pending = workspace.sync?.status { return "Changes waiting to sync" }
-        return workspace.lastSuccessfulSync == nil ? "Ready to sync" : "Synced with iCloud"
+        return workspace.lastSuccessfulSync == nil ? "Ready to sync" : "Synced with \(workspace.syncStorageName)"
     }
 
     var indicator: NotebookSyncIndicator {
