@@ -124,10 +124,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         let sourceID = itemID(named: "Meeting", in: app)
         markTemplate(sourceID, named: "Meeting", in: app)
 
-        app.buttons["notebook-app-menu"].tap()
-        app.buttons["notebook-settings"].tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-        app.buttons["notebook-templates-settings"].tap()
+        openTemplatesSettings(app)
         let sourceOptions = app.buttons["notebook-template-options-" + sourceID]
         XCTAssertTrue(sourceOptions.waitForExistence(timeout: 5))
         closeTemplatesSettings(app)
@@ -263,16 +260,22 @@ final class NotebookTemplatesUITests: XCTestCase {
     }
 
     private func openAppIconMenu(_ springboard: XCUIApplication) {
-        XCUIDevice.shared.press(.home)
         let icon = springboard.icons.matching(NSPredicate(
             format: "label == %@ OR label == %@", "meh.md", "meh.md iCloud Dev"
         )).firstMatch
-        if !icon.waitForExistence(timeout: 3) || !icon.isHittable {
-            springboard.swipeLeft()
+        // A press while the Home Screen still settles can miss the menu, so
+        // go Home and press again until it opens.
+        for _ in 0..<3 {
+            XCUIDevice.shared.press(.home)
+            if !icon.waitForExistence(timeout: 3) || !icon.isHittable {
+                springboard.swipeLeft()
+            }
+            XCTAssertTrue(icon.waitForExistence(timeout: 5))
+            XCTAssertTrue(icon.isHittable)
+            icon.press(forDuration: 1)
+            if springboard.buttons["New Note"].waitForExistence(timeout: 5) { return }
         }
-        XCTAssertTrue(icon.waitForExistence(timeout: 5))
-        XCTAssertTrue(icon.isHittable)
-        icon.press(forDuration: 1)
+        XCTFail("Expected the app icon's quick actions")
     }
 
     private func commitBlankNote(in app: XCUIApplication) {
@@ -372,8 +375,7 @@ final class NotebookTemplatesUITests: XCTestCase {
     }
 
     private func openTemplatesSettings(_ app: XCUIApplication) {
-        app.buttons["notebook-app-menu"].tap()
-        app.buttons["notebook-settings"].tap()
+        app.openNotebookSettings()
         app.buttons["notebook-templates-settings"].tap()
     }
 

@@ -36,9 +36,7 @@ final class NewNoteDestinationUITests: XCTestCase {
         let noteName = title.value as? String ?? ""
         XCTAssertFalse(noteName.isEmpty)
         title.typeText("\n")
-        let back = app.navigationBars.buttons.firstMatch
-        XCTAssertTrue(back.waitForExistence(timeout: 5))
-        back.tap()
+        app.revealNotebookSidebar()
 
         let note = app.staticTexts.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label == %@",

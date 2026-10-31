@@ -237,8 +237,7 @@ final class NotebookSnippetsUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, source + "- Face pulls: ",
                        "Editing must keep the snippet's own changes")
         XCTAssertTrue(insert.waitForExistence(timeout: 5))
-        let back = app.buttons["note-link-back"]
-        (back.exists ? back : app.navigationBars.buttons.firstMatch).tap()
+        app.navigationBars.buttons["BackButton"].tap()
         let unchanged = NSPredicate(format: "value == %@", afterInsert)
         expectation(for: unchanged, evaluatedWith: editor)
         waitForExpectations(timeout: 10)
@@ -400,6 +399,12 @@ final class NotebookSnippetsUITests: XCTestCase {
         title.typeText("\n")
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        // Return moves focus into the body a moment later; typing earlier
+        // loses the first characters.
+        let focused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: editor
+        )
+        if XCTWaiter.wait(for: [focused], timeout: 5) != .completed { editor.tap() }
         editor.typeText(body)
         XCTAssertEqual(editor.value as? String, body)
     }
@@ -476,8 +481,7 @@ final class NotebookSnippetsUITests: XCTestCase {
     }
 
     private func openSnippetSettings(_ app: XCUIApplication) {
-        app.buttons["notebook-app-menu"].tap()
-        app.buttons["notebook-settings"].tap()
+        app.openNotebookSettings()
         app.buttons["notebook-templates-settings"].tap()
         XCTAssertTrue(app.navigationBars["Templates & Snippets"]
             .waitForExistence(timeout: 5))
@@ -498,26 +502,39 @@ final class NotebookSnippetsUITests: XCTestCase {
     private func editSnippet(_ name: String, in folder: String,
                              app: XCUIApplication) {
         revealSnippetMenu(in: app)
-        app.buttons["editor-snippet-menu"].press(forDuration: 1)
-        XCTAssertTrue(app.staticTexts["Edit Snippet"].waitForExistence(timeout: 5),
-                      "Holding the button opens the menu for editing")
-        chooseMenuItem(folder, in: app)
-        chooseMenuItem(name, in: app)
+        // Like a sidebar row menu, this hold menu stalls XCTest's idle waits.
+        app.withoutIdleWait {
+            app.buttons["editor-snippet-menu"].press(forDuration: 1)
+            XCTAssertTrue(app.staticTexts["Edit Snippet"].waitForExistence(timeout: 5),
+                          "Holding the button opens the menu for editing")
+            chooseMenuItem(folder, in: app)
+            chooseMenuItem(name, in: app)
+        }
     }
 
     private func revealSnippetMenu(in app: XCUIApplication) {
         let menu = app.buttons["editor-snippet-menu"]
         let toolbar = app.collectionViews["editor-keyboard-toolbar"]
         XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
-        for _ in 0..<5 where !menu.isHittable {
-            toolbar.swipeLeft()
+        // The bar keeps its scroll position, so the button can sit on
+        // either side of the visible part.
+        for _ in 0..<6 where !menu.isHittable {
+            if menu.exists && menu.frame.midX < toolbar.frame.midX {
+                toolbar.swipeRight()
+            } else {
+                toolbar.swipeLeft()
+            }
         }
         XCTAssertTrue(menu.isHittable,
                       "Swipe the formatting bar until Insert Snippet is visible")
     }
 
     private func menuItem(_ name: String, in app: XCUIApplication) -> XCUIElement {
-        app.buttons[name].firstMatch
+        // On iPad the sidebar stays visible, with rows of the same names.
+        app.buttons.matching(NSPredicate(
+            format: "label == %@ AND NOT (identifier BEGINSWITH %@)",
+            name, "notebook-"
+        )).firstMatch
     }
 
     private func chooseMenuItem(_ name: String, in app: XCUIApplication) {
