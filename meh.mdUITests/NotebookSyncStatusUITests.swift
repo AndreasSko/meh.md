@@ -28,7 +28,9 @@ final class NotebookSyncStatusUITests: XCTestCase {
         XCTAssertTrue(status.waitForExistence(timeout: 10))
         XCTAssertEqual(status.label, "Device storage is full")
         XCTAssertTrue(app.staticTexts["sync-failure-explanation"].exists)
-        XCTAssertTrue(app.buttons["sync-now"].exists)
+        // The fixture's retry cooldown shows a countdown until Try Again.
+        XCTAssertTrue(app.staticTexts["sync-retry-countdown"].exists)
+        XCTAssertFalse(app.buttons["sync-now"].exists)
         capture(app, name: "After - actionable device storage warning")
         app.terminate()
     }
@@ -41,7 +43,9 @@ final class NotebookSyncStatusUITests: XCTestCase {
         XCTAssertTrue(status.waitForExistence(timeout: 10))
         XCTAssertEqual(status.label, "Sync is still waiting")
         XCTAssertTrue(app.staticTexts["sync-failure-explanation"].exists)
-        XCTAssertTrue(app.buttons["sync-now"].exists)
+        // The fixture's retry cooldown shows a countdown until Try Again.
+        XCTAssertTrue(app.staticTexts["sync-retry-countdown"].exists)
+        XCTAssertFalse(app.buttons["sync-now"].exists)
         capture(app, name: "After - prolonged save wait")
         app.terminate()
     }

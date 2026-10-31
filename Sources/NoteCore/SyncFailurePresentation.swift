@@ -22,6 +22,9 @@ public struct SyncFailurePresentation: Equatable, Sendable {
     /// A local durability prerequisite with an app-managed retry, not a
     /// confirmed write failure. Persistent waits still need visible attention.
     public let isWaitingForLocalSave: Bool
+    /// This device has no network connection, as opposed to iCloud or the
+    /// connection to it having a temporary problem.
+    public let isOffline: Bool
 
     public init(
         error: any Error,
@@ -34,6 +37,7 @@ public struct SyncFailurePresentation: Equatable, Sendable {
             && !retryWillOccurAutomatically ? .manual : failure.disposition
         isWaitingForLocalSave = failure.isWaitingForLocalSave
             && retryWillOccurAutomatically
+        isOffline = failure.title == Self.offlineFailure.title
         if failure.disposition == .automatic {
             actionHint = retryWillOccurAutomatically
                 ? "Sync will retry automatically."
@@ -220,7 +224,7 @@ public struct SyncFailurePresentation: Equatable, Sendable {
         }
 
         if let error = error as? URLError {
-            if isTransient(error.code) { return transientFailure }
+            if let failure = classifyTransient(error.code) { return failure }
             if error.code == .userAuthenticationRequired {
                 return Failure(
                     "Sign-in required",
@@ -248,8 +252,8 @@ public struct SyncFailurePresentation: Equatable, Sendable {
             return classifyCloudCode(nsError.code)
         }
         if nsError.domain == NSURLErrorDomain,
-           isTransient(URLError.Code(rawValue: nsError.code)) {
-            return transientFailure
+           let failure = classifyTransient(URLError.Code(rawValue: nsError.code)) {
+            return failure
         }
         if nsError.domain == NSPOSIXErrorDomain,
            let rawCode = Int32(exactly: nsError.code),
@@ -290,9 +294,16 @@ public struct SyncFailurePresentation: Equatable, Sendable {
             ?? unknownFailure
     }
 
+    private static let offlineFailure = Failure(
+        "You're offline",
+        "Notes sync again once you're back online.",
+        actionHint: "Try syncing again.",
+        disposition: .automatic
+    )
+
     private static let transientFailure = Failure(
-        "Sync temporarily unavailable",
-        "A temporary network or iCloud service problem stopped sync.",
+        "Can't reach iCloud",
+        "This is usually temporary.",
         actionHint: "Try syncing again.",
         disposition: .automatic
     )
@@ -326,7 +337,9 @@ public struct SyncFailurePresentation: Equatable, Sendable {
                 "This app does not currently have permission to sync with iCloud.",
                 actionHint: "Check iCloud access for this app."
             )
-        case .networkUnavailable, .networkFailure, .serviceUnavailable,
+        case .networkUnavailable:
+            return offlineFailure
+        case .networkFailure, .serviceUnavailable,
              .requestRateLimited, .zoneBusy, .serverResponseLost:
             return transientFailure
         case .serverRecordChanged, .changeTokenExpired, .unknownItem,
@@ -342,13 +355,17 @@ public struct SyncFailurePresentation: Equatable, Sendable {
         }
     }
 
-    private static func isTransient(_ code: URLError.Code) -> Bool {
-        [
-            .timedOut, .cannotFindHost, .cannotConnectToHost,
-            .networkConnectionLost, .dnsLookupFailed,
-            .notConnectedToInternet, .resourceUnavailable,
-            .internationalRoamingOff, .dataNotAllowed
-        ].contains(code)
+    private static func classifyTransient(_ code: URLError.Code) -> Failure? {
+        switch code {
+        case .notConnectedToInternet:
+            return offlineFailure
+        case .timedOut, .cannotFindHost, .cannotConnectToHost,
+             .networkConnectionLost, .dnsLookupFailed, .resourceUnavailable,
+             .internationalRoamingOff, .dataNotAllowed:
+            return transientFailure
+        default:
+            return nil
+        }
     }
 
     private static func classifyPOSIX(_ code: POSIXErrorCode) -> Failure? {

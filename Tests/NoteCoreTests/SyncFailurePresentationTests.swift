@@ -143,6 +143,41 @@ final class SyncFailurePresentationTests: XCTestCase {
         XCTAssertEqual(String(localized: manual.actionHint!), "Try syncing again.")
     }
 
+    func testMissingConnectionIsExplainedAsOffline() {
+        let offlineErrors: [any Error] = [
+            URLError(.notConnectedToInternet),
+            CKError(.networkUnavailable),
+            NSError(
+                domain: NSURLErrorDomain,
+                code: URLError.notConnectedToInternet.rawValue
+            ),
+            CloudKitSyncTransportError.uploadFailed(
+                code: CKError.networkUnavailable.rawValue
+            ),
+        ]
+        for error in offlineErrors {
+            let presentation = SyncFailurePresentation(
+                error: error, retryWillOccurAutomatically: true
+            )
+            XCTAssertEqual(String(localized: presentation.title), "You're offline")
+            XCTAssertTrue(presentation.isOffline)
+            XCTAssertEqual(presentation.retryDisposition, .automatic)
+        }
+
+        let serviceErrors: [any Error] = [
+            URLError(.timedOut), URLError(.networkConnectionLost),
+            URLError(.dataNotAllowed), CKError(.networkFailure),
+            CKError(.serviceUnavailable), SyncError.unavailable("Fictional"),
+        ]
+        for error in serviceErrors {
+            let presentation = SyncFailurePresentation(
+                error: error, retryWillOccurAutomatically: true
+            )
+            XCTAssertEqual(String(localized: presentation.title), "Can't reach iCloud")
+            XCTAssertFalse(presentation.isOffline)
+        }
+    }
+
     func testOversizedSnapshotShowsRecoveryGuidance() {
         let documentID = UUID()
         let presentation = SyncFailurePresentation(
@@ -229,9 +264,10 @@ final class SyncFailurePresentationTests: XCTestCase {
             retryWillOccurAutomatically: false
         )
         XCTAssertEqual(
-            String(localized: transport.title), "Sync temporarily unavailable"
+            String(localized: transport.title), "Can't reach iCloud"
         )
         XCTAssertEqual(transport.retryDisposition, .manual)
+        XCTAssertFalse(transport.isOffline)
 
         let wrappedStorage = SyncFailurePresentation(
             error: CloudKitStateWriteFailure(underlyingError: POSIXError(.ENOSPC)),

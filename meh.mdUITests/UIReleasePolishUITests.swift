@@ -332,10 +332,8 @@ final class UIReleasePolishUITests: XCTestCase {
         let details = app.buttons["notebook-sync-details"]
         XCTAssertTrue(details.waitForExistence(timeout: 30))
         details.tap()
-        let retry = app.buttons["sync-now"]
-        XCTAssertTrue(retry.waitForExistence(timeout: 15))
         let statusTitle = app.staticTexts["note-sync-status"]
-        XCTAssertTrue(statusTitle.waitForExistence(timeout: 5))
+        XCTAssertTrue(statusTitle.waitForExistence(timeout: 15))
         if isBeforeCapture {
             XCTAssertTrue(app.staticTexts["sync-failure-explanation"].exists)
             capture("Before - retry status while cooldown is active")
@@ -343,23 +341,43 @@ final class UIReleasePolishUITests: XCTestCase {
         }
 
         let failureTitle = statusTitle.label
-        XCTAssertEqual(failureTitle, "Sync temporarily unavailable")
+        XCTAssertEqual(failureTitle, "Can't reach iCloud")
         let countdown = app.staticTexts["sync-retry-countdown"]
         XCTAssertTrue(countdown.waitForExistence(timeout: 10))
-        XCTAssertTrue(countdown.label.contains("Try Again will be available in"))
-        XCTAssertFalse(retry.isEnabled,
-                       "Retry must stay disabled while the countdown is visible")
-        capture("After - retry countdown and disabled action")
+        XCTAssertTrue(countdown.label.contains("You can try again in"))
+        let retry = app.buttons["sync-now"]
+        XCTAssertFalse(retry.exists,
+                       "The countdown replaces Try Again until retry is allowed")
+        capture("After - retry countdown")
 
-        let retryEnabled = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "isEnabled == true"), object: retry
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [retryEnabled], timeout: 20), .completed)
+        XCTAssertTrue(retry.waitForExistence(timeout: 20))
+        XCTAssertTrue(retry.isEnabled)
         XCTAssertFalse(countdown.exists,
                        "The countdown should disappear as retry becomes available")
         XCTAssertEqual(statusTitle.label, failureTitle,
                        "The sync headline should remain stable after the cooldown")
         capture("After - retry becomes available when countdown ends")
+    }
+
+    func testOfflineSyncStatusIsShortAndRetriesAutomatically() throws {
+        app.launchEnvironment["MEH_NOTEBOOK_TEST_FIXTURE"] = "sync-status"
+        app.launchEnvironment["MEH_NOTEBOOK_RETRY_TEST"] = "offline"
+        app.launchEnvironment["MEH_NOTEBOOK_RETRY_SECONDS"] = "30"
+        app.launch()
+
+        let details = app.buttons["notebook-sync-details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 30))
+        details.tap()
+        let statusTitle = app.staticTexts["note-sync-status"]
+        XCTAssertTrue(statusTitle.waitForExistence(timeout: 15))
+        XCTAssertEqual(statusTitle.label, "You're offline")
+        XCTAssertEqual(app.staticTexts["sync-failure-explanation"].label,
+                       "Notes sync again once you're back online.")
+        let countdown = app.staticTexts["sync-retry-countdown"]
+        XCTAssertTrue(countdown.waitForExistence(timeout: 10))
+        XCTAssertTrue(countdown.label.contains("Trying again in"))
+        XCTAssertFalse(app.buttons["sync-now"].exists)
+        capture("After - offline sync status")
     }
 #endif
 
