@@ -119,13 +119,13 @@ public struct SyncFailurePresentation: Equatable, Sendable {
             case .updateRequired:
                 return Failure(
                     "Update required",
-                    "Update meh.md to resume iCloud sync. You can keep editing your notes on this device.",
+                    "Update meh.md to resume sync. You can keep editing your notes on this device.",
                     disposition: .unavailable
                 )
             case .scopeChanged:
                 return Failure(
                     "Sync paused",
-                    "The iCloud sync identity changed. Sync is paused to protect notebook history.",
+                    "The sync identity changed. Sync is paused to protect notebook history.",
                     actionHint: "Review the sync status before continuing.",
                     disposition: .unavailable
                 )

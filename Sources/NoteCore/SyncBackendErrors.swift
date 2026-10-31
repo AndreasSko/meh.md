@@ -38,7 +38,9 @@ extension SyncBackendErrors {
 /// Every backend whose transport can surface its own error types. A new
 /// backend adds its `SyncBackendErrors` here.
 enum SyncBackends {
-    static var errors: [any SyncBackendErrors.Type] { [CloudKitSyncErrors.self] }
+    static var errors: [any SyncBackendErrors.Type] {
+        [CloudKitSyncErrors.self, S3SyncErrors.self]
+    }
 
     static func diagnosticCode(
         of error: any Error, nested: (any Error) -> String
