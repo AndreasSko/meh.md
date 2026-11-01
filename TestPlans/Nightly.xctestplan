@@ -27,6 +27,7 @@
         "EditorScrollTypingUITests/testPreviewColdFocusTypesIntoTappedParagraph",
         "EditorScrollTypingUITests/testPreviewTypingAndListReturnKeepInsertionVisible",
         "EditorScrollTypingUITests/testSourceColdFocusAndReturnKeepInsertionVisible",
+        "EditorScrollTypingUITests/testSwitchingAppsKeepsTextInPlace",
         "FlairUITests/testAppearanceSwitchesTheInk",
         "FlairUITests/testLibraryEndsWithTheNoteCount",
         "FlairUITests/testSearchWithoutResultsNamesTheQuery",
