@@ -309,7 +309,7 @@ enum NotebookUITestFixture: String, CaseIterable {
             let day = calendar.date(byAdding: .day, value: -daysAgo, to: today)!
             return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)!
         }
-        let intro = "Four days, no plans before ten."
+        var intro = "Four days, see everything."
         let packing = " What to bring is in [[Packing list]]."
         var todo = ["- [ ] Book flights", "- [ ] Find a place in Alfama", "- [ ] Rent a car"]
         var plan = ["| Thu | Museums |"]
@@ -344,7 +344,9 @@ enum NotebookUITestFixture: String, CaseIterable {
         edit(at(6, 19, 12))
         plan[1] = "| Fri | Belém, *pastéis* |"
         edit(at(6, 22, 40))
-        // One version that both edits and removes a line.
+        // One version that edits, rewrites and removes lines, so History
+        // has a clearly visible change to show.
+        intro = "Four days, no plans before ten."
         todo.remove(at: 2)
         todo[1] = "- [x] Find a place in Alfama"
         edit(at(3, 8, 50))
@@ -388,7 +390,15 @@ enum NotebookUITestFixture: String, CaseIterable {
             parentID: inbox)
         _ = try await replica.createNote(
             name: "Packing list.md",
-            text: "- [x] Passport\n- [ ] Chargers\n- [ ] Sunscreen\n",
+            text: """
+                Light. Everything else can be bought there.
+
+                - [x] Passport
+                - [x] Good camera
+                - [ ] Chargers
+                - [ ] Sunscreen
+                - [ ] Comfortable shoes
+                """,
             parentID: resources)
         let book = try await replica.createNote(
             name: "Book notes.md",
@@ -396,7 +406,11 @@ enum NotebookUITestFixture: String, CaseIterable {
             parentID: resources)
         _ = try await replica.createNote(
             name: "Barcelona 2025.md",
-            text: "Best tapas: the tiny place behind the market. No name, no website.\n",
+            text: """
+                Best tapas: the tiny place behind the market. No name, no website.
+
+                Packed way too much. Next time, stick to the [[Packing list]].
+                """,
             parentID: archive)
 
         let templates = try await replica.createFolder(name: "Templates", parentID: resources)
@@ -410,16 +424,50 @@ enum NotebookUITestFixture: String, CaseIterable {
                                      filenamePattern: "Weekly review {{date}}"),
             for: weekly)
 
+        // A workout log that repeats the same exercises, one snippet per day.
         let snippets = try await replica.createFolder(name: "Snippets", parentID: resources)
-        for (name, text) in [
-            ("Meeting notes", "## Meeting {{date:short}}\n\nWho: \n\n- \n\n**Action items**\n\n- [ ] \n"),
-            ("Pros & cons", "| Pros | Cons |\n| --- | --- |\n|  |  |\n"),
-            ("Decision", "**Decision:** \n**Why:** \n**Also considered:** \n"),
-            ("Log entry", "**{{date:short}}** – "),
-        ] {
+        let workouts = [
+            ("Pull", ["Pull-ups (+20 kg)", "Ring rows", "Chin-ups", "Reverse ring flys",
+                      "Dead hang"]),
+            ("Push", ["Dips (+15 kg)", "Pike push-ups", "Lateral raises (9 kg)",
+                      "Ring push-ups"]),
+            ("Legs", ["Squats (60 kg)", "Bulgarian split squats", "Nordic curls",
+                      "Calf raises"]),
+        ]
+        for (name, exercises) in workouts {
+            let text = "## {{date:short}} · \(name)\n\n"
+                + exercises.map { "- \($0): " }.joined(separator: "\n") + "\n"
             _ = try await replica.createNote(name: "\(name).md", text: text, parentID: snippets)
         }
         try await replica.setSnippetSource(snippets, enabled: true)
+        _ = try await replica.createNote(
+            name: "Training log.md",
+            text: """
+                ## 10/19 · Pull
+
+                - Pull-ups (+20 kg): 9, 8
+                - Ring rows: 21, 23
+                - Chin-ups: 7, 7, 7
+                - Reverse ring flys: 10, 10
+                - Dead hang: 45 s, 35 s
+
+                ## 10/20 · Push
+
+                - Dips (+15 kg): 12, 8
+                - Pike push-ups: 22, 18
+                - Lateral raises (9 kg): 10, 11
+                - Ring push-ups: 15, 12
+
+                ## 10/22 · Legs
+
+                - Squats (60 kg): 10, 10, 8
+                - Bulgarian split squats: 12, 12
+                - Nordic curls: 5, 4
+                - Calf raises: 20, 20
+
+
+                """,
+            parentID: areas)
 
         let review = try await replica.createNoteFromTemplate(
             weekly, name: "Weekly review 2026-10-24")
@@ -437,6 +485,7 @@ enum NotebookUITestFixture: String, CaseIterable {
             ## Next week
 
             - Decide on the new laptop
+            - Go through the [[Packing list]] for Lisbon
             """)
         try await reviewSession.flush()
 

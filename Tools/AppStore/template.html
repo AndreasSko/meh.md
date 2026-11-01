@@ -1,0 +1,157 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --paper: #f7f6f2;
+    --ink: #1c1c1e;
+    --muted: #6e6e73;
+    --yellow: #ffd83a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100vw; height: 100vh; overflow: hidden; }
+  body {
+    font-family: -apple-system, "SF Pro Display", sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    display: flex;
+    flex-direction: column;
+  }
+  body.yellow { background: var(--yellow); }
+  body.yellow .sub { color: #5a4a00; }
+  body.yellow mark::after { background: var(--paper); }
+  body.dark { background: #1c1c1e; color: #f5f5f7; }
+  body.dark .sub { color: #a1a1a6; }
+
+  header { text-align: center; position: relative; z-index: 2; }
+  h1 {
+    font-size: var(--h1);
+    font-weight: 800;
+    letter-spacing: -0.028em;
+    line-height: 1.04;
+    text-wrap: balance;
+  }
+  mark { background: none; color: inherit; position: relative; white-space: nowrap; }
+  mark::after {
+    content: ""; position: absolute; z-index: -1;
+    left: -0.06em; right: -0.06em; bottom: 0.06em; height: 0.32em;
+    background: var(--yellow); border-radius: 0.08em; transform: rotate(-1deg);
+  }
+  .sub {
+    margin-top: calc(var(--h1) * .38);
+    font-size: var(--sub);
+    font-weight: 500;
+    color: var(--muted);
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+
+  code {
+    font-family: ui-monospace, "SF Mono", monospace;
+    font-size: .9em;
+    font-weight: 500;
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  body.dark code { color: #f5f5f7; }
+
+  .iphone { --h1: 128px; --sub: 54px; }
+  .iphone header { padding: 170px 70px 0; }
+  .ipad { --h1: 150px; --sub: 60px; }
+  .ipad header { padding: 170px 100px 0; }
+  .mac { --h1: 132px; --sub: 52px; }
+  .mac header { padding: 110px 100px 0; }
+
+  main { flex: 1; position: relative; }
+  main > * { position: absolute; }
+  main img { display: block; width: 100%; }
+
+  /* iPhone / iPad: CSS bezel around the raw screenshot */
+  .phone, .ipad-frame {
+    background: #111;
+    padding: var(--bezel);
+    border-radius: calc(var(--radius) + var(--bezel));
+    box-shadow: 0 0 0 calc(var(--bezel) * .18) #3a3a3c,
+                0 60px 120px rgba(0,0,0,.18), 0 20px 40px rgba(0,0,0,.10);
+  }
+  .phone img, .ipad-frame img { border-radius: var(--radius); }
+
+  /* Mac: the screenshot already has the window chrome */
+  .mac-frame img {
+    border-radius: var(--radius);
+    box-shadow: 0 0 0 1.5px rgba(0,0,0,.12),
+                0 60px 140px rgba(0,0,0,.22), 0 18px 40px rgba(0,0,0,.10);
+  }
+
+  /* Magnified detail of a screenshot */
+  .callout {
+    overflow: hidden;
+    border-radius: 48px;
+    background: var(--paper);
+    box-shadow: 0 0 0 10px var(--yellow),
+                0 50px 120px rgba(0,0,0,.28), 0 16px 40px rgba(0,0,0,.14);
+  }
+  .callout img { position: absolute; max-width: none; }
+  .callout.plain {
+    border-radius: 40px;
+    box-shadow: 0 0 0 1.5px rgba(0,0,0,.10),
+                0 60px 140px rgba(0,0,0,.22), 0 18px 40px rgba(0,0,0,.10);
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1 id="h1"></h1>
+    <p class="sub" id="sub"></p>
+  </header>
+  <main id="stage"></main>
+<script src="shots.js"></script>
+<script>
+  const p = new URLSearchParams(location.search);
+  const device = p.get("device"), name = p.get("name");
+  const c = copy[name];
+  const theme = themes[device]?.[name] ?? c.theme ?? "";
+  document.body.className = `${device} ${theme}`;
+  // Code spans stay literal, so Markdown in them isn't highlighted
+  const fmt = s => s.split("`").map((part, i) => i % 2
+    ? `<code>${part}</code>`
+    : part.replace(/\*(.+?)\*/g, "<mark>$1</mark>")).join("");
+  document.getElementById("h1").innerHTML = fmt(c.h1);
+  document.getElementById("sub").innerHTML = fmt(c.sub);
+
+  // Bezel and corner radius as a share of the frame width
+  const frames = {
+    phone: { cls: "phone", bezel: 0.0306, radius: 0.153 },
+    ipad: { cls: "ipad-frame", bezel: 0.0227, radius: 0.043 },
+    mac: { cls: "mac-frame", bezel: 0, radius: 0.0135 },
+  };
+
+  const stage = document.getElementById("stage");
+  for (const el of layouts[device][name]) {
+    const div = document.createElement("div");
+    const img = document.createElement("img");
+    img.src = `raw/${el.img}.png`;
+    div.style.cssText = el.css;
+    if (el.crop) {
+      const [x, y, w, h] = el.crop, s = el.scale;
+      div.className = el.plain ? "callout plain" : "callout";
+      div.style.width = `${w * s}px`;
+      div.style.height = `${h * s}px`;
+      img.style.left = `${-x * s}px`;
+      img.style.top = `${-y * s}px`;
+      img.onload = () => { img.style.width = `${img.naturalWidth * s}px`; };
+    } else {
+      const f = frames[el.frame];
+      div.className = f.cls;
+      div.style.width = `${el.w}px`;
+      div.style.setProperty("--bezel", `${el.w * f.bezel}px`);
+      div.style.setProperty("--radius", `${el.w * f.radius}px`);
+    }
+    div.appendChild(img);
+    stage.appendChild(div);
+  }
+</script>
+</body>
+</html>

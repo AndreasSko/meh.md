@@ -23,7 +23,8 @@ Just a few things to note:
   Use `gh pr edit <number> --body-file <body.md> --attach <image.png>`;
   repeat `--attach` for more files. Matching local Markdown image paths in
   the body are replaced with uploaded GitHub URLs. Videos attach the same
-  way, but without a `#alt` suffix.
+  way, but without a `#alt` suffix. See docs/screenshots.md for sample
+  content and launch settings.
 * The goal of this app is to be minimalistic, easy-to-use and feeling like
   a proper, native iOS app. Keep that in mind when proposing UI changes.
   Consider Apple’s Human Interface Guidelines for UI design:

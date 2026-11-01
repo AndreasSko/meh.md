@@ -28,6 +28,8 @@ and the evidence collected along the way.
   measured device-side improvements.
 - [Automatic sync](notebook-sync-scheduling.md): scheduling behavior and a
   physical-device checklist.
+- [Screenshots](screenshots.md): README and App Store captures, sample
+  content, and launch settings for a tidy, synced notebook.
 
 ## Notebook behavior and contracts
 
