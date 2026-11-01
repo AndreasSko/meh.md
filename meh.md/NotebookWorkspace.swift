@@ -383,7 +383,8 @@ final class NotebookWorkspace {
     }
     var usesSync: Bool {
         #if DEBUG
-        if isPreviewSyncStatusFixture || isPreviewUpdateRequirementFixture { return true }
+        if isPreviewSyncStatusFixture || isPreviewUpdateRequirementFixture
+            || isPreviewInMemorySync { return true }
         #endif
         if syncStorage == .off { return false }
         switch mode {
@@ -441,6 +442,12 @@ final class NotebookWorkspace {
 
     private var isPreviewSyncStatusFixture: Bool {
         requestedPreviewFixture == .syncStatus
+    }
+
+    /// Screenshots should show a synced notebook, so a preview can sync
+    /// with an in-memory stand-in for iCloud instead of showing sync as off.
+    private var isPreviewInMemorySync: Bool {
+        isPreview && ProcessInfo.processInfo.environment["MEH_NOTEBOOK_PREVIEW_SYNC"] == "1"
     }
 
     private var isPreviewRetryFixture: Bool {
@@ -1620,6 +1627,10 @@ final class NotebookWorkspace {
             case .preview where isPreviewSyncStatusFixture:
                 transport = NotebookSyncStatusPreviewTransport(
                     runID: directory.lastPathComponent
+                )
+            case .preview where isPreviewInMemorySync:
+                transport = NotebookSyncStatusPreviewTransport(
+                    runID: directory.lastPathComponent, phaseDelay: .zero
                 )
 #endif
             default: return
