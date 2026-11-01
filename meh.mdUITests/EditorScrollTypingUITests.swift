@@ -51,6 +51,65 @@ final class EditorScrollTypingUITests: XCTestCase {
         capture(app, name: "Preview writing stays visible after list and plain Return")
     }
 
+    func testSwitchingAppsKeepsTextInPlace() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
+        continueAfterFailure = false
+        let app = makeApp(mode: "livePreview")
+        defer { app.terminate() }
+        app.launch()
+        let editor = try createEditor(in: app)
+        let keyboard = app.keyboards.firstMatch
+        let fixture = (1...40).map {
+            "Fictional prose line \($0) for Cedar journal."
+        }.joined(separator: "\n") + "\n- TARGET 12345"
+        try paste(fixture, into: editor, in: app)
+        try alignEndMarker(in: app, editor: editor)
+        // Lift the last line well above the keyboard, into the space below
+        // the note, like a writer who scrolled a little past the end.
+        let visible = unobscuredEditor(editor, in: app, keyboard: keyboard)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(
+            dx: visible.maxX - 30, dy: visible.minY + visible.height * 0.7
+        ))
+        let end = origin.withOffset(CGVector(
+            dx: visible.maxX - 30, dy: visible.minY + visible.height * 0.4
+        ))
+        start.press(forDuration: 0.05, thenDragTo: end,
+                    withVelocity: .slow, thenHoldForDuration: 0.5)
+        XCTAssertTrue(keyboard.exists)
+        let before = try requireText("TARGET", in: app, editor: editor, last: true)
+        XCTAssertLessThan(
+            before.maxY, visible.maxY - 3 * before.height,
+            "The last line must start well above the keyboard"
+        )
+        capture(app, name: "Before switching apps")
+
+        for round in 1...2 {
+            XCUIDevice.shared.press(.home)
+            // The app may suspend right away, skipping .runningBackground.
+            let left = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "state != %d",
+                                       XCUIApplication.State.runningForeground.rawValue),
+                object: app
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [left], timeout: 10), .completed)
+            Thread.sleep(forTimeInterval: 1)
+            app.activate()
+            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+            XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
+            // The keyboard slides back in; let any scrolling settle.
+            Thread.sleep(forTimeInterval: 1.5)
+            capture(app, name: "After switching apps \(round)")
+            let after = try requireText("TARGET", in: app, editor: editor, last: true)
+            XCTAssertEqual(after.midY, before.midY, accuracy: 4,
+                           "Switching apps must not move the note (round \(round))")
+        }
+
+        var expected = fixture
+        for letter in "ok" { expected += tapLetter(String(letter), in: app) }
+        try assertVisibleInsertion(expected, in: app, editor: editor, marker: "TARGET")
+    }
+
     private func makeApp(mode: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"

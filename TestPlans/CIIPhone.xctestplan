@@ -27,6 +27,7 @@
         "EditorScrollTypingUITests/testSourceColdFocusAndReturnKeepInsertionVisible",
         "EditorScrollTypingUITests/testPreviewColdFocusTypesIntoTappedParagraph",
         "EditorScrollTypingUITests/testPreviewTypingAndListReturnKeepInsertionVisible",
+        "EditorScrollTypingUITests/testSwitchingAppsKeepsTextInPlace",
         "NotebookStorageUITests/testStorageOverviewReopenAndOpenNote",
         "NotebookStorageUITests/testEmptyStorageCanCloseAndReopen",
         "NotebookStorageUITests/testStorageCleanupControlsAndPreserveNote",

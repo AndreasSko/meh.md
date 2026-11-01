@@ -1772,10 +1772,14 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         // Their bottom inset must survive subsequent layout passes as well.
         if !isEditable, contentInsetAdjustmentBehavior == .never,
            !markdownState.isFinding { return }
+        // Switching apps or opening Control Center can hide the keyboard
+        // until the scene is active again. Shrinking the inset meanwhile
+        // would clamp the scroll position.
+        if let scene = window?.windowScene,
+           scene.activationState != .foregroundActive { return }
         // UIKit owns keyboard avoidance while the editor keeps its frame.
         // Reserve actual covered space without changing the text viewport.
-        let overlap = bounds.intersection(keyboardLayoutGuide.layoutFrame)
-        let coveredHeight = !overlap.isNull ? overlap.height : 0
+        let coveredHeight = keyboardCoveredHeight
         // The keyboard includes the bottom safe area. UIKit already adds
         // that automatic contribution to our custom scrolling inset.
         let automaticBottom = max(
@@ -1857,7 +1861,10 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 
     override func resignFirstResponder() -> Bool {
         let accepted = super.resignFirstResponder()
-        if accepted { markdownState.pendingKeyboardSelectionReveal = false }
+        if accepted {
+            markdownState.pendingKeyboardSelectionReveal = false
+            markdownState.offsetBeforeDeactivation = nil
+        }
         markdownState.linkPointer?.invalidate()
         return accepted
     }
@@ -2000,23 +2007,92 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         super.didMoveToWindow()
         if window != nil { attachMarkdownTitleHostIfNeeded() }
         let center = NotificationCenter.default
-        if let observer = markdownState.keyboardRevealObserver {
-            center.removeObserver(observer)
-            markdownState.keyboardRevealObserver = nil
-        }
-        if window != nil {
-            markdownState.keyboardRevealObserver = center.addObserver(
-                forName: UIResponder.keyboardDidShowNotification,
-                object: nil, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.revealSelectionAfterKeyboardDidShow()
-                }
-            }
+        markdownState.windowObservers.forEach(center.removeObserver)
+        markdownState.windowObservers = []
+        if let window {
+            markdownState.windowObservers = [
+                center.addObserver(
+                    forName: UIResponder.keyboardDidShowNotification,
+                    object: nil, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.revealSelectionAfterKeyboardDidShow()
+                        self?.restoreOffsetAfterReactivation(lastChance: true)
+                    }
+                },
+                center.addObserver(
+                    forName: UIScene.willDeactivateNotification,
+                    object: window.windowScene, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.markdownState.offsetBeforeDeactivation =
+                            self.offsetWorthRestoring()
+                    }
+                },
+                center.addObserver(
+                    forName: UIScene.didActivateNotification,
+                    object: window.windowScene, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.setNeedsLayout()
+                        self?.restoreOffsetAfterReactivation()
+                    }
+                },
+                center.addObserver(
+                    forName: UITextView.textDidChangeNotification,
+                    object: self, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.markdownState.offsetBeforeDeactivation = nil
+                    }
+                },
+            ]
         } else {
             markdownState.pendingKeyboardSelectionReveal = false
+            markdownState.offsetBeforeDeactivation = nil
         }
         reportWindowAttachmentIfNeeded()
+    }
+
+    /// Switching apps hides and shows the keyboard, and UIKit can clamp the
+    /// scroll position in between. Once the scene is active and the keyboard
+    /// is back, return to where the writer left the note.
+    private func restoreOffsetAfterReactivation(lastChance: Bool = false) {
+        guard let saved = markdownState.offsetBeforeDeactivation,
+              window?.windowScene?.activationState == .foregroundActive
+        else { return }
+        layoutIfNeeded()
+        if isFirstResponder, keyboardCoveredHeight == 0 { return }
+        let inset = adjustedContentInset
+        let maxY = max(-inset.top, contentSize.height + inset.bottom - bounds.height)
+        let y = min(max(saved.y, -inset.top), maxY)
+        // A keyboard still settling can leave the range short. Let its
+        // did-show notification finish the job, then stop either way.
+        if y == saved.y || lastChance {
+            markdownState.offsetBeforeDeactivation = nil
+        }
+        if contentOffset.y != y {
+            setContentOffset(CGPoint(x: contentOffset.x, y: y), animated: false)
+        }
+    }
+
+    /// Only an editing session with the keyboard covering the editor can
+    /// be clamped. A position mid-scroll is not where the writer stopped.
+    private func offsetWorthRestoring() -> CGPoint? {
+        guard isFirstResponder, keyboardCoveredHeight > 0,
+              !isDragging, !isDecelerating else { return nil }
+        return contentOffset
+    }
+
+    private var keyboardCoveredHeight: CGFloat {
+        let overlap = bounds.intersection(keyboardLayoutGuide.layoutFrame)
+        return overlap.isNull ? 0 : overlap.height
+    }
+
+    /// A writer who scrolls after returning chose a new position.
+    func forgetOffsetBeforeDeactivation() {
+        markdownState.offsetBeforeDeactivation = nil
     }
 
     private func revealSelectionAfterKeyboardDidShow() {
@@ -2417,13 +2493,12 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 }
 
 private final class MarkdownTextViewState: NSObject {
-    var keyboardRevealObserver: NSObjectProtocol?
+    var windowObservers: [NSObjectProtocol] = []
     var pendingKeyboardSelectionReveal = false
+    var offsetBeforeDeactivation: CGPoint?
 
     isolated deinit {
-        if let keyboardRevealObserver {
-            NotificationCenter.default.removeObserver(keyboardRevealObserver)
-        }
+        windowObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
     var appliedEndPadding: CGFloat?
@@ -2751,6 +2826,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             cancelPositionRestore()
+            (scrollView as? MarkdownTextView)?.forgetOffsetBeforeDeactivation()
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
