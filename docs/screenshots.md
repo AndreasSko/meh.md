@@ -71,3 +71,5 @@ layouts live in `shots.js`. Crop positions are in raw screenshot pixels,
 so check them after a UI change moves things around. The script needs
 Google Chrome, which renders `template.html` headless at the exact App
 Store sizes.
+
+To upload the images to the App Store, see [App Store page](app-store.md).

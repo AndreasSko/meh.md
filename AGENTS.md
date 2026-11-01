@@ -25,6 +25,9 @@ Just a few things to note:
   the body are replaced with uploaded GitHub URLs. Videos attach the same
   way, but without a `#alt` suffix. See docs/screenshots.md for sample
   content and launch settings.
+* The App Store page, text and screenshots, lives in `Tools/AppStore/`.
+  See docs/app-store.md to change or publish it. Run `publish.sh` without
+  `--confirm` first, and with it only when the user asks.
 * The goal of this app is to be minimalistic, easy-to-use and feeling like
   a proper, native iOS app. Keep that in mind when proposing UI changes.
   Consider Apple’s Human Interface Guidelines for UI design:

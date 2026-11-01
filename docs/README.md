@@ -30,6 +30,8 @@ and the evidence collected along the way.
   physical-device checklist.
 - [Screenshots](screenshots.md): README and App Store captures, sample
   content, and launch settings for a tidy, synced notebook.
+- [App Store page](app-store.md): store text in the repo and publishing it
+  with one script.
 
 ## Notebook behavior and contracts
 
