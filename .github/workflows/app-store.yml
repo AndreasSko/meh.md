@@ -1,0 +1,23 @@
+name: App Store page
+
+on:
+  pull_request:
+    paths: [Tools/AppStore/metadata/**, Tools/AppStore/publish.sh]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check store text
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: rudrankriyam/setup-asc@5358c70a27a3f0d1517604b0f1fdc43e70c1cc4d
+        with:
+          version: 5.8.0
+      - run: Tools/AppStore/publish.sh --check
