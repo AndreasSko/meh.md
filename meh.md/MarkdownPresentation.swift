@@ -209,7 +209,10 @@ enum MarkdownPresentation {
         )
         textView.needsDisplay = true
         textView.window?.invalidateCursorRects(for: textView)
-        (textView as? MarkdownTextView)?.updateMarkdownTableScrollOverlays()
+        if let textView = textView as? MarkdownTextView {
+            textView.updateMarkdownTableScrollOverlays()
+            MarkdownTimeCalculator.update(textView)
+        }
     }
 
     static func syntaxCache(
@@ -461,7 +464,10 @@ enum MarkdownPresentation {
             invalidatedRange: renderingRange
         )
         textView.setNeedsDisplay()
-        (textView as? MarkdownTextView)?.updateMarkdownTableScrollOverlays()
+        if let textView = textView as? MarkdownTextView {
+            textView.updateMarkdownTableScrollOverlays()
+            MarkdownTimeCalculator.update(textView)
+        }
     }
 
     static func syntaxCache(
@@ -1398,7 +1404,7 @@ enum MarkdownPresentation {
         return NSRange(location: location, length: max(0, end - location))
     }
 
-    private static func textRange(
+    static func textRange(
         for range: NSRange,
         documentStart: any NSTextLocation,
         contentManager: NSTextContentManager

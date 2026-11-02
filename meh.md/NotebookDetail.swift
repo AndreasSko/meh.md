@@ -20,6 +20,8 @@ struct NotebookDetail: View {
     @AppStorage("editor.mode", store: NotebookEditorPreferences.store)
     private var editorModeRaw =
         MarkdownEditorMode.livePreview.rawValue
+    @AppStorage(MarkdownTimeCalculator.enabledKey, store: NotebookEditorPreferences.store)
+    private var timeCalculatorLabs = false
 
     private var editorMode: MarkdownEditorMode {
         MarkdownEditorMode(rawValue: editorModeRaw) ?? .livePreview
@@ -98,7 +100,9 @@ struct NotebookDetail: View {
                             },
                             fontSize: editorFontSize,
                             fontFamily: editorFontFamily,
-                            mode: editorMode
+                            mode: editorMode,
+                            timeCalculator: timeCalculatorLabs
+                                && scene.replica.timeCalculatorNoteIDs.contains(selectedID)
                         )
                         .mehCrumple(trigger: scene.trashedOpenNote)
                         }
@@ -288,6 +292,23 @@ struct NotebookDetail: View {
                         } label: {
                             Label("Font & Text Size…",
                                   systemImage: "textformat.size")
+                        }
+                        if timeCalculatorLabs {
+                            Divider()
+                            Toggle(isOn: Binding(
+                                get: { scene.replica.timeCalculatorNoteIDs.contains(selectedID) },
+                                set: { enabled in
+                                    scene.perform {
+                                        try await scene.replica.setTimeCalculator(
+                                            selectedID, enabled: enabled
+                                        )
+                                    }
+                                }
+                            )) {
+                                Label("Time Calculator", systemImage: "plus.forwardslash.minus")
+                            }
+                            .disabled(!session.isEditingEnabled || scene.busy)
+                            .accessibilityIdentifier("notebook-time-calculator")
                         }
                     } label: {
                         Label("Editor Display", systemImage: "textformat")

@@ -107,6 +107,14 @@ struct NotebookSettingsView: View {
                 }
                 NotebookFeedbackSection(log: workspace.syncEventLog)
                 Section {
+                    NavigationLink {
+                        NotebookLabsView()
+                    } label: {
+                        Label("Labs", systemImage: "flask")
+                    }
+                    .accessibilityIdentifier("notebook-labs-settings")
+                }
+                Section {
                     NotebookSettingsSignature()
                         .listRowBackground(Color.clear)
                 }
@@ -302,6 +310,55 @@ private struct NotebookSettingsSignature: View {
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("notebook-settings-version")
+    }
+}
+
+/// Experiments that are off until someone turns them on on this device.
+private struct NotebookLabsView: View {
+    @AppStorage(MarkdownTimeCalculator.enabledKey, store: NotebookEditorPreferences.store)
+    private var timeCalculator = false
+
+    var body: some View {
+        Form {
+            Section {
+                Text("Experiments that might still change.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+            }
+            Section {
+                Toggle(isOn: $timeCalculator) {
+                    Label("Time Calculator", systemImage: "plus.forwardslash.minus")
+                }
+                .accessibilityIdentifier("notebook-labs-time-calculator")
+                NotebookTimeCalculatorSample()
+            } footer: {
+                Text("End a line with = to add up the times above it. Turn it on for a note in … › Editor Display.")
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Labs")
+    }
+}
+
+/// A short note that shows a sum, drawn like the editor draws it.
+private struct NotebookTimeCalculatorSample: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(verbatim: "Flight 2h 55m")
+            Text(verbatim: "Taxi 25m")
+            HStack(spacing: 0) {
+                Text(verbatim: "Travel day = ")
+                Text(verbatim: "3h 20m").foregroundStyle(.secondary)
+            }
+        }
+        .font(.subheadline)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MehStyle.paperColor, in: .rect(cornerRadius: 10))
+        .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+        .accessibilityHidden(true)
     }
 }
 

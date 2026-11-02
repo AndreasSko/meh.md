@@ -41,6 +41,8 @@ and the evidence collected along the way.
   folders, and destination and filename defaults.
 - [Markdown snippets](notebook-snippets.md): reusable text, folder categories,
   and insertion-time variables.
+- [Time calculator](time-calculator.md): live time sums in a note, an
+  experiment behind a Labs setting.
 - [Navigation and preview](notebook-navigation-preview.md): app interaction
   and the isolated Debug workspace.
 - [Markdown import](notebook-import-contract.md): source-preserving import.

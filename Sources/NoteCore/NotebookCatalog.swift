@@ -180,6 +180,7 @@ final class NotebookCatalogDocument {
         _ = try historicalLinkLocations()
         _ = try templateMetadata()
         _ = try snippetMetadata()
+        _ = try timeCalculatorNoteIDs()
     }
 
     /// A fork owns a distinct Automerge document but initially has the same
@@ -279,6 +280,37 @@ final class NotebookCatalogDocument {
             $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
         }) else { throw NotebookSnippetError.sourceUnavailable }
         try document.put(obj: .ROOT, key: "snippet.source.\(id.uuidString)",
+                         value: .Boolean(enabled))
+    }
+
+    /// Notes that show time calculator results. Each note is its own flat
+    /// register, so devices that turn on different notes merge cleanly.
+    func timeCalculatorNoteIDs() throws -> Set<UUID> {
+        var result: Set<UUID> = []
+        for key in document.keys(obj: .ROOT) where key.hasPrefix("timeCalculator.") {
+            let parts = key.split(separator: ".")
+            guard parts.count == 2,
+                  let id = UUID(uuidString: String(parts[1])),
+                  id.uuidString == parts[1] else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            for value in try document.getAll(obj: .ROOT, key: key) {
+                guard case .Scalar(.Boolean) = value else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+            }
+            if try document.get(obj: .ROOT, key: key) == .Scalar(.Boolean(true)) {
+                result.insert(id)
+            }
+        }
+        return result
+    }
+
+    func setTimeCalculator(_ id: UUID, enabled: Bool) throws {
+        guard try placements().contains(where: {
+            $0.item.id == id && $0.item.kind == .note && !$0.item.isPermanentlyDeleted
+        }) else { throw NotebookCatalogError.itemNotFound }
+        try document.put(obj: .ROOT, key: "timeCalculator.\(id.uuidString)",
                          value: .Boolean(enabled))
     }
 
@@ -671,10 +703,11 @@ final class NotebookCatalogDocument {
             }
         }
         // These optional registers describe individual items. Keep template
-        // settings, snippet sources, pins, former links and the new-note choice.
+        // settings, snippet sources, time calculator notes, pins, former links
+        // and the new-note choice.
         for key in local.document.keys(obj: .ROOT) where
             key.hasPrefix("template.") || key.hasPrefix("recent.")
-                || key.hasPrefix("snippet.")
+                || key.hasPrefix("snippet.") || key.hasPrefix("timeCalculator.")
                 || key.hasPrefix("recentsHidden.")
                 || key.hasPrefix("linkLocation.") || key == "newNoteParent"
         {
@@ -725,10 +758,12 @@ final class NotebookCatalogDocument {
                 try candidate.document.put(obj: destination, key: key, value: value)
             }
         }
-        // Template settings, snippet sources, pins and former links of the
-        // added items come along. The stored notebook's new-note choice wins.
+        // Template settings, snippet sources, time calculator notes, pins and
+        // former links of the added items come along. The stored notebook's
+        // new-note choice wins.
         for key in other.document.keys(obj: .ROOT) where
             key.hasPrefix("template.") || key.hasPrefix("snippet.")
+                || key.hasPrefix("timeCalculator.")
                 || key.hasPrefix("recent.") || key.hasPrefix("recentsHidden.")
                 || key.hasPrefix("linkLocation.")
         {

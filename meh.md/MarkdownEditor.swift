@@ -332,6 +332,13 @@ final class MarkdownTextView: NSTextView {
             if markdownHistoryChanges != oldValue { needsDisplay = true }
         }
     }
+    /// Whether this note shows time calculator results.
+    var markdownTimeCalculator = false {
+        didSet {
+            if markdownTimeCalculator != oldValue { MarkdownTimeCalculator.update(self) }
+        }
+    }
+    var markdownTimeSums: [MarkdownTimeSum] = []
     private let markdownTopInset: CGFloat = 20
     private var markdownTitleHeight: CGFloat = 0
     private var markdownTitleHost: NSHostingView<AnyView>?
@@ -811,6 +818,7 @@ final class MarkdownTextView: NSTextView {
         super.drawBackground(in: rect)
         MarkdownPresentation.drawBlockBackgrounds(in: self, dirtyRect: rect)
         MarkdownHistoryMarks.draw(in: self, dirtyRect: rect)
+        MarkdownTimeCalculator.draw(in: self, dirtyRect: rect)
     }
 
     func historyRemoval(at point: CGPoint) -> MarkdownHistoryMarks.Ring? {
@@ -848,6 +856,7 @@ struct MarkdownEditor: NSViewRepresentable {
     var mode: MarkdownEditorMode
     var palette: MehPalette
     var historyChanges: NoteHistoryChanges
+    var timeCalculator: Bool
     @AppStorage(EditorLineWidth.key, store: NotebookEditorPreferences.store)
     private var lineWidth = EditorLineWidth.standard
 
@@ -871,7 +880,8 @@ struct MarkdownEditor: NSViewRepresentable {
         fontFamily: EditorFontFamily = .system,
         mode: MarkdownEditorMode = .source,
         palette: MehPalette = MehStyle.palette,
-        historyChanges: NoteHistoryChanges = .none
+        historyChanges: NoteHistoryChanges = .none,
+        timeCalculator: Bool = false
     ) {
         _text = text
         self.isReadOnly = isReadOnly
@@ -889,6 +899,7 @@ struct MarkdownEditor: NSViewRepresentable {
         self.mode = mode
         self.palette = palette
         self.historyChanges = historyChanges
+        self.timeCalculator = timeCalculator
     }
 
     func makeCoordinator() -> Coordinator {
@@ -935,6 +946,7 @@ struct MarkdownEditor: NSViewRepresentable {
         )
         context.coordinator.observeUndoAndRedo(for: textView)
         textView.markdownHistoryChanges = historyChanges
+        textView.markdownTimeCalculator = timeCalculator
         if isReadOnly { context.coordinator.observeViewport(of: scrollView) }
 
         context.coordinator.attachNavigation(to: textView)
@@ -1122,6 +1134,7 @@ struct MarkdownEditor: NSViewRepresentable {
         func update(parent: MarkdownEditor, textView: NSTextView) {
             self.parent = parent
             (textView as? MarkdownTextView)?.markdownHistoryChanges = parent.historyChanges
+            (textView as? MarkdownTextView)?.markdownTimeCalculator = parent.timeCalculator
             if let nativeView = textView as? MarkdownTextView,
                nativeView.markdownLinkNavigation !== parent.navigation {
                 attachNavigation(to: nativeView)
@@ -2137,6 +2150,21 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         }
     }
 
+    /// Whether this note shows time calculator results.
+    var markdownTimeCalculator: Bool {
+        get { markdownState.timeCalculator }
+        set {
+            guard newValue != markdownState.timeCalculator else { return }
+            markdownState.timeCalculator = newValue
+            MarkdownTimeCalculator.update(self)
+        }
+    }
+
+    var markdownTimeSums: [MarkdownTimeSum] {
+        get { markdownState.timeSums }
+        set { markdownState.timeSums = newValue }
+    }
+
     func historyRemoval(at point: CGPoint) -> MarkdownHistoryMarks.Ring? {
         guard let layoutManager = textLayoutManager else { return nil }
         return MarkdownHistoryMarks.ring(
@@ -2518,6 +2546,8 @@ private final class MarkdownTextViewState: NSObject {
     var tappedLink: NotebookLinkOccurrence?
     var tappedRemoval: MarkdownHistoryMarks.Ring?
     var historyChanges = NoteHistoryChanges.none
+    var timeCalculator = false
+    var timeSums: [MarkdownTimeSum] = []
     var linkPointer: UIPointerInteraction?
     weak var linkNavigation: MarkdownEditorNavigation?
     var layoutDelegate: MarkdownLayoutManagerDelegate?
@@ -2636,6 +2666,12 @@ nonisolated private final class MarkdownTextLayoutFragment:
                     at: point,
                     context: drawingContext.value
                 )
+                MarkdownTimeCalculator.draw(
+                    in: fragment.value,
+                    textView: textView,
+                    at: point,
+                    context: drawingContext.value
+                )
             }
         }
         super.draw(at: point, in: context)
@@ -2665,6 +2701,7 @@ struct MarkdownEditor: UIViewRepresentable {
     var mode: MarkdownEditorMode
     var palette: MehPalette
     var historyChanges: NoteHistoryChanges
+    var timeCalculator: Bool
     var initialPreviewPosition: MarkdownEditorPosition?
     var initialPreviewInsets: UIEdgeInsets?
     var initialPreviewOriginY: CGFloat?
@@ -2692,6 +2729,7 @@ struct MarkdownEditor: UIViewRepresentable {
         mode: MarkdownEditorMode = .source,
         palette: MehPalette = MehStyle.palette,
         historyChanges: NoteHistoryChanges = .none,
+        timeCalculator: Bool = false,
         initialPreviewPosition: MarkdownEditorPosition? = nil,
         initialPreviewInsets: UIEdgeInsets? = nil,
         initialPreviewOriginY: CGFloat? = nil
@@ -2712,6 +2750,7 @@ struct MarkdownEditor: UIViewRepresentable {
         self.mode = mode
         self.palette = palette
         self.historyChanges = historyChanges
+        self.timeCalculator = timeCalculator
         self.initialPreviewPosition = initialPreviewPosition
         self.initialPreviewInsets = initialPreviewInsets
         self.initialPreviewOriginY = initialPreviewOriginY
@@ -2764,6 +2803,7 @@ struct MarkdownEditor: UIViewRepresentable {
         )
 
         textView.markdownHistoryChanges = historyChanges
+        textView.markdownTimeCalculator = timeCalculator
         context.coordinator.attachNavigation(to: textView)
         textView.updateMarkdownTitle(title, height: titleHeight)
         context.coordinator.applyInitialPreviewInsets(in: textView)
@@ -2991,6 +3031,7 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             self.parent = parent
             (textView as? MarkdownTextView)?.markdownHistoryChanges = parent.historyChanges
+            (textView as? MarkdownTextView)?.markdownTimeCalculator = parent.timeCalculator
             applyInitialPreviewInsets(in: textView)
             // SwiftUI can retain the native view while a navigation visit or
             // History changes its owner. Selection reporting uses the updated

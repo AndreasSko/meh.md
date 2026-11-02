@@ -16,6 +16,7 @@ struct NotebookNoteEditor: View {
     var fontSize: Double = 17
     var fontFamily: EditorFontFamily = .system
     var mode: MarkdownEditorMode = .source
+    var timeCalculator = false
     @State private var editError: String?
     @State private var unrecordedText: String?
     @Environment(\.scenePhase) private var scenePhase
@@ -67,7 +68,8 @@ struct NotebookNoteEditor: View {
                     title: title, titleHeight: titleHeight,
                     focusRequest: focusRequest,
                     fontSize: fontSize,
-                    fontFamily: fontFamily, mode: mode, palette: palette
+                    fontFamily: fontFamily, mode: mode, palette: palette,
+                    timeCalculator: timeCalculator
                 )
                 .overlay {
                     // An empty page waits with a faint face until the first
