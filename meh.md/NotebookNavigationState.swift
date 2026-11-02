@@ -16,7 +16,7 @@ final class NotebookNavigationState {
     @ObservationIgnored private let store: UserDefaults
     @ObservationIgnored private let sceneID: UUID?
     @ObservationIgnored private let storagePrefix = "meh.md.navigation."
-    @ObservationIgnored private var notebookID: UUID?
+    private var notebookID: UUID?
     @ObservationIgnored private var selectionLoadGeneration = 0
     @ObservationIgnored private var recentLoadGeneration = 0
     @ObservationIgnored private var recentPreviewLoadGeneration = 0
@@ -92,6 +92,12 @@ final class NotebookNavigationState {
 
     /// The shared catalog owns recent ordering; this scene only reads it.
     var recentNoteIDs: [UUID] { replica.recentNotes.map(\.id) }
+    /// Changes whenever the Recents sessions must load again. Switching to
+    /// another notebook, for example after combining, clears them even when
+    /// the same notes lead Recents.
+    var recentSessionsRequest: NotebookRecentSessionsRequest {
+        NotebookRecentSessionsRequest(notebookID: notebookID, ids: recentNoteIDs)
+    }
     var allRecentNoteIDs: [UUID] { replica.allRecentNotes.map(\.id) }
     var recentPreviewRevision: NotebookSearchRevision { replica.searchRevision }
 
@@ -396,4 +402,9 @@ private struct StoredPreferences: Codable {
         self.expandedFolderIDs = expandedFolderIDs
         self.positions = positions
     }
+}
+
+struct NotebookRecentSessionsRequest: Hashable {
+    let notebookID: UUID?
+    let ids: [UUID]
 }

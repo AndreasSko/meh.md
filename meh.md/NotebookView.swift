@@ -550,7 +550,7 @@ private struct NotebookScenePresentation: ViewModifier {
             Text(scene.deletionMessage(selection))
         }
         .task { await scene.restoreNavigation() }
-        .task(id: scene.navigationState.recentNoteIDs) {
+        .task(id: scene.navigationState.recentSessionsRequest) {
             await scene.navigationState.loadRecentSessions()
         }
         .task(id: NotebookRecentPreviewRequest(

@@ -111,6 +111,35 @@ final class NotebookWorkspaceSyncStorageTests: XCTestCase {
         workspace.localStorageResetWasScheduled()
     }
 
+    func testCombiningReloadsRecentsForTheCombinedNotebook() async throws {
+        let other = try await joinS3(named: "other")
+        _ = try await other.replica.createNote(name: "Theirs.md", text: "Fictional\n")
+        await other.coordinator.synchronize()
+
+        let workspace = makeWorkspace()
+        await workspace.start()
+        let replica = try XCTUnwrap(workspace.replica)
+        let mine = try await replica.createNote(name: "Mine.md", text: "Fictional packing list\n")
+        try await replica.recordRecentActivity(for: mine)
+        let store = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        let state = NotebookNavigationState(replica: replica, store: store)
+        await state.loadRecentSessions()
+        XCTAssertNotNil(state.recentSessions[mine])
+        let request = state.recentSessionsRequest
+
+        try await workspace.changeSyncStorage(.s3, s3: configuration, credentials: credentials)
+        try await workspace.resolveStorageMismatch(.combine)
+        state.refreshAvailability()
+        XCTAssertNil(state.recentSessions[mine], "a new notebook clears the sessions")
+        XCTAssertEqual(state.recentNoteIDs, request.ids)
+        // The combined notebook has another ID, so its sessions reload even
+        // though the same note leads Recents.
+        XCTAssertNotEqual(state.recentSessionsRequest, request)
+        await state.loadRecentSessions()
+        XCTAssertEqual(state.recentSessions[mine]?.text, "Fictional packing list\n")
+        workspace.localStorageResetWasScheduled()
+    }
+
     func testFailedBackupLeavesStorageUnchanged() async throws {
         let workspace = makeWorkspace()
         await workspace.start()
