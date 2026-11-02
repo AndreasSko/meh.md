@@ -105,6 +105,8 @@ public final class NotebookReplica {
     public private(set) var snippetSources: [NotebookSnippetSource] = []
     public private(set) var snippets: [NotebookSnippet] = []
     @ObservationIgnored private var storedSnippetSourceIDs: Set<UUID> = []
+    /// Notes that show time calculator results, a Labs experiment.
+    public private(set) var timeCalculatorNoteIDs: Set<UUID> = []
     public private(set) var recentNotes: [NotebookRecentNote] = []
     /// All eligible recent notes, with pins first and no ordinary-note cap.
     public private(set) var allRecentNotes: [NotebookRecentNote] = []
@@ -598,6 +600,15 @@ public final class NotebookReplica {
             guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
             let next = try catalog.fork()
             try next.setSnippetSource(id, enabled: enabled)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    public func setTimeCalculator(_ id: UUID, enabled: Bool) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.setTimeCalculator(id, enabled: enabled)
             try await self.persistCatalog(next)
         }
     }
@@ -2173,6 +2184,8 @@ public final class NotebookReplica {
         snippetSources = snippetProjection.sources
         snippets = snippetProjection.snippets
         storedSnippetSourceIDs = snippetMetadata.sources
+        let notes = Set(nextPlacements.lazy.filter { $0.item.kind == .note }.map(\.item.id))
+        timeCalculatorNoteIDs = try document.timeCalculatorNoteIDs().intersection(notes)
         defaultNewNoteParentID = try document.defaultNewNoteParentID()
         try updateRecentProjection(from: document, placements: nextPlacements)
         searchBodyGeneration &+= 1
@@ -2240,6 +2253,7 @@ public final class NotebookReplica {
             sources: storedSnippetSourceIDs).projection(placements)
         snippetSources = snippetsProjection.sources
         snippets = snippetsProjection.snippets
+        timeCalculatorNoteIDs.subtract(rememberedDeletions)
         searchBodyGeneration &+= 1
     }
 
