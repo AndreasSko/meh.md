@@ -25,6 +25,11 @@ Just a few things to note:
   the body are replaced with uploaded GitHub URLs. Videos attach the same
   way, but without a `#alt` suffix. See docs/screenshots.md for sample
   content and launch settings.
+* After adding or updating a Swift package, run
+  `python3 scripts/generate_licenses.py` and commit the updated
+  `meh.md/OpenSourceLicenses.json`. Settings shows it as Open Source
+  Licenses, and `OpenSourceLicensesTests` fails until it matches
+  `Package.resolved`.
 * The App Store page, text and screenshots, lives in `Tools/AppStore/`.
   See docs/app-store.md to change or publish it. Run `publish.sh` without
   `--confirm` first, and with it only when the user asks.
