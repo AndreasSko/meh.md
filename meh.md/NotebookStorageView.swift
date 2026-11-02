@@ -360,7 +360,7 @@ private struct NotebookCloudCopiesSection: View {
                 Task { await workspace.requestCloudCopyCleanup() }
             } label: {
                 HStack {
-                    Text("Clean Up iCloud Copies")
+                    Text("Clean Up \(workspace.syncStorageName) Copies")
                     Spacer()
                     if workspace.isCleaningCloudCopies { ProgressView() }
                 }
@@ -376,12 +376,12 @@ private struct NotebookCloudCopiesSection: View {
             }
             .accessibilityIdentifier("notebook-storage-last-cleanup")
             if let error = workspace.cloudCleanupError {
-                Text("Couldn’t Clean Up iCloud Copies")
+                Text("Couldn’t Clean Up \(workspace.syncStorageName) Copies")
                     .font(.headline)
                 Text(error).foregroundStyle(.secondary)
             }
         } header: {
-            Text("iCloud")
+            Text(workspace.syncStorageName)
         } footer: {
             Text("Removes older sync copies. All notes and their edit history are preserved. Cleanup also runs automatically.")
         }

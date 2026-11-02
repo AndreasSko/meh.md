@@ -1,4 +1,3 @@
-import CloudKit
 import Foundation
 import Observation
 
@@ -10,6 +9,41 @@ struct NotebookSyncState: Codable {
     var appliedHeads: [String: Set<String>] = [:]
     var acknowledgedHeads: [String: Set<String>] = [:]
     var deletedIDs: Set<UUID> = []
+}
+
+extension NotebookSyncState {
+    /// S3 keeps its own progress next to iCloud's, so a notebook can move
+    /// between them or sync with both without losing either binding.
+    static func fileName(forScope scope: String) -> String {
+        isS3(scope) ? "notebook-sync-state-s3.json" : "notebook-sync-state.json"
+    }
+
+    static func proposalFileName(forScope scope: String) -> String {
+        isS3(scope) ? "notebook-proposal-s3.json" : "notebook-proposal.json"
+    }
+
+    static let fileNames = ["notebook-sync-state.json", "notebook-sync-state-s3.json"]
+
+    private static func isS3(_ scope: String) -> Bool { scope.hasPrefix("s3://") }
+}
+
+/// The storage already holds a different notebook. Nothing was changed;
+/// the user decides whether to combine the two or use the other one.
+public struct NotebookStorageMismatch: Error, Equatable, LocalizedError {
+    public let scope: String
+    public let notebookID: UUID
+    /// Notes outside Trash, or nil when the storage could not be read.
+    public let noteCount: Int?
+
+    public init(scope: String, notebookID: UUID, noteCount: Int?) {
+        self.scope = scope
+        self.notebookID = notebookID
+        self.noteCount = noteCount
+    }
+
+    public var errorDescription: String? {
+        "This storage already holds a different notebook. Choose in Settings › Sync what to do with it."
+    }
 }
 
 /// Finite whole-notebook exchanges. Cloud scheduling can invoke this same
@@ -47,8 +81,10 @@ public final class NotebookSyncCoordinator {
         self.replica = replica
         self.transport = transport
         self.diagnosticLog = diagnosticLog
-        stateURL = replica.directory.appending(path: "notebook-sync-state.json")
-        proposalURL = replica.directory.appending(path: "notebook-proposal.json")
+        stateURL = replica.directory.appending(
+            path: NotebookSyncState.fileName(forScope: transport.scope))
+        proposalURL = replica.directory.appending(
+            path: NotebookSyncState.proposalFileName(forScope: transport.scope))
     }
 
     /// A local catalog is remotely joined only after its canonical V2 seed
@@ -61,8 +97,12 @@ public final class NotebookSyncCoordinator {
 
     /// Reads an existing local binding without account discovery or network work.
     /// A provisional state without an accepted notebook has no bound scope.
-    public static func boundScope(for replica: NotebookReplica) throws -> String? {
-        let url = replica.directory.appending(path: "notebook-sync-state.json")
+    /// `likeScope` picks the backend whose binding to read; iCloud by default.
+    public static func boundScope(
+        for replica: NotebookReplica, likeScope: String = ""
+    ) throws -> String? {
+        let url = replica.directory.appending(
+            path: NotebookSyncState.fileName(forScope: likeScope))
         let state: NotebookSyncState
         do {
             state = try JSONDecoder().decode(
@@ -161,7 +201,7 @@ public final class NotebookSyncCoordinator {
     public func cleanupSnapshots() async throws -> SyncSnapshotCleanupReport {
         guard !inFlight, case .exchanged = status,
               let notebookID = try loadState().notebookID else {
-            throw SyncError.unavailable("Sync notes before cleaning up iCloud copies.")
+            throw SyncError.unavailable("Sync notes before cleaning up extra sync copies.")
         }
         try Task.checkCancellation()
         inFlight = true
@@ -185,9 +225,50 @@ public final class NotebookSyncCoordinator {
         }
     }
 
+    /// Reads every catalog snapshot the storage holds and merges them onto
+    /// the seed. Note bodies are skipped; the normal exchange applies them.
+    /// A count may come from a partial read. Joining needs every catalog
+    /// change, or items deleted there could be added back, so it fails
+    /// instead when a page or record can't be used.
+    private func latestRemoteCatalog(
+        seed: SyncRecord, requireComplete: Bool = false
+    ) async throws -> SyncRecord {
+        guard let seedSnapshot = seed.catalogSnapshot else { throw SyncError.invalidRecord }
+        let merged = try NotebookCatalogDocument(snapshot: seedSnapshot, forSync: true)
+        let incomplete = SyncError.unavailable(
+            "The notebook in this storage couldn’t be read completely. Try again.")
+        try await transport.beginExchange()
+        var cursor: String?
+        var complete = false
+        for _ in 0..<1_000 {
+            try Task.checkCancellation()
+            let page = try await transport.fetch(after: cursor)
+            for record in page.records where record.kind == .catalog
+                && record.notebookID == seed.notebookID {
+                do {
+                    guard let snapshot = record.catalogSnapshot else { throw SyncError.invalidRecord }
+                    try merged.merge(NotebookCatalogDocument(snapshot: snapshot, forSync: true))
+                } catch {
+                    if requireComplete { throw incomplete }
+                }
+            }
+            if !page.hasMore { complete = true; break }
+            if page.cursor == cursor { break }
+            cursor = page.cursor
+        }
+        if requireComplete && !complete { throw incomplete }
+        return SyncRecord(catalog: merged.snapshot())
+    }
+
+    nonisolated static func activeNoteCount(in record: SyncRecord) -> Int {
+        guard let snapshot = record.catalogSnapshot,
+              let catalog = try? NotebookCatalogDocument(snapshot: snapshot, forSync: true),
+              let placements = try? catalog.placements() else { return 0 }
+        return placements.count { $0.item.kind == .note && !$0.isInTrash }
+    }
+
     private func namedOversizedError(_ error: any Error) -> any Error {
-        guard let failure = error as? CloudKitSyncTransportError,
-              case let .snapshotTooLarge(documentID, kind, _) = failure else {
+        guard let documentID = SyncBackends.oversizedDocumentID(in: error) else {
             return error
         }
         var displayName: String?
@@ -199,9 +280,7 @@ public final class NotebookSyncCoordinator {
                 displayName = items.first { $0.id == documentID }?.name
             }
         }
-        return CloudKitSyncTransportError.snapshotTooLarge(
-            documentID: documentID, kind: kind, displayName: displayName
-        )
+        return SyncBackends.naming(error, displayName: displayName)
     }
 
     private func exchange() async throws {
@@ -238,9 +317,35 @@ public final class NotebookSyncCoordinator {
         if let expected = state.notebookID, expected != notebookID {
             throw SyncError.identityConflict
         }
+        // A notebook joined elsewhere, such as in iCloud, cannot take over
+        // another notebook's storage. Fail before changing anything.
+        if state.notebookID == nil, let current = replica.catalogSnapshot,
+           current.notebookID != notebookID,
+           try !replica.mayJoinAnotherNotebook(in: transport.scope, notebookID: notebookID) {
+            let latest = try? await latestRemoteCatalog(seed: seed)
+            throw NotebookStorageMismatch(
+                scope: transport.scope, notebookID: notebookID,
+                noteCount: latest.map(Self.activeNoteCount)
+            )
+        }
         // Acceptance validates the record or reuses an exact, durable match.
         if state.notebookID == nil {
-            try await replica.acceptFirstSyncSeed(seed, scope: transport.scope)
+            // A chosen notebook is joined in its current state, so shared
+            // items are not added twice and this device's deletions only
+            // skip what it really holds. The seed is just the first version.
+            let current = replica.catalogSnapshot
+            let chosen = try current.map { $0.notebookID != notebookID } ?? false
+                && replica.hasOtherNotebookChoice(for: transport.scope)
+            let incoming = chosen
+                ? try await latestRemoteCatalog(seed: seed, requireComplete: true) : seed
+            try await replica.acceptFirstSyncSeed(
+                seed, latest: incoming, scope: transport.scope)
+            if current?.notebookID != notebookID {
+                // Deletions remembered for the old notebook must not be
+                // replayed onto the one it joined; the join carried over
+                // those that apply.
+                state.deletedIDs = try replica.deletedIDs
+            }
         } else {
             try await replica.acceptSeed(seed)
         }
@@ -403,7 +508,7 @@ public final class NotebookSyncCoordinator {
             phaseFraction: pendingNotes.isEmpty ? 1 : 0,
             completedUnits: 0, totalUnits: pendingNotes.count
         )
-        var oversizedError: CloudKitSyncTransportError?
+        var oversizedError: (any Error)?
         for start in stride(from: 0, to: pendingNotes.count, by: 50) {
             try Task.checkCancellation()
             let end = min(start + 50, pendingNotes.count)
@@ -435,8 +540,7 @@ public final class NotebookSyncCoordinator {
                     state: &state,
                     completedNoteCount: batch.count
                 )
-            } catch let error as CloudKitSyncTransportError {
-                guard case .snapshotTooLarge = error else { throw error }
+            } catch let error where SyncBackends.oversizedDocumentID(in: error) != nil {
                 oversizedError = oversizedError ?? error
             }
         }
@@ -636,7 +740,7 @@ public final class NotebookSyncCoordinator {
     /// Remove a single-note body left in the proposal by an older build,
     /// e.g. after permanent deletion, even when cloud setup is unavailable.
     static func removeLegacyProposalBody(in directory: URL) throws {
-        let url = directory.appending(path: "notebook-proposal.json")
+        let url = directory.appending(path: NotebookSyncState.proposalFileName(forScope: ""))
         let data: Data
         do { data = try Data(contentsOf: url) }
         catch CocoaError.fileReadNoSuchFile { return }

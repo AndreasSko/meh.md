@@ -699,6 +699,56 @@ final class NotebookCatalogDocument {
         return candidate
     }
 
+    /// Adds another notebook's items to this one, for a user who combines
+    /// two notebooks. Items this notebook already has keep their state here;
+    /// their note bodies still merge through sync because they share history.
+    /// The other notebook's top-level items move into a new folder, so they
+    /// are easy to find and tidy up. Conflicting notebook settings keep this
+    /// notebook's value.
+    func forkCombining(
+        _ other: NotebookCatalogDocument, omitting omitted: Set<UUID> = [],
+        intoFolderNamed folderName: String
+    ) throws -> NotebookCatalogDocument {
+        let existing = Set(try items().map(\.id))
+        let incoming = try other.items().filter {
+            !omitted.contains($0.id) && !existing.contains($0.id)
+        }
+        let incomingIDs = Set(incoming.map(\.id))
+        let candidate = try fork()
+        for item in incoming {
+            let source = try other.object(for: item.id)
+            let destination = try candidate.document.putObject(
+                obj: candidate.itemsObject, key: item.id.uuidString, ty: .Map)
+            for key in other.document.keys(obj: source) {
+                guard case .Scalar(let value) = try other.document.get(obj: source, key: key)
+                else { throw NotebookCatalogError.invalidDocument }
+                try candidate.document.put(obj: destination, key: key, value: value)
+            }
+        }
+        // Template settings, snippet sources, pins and former links of the
+        // added items come along. The stored notebook's new-note choice wins.
+        for key in other.document.keys(obj: .ROOT) where
+            key.hasPrefix("template.") || key.hasPrefix("snippet.")
+                || key.hasPrefix("recent.") || key.hasPrefix("recentsHidden.")
+                || key.hasPrefix("linkLocation.")
+        {
+            guard incomingIDs.contains(where: { key.contains($0.uuidString) }),
+                  try candidate.document.get(obj: .ROOT, key: key) == nil,
+                  case .Scalar(let value) = try other.document.get(obj: .ROOT, key: key)
+            else { continue }
+            try candidate.document.put(obj: .ROOT, key: key, value: value)
+        }
+        let roots = try other.orderedChildren(parentID: nil, inTrash: false)
+            .filter { $0.item.parentID == nil && incomingIDs.contains($0.item.id) }
+            .map { $0.item.id }
+        if !roots.isEmpty {
+            let folderID = try candidate.add(kind: .folder, name: folderName)
+            for id in roots { try candidate.move(id, to: folderID) }
+        }
+        _ = try NotebookCatalogDocument(snapshot: candidate.snapshot())
+        return candidate
+    }
+
     @discardableResult
     func add(
         id: UUID = UUID(), kind: NotebookItemKind, name: String,
@@ -1373,10 +1423,27 @@ final class NotebookCatalogDocument {
         return entries
     }
 
+    /// Two devices that combine the same notebook at once each copy its
+    /// items under the same IDs. Copies with the same kind and name are that
+    /// one item, and every device picks the same winner. Anything else under
+    /// one ID stays a conflict.
+    private func isSingleItem(at key: String) throws -> Bool {
+        let values = try document.getAll(obj: itemsObject, key: key)
+        guard values.count > 1 else { return values.count == 1 }
+        let copies = try values.map { value -> [String] in
+            guard case .Object(let object, .Map) = value,
+                  case .Scalar(.String(let kind)) = try document.get(obj: object, key: "kind"),
+                  case .Scalar(.String(let name)) = try document.get(obj: object, key: "name")
+            else { throw NotebookCatalogError.duplicateIdentity }
+            return [kind, name]
+        }
+        return Set(copies).count == 1
+    }
+
     private func decodeItems() throws -> [ItemEntry] {
         try document.keys(obj: itemsObject).sorted().map { key in
             guard let id = UUID(uuidString: key), key == id.uuidString,
-                try document.getAll(obj: itemsObject, key: key).count == 1
+                try isSingleItem(at: key)
             else {
                 throw NotebookCatalogError.duplicateIdentity
             }

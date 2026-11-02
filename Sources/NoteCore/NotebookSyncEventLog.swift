@@ -1,4 +1,3 @@
-import CloudKit
 import Foundation
 import Observation
 
@@ -112,12 +111,8 @@ public final class NotebookSyncEventLog {
         if let error = error as? LocalNoteSaveFailure {
             return "LocalNoteSaveFailure." + errorCode(error.underlyingError)
         }
-        if let error = error as? CloudKitStateWriteFailure {
-            return "CloudKitStateWriteFailure."
-                + errorCode(error.underlyingError)
-        }
-        if let error = error as? CKError {
-            return "CKError.\(error.code.rawValue)"
+        if let code = SyncBackends.diagnosticCode(of: error, nested: errorCode) {
+            return code
         }
         if let error = error as? SyncError {
             switch error {
@@ -129,25 +124,6 @@ public final class NotebookSyncEventLog {
             case .localSaveRequired: return "SyncError.localSaveRequired"
             case .updateRequired: return "SyncError.updateRequired"
             case .unavailable: return "SyncError.unavailable"
-            }
-        }
-        if let error = error as? CloudKitSyncTransportError {
-            switch error {
-            case .accountUnavailable: return "CloudKitSyncTransportError.accountUnavailable"
-            case .corruptState: return "CloudKitSyncTransportError.corruptState"
-            case .unrecoverableRetryDelay:
-                return "CloudKitSyncTransportError.unrecoverableRetryDelay"
-            case .invalidRemoteRecord:
-                return "CloudKitSyncTransportError.invalidRemoteRecord"
-            case .unexpectedDeletion:
-                return "CloudKitSyncTransportError.unexpectedDeletion"
-            case .uploadFailed(let code):
-                return "CloudKitSyncTransportError.uploadFailed.\(code)"
-            case .uploadNotAcknowledged:
-                return "CloudKitSyncTransportError.uploadNotAcknowledged"
-            case let .snapshotTooLarge(documentID, _, _):
-                return "CloudKitSyncTransportError.snapshotTooLarge."
-                    + documentID.uuidString
             }
         }
         if let error = error as? NotebookReplicaError {

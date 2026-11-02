@@ -246,6 +246,8 @@ public protocol SyncTransport: Sendable {
     ) async
     /// The earliest useful retry time known by the transport.
     func retryNotBefore() async -> Date?
+    /// Repairs made while opening saved transport state, for the event log.
+    func recoveryEvents() async -> [String]
 }
 
 extension SyncTransport {
@@ -296,6 +298,8 @@ extension SyncTransport {
 
     public func retryNotBefore() async -> Date? { nil }
 
+    public func recoveryEvents() async -> [String] { [] }
+
     public func purgeDeletedNotes(
         _ noteIDs: Set<UUID>, notebookID: UUID
     ) async throws {
@@ -344,7 +348,7 @@ public enum SyncError: Error, Equatable, LocalizedError {
         case .invalidCursor: "The sync cursor is invalid. A full replay is required."
         case .localSaveRequired: "Save this note locally before synchronizing."
         case .updateRequired:
-            "Update meh.md to resume iCloud sync. You can keep editing your notes on this device."
+            "Update meh.md to resume sync. You can keep editing your notes on this device."
         case .unavailable(let message): message
         }
     }
