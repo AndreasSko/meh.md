@@ -70,6 +70,8 @@ struct NotebookFeedbackSection: View {
                 .accessibilityIdentifier("notebook-send-feedback")
             Link("About meh.md", destination: NotebookFeedback.aboutURL)
             Link("Privacy Policy", destination: NotebookFeedback.privacyURL)
+            NavigationLink("Open Source Licenses") { NotebookLicensesView() }
+                .accessibilityIdentifier("notebook-licenses-settings")
         } footer: {
             Text("If your mail app allows it, feedback includes the sync event log. It contains no note contents or names.")
         }
