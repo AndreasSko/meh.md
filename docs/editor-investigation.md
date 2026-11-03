@@ -187,12 +187,12 @@ Commands used:
 ```sh
 xcodebuild -project meh.md.xcodeproj -scheme meh.md \
   -configuration Debug -destination 'platform=macOS' \
-  -derivedDataPath /tmp/meh-md-derived-mac \
+  -derivedDataPath /tmp/meh-md-derived-mac -skipPackagePluginValidation \
   CODE_SIGNING_ALLOWED=NO build
 
 xcodebuild -project meh.md.xcodeproj -scheme meh.md \
   -configuration Debug -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath /tmp/meh-md-derived-ios \
+  -derivedDataPath /tmp/meh-md-derived-ios -skipPackagePluginValidation \
   CODE_SIGNING_ALLOWED=NO build
 ```
 

@@ -64,7 +64,7 @@ fi
 xcodebuild build -project meh.md.xcodeproj -scheme "$scheme" \
   -configuration "$configuration" \
   -destination "id=$udid" -derivedDataPath "$derived" \
-  -allowProvisioningUpdates -quiet
+  -allowProvisioningUpdates -skipPackagePluginValidation -quiet
 app=$(find "$derived/Build/Products/$configuration-iphoneos" -maxdepth 1 -name '*.app' | head -1)
 bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")
 

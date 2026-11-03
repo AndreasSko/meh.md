@@ -9,11 +9,16 @@ let package = Package(
         .library(name: "NotebookAppModel", targets: ["NotebookAppModel"]),
         .library(name: "NativeEditor", targets: ["NativeEditor"]),
         .library(name: "NoteCore", targets: ["NoteCore"]),
+        .library(name: "NoteCoreAWS", targets: ["NoteCoreAWS"]),
     ],
     dependencies: [
         .package(
             url: "https://github.com/automerge/automerge-swift.git",
             exact: "0.7.2"
+        ),
+        .package(
+            url: "https://github.com/awslabs/aws-sdk-swift.git",
+            exact: "1.8.19"
         ),
     ],
     targets: [
@@ -23,18 +28,28 @@ let package = Package(
                 .product(name: "Automerge", package: "automerge-swift"),
             ]
         ),
+        // The AWS SDK lives apart from NoteCore, so code that only edits
+        // notes, like the editor performance probes, builds without it.
+        .target(
+            name: "NoteCoreAWS",
+            dependencies: [
+                "NoteCore",
+                .product(name: "AWSS3", package: "aws-sdk-swift"),
+            ]
+        ),
         .target(name: "TestSupport", path: "Tests/TestSupport"),
         .testTarget(
             name: "NoteCoreTests",
             dependencies: [
                 "NoteCore",
+                "NoteCoreAWS",
                 "TestSupport",
                 .product(name: "Automerge", package: "automerge-swift"),
             ]
         ),
         .target(
             name: "NotebookAppModel",
-            dependencies: ["NoteCore"],
+            dependencies: ["NoteCore", "NoteCoreAWS"],
             path: "meh.md",
             exclude: [
                 "Assets.xcassets", "CloudKitSmokeCheck.swift",
@@ -114,7 +129,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NotebookAppModelTests",
-            dependencies: ["NotebookAppModel", "NoteCore", "TestSupport"],
+            dependencies: ["NotebookAppModel", "NoteCore", "NoteCoreAWS", "TestSupport"],
             path: "Tests/NotebookAppModelTests"
         ),
         .target(

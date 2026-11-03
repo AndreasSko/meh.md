@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		000000000000000000000201 /* NoteCore in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000202 /* NoteCore */; };
+		000000000000000000000205 /* NoteCoreAWS in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000206 /* NoteCoreAWS */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				000000000000000000000201 /* NoteCore in Frameworks */,
+				000000000000000000000205 /* NoteCoreAWS in Frameworks */,
 			);
 		};
 		000000000000000130000001 /* Frameworks */ = {
@@ -104,6 +106,7 @@
 			name = meh.md;
 			packageProductDependencies = (
 				000000000000000000000202 /* NoteCore */,
+				000000000000000000000206 /* NoteCoreAWS */,
 			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* meh.md.app */;
@@ -454,7 +457,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 0.25.0;
+				MARKETING_VERSION = 0.25.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "de.andreas-sk.meh-md";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -522,7 +525,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 0.25.0;
+				MARKETING_VERSION = 0.25.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "de.andreas-sk.meh-md";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -590,7 +593,7 @@
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MARKETING_VERSION = 0.25.0;
+				MARKETING_VERSION = 0.25.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "de.andreas-sk.meh-md.icloud-dev";
 				PRODUCT_NAME = "meh.md iCloud Dev";
 				REGISTER_APP_GROUPS = YES;
@@ -669,6 +672,10 @@
 		000000000000000000000202 /* NoteCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = NoteCore;
+		};
+		000000000000000000000206 /* NoteCoreAWS */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NoteCoreAWS;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

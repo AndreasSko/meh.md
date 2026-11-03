@@ -9,6 +9,7 @@ import Network
 #else
 import NoteCore
 #endif
+import NoteCoreAWS
 import Observation
 #if os(iOS)
 import UIKit
@@ -1847,7 +1848,9 @@ final class NotebookWorkspace {
             stateDirectory: FileManager.default.temporaryDirectory
                 .appending(path: "meh-s3-check-\(UUID().uuidString)"),
             session: Self.s3CheckSession,
-            timeout: 15
+            timeout: 15,
+            // Each try may wait the full timeout for an unreachable server.
+            maxAttempts: 2
         )
         return try await transport.checkConnection()
     }

@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 
 @testable import NoteCore
+@testable import NoteCoreAWS
 @testable import NotebookAppModel
 import TestSupport
 

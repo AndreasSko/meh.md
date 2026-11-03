@@ -44,6 +44,9 @@ Just a few things to note:
 
 * Markdown-only changes need no build or test run.
 * Use `-derivedDataPath build/<name>`; `build/` is ignored by git.
+* Pass `-skipPackagePluginValidation` to every `xcodebuild` that builds.
+  The AWS SDK generates code with a package plug-in, and xcodebuild
+  refuses to run an untrusted plug-in. In Xcode, trust it once when asked.
 * Pipe `xcodebuild` output through `xcbeautify` when it is installed. Keep
   the raw log with `tee` and use `set -o pipefail` so failures still show.
 * Run UI tests with `build-for-testing` once, then `test-without-building

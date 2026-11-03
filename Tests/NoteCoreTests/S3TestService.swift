@@ -1,5 +1,6 @@
 import Foundation
 @testable import NoteCore
+@testable import NoteCoreAWS
 
 /// A real S3-compatible service for tests, configured by environment:
 /// `MEH_S3_TEST_ENDPOINT`, `MEH_S3_TEST_BUCKET`, `MEH_S3_TEST_ACCESS_KEY`,

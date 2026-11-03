@@ -24,7 +24,7 @@ import FoundationNetworking
 public actor S3SyncTransport: SyncTransport {
     public nonisolated let scope: String
 
-    private let client: S3Client
+    private let client: any S3Client
     private let root: String
     private let stateURL: URL
     private let pageSize: Int
@@ -42,17 +42,12 @@ public actor S3SyncTransport: SyncTransport {
 
     public init(
         configuration: S3SyncConfiguration,
-        credentials: S3Credentials,
+        client: any S3Client,
         stateDirectory: URL,
-        session: URLSession = .shared,
-        timeout: TimeInterval = 30,
         pageSize: Int = 200
     ) {
         scope = configuration.scope
-        client = S3Client(
-            configuration: configuration, credentials: credentials,
-            session: session, timeout: timeout
-        )
+        self.client = client
         let prefix = configuration.normalizedPrefix
         root = (prefix.isEmpty ? "" : prefix + "/") + "meh-notebook/"
         stateURL = stateDirectory.appending(path: "s3-device.json")
@@ -435,6 +430,8 @@ public actor S3SyncTransport: SyncTransport {
                 _ = try await client.put(key, body)
                 return
             case .alreadyExists:
+                // A retried write can find the entry its first try stored.
+                if try await client.get(key) == body { return }
                 var state = try loadDevice()
                 state.deviceID = UUID().uuidString.lowercased()
                 state.nextSequence = 1
