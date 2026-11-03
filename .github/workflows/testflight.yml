@@ -73,12 +73,16 @@ jobs:
             destination: generic/platform=iOS
             profile_secret: IOS_PROFILE_BASE64
             profile_name: 'meh.md iOS TestFlight'
+            widgets_profile_secret: IOS_WIDGETS_PROFILE_BASE64
+            widgets_profile_name: 'meh.md Widgets iOS TestFlight'
             profile_extension: mobileprovision
             artifact: ipa
           - platform: MAC_OS
             destination: generic/platform=macOS
             profile_secret: MACOS_PROFILE_BASE64
             profile_name: meh.md Mac TestFlight
+            widgets_profile_secret: MACOS_WIDGETS_PROFILE_BASE64
+            widgets_profile_name: meh.md Widgets Mac TestFlight
             profile_extension: provisionprofile
             artifact: pkg
     env:
@@ -112,22 +116,28 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.SIGNING_CERTIFICATES_P12_BASE64 }}
           p12-password: ${{ secrets.SIGNING_CERTIFICATES_PASSWORD }}
-      - name: Install distribution profile
+      - name: Install distribution profiles
         env:
-          PROFILE_BASE64: ${{ secrets[matrix.profile_secret] }}
+          APP_PROFILE_BASE64: ${{ secrets[matrix.profile_secret] }}
+          WIDGETS_PROFILE_BASE64: ${{ secrets[matrix.widgets_profile_secret] }}
           PROFILE_EXTENSION: ${{ matrix.profile_extension }}
         run: |
           umask 077
-          printf '%s' "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile"
-          security cms -D -i "$RUNNER_TEMP/profile" > "$RUNNER_TEMP/profile.plist"
-          uuid=$(plutil -extract UUID raw "$RUNNER_TEMP/profile.plist")
           directory="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
           mkdir -p "$directory"
-          cp "$RUNNER_TEMP/profile" "$directory/$uuid.$PROFILE_EXTENSION"
+          for name in APP WIDGETS; do
+            variable="${name}_PROFILE_BASE64"
+            [[ -n "${!variable}" ]] || { echo "Missing secret for $name profile" >&2; exit 1; }
+            printf '%s' "${!variable}" | base64 --decode > "$RUNNER_TEMP/profile"
+            security cms -D -i "$RUNNER_TEMP/profile" > "$RUNNER_TEMP/profile.plist"
+            uuid=$(plutil -extract UUID raw "$RUNNER_TEMP/profile.plist")
+            cp "$RUNNER_TEMP/profile" "$directory/$uuid.$PROFILE_EXTENSION"
+          done
       - name: Archive Release
         env:
           DESTINATION: ${{ matrix.destination }}
           PROFILE_NAME: ${{ matrix.profile_name }}
+          WIDGETS_PROFILE_NAME: ${{ matrix.widgets_profile_name }}
           BUILD_NUMBER: ${{ steps.release.outputs.number }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
@@ -136,7 +146,8 @@ jobs:
             -archivePath "$RUNNER_TEMP/App.xcarchive" -skipPackagePluginValidation \
             CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY='Apple Distribution' \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            MEH_APP_PROFILE="$PROFILE_NAME" \
+            MEH_WIDGETS_PROFILE="$WIDGETS_PROFILE_NAME" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" archive
       - name: Export internal-only build
         run: |
