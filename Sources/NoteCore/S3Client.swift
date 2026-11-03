@@ -171,6 +171,8 @@ public protocol S3Client: Sendable {
         prefix: String, delimiter: String?, startAfter: String?,
         continuationToken: String?, maxKeys: Int
     ) async throws -> S3Listing
+    /// Replies so far that asked for a retry, such as 503 SlowDown.
+    var busyReplyCount: Int { get }
 }
 
 public struct S3Listing: Sendable {

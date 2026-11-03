@@ -365,6 +365,85 @@ final class S3SyncTransportTests: XCTestCase {
         )
     }
 
+    func testPurgeReportsProgressAndBusyReplies() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        let notebookID = try XCTUnwrap(fixture.catalog.notebookID)
+        let events = Recorder<(String, [String: Int])>()
+        let progress = Recorder<SyncCleanupProgress>()
+        await writer.setDiagnosticsHandler { await events.append(($0, $1)) }
+        await writer.setCleanupProgressHandler { await progress.append($0) }
+
+        server.failNextPuts(3, prefix: "meh/meh-notebook/purged/")
+        try await writer.purgeDeletedNotes(Set((0..<120).map { _ in UUID() }), notebookID: notebookID)
+
+        let logged = await events.items
+        XCTAssertEqual(
+            logged.filter { $0.0 == "s3_purge_progress" }.map { $0.1["done"] }, [50, 100]
+        )
+        XCTAssertEqual(logged.last?.0, "s3_purge")
+        XCTAssertEqual(logged.last?.1, ["notes": 120, "busy": 3])
+        let reported = await progress.items
+        XCTAssertEqual(reported.first?.completedCount, 0)
+        XCTAssertEqual(reported.last?.completedCount, 120)
+        XCTAssertEqual(reported.last?.totalCount, 120)
+    }
+
+    func testBodiesLeftByAFailedPurgeAreDeletedOnTheNextOne() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let root = temporaryDirectory()
+        let writer = transport(server, device: "writer", root: root)
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publish(fixture.notes[0])
+        let notebookID = try XCTUnwrap(fixture.catalog.notebookID)
+        let id = fixture.notes[0].snapshot.noteID
+        let bodies = "meh/meh-notebook/records/" + id.uuidString.lowercased()
+
+        server.failNextDeletes(AWSS3Client.maxAttempts, prefix: bodies)
+        do {
+            try await writer.purgeDeletedNotes([id], notebookID: notebookID)
+            XCTFail("Purged although every delete failed")
+        } catch {}
+        XCTAssertNotEqual(server.keys(bucket: "notes", prefix: bodies), [])
+
+        // The marker is stored, yet the next pass, here after a restart,
+        // still removes the bodies.
+        let restarted = transport(server, device: "writer", root: root)
+        _ = try await restarted.fetch(after: nil)
+        try await restarted.purgeDeletedNotes([id], notebookID: notebookID)
+        XCTAssertEqual(server.keys(bucket: "notes", prefix: bodies), [])
+        let before = server.requests.count
+        try await restarted.purgeDeletedNotes([id], notebookID: notebookID)
+        XCTAssertFalse(server.requests.dropFirst(before).contains { $0.hasPrefix("PUT") })
+    }
+
+    func testDeviceStateSavedBeforeUnsweptStillLoads() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let root = temporaryDirectory()
+        let writer = transport(server, device: "writer", root: root)
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        let state = root.appending(path: "s3-writer/s3-device.json")
+        try FileManager.default.createDirectory(
+            at: state.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        // The format 0.25.0 saved, before `unswept` was added.
+        let legacy = """
+            {"version":1,"scope":"\(writer.scope)","deviceID":"legacy-device",
+             "nextSequence":7,"snapshotCounts":{},"retainedBytes":0,
+             "hasNewSnapshots":false}
+            """
+        try Data(legacy.utf8).write(to: state)
+
+        let reopened = transport(server, device: "writer", root: root)
+        try await reopened.publish(fixture.notes[0])
+        XCTAssertTrue(server.keys(bucket: "notes", prefix: "meh/meh-notebook/log/")
+            .contains("meh/meh-notebook/log/legacy-device/00000000000000000007.json"))
+    }
+
     func testPurgeOfAFewNotesListsOnlyTheirFolders() async throws {
         let server = FakeS3Server()
         let fixture = try Fixture()
@@ -477,6 +556,11 @@ final class S3SyncTransportTests: XCTestCase {
             SyncRecord(catalog: try NotebookCatalogDocument().snapshot())
         }
     }
+}
+
+private actor Recorder<Item: Sendable> {
+    private(set) var items: [Item] = []
+    func append(_ item: Item) { items.append(item) }
 }
 
 /// Retries at once, so tests of failing requests stay fast.

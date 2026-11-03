@@ -26,6 +26,7 @@ public final class FakeS3Server: @unchecked Sendable {
     private var _requests: [String] = []
     private var _putFailures: [PutFailure] = []
     private var _putFailurePrefix = ""
+    private var _putFailureMethod = "PUT"
 
     /// A failed PUT. With `afterStoring`, the object is stored but the
     /// reply is still an error, as when a response is lost on the way back.
@@ -76,9 +77,19 @@ public final class FakeS3Server: @unchecked Sendable {
     public func failNextPuts(
         _ count: Int, with failure: PutFailure = PutFailure(), prefix: String = ""
     ) {
+        failNext(count, method: "PUT", with: failure, prefix: prefix)
+    }
+
+    /// Fails the next DELETE requests to keys under `prefix` with a 503.
+    public func failNextDeletes(_ count: Int, prefix: String = "") {
+        failNext(count, method: "DELETE", with: PutFailure(), prefix: prefix)
+    }
+
+    private func failNext(_ count: Int, method: String, with failure: PutFailure, prefix: String) {
         lock.withLock {
             _putFailures = Array(repeating: failure, count: count)
             _putFailurePrefix = prefix
+            _putFailureMethod = method
         }
     }
 
@@ -116,16 +127,17 @@ public final class FakeS3Server: @unchecked Sendable {
             }
             let key = parts.count > 1 ? String(parts[1]) : ""
             let full = bucket + "/" + key
+            if !_putFailures.isEmpty, method == _putFailureMethod,
+               key.hasPrefix(_putFailurePrefix) {
+                let failure = _putFailures.removeFirst()
+                if failure.afterStoring { objects[full] = body }
+                return (
+                    failure.status, [:],
+                    failure.body.map { Data($0.utf8) } ?? Self.error(failure.code)
+                )
+            }
             switch method {
             case "PUT":
-                if !_putFailures.isEmpty, key.hasPrefix(_putFailurePrefix) {
-                    let failure = _putFailures.removeFirst()
-                    if failure.afterStoring { objects[full] = body }
-                    return (
-                        failure.status, [:],
-                        failure.body.map { Data($0.utf8) } ?? Self.error(failure.code)
-                    )
-                }
                 if request.value(forHTTPHeaderField: "If-None-Match") == "*" {
                     switch _conditionalWrites {
                     case .supported where objects[full] != nil:

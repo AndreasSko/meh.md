@@ -7,6 +7,7 @@ import SmithyHTTPAPI
 import SmithyIdentity
 import SmithyRetries
 import SmithyRetriesAPI
+import Synchronization
 
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -42,6 +43,7 @@ public struct AWSS3Client: NoteCore.S3Client {
     public static let maxAttempts = 5
 
     let bucket: String
+    private let busyReplies = S3BusyReplies()
     private let sdk: Result<AWSS3.S3Client, any Error>
 
     public init(
@@ -62,6 +64,7 @@ public struct AWSS3Client: NoteCore.S3Client {
         retryBackoff: any RetryBackoffStrategy
     ) {
         bucket = configuration.bucket
+        let busyReplies = busyReplies
         sdk = Result {
             try configuration.validate()
             let config = try AWSS3.S3Client.S3ClientConfig(
@@ -90,11 +93,15 @@ public struct AWSS3Client: NoteCore.S3Client {
                 ),
                 endpoint: configuration.isAWS
                     ? nil : configuration.endpointURL?.absoluteString,
-                httpClientEngine: S3SessionEngine(session: session, timeout: timeout)
+                httpClientEngine: S3SessionEngine(
+                    session: session, timeout: timeout, busyReplies: busyReplies
+                )
             )
             return AWSS3.S3Client(config: config)
         }
     }
+
+    public var busyReplyCount: Int { busyReplies.value }
 
     public func get(_ key: String) async throws -> Data? {
         do {
@@ -173,6 +180,7 @@ public struct AWSS3Client: NoteCore.S3Client {
 struct S3SessionEngine: SmithyHTTPAPI.HTTPClient {
     let session: URLSession
     let timeout: TimeInterval
+    let busyReplies: S3BusyReplies
 
     func send(request: SmithyHTTPAPI.HTTPRequest) async throws -> SmithyHTTPAPI.HTTPResponse {
         var components = URLComponents()
@@ -203,6 +211,7 @@ struct S3SessionEngine: SmithyHTTPAPI.HTTPClient {
         guard let http = response as? HTTPURLResponse else {
             throw S3SyncTransportError.invalidResponse
         }
+        if http.statusCode >= 500 || http.statusCode == 429 { busyReplies.increment() }
         // The SDK only reads errors with an S3 error code. A proxy's empty
         // or HTML reply would otherwise be neither retried nor reported by
         // its status, so it gets the status as its code.
@@ -243,4 +252,12 @@ struct S3SessionEngine: SmithyHTTPAPI.HTTPClient {
         }
         return (Data(buffer), response)
     }
+}
+
+final class S3BusyReplies: Sendable {
+    private let count = Mutex(0)
+
+    var value: Int { count.withLock { $0 } }
+
+    func increment() { count.withLock { $0 += 1 } }
 }
