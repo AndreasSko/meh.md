@@ -1118,6 +1118,23 @@ private struct NotebookFileRow: View {
                     .accessibilityIdentifier("notebook-swipe-trash")
                 }
             }
+            #if os(iOS)
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                if !scene.showsSelectionControls, scene.editingID == nil,
+                   scene.detailEditingID == nil {
+                    Button {
+                        // An open swipe can outlive a pointer multi-selection.
+                        guard !scene.showsSelectionControls else { return }
+                        scene.beginSelectingItems(startingWith: row.id)
+                    } label: {
+                        Image(systemName: "checkmark.circle")
+                    }
+                    .tint(.accentColor)
+                    .accessibilityLabel("Select")
+                    .accessibilityIdentifier("notebook-swipe-select")
+                }
+            }
+            #endif
         }
     }
 }
