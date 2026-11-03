@@ -18,6 +18,7 @@ final class NotebookSceneState {
     let workspace: NotebookWorkspace?
     let incomingImports: NotebookIncomingImportRequests?
     let preferredNoteID: UUID?
+    let sceneID: UUID
     let navigationState: NotebookNavigationState
     let recentCommands: NotebookRecentCommandState
     #if os(macOS)
@@ -56,11 +57,9 @@ final class NotebookSceneState {
     var showingTextSize = false
     var sharedFile: NotebookSharedFile?
     var deletionSelection: NotebookDeletionSelection?
-    #if os(iOS)
     let quickActionRequests = NotebookQuickActionRequests.shared
     var pendingTemplateQuickAction = false
     var awaitingQuickActionSheetDismissal = false
-    #endif
 
     // MARK: Search
 
@@ -157,6 +156,7 @@ final class NotebookSceneState {
         self.workspace = workspace
         self.incomingImports = incomingImports
         self.preferredNoteID = preferredNoteID
+        self.sceneID = sceneID
         navigationState = NotebookNavigationState(replica: replica, sceneID: sceneID)
         recentCommands = NotebookRecentCommandState(replica: replica)
     }
@@ -209,9 +209,8 @@ final class NotebookSceneState {
         resetLinkJourney()
         if selectedID != nil { preferredCompactColumn = .detail }
         busy = false
-        #if os(iOS)
+        NotebookWidgetSnapshotWriter.shared.schedule(replica, delay: .zero)
         handlePendingQuickAction()
-        #endif
     }
 
     func catalogSnapshotChanged(
@@ -219,6 +218,7 @@ final class NotebookSceneState {
     ) {
         workspace?.contentDidSave(trigger: "catalog snapshot changed")
         navigationState.refreshAvailability()
+        NotebookWidgetSnapshotWriter.shared.schedule(replica)
         if previous?.notebookID != current?.notebookID {
             browserDrag.reset()
             search.clear()
@@ -305,23 +305,44 @@ final class NotebookSceneState {
             }
         }
         workspace?.noteDidEdit()
+        NotebookWidgetSnapshotWriter.shared.schedule(replica, editedID: selectedID)
     }
 
     // MARK: Presentation
 
-    #if os(iOS)
     func handlePendingQuickAction() {
         guard restoredNavigation, !busy else { return }
         if pendingTemplateQuickAction {
             presentPendingTemplateQuickAction()
             return
         }
-        guard let action = quickActionRequests.takeNextAction() else { return }
+        guard let action = quickActionRequests.takeNextAction(for: sceneID) else { return }
         switch action {
         case .newNote: createDefaultNote()
         case .newFromTemplate:
             pendingTemplateQuickAction = true
             presentPendingTemplateQuickAction()
+        case .openNote(let id):
+            openFromOutside(id)
+        }
+    }
+
+    /// Opens a note picked outside the window, such as in a widget. Sheets
+    /// close first, so the note isn't hidden behind them.
+    private func openFromOutside(_ id: UUID) {
+        showingSettings = false
+        showingTrash = false
+        showingTemplates = false
+        showingBacklinks = false
+        search.showingQuickOpen = false
+        if browsingAllRecents { browsingAllRecents = false }
+        if search.isPresented { search.clear() }
+        perform { [self] in
+            guard replica.placements.contains(where: {
+                $0.item.id == id && $0.item.kind == .note
+                    && !$0.isInTrash && !$0.item.isPermanentlyDeleted
+            }) else { throw NotebookReplicaError.noteUnavailable(id) }
+            try await selectNote(id)
         }
     }
 
@@ -342,14 +363,11 @@ final class NotebookSceneState {
         pendingTemplateQuickAction = false
         showTemplates()
     }
-    #endif
 
     func finishTemplatePresentation() {
         openPendingPresentedItem()
-        #if os(iOS)
         awaitingQuickActionSheetDismissal = false
         handlePendingQuickAction()
-        #endif
         presentSharedImport()
     }
 

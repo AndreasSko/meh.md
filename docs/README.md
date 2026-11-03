@@ -47,6 +47,8 @@ and the evidence collected along the way.
   and insertion-time variables.
 - [Time calculator](time-calculator.md): live time sums in a note, an
   experiment behind a Labs setting.
+- [Widgets](widgets.md): Recents or one note on the Home Screen and the Mac
+  desktop, and how the app shares notes with them.
 - [Navigation and preview](notebook-navigation-preview.md): app interaction
   and the isolated Debug workspace.
 - [Markdown import](notebook-import-contract.md): source-preserving import.

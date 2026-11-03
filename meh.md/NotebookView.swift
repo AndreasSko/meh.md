@@ -394,9 +394,9 @@ private struct NotebookScenePresentation: ViewModifier {
             if phase != .active {
                 scene.browserDrag.reset()
                 scene.rememberEditorPosition()
+                NotebookWidgetSnapshotWriter.shared.flush(scene.replica)
             }
         }
-        #if os(iOS)
         .onChange(of: scene.quickActionRequests.pendingActionCount, initial: true) { _, _ in
             scene.handlePendingQuickAction()
         }
@@ -406,12 +406,20 @@ private struct NotebookScenePresentation: ViewModifier {
         .onChange(of: scene.deletionSelection) { _, selection in
             if selection == nil { scene.handlePendingQuickAction() }
         }
-        #endif
         .onDisappear {
             scene.browserDrag.reset()
             scene.historyLoadTask?.cancel()
             scene.rememberEditorPosition()
         }
+        #if os(macOS)
+        // Mac windows rarely leave the active phase; losing focus is the
+        // moment the desktop widgets come into view.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didResignActiveNotification
+        )) { _ in
+            NotebookWidgetSnapshotWriter.shared.flush(scene.replica)
+        }
+        #endif
         .onReceive(NotificationCenter.default.publisher(for: applicationWillTerminate)) { _ in
             scene.rememberEditorPosition()
         }
