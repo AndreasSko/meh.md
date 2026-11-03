@@ -56,12 +56,13 @@ opportunistic after exchanges, not a guaranteed background wakeup. Unchanged
 incomparable copies wait for the daily backstop instead of repeating history
 discovery after every edit. Pending work remains durable across cancellation.
 
-Settings > Storage offers Clean Up iCloud Copies and the last successful
-cleanup time. A manual request exchanges notes first, then bypasses the idle
-delay and threshold. Errors appear there without replacing successful sync
-status. Account changes and local resets discard stale presentation state.
-Discovery considers every eligible document so a large earlier group cannot
-hide later groups. Each maintenance pass still deletes at most 100 records.
+Settings › Sync & Backups › Troubleshooting offers Clean Up iCloud Copies and
+the last successful cleanup time. A manual request exchanges notes first, then
+bypasses the idle delay and threshold. Errors appear there without replacing
+successful sync status. Account changes and local resets discard stale
+presentation state. Discovery considers every eligible document so a large
+earlier group cannot hide later groups. Each maintenance pass still deletes at
+most 100 records.
 
 History parsing is cached within each discovery or proof pass. Cancellation
 is checked between parsing and comparison steps. Comparisons

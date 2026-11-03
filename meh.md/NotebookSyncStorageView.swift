@@ -1,210 +1,8 @@
 import NoteCore
 import SwiftUI
 
-/// Where notes sync. iCloud is the default and needs no setup. Turning sync
-/// off and the S3 beta are there for people who want them, without getting
-/// in the way of everyone else.
-struct NotebookSyncSettingsView: View {
-    let workspace: NotebookWorkspace
-    @State private var pending: NotebookSyncStorage?
-    @State private var switching: NotebookSyncStorage?
-    @State private var errorMessage: String?
-    @State private var mismatchRequest: MismatchRequest?
-    @State private var isVisible = false
-
-    var body: some View {
-        Form {
-            Section {
-                storageRow(.iCloud)
-                if workspace.hasSavedS3Settings {
-                    storageRow(.s3)
-                } else {
-                    NavigationLink {
-                        NotebookS3SettingsView(workspace: workspace)
-                    } label: {
-                        LabeledContent {
-                            Text("Set Up")
-                        } label: {
-                            NotebookSyncStorageTitle(storage: .s3)
-                        }
-                    }
-                    .accessibilityIdentifier("sync-s3-settings")
-                }
-                storageRow(.off)
-            } header: {
-                Text("Sync Notes With")
-            } footer: {
-                Text(footer)
-            }
-            if workspace.storageMismatch != nil {
-                Section {
-                    Button("Choose How to Sync…") { presentMismatch() }
-                        .accessibilityIdentifier("sync-mismatch")
-                } footer: {
-                    Text("\(workspace.syncStorage.title) holds another notebook. Nothing has changed yet.")
-                }
-            }
-            if let errorMessage {
-                Section {
-                    Text(errorMessage).foregroundStyle(.red)
-                }
-            }
-            if workspace.hasSavedS3Settings {
-                Section {
-                    NavigationLink("S3 Settings") {
-                        NotebookS3SettingsView(workspace: workspace)
-                    }
-                    .accessibilityIdentifier("sync-s3-settings")
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("Sync")
-        .disabled(switching != nil)
-        .confirmationDialog(
-            pending.map(confirmationTitle) ?? "",
-            isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }),
-            titleVisibility: .visible
-        ) {
-            if let pending {
-                Button(String(confirmationTitle(pending).dropLast())) { switchTo(pending) }
-            }
-            Button("Cancel", role: .cancel) { pending = nil }
-        } message: {
-            if let pending { Text(confirmationMessage(pending)) }
-        }
-        .sheet(item: $mismatchRequest) { request in
-            NotebookStorageMismatchView(workspace: workspace, mismatch: request.mismatch)
-        }
-        // A mismatch found while the S3 screen still covers this one is
-        // offered once this screen is visible again.
-        .onAppear {
-            isVisible = true
-            presentMismatch()
-        }
-        .onChange(of: workspace.storageMismatch) {
-            if isVisible || workspace.storageMismatch == nil { presentMismatch() }
-        }
-        .onDisappear {
-            isVisible = false
-            workspace.dismissStorageSwitchHint()
-        }
-    }
-
-    private func storageRow(_ storage: NotebookSyncStorage) -> some View {
-        Button {
-            guard storage != workspace.syncStorage else { return }
-            errorMessage = nil
-            pending = storage
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    NotebookSyncStorageTitle(storage: storage)
-                    if storage == .s3, workspace.s3Configuration != nil {
-                        // "Synced 1 minute ago" stays current while open.
-                        TimelineView(.everyMinute) { _ in
-                            if let detail = s3Detail {
-                                Text(detail).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                Spacer()
-                if switching == storage {
-                    ProgressView()
-                } else if storage == workspace.syncStorage {
-                    Image(systemName: "checkmark")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.tint)
-                        .accessibilityLabel("Selected")
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("sync-storage-\(storage.rawValue)")
-        .accessibilityAddTraits(storage == workspace.syncStorage ? .isSelected : [])
-    }
-
-    /// Where S3 stores the notes and, while it is in use, how sync is going.
-    private var s3Detail: LocalizedStringKey? {
-        guard let configuration = workspace.s3Configuration else { return nil }
-        let folder = configuration.prefix.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
-        let location = folder.isEmpty ? configuration.bucket : configuration.bucket + "/" + folder
-        guard workspace.syncStorage == .s3 else { return "\(location)" }
-        if let failure = workspace.syncFailure {
-            return "\(location) · \(String(localized: failure.title))"
-        }
-        if let date = workspace.lastSuccessfulSync {
-            return "\(location) · Synced \(date, format: .relative(presentation: .named))"
-        }
-        return "\(location) · Not synced yet"
-    }
-
-    // MARK: - Text
-
-    private var footer: String {
-        let description = switch workspace.syncStorage {
-        case .iCloud: "Changes reach your other devices right away."
-        case .s3: "Changes arrive about once a minute while meh.md is open."
-        case .off: "Notes stay on this device only."
-        }
-        guard let change = workspace.recentStorageSwitch, change.to != .off else {
-            return description
-        }
-        let reminder = change.from == .off
-            ? "Turn on \(change.to.name) sync on your other devices too."
-            : "Switch your other devices to \(change.to.name) too."
-        return description + " " + reminder
-    }
-
-    private func confirmationTitle(_ storage: NotebookSyncStorage) -> String {
-        switch storage {
-        case .iCloud: "Sync With iCloud?"
-        case .s3: "Sync With S3 Storage?"
-        case .off: "Turn Off Sync?"
-        }
-    }
-
-    private func confirmationMessage(_ storage: NotebookSyncStorage) -> String {
-        let current = workspace.syncStorage
-        if storage == .off {
-            return "A backup is made first. Changes on this device no longer reach your other devices."
-        }
-        if current == .off {
-            return "A backup is made first. Then this device uploads its notes to \(storage.name)."
-        }
-        return "A backup is made first. Your \(current.name) copy stays as it is, but no longer gets changes from this device."
-    }
-
-    // MARK: - Actions
-
-    /// Each request is new, so the sheet opens again after it was dismissed.
-    private func presentMismatch() {
-        mismatchRequest = workspace.storageMismatch.map(MismatchRequest.init)
-    }
-
-    private func switchTo(_ storage: NotebookSyncStorage) {
-        switching = storage
-        pending = nil
-        Task { @MainActor in
-            defer { switching = nil }
-            do {
-                try await workspace.changeSyncStorage(storage)
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-}
-
-private struct MismatchRequest: Identifiable {
-    let id = UUID()
-    let mismatch: NotebookStorageMismatch
-}
-
 /// A storage's name, with a beta badge for S3.
-private struct NotebookSyncStorageTitle: View {
+struct NotebookSyncStorageTitle: View {
     let storage: NotebookSyncStorage
 
     var body: some View {
@@ -225,7 +23,7 @@ private struct NotebookSyncStorageTitle: View {
 
 /// The storage already holds another notebook. Nothing changes until the
 /// user picks what happens to this device's notes.
-private struct NotebookStorageMismatchView: View {
+struct NotebookStorageMismatchView: View {
     typealias Choice = NotebookWorkspace.StorageMismatchChoice
 
     let workspace: NotebookWorkspace
@@ -670,7 +468,7 @@ struct NotebookS3SettingsView: View {
                 )
                 savedCredentials = credentials
                 reviewing = false
-                // The Sync screen shows the result and any choice to make.
+                // Sync & Backups shows the result and any choice to make.
                 dismiss()
             } catch {
                 applyError = error.localizedDescription

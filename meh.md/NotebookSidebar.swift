@@ -114,7 +114,8 @@ struct NotebookSidebar: View {
                         ToolbarItem(placement: syncToolbarPlacement) {
                             NotebookSyncButton(
                                 workspace: workspace,
-                                showingDetails: $scene.showingSyncDetails
+                                showingDetails: $scene.showingSyncDetails,
+                                openSettings: { scene.openSettings(.syncBackups) }
                             )
                         }
                     }

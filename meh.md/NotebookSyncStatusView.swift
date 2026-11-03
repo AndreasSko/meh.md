@@ -9,6 +9,7 @@ import UIKit
 struct NotebookSyncButton: View {
     let workspace: NotebookWorkspace
     @Binding var showingDetails: Bool
+    var openSettings: (() -> Void)? = nil
 
     var body: some View {
         // The native presenter belongs to the button. Its label and progress
@@ -28,7 +29,7 @@ struct NotebookSyncButton: View {
         .accessibilityIdentifier("notebook-sync-details")
         .accessibilityLabel("Sync with \(workspace.syncStorageName)")
         .popover(isPresented: $showingDetails, arrowEdge: preferredPopoverEdge) {
-            NotebookSyncDetailsView(workspace: workspace)
+            NotebookSyncDetailsView(workspace: workspace, openSettings: openSettings)
                 .presentationCompactAdaptation(.popover)
         }
         .onDisappear { showingDetails = false }
@@ -120,6 +121,7 @@ struct NotebookWorkspaceStatusView: View {
 
 struct NotebookSyncDetailsView: View {
     let workspace: NotebookWorkspace
+    var openSettings: (() -> Void)? = nil
 
     var body: some View {
         TimelineView(.periodic(
@@ -131,7 +133,8 @@ struct NotebookSyncDetailsView: View {
                     NotebookSyncOverallProgressView(
                         storageName: workspace.syncStorageName,
                         fraction: presentation.activity.fraction,
-                        accessibilityValue: presentation.accessibilityValue
+                        accessibilityValue: presentation.accessibilityValue,
+                        openSettings: openSettings
                     )
                     NotebookSyncPhaseDetailsView(
                         activity: presentation.activity,
@@ -151,6 +154,10 @@ struct NotebookSyncDetailsView: View {
                             .font(.headline)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("note-sync-status")
+                        if let openSettings {
+                            Spacer(minLength: 8)
+                            NotebookSyncSettingsButton(action: openSettings)
+                        }
                     }
                     NotebookSyncFailureView(workspace: workspace, now: context.date)
                 }
@@ -171,6 +178,7 @@ private struct NotebookSyncOverallProgressView: View {
     let storageName: String
     let fraction: Double?
     let accessibilityValue: LocalizedStringResource
+    let openSettings: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -184,6 +192,10 @@ private struct NotebookSyncOverallProgressView: View {
                     .tint(.accentColor)
                     .accessibilityLabel("Sync in progress")
                     .accessibilityIdentifier("notebook-sync-activity")
+                if let openSettings {
+                    Spacer(minLength: 8)
+                    NotebookSyncSettingsButton(action: openSettings)
+                }
             }
             if let fraction {
                 ProgressView(value: fraction)
@@ -194,6 +206,25 @@ private struct NotebookSyncOverallProgressView: View {
                     .accessibilityIdentifier("notebook-sync-progress")
             }
         }
+    }
+}
+
+/// Opens Settings › Sync & Backups. It sits in the title row, so the popover
+/// stays as small as before.
+private struct NotebookSyncSettingsButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "gearshape")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle().inset(by: -10))
+        }
+        .buttonStyle(.plain)
+        .help("Sync & Backups Settings")
+        .accessibilityLabel("Sync & Backups Settings")
+        .accessibilityIdentifier("notebook-sync-open-settings")
     }
 }
 
@@ -368,9 +399,9 @@ private struct NotebookSyncFailureView: View {
                     }
                 }
             } else if workspace.syncSetupError != nil {
-                Text("Sync is paused. Open Settings → Diagnostics for details.")
+                Text("Sync is paused. Open Settings › Sync & Backups for details.")
             } else if workspace.notificationRegistrationError != nil {
-                Text("Open Settings → Diagnostics for details about automatic sync notifications.")
+                Text("Open Settings › Sync & Backups for details about automatic sync notifications.")
             }
         }
         .font(.callout)
@@ -378,7 +409,7 @@ private struct NotebookSyncFailureView: View {
     }
 }
 
-private struct NotebookSyncPresentation {
+struct NotebookSyncPresentation {
     let workspace: NotebookWorkspace
     let now: Date
 

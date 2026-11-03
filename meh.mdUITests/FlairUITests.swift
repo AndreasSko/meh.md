@@ -42,7 +42,7 @@ final class FlairUITests: XCTestCase {
         let app = makeApp(mode: "source")
         app.launch()
 
-        app.openNotebookSettings()
+        app.openNotebookSettings(macTab: "Appearance")
         let blue = app.buttons["Royal Blue"]
         for _ in 0..<4 where !blue.exists { scrollDown(in: app) }
         XCTAssertTrue(blue.waitForExistence(timeout: 5))

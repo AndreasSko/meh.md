@@ -12,9 +12,9 @@ several devices at once still come together without conflicts.
 
 ## Choosing where notes sync
 
-iCloud is the default and needs no setup. Settings › Sync lists iCloud, S3
-Storage, and Off. Until S3 is set up, its row opens the setup form; after
-that it switches like the others, and S3 Settings changes the address.
+iCloud is the default and needs no setup. Settings › Sync & Backups lists
+iCloud, S3 Storage, and Off. Until S3 is set up, its row opens the setup form;
+after that it switches like the others, and S3 Settings changes the address.
 
 To set up S3, enter the server address, region, bucket, an optional folder,
 and an access key ID with its secret key. For AWS addresses, the region is

@@ -11,9 +11,6 @@ struct NotebookStorageView: View {
 
     var body: some View {
         Form {
-            if workspace.snapshotMaintenanceStatus != nil {
-                NotebookCloudCopiesSection(workspace: workspace)
-            }
             if let report {
                 NotebookStorageSummary(report: report)
                 NotebookStorageCategories(
@@ -97,6 +94,28 @@ private struct NotebookStorageSummary: View {
         } footer: {
             Text("Measured \(report.measuredAt.formatted(date: .omitted, time: .shortened))")
         }
+    }
+}
+
+/// The total and how it splits up, small enough for a row in Sync & Backups.
+struct NotebookStorageOverview: View {
+    let report: NotebookStorageReport
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(storageBytes(report.totalBytes))
+                    .font(.title2.bold())
+                    .accessibilityIdentifier("notebook-storage-overview-total")
+                Spacer(minLength: 12)
+                Text("\(report.activeNoteCount) notes")
+                    .foregroundStyle(.secondary)
+            }
+            NotebookStorageBar(
+                categories: report.categories, totalBytes: report.totalBytes
+            )
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -342,48 +361,11 @@ private extension NotebookStorageCategory {
     }
 }
 
-private func storageBytes(_ bytes: Int64) -> String {
+func storageBytes(_ bytes: Int64) -> String {
     ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
 }
 
 private func storagePercent(_ bytes: Int64, of total: Int64) -> String {
     (total > 0 ? Double(bytes) / Double(total) : 0)
         .formatted(.percent.precision(.fractionLength(0...1)))
-}
-
-private struct NotebookCloudCopiesSection: View {
-    let workspace: NotebookWorkspace
-
-    var body: some View {
-        Section {
-            Button {
-                Task { await workspace.requestCloudCopyCleanup() }
-            } label: {
-                HStack {
-                    Text("Clean Up \(workspace.syncStorageName) Copies")
-                    Spacer()
-                    if workspace.isCleaningCloudCopies { ProgressView() }
-                }
-            }
-            .disabled(!workspace.canCleanCloudCopies)
-            .accessibilityIdentifier("notebook-storage-cleanup")
-            LabeledContent("Last Cleanup") {
-                if let date = workspace.snapshotMaintenanceStatus?.lastSuccessfulCleanup {
-                    Text(date, format: .dateTime.year().month().day().hour().minute())
-                } else {
-                    Text("Never")
-                }
-            }
-            .accessibilityIdentifier("notebook-storage-last-cleanup")
-            if let error = workspace.cloudCleanupError {
-                Text("Couldn’t Clean Up \(workspace.syncStorageName) Copies")
-                    .font(.headline)
-                Text(error).foregroundStyle(.secondary)
-            }
-        } header: {
-            Text(workspace.syncStorageName)
-        } footer: {
-            Text("Removes older sync copies. All notes and their edit history are preserved. Cleanup also runs automatically.")
-        }
-    }
 }

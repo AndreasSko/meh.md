@@ -378,6 +378,25 @@ final class NotebookSyncStatusUITests: XCTestCase {
 
 #endif
 
+    func testSyncDetailsOpensSyncAndBackupsSettings() throws {
+        let app = makeFixture()
+        app.launch()
+        defer { app.terminate() }
+        app.openSyncDetails()
+        let open = app.buttons["notebook-sync-open-settings"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10))
+        capture(app, name: "Sync details with the Settings button")
+        open.tap()
+#if os(iOS)
+        XCTAssertTrue(app.navigationBars["Sync & Backups"].waitForExistence(timeout: 10))
+#else
+        let window = app.windows["Sync & Backups"]
+        XCTAssertTrue(window.waitForExistence(timeout: 10))
+#endif
+        XCTAssertTrue(app.buttons["notebook-backup-now"].waitForExistence(timeout: 10))
+        capture(app, name: "Sync & Backups opened from sync details")
+    }
+
     func testSettingsContainsTheSyncEventLog() throws {
         let app = makeFixture()
         app.launch()
@@ -386,12 +405,12 @@ final class NotebookSyncStatusUITests: XCTestCase {
             "Expected the isolated notebook workspace to finish loading"
         )
 
-        app.openNotebookSettings()
+        app.openSyncBackupsSettings()
 
         let eventLog = app.buttons["notebook-sync-event-log"]
         for _ in 0..<6 where !eventLog.isHittable { app.swipeUp() }
         XCTAssertTrue(eventLog.waitForExistence(timeout: 5))
-        capture(app, name: "After - diagnostics in Settings")
+        capture(app, name: "After - event log in Sync & Backups")
         eventLog.tap()
         let logText = app.descendants(matching: .any)
             .matching(identifier: "notebook-sync-event-log-text").firstMatch

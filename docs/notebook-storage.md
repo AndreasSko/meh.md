@@ -1,9 +1,11 @@
 # Notebook storage
 
-Settings > Storage shows the sizes of saved files for the current notebook on
-this device. The overview includes active and trashed notes, a category bar,
-percentages, and the five largest notes. Show All opens the full list ordered
-by size; each note has a detail view and active notes can be opened directly.
+Settings › Sync & Backups shows the total size and a category bar for the
+current notebook on this device; the row opens the full Storage page. Next to
+the backup count it shows how much the backups use. The Storage page includes
+active and trashed notes, a category bar, percentages, and the five largest
+notes. Show All opens the full list ordered by size; each note has a detail
+view and active notes can be opened directly.
 
 The total uses logical regular-file sizes, before filesystem compression. It
 does not measure the installed app, RAM, iCloud quota, or unique physical disk
@@ -49,16 +51,18 @@ is still active before opening it.
 
 ## iCloud copies
 
-Cloud notebooks also show Clean Up iCloud Copies and Last Cleanup. Cleanup
-removes only redundant remote sync snapshots after proving a survivor retains
-their complete history. It does not clear note history or local replay data.
-It receives and publishes pending changes first, then runs separately from
-the sync indicator. New edits or sync requests interrupt maintenance.
+Cloud notebooks also show Clean Up iCloud Copies and Last Cleanup under
+Settings › Sync & Backups › Troubleshooting. Cleanup removes only redundant
+remote sync snapshots after proving a survivor retains their complete history.
+It does not clear note history or local replay data. It receives and publishes
+pending changes first, then runs separately from the sync indicator. New edits
+or sync requests interrupt maintenance.
 
 Automatic cleanup is opportunistic after a successful exchange: ten eligible
 copies for a document, 16 MiB of estimated redundant payloads, or a 24-hour
 backstop. It stays quiet in the writing screen. Manual cleanup bypasses those
-thresholds; failures appear in Storage and leave successful sync status alone.
+thresholds; failures appear in Troubleshooting and leave successful sync
+status alone.
 Last Cleanup records a successfully completed pass, including a checked pass
 that finds no redundant copies. Large queues can need several bounded passes.
 
