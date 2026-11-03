@@ -97,7 +97,8 @@ and local time zone. Tokens expand throughout the body,
 including code blocks. Unknown or incomplete tokens remain literal. A stray
 opening `{{` does not stop a later valid token from expanding. Values
 are expanded once; tokens within a substituted title are not expanded again.
-The source itself stays unchanged.
+The source itself stays unchanged. Inserting into another snippet or
+template source keeps the tokens, so they expand when that source is used.
 
 Relative links are copied literally and resolve from the target note's
 location. Linked notes and attachments are not copied.

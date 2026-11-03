@@ -39,15 +39,17 @@ extension NotebookSceneState {
                 NotebookNoteName.title(from: $0.displayName)
             } ?? ""
             let date = Date()
+            // A snippet or template source keeps the tokens for its own use.
+            let expands = !variableSourceNoteIDs.contains(targetID)
             Task { @MainActor in
                 do {
                     let source = try await replica.snippetText(id)
                     guard selectedID == targetID, navigation === editorNavigation,
                           !busy, historyBrowser == nil,
                           session?.isEditingEnabled == true else { return }
-                    let text = NotebookSnippetText.expand(
+                    let text = expands ? NotebookSnippetText.expand(
                         text: source, title: title, date: date
-                    )
+                    ) : source
                     guard insert(text) else {
                         errorMessage = String(localized:
                             "The note or cursor changed while the snippet was loading. Choose the snippet again.")
