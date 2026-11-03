@@ -47,6 +47,8 @@ final class NotebookSceneState {
     var importingFolder = false
     var choosingImportSource = false
     var showingSettings = false
+    /// Where Settings opens, such as Sync & Backups from the sync popover.
+    var settingsRoute: NotebookSettingsRoute?
     var showingSyncDetails = false
     var showingTemplates = false
     var pendingPresentedItemID: UUID?
@@ -453,11 +455,13 @@ final class NotebookSceneState {
         }
     }
 
-    func openSettings() {
+    func openSettings(_ route: NotebookSettingsRoute? = nil) {
+        showingSyncDetails = false
         guard !showingSettings, !showingTrash, !showingImport,
               !search.showingQuickOpen, movingIDs.isEmpty else { return }
         perform { [self] in
             try await flushEditor()
+            settingsRoute = route
             showingSettings = true
         }
     }

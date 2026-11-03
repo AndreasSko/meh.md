@@ -11,8 +11,21 @@ struct NotebookSettingsView: View {
     let beforeExport: () async throws -> Void
     var onOpenNote: ((UUID) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
-    @State private var path: [NotebookSettingsRoute] = []
+    @State private var path: [NotebookSettingsRoute]
     @State private var exporting = false
+
+    init(
+        replica: NotebookReplica, workspace: NotebookWorkspace,
+        beforeExport: @escaping () async throws -> Void,
+        onOpenNote: ((UUID) -> Void)? = nil,
+        initialRoute: NotebookSettingsRoute? = nil
+    ) {
+        self.replica = replica
+        self.workspace = workspace
+        self.beforeExport = beforeExport
+        self.onOpenNote = onOpenNote
+        _path = State(initialValue: initialRoute.map { [$0] } ?? [])
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -67,10 +80,18 @@ enum NotebookSettingsTab: Hashable {
     case general, appearance, syncBackups, labs
 }
 
-/// The tab the Settings window shows, kept while the app runs.
+/// The tab the Settings window shows. Notebook windows set it before they
+/// open Settings, such as from the sync popover.
 @MainActor @Observable final class NotebookSettingsSelection {
     static let shared = NotebookSettingsSelection()
     var tab = NotebookSettingsTab.general
+
+    func open(_ route: NotebookSettingsRoute?) {
+        switch route {
+        case .syncBackups: tab = .syncBackups
+        case nil: break
+        }
+    }
 }
 
 /// Settings as its own window with tabs, like other Mac apps.

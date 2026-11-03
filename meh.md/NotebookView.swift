@@ -512,6 +512,7 @@ private struct NotebookScenePresentation: ViewModifier {
         // Settings is its own window on the Mac.
         .onChange(of: scene.showingSettings) { _, showing in
             guard showing else { return }
+            NotebookSettingsSelection.shared.open(scene.settingsRoute)
             scene.showingSettings = false
             openSettingsWindow()
         }
@@ -521,7 +522,8 @@ private struct NotebookScenePresentation: ViewModifier {
             NotebookSettingsView(replica: scene.replica,
                                  workspace: scene.workspace ?? NotebookWorkspace.shared,
                                  beforeExport: scene.flushEditor,
-                                 onOpenNote: scene.openReusableSource)
+                                 onOpenNote: scene.openReusableSource,
+                                 initialRoute: scene.settingsRoute)
         }
         #endif
         .sheet(item: $scene.sharedImport, onDismiss: scene.finishSharedImport) { request in

@@ -378,6 +378,25 @@ final class NotebookSyncStatusUITests: XCTestCase {
 
 #endif
 
+    func testSyncDetailsOpensSyncAndBackupsSettings() throws {
+        let app = makeFixture()
+        app.launch()
+        defer { app.terminate() }
+        app.openSyncDetails()
+        let open = app.buttons["notebook-sync-open-settings"]
+        XCTAssertTrue(open.waitForExistence(timeout: 10))
+        capture(app, name: "Sync details with the Settings button")
+        open.tap()
+#if os(iOS)
+        XCTAssertTrue(app.navigationBars["Sync & Backups"].waitForExistence(timeout: 10))
+#else
+        let window = app.windows["Sync & Backups"]
+        XCTAssertTrue(window.waitForExistence(timeout: 10))
+#endif
+        XCTAssertTrue(app.buttons["notebook-backup-now"].waitForExistence(timeout: 10))
+        capture(app, name: "Sync & Backups opened from sync details")
+    }
+
     func testSettingsContainsTheSyncEventLog() throws {
         let app = makeFixture()
         app.launch()
