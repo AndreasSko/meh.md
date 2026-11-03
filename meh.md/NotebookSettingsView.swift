@@ -1,8 +1,9 @@
 import NoteCore
 import SwiftUI
-#if os(macOS)
-import AppKit
-#endif
+
+enum NotebookSettingsRoute: Hashable {
+    case syncBackups
+}
 
 struct NotebookSettingsView: View {
     let replica: NotebookReplica
@@ -10,101 +11,20 @@ struct NotebookSettingsView: View {
     let beforeExport: () async throws -> Void
     var onOpenNote: ((UUID) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
-    @State private var confirmingReset = false
-    @State private var resetScheduled = false
+    @State private var path: [NotebookSettingsRoute] = []
     @State private var exporting = false
-    @State private var destinationError: String?
-    @State private var updatingDefaultDestination = false
-    @State private var showingSyncEventLog = false
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Form {
                 Section {
-                    Picker("Destination", selection: Binding(
-                        get: { replica.defaultNewNoteParentID },
-                        set: { setDefaultNewNoteParentID($0) }
-                    )) {
-                        Text("Top Level").tag(UUID?.none)
-                        ForEach(activeFolders, id: \.item.id) { placement in
-                            Text(folderPath(for: placement))
-                                .tag(Optional(placement.item.id))
-                        }
+                    NavigationLink(value: NotebookSettingsRoute.syncBackups) {
+                        NotebookSettingsCard(replica: replica, workspace: workspace)
                     }
-                    .disabled(updatingDefaultDestination)
-                    .accessibilityIdentifier("notebook-new-note-destination")
-                } header: {
-                    Text("New Notes")
-                } footer: {
-                    Text("New notes are saved in this folder.")
+                    .accessibilityIdentifier("notebook-sync-backups-settings")
                 }
-                Section {
-                    NavigationLink {
-                        NotebookTemplatesSettingsView(
-                            replica: replica, onOpenNote: onOpenNote
-                        )
-                    } label: {
-                        Label("Templates & Snippets", systemImage: "doc.on.doc")
-                    }
-                    .accessibilityIdentifier("notebook-templates-settings")
-                }
+                NotebookWritingSection(replica: replica, onOpenNote: onOpenNote)
                 NotebookAppearanceSection()
-                Section {
-                    NavigationLink {
-                        NotebookBackupsView(
-                            workspace: workspace, exporting: $exporting,
-                            beforeBackup: beforeExport
-                        )
-                    } label: {
-                        Label("Backups", systemImage: "clock.arrow.circlepath")
-                    }
-                    .accessibilityIdentifier("notebook-backups-settings")
-                }
-                if workspace.canChooseSyncStorage {
-                    Section {
-                        NavigationLink {
-                            NotebookSyncSettingsView(workspace: workspace)
-                        } label: {
-                            LabeledContent {
-                                Text(workspace.syncStorage == .s3 ? "S3" : workspace.syncStorage.title)
-                            } label: {
-                                Label("Sync", systemImage: workspace.syncStorage == .off
-                                      ? "icloud.slash" : "arrow.triangle.2.circlepath")
-                            }
-                        }
-                        .accessibilityIdentifier("notebook-sync-storage-settings")
-                    }
-                }
-                Section {
-                    NavigationLink {
-                        NotebookStorageView(
-                            replica: replica, workspace: workspace,
-                            onOpenNote: onOpenNote
-                        )
-                    } label: {
-                        Label("Storage", systemImage: "internaldrive")
-                    }
-                    .accessibilityIdentifier("notebook-storage-settings")
-                }
-                Section("Local Storage") {
-                    Button("Reset All Local Data…", role: .destructive) {
-                        confirmingReset = true
-                    }
-                    .foregroundStyle(.red)
-                    .disabled(exporting || resetScheduled)
-                    Text("Removes local notes, settings, and sync data on the next launch. Unsynced changes will be lost. Synced notes and backups are kept.")
-                        .font(.footnote)
-                }
-                Section("Diagnostics") {
-                    Button("Sync Event Log") { showingSyncEventLog = true }
-                        .accessibilityIdentifier("notebook-sync-event-log")
-                    if let error = workspace.syncSetupError {
-                        Text(error).font(.caption)
-                    }
-                    if let error = workspace.notificationRegistrationError {
-                        Text(error).font(.caption)
-                    }
-                }
                 NotebookFeedbackSection(log: workspace.syncEventLog)
                 Section {
                     NavigationLink {
@@ -121,51 +41,142 @@ struct NotebookSettingsView: View {
             }
             .formStyle(.grouped)
             .navigationTitle("Settings")
+            .navigationDestination(for: NotebookSettingsRoute.self) { _ in
+                NotebookSyncBackupsView(
+                    replica: replica, workspace: workspace, exporting: $exporting,
+                    beforeExport: beforeExport, onOpenNote: onOpenNote
+                )
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .disabled(exporting)
                 }
             }
+            .task { await workspace.reloadBackupInfo() }
         }
         #if os(macOS)
         .frame(width: 480, height: 460)
         #endif
         .interactiveDismissDisabled(exporting)
-        .sheet(isPresented: $showingSyncEventLog) {
-            NotebookSyncEventLogView(log: workspace.syncEventLog)
-        }
-        .alert("Reset All Local Data?", isPresented: $confirmingReset) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reset on Next Launch", role: .destructive) {
-                let defaults = UserDefaults.standard
-                defaults.set(true, forKey: "meh.md.resetLocalStorage")
-                defaults.synchronize()
-                workspace.localStorageResetWasScheduled()
-                resetScheduled = true
-            }
-        } message: {
-            Text("This cannot be undone. All local notes, including unsynced changes, settings, and sync history will be removed when you reopen the app. Local backups and notes already in iCloud or S3 storage are kept.")
-        }
-        .alert("Reset Scheduled", isPresented: $resetScheduled) {
-            #if os(macOS)
-            Button("Quit Now") { NSApplication.shared.terminate(nil) }
-            #else
-            Button("OK", role: .cancel) {}
-            #endif
-        } message: {
-            Text("Quit and reopen meh.md to complete the reset. Any changes made before restarting will also be discarded.")
-        }
         .notebookMarkdownExporter(
             isPresented: $exporting, replica: replica, beforeExport: beforeExport
         )
-        .alert("Couldn’t Change Destination", isPresented: Binding(
-            get: { destinationError != nil },
-            set: { if !$0 { destinationError = nil } }
-        )) {
-            Button("OK", role: .cancel) { destinationError = nil }
-        } message: {
-            Text(destinationError ?? "")
+    }
+}
+
+/// The notebook at a glance: how many notes, whether they are synced and
+/// when they were last backed up. Opens Sync & Backups.
+private struct NotebookSettingsCard: View {
+    let replica: NotebookReplica
+    let workspace: NotebookWorkspace
+
+    var body: some View {
+        TimelineView(.everyMinute) { context in
+            let sync = NotebookSyncPresentation(workspace: workspace, now: context.date)
+            let syncProblem = sync.indicator == .failed
+            HStack(spacing: 14) {
+                Group {
+                    if syncProblem || workspace.backupError != nil {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.orange)
+                    } else {
+                        MehFace(mood: sync.mood ?? .neutral, size: 15)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .frame(width: 48, height: 48)
+                .background(.quaternary.opacity(0.5), in: .circle)
+                .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sync & Backups")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(sync.title)
+                        .foregroundStyle(syncProblem ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                        .accessibilityIdentifier("notebook-settings-card-sync")
+                    backupStatus(now: context.date)
+                        .accessibilityIdentifier("notebook-settings-card-backup")
+                }
+                .font(.subheadline)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var noteCount: Int {
+        replica.placements.count { $0.item.kind == .note && !$0.isInTrash }
+    }
+
+    /// "today at 9:41", or "yesterday" and "3 days ago" for older backups.
+    private func backupDate(_ date: Date, now: Date) -> String {
+        if Calendar.current.isDate(date, inSameDayAs: now) {
+            let time = date.formatted(date: .omitted, time: .shortened)
+            return String(localized: "today at \(time)")
+        }
+        return date.formatted(.relative(presentation: .named))
+    }
+
+    @ViewBuilder
+    private func backupStatus(now: Date) -> some View {
+        let notes = noteCount == 1 ? String(localized: "1 note")
+            : String(localized: "\(noteCount) notes")
+        Group {
+            if workspace.backupError != nil {
+                Text("\(notes) · Backup failed").foregroundStyle(.orange)
+            } else if let lastBackup = workspace.lastBackup {
+                Text("\(notes) · Backed up \(backupDate(lastBackup.createdAt, now: now))")
+            } else if workspace.backupFrequency == .off {
+                Text("\(notes) · Automatic backups off")
+            } else {
+                Text("\(notes) · Not backed up yet")
+            }
+        }
+        .foregroundStyle(.secondary)
+    }
+}
+
+/// Where new notes go and the notes that start or fill in others.
+private struct NotebookWritingSection: View {
+    let replica: NotebookReplica
+    let onOpenNote: ((UUID) -> Void)?
+    @State private var destinationError: String?
+    @State private var updatingDefaultDestination = false
+
+    var body: some View {
+        Section("Writing") {
+            Picker("New Notes Go To", selection: Binding(
+                get: { replica.defaultNewNoteParentID },
+                set: { setDefaultNewNoteParentID($0) }
+            )) {
+                Text("Top Level").tag(UUID?.none)
+                ForEach(activeFolders, id: \.item.id) { placement in
+                    Text(folderPath(for: placement))
+                        .tag(Optional(placement.item.id))
+                }
+            }
+            .disabled(updatingDefaultDestination)
+            .accessibilityIdentifier("notebook-new-note-destination")
+            .alert("Couldn’t Change Destination", isPresented: Binding(
+                get: { destinationError != nil },
+                set: { if !$0 { destinationError = nil } }
+            )) {
+                Button("OK", role: .cancel) { destinationError = nil }
+            } message: {
+                Text(destinationError ?? "")
+            }
+            NavigationLink {
+                NotebookTemplatesSettingsView(
+                    replica: replica, onOpenNote: onOpenNote
+                )
+            } label: {
+                Text("Templates & Snippets")
+            }
+            .accessibilityIdentifier("notebook-templates-settings")
         }
     }
 
@@ -201,91 +212,6 @@ struct NotebookSettingsView: View {
             } catch {
                 destinationError = error.localizedDescription
             }
-        }
-    }
-
-}
-
-/// Explains where notes are kept and what survives deleting the app, next to
-/// the automatic backup settings.
-private struct NotebookBackupsView: View {
-    let workspace: NotebookWorkspace
-    @Binding var exporting: Bool
-    let beforeBackup: () async throws -> Void
-
-    var body: some View {
-        Form {
-            Section {
-                #if os(macOS)
-                Text(workspace.usesSync
-                    ? "Your notes are saved on this Mac and in \(workspace.syncStorageDestination)."
-                    : "Your notes are saved only on this Mac.")
-                Text("meh.md also keeps Markdown copies of your notes and regular backups on this Mac. To keep a copy somewhere else, export your notes.")
-                #else
-                Text(workspace.usesSync
-                    ? "Your notes are saved on this device and in \(workspace.syncStorageDestination). If you delete meh.md, they come back from \(workspace.syncStorageName) when you install it again. Only changes that haven’t synced yet are lost."
-                    : "Your notes are saved only on this device. If you delete meh.md, they are deleted with it.")
-                Text("meh.md also keeps Markdown copies of your notes and regular backups on this device. They are deleted with the app, so export your notes to keep a copy somewhere else.")
-                #endif
-                Button("Export All Notes…") { exporting = true }
-                    .disabled(exporting)
-                    .accessibilityIdentifier("notebook-export")
-            }
-            Section {
-                Picker("Frequency", selection: Binding(
-                    get: { workspace.backupFrequency },
-                    set: { workspace.setBackupFrequency($0) }
-                )) {
-                    ForEach(NotebookBackupFrequency.allCases) { frequency in
-                        Text(frequency.title).tag(frequency)
-                    }
-                }
-                Stepper(value: Binding(
-                    get: { workspace.backupRetentionCount },
-                    set: { workspace.setBackupRetentionCount($0) }
-                ), in: 1...365) {
-                    Text("Keep latest \(workspace.backupRetentionCount)")
-                }
-                Button { backUpNow() } label: {
-                    HStack {
-                        Text(workspace.isBackingUp ? "Backing Up…" : "Back Up Now")
-                        Spacer()
-                        if workspace.isBackingUp {
-                            ProgressView().controlSize(.small)
-                        }
-                    }
-                }
-                .disabled(workspace.isBackingUp || exporting)
-                .accessibilityIdentifier("notebook-backup-now")
-                if let lastBackup = workspace.lastBackup {
-                    LabeledContent("Last backup",
-                        value: lastBackup.createdAt.formatted(
-                            date: .abbreviated, time: .shortened
-                        ))
-                }
-                if let backupError = workspace.backupError {
-                    Text(backupError).foregroundStyle(.red)
-                }
-            } header: {
-                Text("Automatic Backups")
-            } footer: {
-                #if os(macOS)
-                Text("In Finder, use Go to Folder to open \(workspace.backupDirectory.deletingLastPathComponent().path). Current notes are in Notebook Copies/Markdown; backups are in Backups. Trash is not included.")
-                #else
-                let device = UIDevice.current.userInterfaceIdiom == .pad
-                    ? "On My iPad" : "On My iPhone"
-                Text("In Files, open \(device) › meh.md. Current notes are in Notebook Copies/Markdown; backups are in Backups. Trash is not included.")
-                #endif
-            }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("Backups")
-        .task { await workspace.reloadBackupInfo() }
-    }
-
-    private func backUpNow() {
-        Task { @MainActor in
-            try? await workspace.backupNow(beforeBackup: beforeBackup)
         }
     }
 }

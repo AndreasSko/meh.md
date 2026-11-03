@@ -12,21 +12,15 @@ final class NotebookStorageUITests: XCTestCase {
         defer { app.terminate() }
         app.launch()
         openSettings(app)
-        let backups = app.buttons["notebook-backups-settings"]
-        reveal(backups, in: app)
-        backups.tap()
         let backup = app.buttons["notebook-backup-now"]
         reveal(backup, in: app)
         backup.tap()
         let backedUp = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "enabled == true AND label == %@", "Back Up Now"),
+            predicate: NSPredicate(format: "enabled == true AND label BEGINSWITH %@", "Back Up Now"),
             object: backup)
         XCTAssertEqual(XCTWaiter.wait(for: [backedUp], timeout: 180), .completed)
-        let settings = app.navigationBars["Backups"].buttons["Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 10))
-        settings.tap()
         reveal(app.buttons["Reset All Local Data…"], in: app)
-        capture(app, "Settings with fictional notebook")
+        capture(app, "Sync & Backups with fictional notebook")
 
         openStorage(app)
         let count = app.staticTexts["notebook-storage-note-count"]
@@ -36,7 +30,7 @@ final class NotebookStorageUITests: XCTestCase {
                        accuracy: 4, "Active and Trash counts share one row")
         XCTAssertFalse(app.staticTexts["notebook-storage-total"].label.isEmpty)
         capture(app, "Storage overview — 320 fictional notes")
-        let back = app.navigationBars["Storage"].buttons["Settings"]
+        let back = app.navigationBars["Storage"].buttons["Sync & Backups"]
         XCTAssertTrue(back.waitForExistence(timeout: 10))
         back.tap()
         openStorage(app)
@@ -101,9 +95,6 @@ final class NotebookStorageUITests: XCTestCase {
         defer { app.terminate() }
         app.launch()
         openSettings(app)
-        openStorage(app)
-        XCTAssertEqual(app.staticTexts["notebook-storage-note-count"].label, "320 notes")
-        XCTAssertTrue(app.staticTexts["7 in Trash"].exists)
         let cleanup = app.buttons["notebook-storage-cleanup"]
         reveal(cleanup, in: app)
         XCTAssertTrue(cleanup.isEnabled)
@@ -116,6 +107,9 @@ final class NotebookStorageUITests: XCTestCase {
         XCTAssertFalse(element("notebook-storage-last-cleanup", in: app).label.contains("Never"))
         XCTAssertTrue(element("notebook-storage-last-cleanup", in: app).exists)
         capture(app, "After — fictional cleanup completed")
+        openStorage(app)
+        XCTAssertEqual(app.staticTexts["notebook-storage-note-count"].label, "320 notes")
+        XCTAssertTrue(app.staticTexts["7 in Trash"].exists)
         let row = app.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "notebook-storage-note-"
         )).firstMatch
@@ -144,7 +138,7 @@ final class NotebookStorageUITests: XCTestCase {
         reveal(storage, in: app)
         storage.tap()
         // Native Back remains usable even before the measurement publishes.
-        let back = app.navigationBars["Storage"].buttons["Settings"]
+        let back = app.navigationBars["Storage"].buttons["Sync & Backups"]
         XCTAssertTrue(back.waitForExistence(timeout: 10))
         back.tap()
         openStorage(app)
@@ -218,6 +212,10 @@ final class NotebookStorageUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 10))
         settings.tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10))
+        let syncBackups = app.buttons["notebook-sync-backups-settings"]
+        XCTAssertTrue(syncBackups.waitForExistence(timeout: 10))
+        syncBackups.tap()
+        XCTAssertTrue(app.navigationBars["Sync & Backups"].waitForExistence(timeout: 10))
     }
 
     @MainActor

@@ -13,8 +13,10 @@ in the way.
 - **Faces where the screen would otherwise be empty, plus a few fixed
   spots.** Empty lists, no search results, an empty new note and Sync
   Details with nothing to report. The fixed spots are the library title,
-  the end of the file list, the end of Settings, the launch screen and the
-  handle of the History timeline, so the face shows up on a normal day too.
+  the end of the file list, the Sync & Backups card and the end of
+  Settings, the launch screen and the handle of the History timeline, so
+  the face shows up on a normal day too. The card shows a warning symbol
+  instead when sync or a backup fails.
   Never in toolbars, menus or the rows of notes and folders. The sync
   button stays an SF Symbol because it is faster to read.
 - **Dry, short copy.** One plain sentence that says what is going on. No
@@ -36,8 +38,8 @@ them carries the meaning.
 | `•_•` | neutral | empty library, no selection, no backlinks |
 | `•_•?` | puzzled | search without results |
 | `^_^` | pleased | empty Trash |
-| `•‿•` | relaxed | Sync Details when everything is synced |
-| `-_-` | asleep | Sync Details when sync is off |
+| `•‿•` | relaxed | Sync Details and the Settings card when synced |
+| `-_-` | asleep | Sync Details and the Settings card when sync is off |
 | `•_•` | neutral | the handle of the History timeline |
 
 Faces with dot eyes blink every few seconds. Tapping a face cycles through

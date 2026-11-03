@@ -368,9 +368,9 @@ private struct NotebookSyncFailureView: View {
                     }
                 }
             } else if workspace.syncSetupError != nil {
-                Text("Sync is paused. Open Settings → Diagnostics for details.")
+                Text("Sync is paused. Open Settings › Sync & Backups for details.")
             } else if workspace.notificationRegistrationError != nil {
-                Text("Open Settings → Diagnostics for details about automatic sync notifications.")
+                Text("Open Settings › Sync & Backups for details about automatic sync notifications.")
             }
         }
         .font(.callout)
@@ -378,7 +378,7 @@ private struct NotebookSyncFailureView: View {
     }
 }
 
-private struct NotebookSyncPresentation {
+struct NotebookSyncPresentation {
     let workspace: NotebookWorkspace
     let now: Date
 

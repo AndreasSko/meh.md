@@ -108,6 +108,14 @@ extension XCUIApplication {
         )
     }
 
+    /// Opens Settings › Sync & Backups.
+    func openSyncBackupsSettings(timeout: TimeInterval = 15) {
+        openNotebookSettings(timeout: timeout)
+        let card = buttons["notebook-sync-backups-settings"]
+        XCTAssertTrue(card.waitForExistence(timeout: timeout))
+        activate(card)
+    }
+
     func openTrash(timeout: TimeInterval = 15) {
 #if os(iOS)
         // An empty library has no sidebar to reveal; its menu opens Trash.

@@ -61,10 +61,10 @@ CloudKit, so shared code stays usable by every backend.
 ## Choosing a backend in the app
 
 `NotebookWorkspace.Mode` selects the kind of build, and in iCloud builds
-`NotebookSyncStorage` selects iCloud, S3, or no sync. Settings › Sync changes
-it while the app runs; `prepareNotebookTransport` creates the transport. A
-mode can name a notification to observe for account changes through
-`Mode.accountChangedNotification`.
+`NotebookSyncStorage` selects iCloud, S3, or no sync. Settings › Sync & Backups
+changes it while the app runs; `prepareNotebookTransport` creates the
+transport. A mode can name a notification to observe for account changes
+through `Mode.accountChangedNotification`.
 
 Each backend keeps its own sync state next to the notebook, chosen by the
 scope: `notebook-sync-state.json` for iCloud and `notebook-sync-state-s3.json`

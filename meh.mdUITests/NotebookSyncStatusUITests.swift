@@ -386,12 +386,12 @@ final class NotebookSyncStatusUITests: XCTestCase {
             "Expected the isolated notebook workspace to finish loading"
         )
 
-        app.openNotebookSettings()
+        app.openSyncBackupsSettings()
 
         let eventLog = app.buttons["notebook-sync-event-log"]
         for _ in 0..<6 where !eventLog.isHittable { app.swipeUp() }
         XCTAssertTrue(eventLog.waitForExistence(timeout: 5))
-        capture(app, name: "After - diagnostics in Settings")
+        capture(app, name: "After - event log in Sync & Backups")
         eventLog.tap()
         let logText = app.descendants(matching: .any)
             .matching(identifier: "notebook-sync-event-log-text").firstMatch
