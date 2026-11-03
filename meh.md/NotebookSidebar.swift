@@ -29,7 +29,6 @@ struct NotebookSidebar: View {
     }
 
     private var sidebarTitle: String {
-        if scene.showsSelectionControls && !search.isPresented { return "" }
         #if os(iOS)
         // The app name repeats the window identity and crowds a split sidebar.
         if !isCompact { return "" }
@@ -94,7 +93,7 @@ struct NotebookSidebar: View {
             }
             .navigationTitle(sidebarTitle)
             #if os(iOS)
-            .navigationBarTitleDisplayMode(scene.showsSelectionControls ? .inline : .large)
+            .navigationBarTitleDisplayMode(.large)
             #endif
             #if os(iOS)
             // Frees room for Done next to Deselect All. Applied after the
@@ -1119,6 +1118,23 @@ private struct NotebookFileRow: View {
                     .accessibilityIdentifier("notebook-swipe-trash")
                 }
             }
+            #if os(iOS)
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                if !scene.showsSelectionControls, scene.editingID == nil,
+                   scene.detailEditingID == nil {
+                    Button {
+                        // An open swipe can outlive a pointer multi-selection.
+                        guard !scene.showsSelectionControls else { return }
+                        scene.beginSelectingItems(startingWith: row.id)
+                    } label: {
+                        Image(systemName: "checkmark.circle")
+                    }
+                    .tint(.accentColor)
+                    .accessibilityLabel("Select")
+                    .accessibilityIdentifier("notebook-swipe-select")
+                }
+            }
+            #endif
         }
     }
 }

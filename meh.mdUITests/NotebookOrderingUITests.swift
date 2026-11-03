@@ -198,6 +198,44 @@ final class NotebookOrderingUITests: XCTestCase {
         app.closeTrash()
         XCTAssertTrue(note.waitForExistence(timeout: 5))
     }
+
+    func testSwipeRightStartsSelection() throws {
+        continueAfterFailure = false
+        let suffix = String(UUID().uuidString.prefix(8))
+        let app = XCUIApplication()
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = suffix
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        app.launch()
+        let alpha = try createNote(named: "Alpha \(suffix)", in: app)
+        let bravo = try createNote(named: "Bravo \(suffix)", in: app)
+        let start = alpha.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        let end = alpha.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow,
+                    thenHoldForDuration: 0.2)
+        let selectAction = app.buttons["notebook-swipe-select"]
+        XCTAssertTrue(selectAction.waitForExistence(timeout: 5))
+        capture(app, name: "Swipe right reveals Select")
+        selectAction.tap()
+        XCTAssertTrue(app.buttons["1 selected"].waitForExistence(timeout: 5))
+        XCTAssertTrue(title(of: alpha, in: app).isSelected)
+        select(bravo, in: app)
+        XCTAssertTrue(app.buttons["2 selected"].waitForExistence(timeout: 5))
+        XCTAssertTrue(title(of: alpha, in: app).isSelected)
+        XCTAssertTrue(title(of: bravo, in: app).isSelected)
+        capture(app, name: "Swiped row starts the selection")
+        app.buttons["notebook-selection-done"].tap()
+        XCTAssertTrue(app.buttons["notebook-selection-done"].waitForNonExistence(timeout: 5))
+
+        // A full swipe selects without tapping the action.
+        let from = bravo.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5))
+        let to = bravo.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
+        from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .fast,
+                   thenHoldForDuration: 0)
+        XCTAssertTrue(app.buttons["1 selected"].waitForExistence(timeout: 5))
+        XCTAssertTrue(title(of: bravo, in: app).isSelected)
+        XCTAssertFalse(title(of: alpha, in: app).isSelected)
+    }
     #endif
 
     private enum RowKind {

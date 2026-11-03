@@ -157,7 +157,7 @@ extension NotebookSceneState {
         return result
     }
 
-    func beginSelectingItems() {
+    func beginSelectingItems(startingWith id: UUID? = nil) {
         #if os(iOS)
         // On iPad the note stays beside the sidebar, and its keyboard would
         // cover the selection's Move and Trash buttons.
@@ -168,6 +168,7 @@ extension NotebookSceneState {
         selectingItems = true
         navigationState.isTreeExpanded = true
         browserSelection.clear()
+        if let id { browserSelection.toggle(id) }
     }
 
     func endSelectingItems() {
