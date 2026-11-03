@@ -57,15 +57,30 @@ a template named `Meeting.md`. Settings shows a preview and rejects unsupported
 variables or invalid filenames. Existing names receive a numbered suffix;
 creating from a template never replaces an existing note.
 
-Variables are expanded in new filenames only. Source Markdown is copied
-literally, including frontmatter, links, and any template-like body text.
-Relative links are therefore interpreted from the new note's location; a
-different destination may change their meaning. Templates do not copy linked
+## Variables in the body
+
+The note body supports the same variables as snippets, such as `{{date}}`,
+`{{date:iso}}`, `{{time}}`, and `{{title}}`. See
+[snippet variables](notebook-snippets.md#variables) for the full list. They
+expand once, when the new note is created; the template keeps its tokens.
+`{{title}}` is the new note's title, after any numbered suffix. The body and
+the filename use the same moment in time.
+
+Body and filename variables are separate lists. In the body, `{{date}}` uses
+your regional short format; in a filename it is always `YYYY-MM-DD`.
+`{{template}}` works only in filenames and stays literal in the body. Type
+`{{` while editing a template source to see the body variables.
+
+Variables expand anywhere in the body, including frontmatter and links.
+Everything else is copied literally. Relative links are therefore
+interpreted from the new note's location; a different destination may
+change their meaning. Templates do not copy linked
 notes or attachment files.
 
 ## Verification boundaries
 
-Core checks cover discovery, inheritance, persistence, copying, and concurrent
-catalog updates. UI checks use the iCloud Dev build with an isolated preview
-notebook and fictional data. Those checks do not establish physical-device or
-live CloudKit behavior; report those layers separately when validating a PR.
+Core checks cover discovery, inheritance, persistence, copying, body
+variables, and concurrent catalog updates. UI checks use the iCloud Dev
+build with an isolated preview notebook and fictional data. Those checks do
+not establish physical-device or live CloudKit behavior; report those layers
+separately when validating a PR.

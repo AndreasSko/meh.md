@@ -71,7 +71,7 @@ final class NotebookTemplateTests: XCTestCase {
         try await replica.setTemplateSource(id, enabled: true)
         try await replica.setTemplateSettings(
             .init(destination: .folder(destination), filenamePattern: "{{template}}"), for: id)
-        let body = "# {{date}}\n\n[[Meeting]]\n![Photo](../photo.png)\n- [ ] Next\n"
+        let body = "# Journal\n\n[[Meeting]]\n![Photo](../photo.png)\n- [ ] Next\n"
         try session.replaceAll(with: body)
         let source = try XCTUnwrap(session.currentSnapshot)
         let copied = try await replica.createNoteFromTemplate(id)
@@ -87,6 +87,42 @@ final class NotebookTemplateTests: XCTestCase {
         XCTAssertEqual(session.text, body)
         let usual = try await replica.createNoteFromTemplate(id, destination: .inherit)
         XCTAssertEqual(replica.placements.first { $0.item.id == usual }?.parentID, inbox)
+    }
+
+    func testCreationExpandsBodyVariablesForTheNewNoteAndKeepsSourceLiteral() async throws {
+        let replica = try await replica()
+        let source = "# {{title}}\n\n{{date:iso}} {{time}} {{date:long}}\n{{unknown}} {{template}}\n"
+        let id = try await replica.createNote(name: "Standup.md", text: source)
+        try await replica.setTemplateSource(id, enabled: true)
+        try await replica.setTemplateSettings(
+            .init(filenamePattern: "{{date}} {{template}}"), for: id)
+        let date = Date(timeIntervalSince1970: 86_400 * 3 + 3_600 * 14 + 60 * 5)
+        let zone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let locale = Locale(identifier: "en_US_POSIX")
+        let first = try await replica.createNoteFromTemplate(
+            id, date: date, timeZone: zone, locale: locale)
+        let second = try await replica.createNoteFromTemplate(
+            id, date: date, timeZone: zone, locale: locale)
+        let names = [first, second].map { copy in
+            replica.placements.first { $0.item.id == copy }?.item.name
+        }
+        XCTAssertEqual(names, ["1970-01-04 Standup.md", "1970-01-04 Standup (2).md"])
+        let long = NotebookSnippetVariable.longDate.value(
+            title: "", date: date, timeZone: zone, locale: locale)
+        let time = NotebookSnippetVariable.time.value(
+            title: "", date: date, timeZone: zone, locale: locale)
+        let firstText = try await replica.openNote(first).text
+        XCTAssertEqual(firstText,
+            "# 1970-01-04 Standup\n\n1970-01-04 \(time) \(long)\n{{unknown}} {{template}}\n")
+        let secondText = try await replica.openNote(second).text
+        XCTAssertTrue(secondText.hasPrefix("# 1970-01-04 Standup (2)\n"),
+                      "{{title}} must use the new note's final, unique name")
+        let sourceText = try await replica.openNote(id).text
+        XCTAssertEqual(sourceText, source)
+        let named = try await replica.createNoteFromTemplate(
+            id, name: "Retro.MARKDOWN", date: date, timeZone: zone, locale: locale)
+        let namedText = try await replica.openNote(named).text
+        XCTAssertTrue(namedText.hasPrefix("# Retro\n"), namedText)
     }
 
     func testUnavailableConfiguredDestinationFailsUntilRestoredOrOverridden() async throws {

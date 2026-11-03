@@ -52,7 +52,7 @@ public enum NotebookTemplateError: Error, Equatable, LocalizedError {
 }
 
 public enum NotebookTemplateFilename {
-    /// Filename-only substitutions. Template bodies are never transformed.
+    /// Filename substitutions. Bodies expand the snippet variables instead.
     public static func preview(
         pattern: String?, templateName: String, date: Date = Date(),
         timeZone: TimeZone = .current
@@ -65,7 +65,7 @@ public enum NotebookTemplateFilename {
         let day = formatter.string(from: date)
         formatter.dateFormat = "HH-mm"
         let time = formatter.string(from: date)
-        let template = stemAndExtension(templateName).stem
+        let template = stem(templateName)
         var name = pattern ?? day
         if pattern != nil {
             try validateVariables(name)
@@ -111,6 +111,8 @@ public enum NotebookTemplateFilename {
             number += 1
         }
     }
+
+    static func stem(_ name: String) -> String { stemAndExtension(name).stem }
 
     private static func stemAndExtension(_ name: String) -> (stem: String, ext: String) {
         let lower = name.lowercased()

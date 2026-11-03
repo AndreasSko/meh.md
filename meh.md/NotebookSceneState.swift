@@ -95,7 +95,7 @@ final class NotebookSceneState {
     // MARK: Editor completion
 
     var variableCompletionSelection = NSRange(location: 0, length: 0)
-    var snippetSourceNoteIDs: Set<UUID> = []
+    var variableSourceNoteIDs: Set<UUID> = []
     var variableCompletion: NotebookSnippetVariableCompletion?
     var linkCompletion: NotebookLinkCompletion?
     var linkCompletionText = ""

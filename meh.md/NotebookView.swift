@@ -254,6 +254,7 @@ private struct NotebookSnippetNavigation: ViewModifier {
         .task(id: ObjectIdentifier(scene.editorNavigation)) { scene.configureSnippetNavigation() }
         .onChange(of: scene.replica.snippets, initial: true) { _, _ in scene.updateSnippetMenu() }
         .onChange(of: scene.replica.snippetSources) { _, _ in scene.updateSnippetMenu() }
+        .onChange(of: scene.replica.templates) { _, _ in scene.updateSnippetMenu() }
         .onChange(of: scene.busy) { _, _ in
             scene.updateSnippetMenu()
             scene.insertPendingSnippet()

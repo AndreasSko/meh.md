@@ -343,7 +343,7 @@ struct NotebookSnippetVariableSuggestions: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Snippet variable")
+                Text("Variable")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                     .padding(.leading, 16)
                 Spacer(minLength: 0)

@@ -74,9 +74,10 @@ When editing a snippet source, type `{{` to see variable suggestions, including
 an example in your current regional format. Type a name to filter the choices;
 tap a choice or use the arrow keys and Return to insert its literal token.
 Escape or the close button dismisses the suggestions. This is available in
-Source and Live Preview for registered notes and notes inside registered
-snippet folders. Ordinary notes and template-only sources do not show these
-suggestions.
+Source and Live Preview for snippet and template sources, including notes
+inside registered folders. Ordinary notes do not show these suggestions.
+Templates expand the same variables when creating a note; see
+[note templates](notebook-templates.md#variables-in-the-body).
 
 The following exact tokens expand when inserting a snippet:
 
@@ -96,7 +97,8 @@ and local time zone. Tokens expand throughout the body,
 including code blocks. Unknown or incomplete tokens remain literal. A stray
 opening `{{` does not stop a later valid token from expanding. Values
 are expanded once; tokens within a substituted title are not expanded again.
-The source itself stays unchanged.
+The source itself stays unchanged. Inserting into another snippet or
+template source keeps the tokens, so they expand when that source is used.
 
 Relative links are copied literally and resolve from the target note's
 location. Linked notes and attachments are not copied.
