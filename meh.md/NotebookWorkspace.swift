@@ -9,7 +9,9 @@ import Network
 #else
 import NoteCore
 #endif
+#if !NOTEBOOK_PERFORMANCE_HOST
 import NoteCoreAWS
+#endif
 import Observation
 #if os(iOS)
 import UIKit
@@ -1831,11 +1833,21 @@ final class NotebookWorkspace {
         guard let credentials = try storageStore.credentials() else {
             throw S3SyncTransportError.missingCredentials
         }
+        #if NOTEBOOK_PERFORMANCE_HOST
+        throw Self.s3UnavailableInPerformanceHost
+        #else
         return S3SyncTransport(
             configuration: configuration, credentials: credentials,
             stateDirectory: directory.appending(path: "S3")
         )
+        #endif
     }
+
+    #if NOTEBOOK_PERFORMANCE_HOST
+    /// The performance host builds without the AWS SDK and never uses S3.
+    private static let s3UnavailableInPerformanceHost =
+        S3SyncTransportError.invalidConfiguration("S3 isn't part of the performance host.")
+    #endif
 
     /// Checks S3 settings before they are used. Nothing in the notebook or
     /// its saved sync state changes.
@@ -1843,6 +1855,9 @@ final class NotebookWorkspace {
         _ configuration: S3SyncConfiguration, credentials: S3Credentials
     ) async throws -> S3ConnectionReport {
         try configuration.validate()
+        #if NOTEBOOK_PERFORMANCE_HOST
+        throw Self.s3UnavailableInPerformanceHost
+        #else
         let transport = S3SyncTransport(
             configuration: configuration, credentials: credentials,
             stateDirectory: FileManager.default.temporaryDirectory
@@ -1853,6 +1868,7 @@ final class NotebookWorkspace {
             maxAttempts: 2
         )
         return try await transport.checkConnection()
+        #endif
     }
 
     /// The check is usually the first request to a server on the local
