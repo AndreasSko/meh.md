@@ -55,15 +55,101 @@ struct NotebookSettingsView: View {
             }
             .task { await workspace.reloadBackupInfo() }
         }
-        #if os(macOS)
-        .frame(width: 480, height: 460)
-        #endif
         .interactiveDismissDisabled(exporting)
         .notebookMarkdownExporter(
             isPresented: $exporting, replica: replica, beforeExport: beforeExport
         )
     }
 }
+
+#if os(macOS)
+enum NotebookSettingsTab: Hashable {
+    case general, appearance, syncBackups, labs
+}
+
+/// The tab the Settings window shows, kept while the app runs.
+@MainActor @Observable final class NotebookSettingsSelection {
+    static let shared = NotebookSettingsSelection()
+    var tab = NotebookSettingsTab.general
+}
+
+/// Settings as its own window with tabs, like other Mac apps.
+struct NotebookMacSettingsView: View {
+    let workspace: NotebookWorkspace
+    @Bindable private var selection = NotebookSettingsSelection.shared
+    @Environment(\.openWindow) private var openWindow
+    @State private var exporting = false
+
+    var body: some View {
+        Group {
+            if let replica = workspace.replica, replica.catalogSnapshot != nil {
+                tabs(replica)
+                    .notebookMarkdownExporter(
+                        isPresented: $exporting, replica: replica,
+                        beforeExport: { try await replica.flushOpenNotes() }
+                    )
+            } else {
+                ContentUnavailableView(
+                    "Notebook Unavailable", systemImage: "book.closed",
+                    description: Text("Settings are available once the notebook is open.")
+                )
+                .frame(width: 520, height: 320)
+            }
+        }
+        .mehAppearance()
+    }
+
+    private func tabs(_ replica: NotebookReplica) -> some View {
+        TabView(selection: $selection.tab) {
+            Tab("General", systemImage: "gearshape", value: .general) {
+                NavigationStack {
+                    Form {
+                        Section {
+                            Button {
+                                selection.tab = .syncBackups
+                            } label: {
+                                NotebookSettingsCard(replica: replica, workspace: workspace)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("notebook-sync-backups-settings")
+                        }
+                        NotebookWritingSection(replica: replica, onOpenNote: openNote)
+                        NotebookFeedbackSection(log: workspace.syncEventLog)
+                        Section {
+                            NotebookSettingsSignature()
+                                .listRowBackground(Color.clear)
+                        }
+                    }
+                    .formStyle(.grouped)
+                }
+            }
+            Tab("Appearance", systemImage: "paintpalette", value: .appearance) {
+                Form { NotebookAppearanceSection() }
+                    .formStyle(.grouped)
+            }
+            Tab("Sync & Backups", systemImage: "arrow.triangle.2.circlepath",
+                value: .syncBackups) {
+                NavigationStack {
+                    NotebookSyncBackupsView(
+                        replica: replica, workspace: workspace, exporting: $exporting,
+                        beforeExport: { try await replica.flushOpenNotes() },
+                        onOpenNote: openNote
+                    )
+                }
+            }
+            Tab("Labs", systemImage: "flask", value: .labs) {
+                NotebookLabsView()
+            }
+        }
+        .frame(width: 520, height: 600)
+        .task { await workspace.reloadBackupInfo() }
+    }
+
+    private func openNote(_ id: UUID) {
+        openWindow(id: "notebook", value: NotebookWindowValue(noteID: id))
+    }
+}
+#endif
 
 /// The notebook at a glance: how many notes, whether they are synced and
 /// when they were last backed up. Opens Sync & Backups.
@@ -101,6 +187,12 @@ private struct NotebookSettingsCard: View {
                 }
                 .font(.subheadline)
                 Spacer(minLength: 0)
+                #if os(macOS)
+                // A button on the Mac, so it needs its own disclosure hint.
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+                #endif
             }
             .padding(.vertical, 4)
             .contentShape(Rectangle())

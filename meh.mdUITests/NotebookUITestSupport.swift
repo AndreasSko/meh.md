@@ -86,7 +86,9 @@ extension XCUIApplication {
 #endif
     }
 
-    func openNotebookSettings(timeout: TimeInterval = 15) {
+    /// Opens Settings. On the Mac it is a window with tabs, and `macTab`
+    /// names the tab to show; iPhone and iPad show everything on one screen.
+    func openNotebookSettings(macTab: String = "General", timeout: TimeInterval = 15) {
 #if os(iOS)
         revealNotebookSidebar(timeout: timeout)
 #endif
@@ -95,26 +97,42 @@ extension XCUIApplication {
         ) else { return }
         activate(settings)
 #if os(iOS)
-        let title = navigationBars["Settings"]
-#else
-        // A Mac sheet has no navigation bar; its title is plain text.
-        let title = sheets.staticTexts.matching(
-            NSPredicate(format: "value == %@", "Settings")
-        ).firstMatch
-#endif
         XCTAssertTrue(
-            title.waitForExistence(timeout: timeout),
+            navigationBars["Settings"].waitForExistence(timeout: timeout),
             "Expected notebook Settings to open"
         )
+#else
+        let tab = toolbars.buttons[macTab]
+        XCTAssertTrue(
+            tab.waitForExistence(timeout: timeout),
+            "Expected the Settings window to open"
+        )
+        tab.click()
+#endif
     }
 
     /// Opens Settings › Sync & Backups.
     func openSyncBackupsSettings(timeout: TimeInterval = 15) {
-        openNotebookSettings(timeout: timeout)
+        openNotebookSettings(macTab: "Sync & Backups", timeout: timeout)
+#if os(iOS)
         let card = buttons["notebook-sync-backups-settings"]
         XCTAssertTrue(card.waitForExistence(timeout: timeout))
-        activate(card)
+        card.tap()
+        XCTAssertTrue(navigationBars["Sync & Backups"].waitForExistence(timeout: timeout))
+#endif
     }
+
+#if os(macOS)
+    /// Closes the Settings window, as ⌘W does.
+    func closeNotebookSettings() {
+        let window = windows.containing(.toolbar, identifier: nil)
+            .matching(NSPredicate(format: "title IN %@",
+                                  ["General", "Appearance", "Sync & Backups", "Labs"]))
+            .firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        window.buttons[XCUIIdentifierCloseWindow].click()
+    }
+#endif
 
     func openTrash(timeout: TimeInterval = 15) {
 #if os(iOS)

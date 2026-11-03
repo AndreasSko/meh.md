@@ -369,10 +369,6 @@ private struct NotebookMenuNavigation: ViewModifier {
             guard scene.menuAvailable else { return }
             scene.createDefaultNote()
         }
-        .onChange(of: menu.settingsRequest) { _, _ in
-            guard scene.menuAvailable else { return }
-            scene.openSettings()
-        }
     }
 }
 #endif
@@ -381,6 +377,9 @@ private struct NotebookMenuNavigation: ViewModifier {
 private struct NotebookScenePresentation: ViewModifier {
     @Bindable var scene: NotebookSceneState
     @Environment(\.scenePhase) private var scenePhase
+    #if os(macOS)
+    @Environment(\.openSettings) private var openSettingsWindow
+    #endif
 
     func body(content: Content) -> some View {
         content
@@ -509,6 +508,14 @@ private struct NotebookScenePresentation: ViewModifier {
                 onOpenNote: scene.openReusableSource
             )
         }
+        #if os(macOS)
+        // Settings is its own window on the Mac.
+        .onChange(of: scene.showingSettings) { _, showing in
+            guard showing else { return }
+            scene.showingSettings = false
+            openSettingsWindow()
+        }
+        #else
         .sheet(isPresented: $scene.showingSettings,
                onDismiss: scene.finishTemplatePresentation) {
             NotebookSettingsView(replica: scene.replica,
@@ -516,6 +523,7 @@ private struct NotebookScenePresentation: ViewModifier {
                                  beforeExport: scene.flushEditor,
                                  onOpenNote: scene.openReusableSource)
         }
+        #endif
         .sheet(item: $scene.sharedImport, onDismiss: scene.finishSharedImport) { request in
             NotebookSharedImportView(plan: request.plan, replica: scene.replica) { parentID in
                 try await scene.importMarkdown(request.plan, parentID: parentID)

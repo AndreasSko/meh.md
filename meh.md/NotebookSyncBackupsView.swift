@@ -188,6 +188,24 @@ struct NotebookSyncBackupsView: View {
                     }
                 }
             }
+            #if os(macOS)
+            LabeledContent {
+                HStack(spacing: 8) {
+                    if workspace.isBackingUp { ProgressView().controlSize(.small) }
+                    Button(workspace.isBackingUp ? "Backing Up…" : "Back Up Now") { backUpNow() }
+                        .disabled(workspace.isBackingUp || exporting)
+                        .accessibilityIdentifier("notebook-backup-now")
+                }
+            } label: {
+                Text("Last Backup")
+                if let lastBackup = workspace.lastBackup {
+                    Text(lastBackup.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        .accessibilityIdentifier("notebook-last-backup")
+                } else {
+                    Text("Never")
+                }
+            }
+            #else
             Button { backUpNow() } label: {
                 LabeledContent {
                     if workspace.isBackingUp {
@@ -203,6 +221,7 @@ struct NotebookSyncBackupsView: View {
             }
             .disabled(workspace.isBackingUp || exporting)
             .accessibilityIdentifier("notebook-backup-now")
+            #endif
             if let backupError = workspace.backupError {
                 Text(backupError).foregroundStyle(.red)
             }

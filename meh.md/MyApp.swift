@@ -64,6 +64,11 @@ struct NotebookWindowValue: Codable, Hashable {
             NotebookSearchCommands()
             NotebookRecentCommands()
         }
+        #if os(macOS)
+        Settings {
+            NotebookMacSettingsView(workspace: workspace)
+        }
+        #endif
     }
 }
 #endif
@@ -71,7 +76,6 @@ struct NotebookWindowValue: Codable, Hashable {
 #if os(macOS)
 @MainActor @Observable final class NotebookMenuState {
     var newNoteRequest = 0
-    var settingsRequest = 0
     var newFolderRequest = 0
     var newWindowRequest = 0
     var importRequest = 0
@@ -116,11 +120,6 @@ struct NotebookMenuCommands: Commands {
             Button("Move Selected to Trash") { menu?.trashRequest += 1 }
                 .keyboardShortcut(.delete, modifiers: .command)
                 .disabled(menu?.canManageSelection != true)
-        }
-        CommandGroup(replacing: .appSettings) {
-            Button("Settings…") { menu?.settingsRequest += 1 }
-                .keyboardShortcut(",", modifiers: .command)
-                .disabled(menu?.isAvailable != true)
         }
     }
 }

@@ -49,12 +49,16 @@ final class NotebookMacMenuUITests: XCTestCase {
         let settingsItem = app.menuItems["Settings…"]
         XCTAssertTrue(settingsItem.waitForExistence(timeout: 5))
         settingsItem.click()
-        let backups = app.buttons["notebook-backups-settings"]
-        XCTAssertTrue(backups.waitForExistence(timeout: 10))
+        // Settings is its own window, in front of the notebook.
+        let general = app.toolbars.buttons["General"]
+        XCTAssertTrue(general.waitForExistence(timeout: 10))
+        general.click()
+        let card = app.buttons["notebook-sync-backups-settings"]
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
         app.typeKey("n", modifierFlags: .command)
-        XCTAssertTrue(backups.exists)
-        app.buttons["Done"].click()
-        XCTAssertFalse(backups.waitForExistence(timeout: 1))
+        XCTAssertTrue(card.exists)
+        app.closeNotebookSettings()
+        XCTAssertFalse(card.waitForExistence(timeout: 1))
         XCTAssertEqual(sidebarNoteCount(in: app), noteCount)
         XCTAssertEqual(noteTitle.label, title)
         XCTAssertEqual(editor.value as? String, body)
@@ -65,8 +69,8 @@ final class NotebookMacMenuUITests: XCTestCase {
         titleField.typeKey("a", modifierFlags: .command)
         titleField.typeText(shortcutTitle)
         app.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(backups.waitForExistence(timeout: 10))
-        app.buttons["Done"].click()
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        app.closeNotebookSettings()
         XCTAssertTrue(noteTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(noteTitle.label, shortcutTitle)
         XCTAssertEqual(sidebarNoteCount(in: app), 2)
