@@ -74,9 +74,10 @@ When editing a snippet source, type `{{` to see variable suggestions, including
 an example in your current regional format. Type a name to filter the choices;
 tap a choice or use the arrow keys and Return to insert its literal token.
 Escape or the close button dismisses the suggestions. This is available in
-Source and Live Preview for registered notes and notes inside registered
-snippet folders. Ordinary notes and template-only sources do not show these
-suggestions.
+Source and Live Preview for snippet and template sources, including notes
+inside registered folders. Ordinary notes do not show these suggestions.
+Templates expand the same variables when creating a note; see
+[note templates](notebook-templates.md#variables-in-the-body).
 
 The following exact tokens expand when inserting a snippet:
 

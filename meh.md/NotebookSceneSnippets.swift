@@ -11,7 +11,8 @@ extension NotebookSceneState {
     }
 
     func updateSnippetMenu() {
-        snippetSourceNoteIDs = Set(replica.snippets.map(\.id))
+        variableSourceNoteIDs = Set(replica.snippets.map(\.id))
+            .union(replica.templates.map(\.id))
         editorNavigation.snippetMenu.update(replica.snippets, sources: replica.snippetSources)
         if variableCompletion != nil && !canCompleteSnippetVariable { dismissEditorCompletion() }
         editorNavigation.snippetMenu.isEnabled = !busy && historyBrowser == nil

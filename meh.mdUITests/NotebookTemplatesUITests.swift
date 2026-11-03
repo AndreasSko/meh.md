@@ -181,6 +181,49 @@ final class NotebookTemplatesUITests: XCTestCase {
                        "Template registration and copy editing must preserve source Markdown")
     }
 
+    func testTemplateSourceCompletesVariablesThatExpandInNewNotes() throws {
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        createNote(in: app, named: "Standup", body: "")
+        showFiles(app)
+        let sourceID = itemID(named: "Standup", in: app)
+        markTemplate(sourceID, named: "Standup", in: app)
+        fileTitle("Standup", in: app).tap()
+
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        editor.typeText("# {{ti")
+        let title = app.buttons["snippet-variable-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5),
+                      "Template sources should offer variable suggestions")
+        title.tap()
+        editor.typeText("\nDone {{date:iso}}")
+        let source = "# {{title}}\nDone {{date:iso}}"
+        XCTAssertEqual(editor.value as? String, source)
+
+        showFiles(app)
+        app.buttons["notebook-new-item"].firstMatch.press(forDuration: 1)
+        app.buttons["New from Template…"].tap()
+        let choice = app.buttons["notebook-template-choice-" + sourceID]
+        XCTAssertTrue(choice.waitForExistence(timeout: 5))
+        choice.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let copyName = app.buttons["note-title"].label
+        let text = editor.value as? String ?? ""
+        XCTAssertTrue(text.hasPrefix("# \(copyName)\nDone "), text)
+        XCTAssertNotNil(text.range(of: "Done [0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                                   options: .regularExpression), text)
+
+        showFiles(app)
+        fileTitle("Standup", in: app).tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, source,
+                       "Creating a note must keep the template's variables")
+    }
+
     func testTemplateFolderDiscoversNestedNotesAndCombinesSources() throws {
         continueAfterFailure = false
         let app = makeApp()

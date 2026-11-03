@@ -139,7 +139,7 @@ extension NotebookSceneState {
     var canCompleteSnippetVariable: Bool {
         guard let selectedID, !busy, historyBrowser == nil,
               session?.isEditingEnabled == true else { return false }
-        return snippetSourceNoteIDs.contains(selectedID)
+        return variableSourceNoteIDs.contains(selectedID)
     }
 
     func dismissEditorCompletion() {
@@ -153,7 +153,8 @@ extension NotebookSceneState {
         sourceID: UUID, selection: NSRange, navigation: MarkdownEditorNavigation) {
         guard sourceID == selectedID, navigation === editorNavigation,
               navigation.isValid, canCompleteSnippetVariable,
-              replica.snippets.contains(where: { $0.id == sourceID }),
+              replica.snippets.contains(where: { $0.id == sourceID })
+                || replica.templates.contains(where: { $0.id == sourceID }),
               session?.text == textSnapshot,
               navigation.capturePosition?()?.selection == selection else { return }
         let change = MarkdownEditingChange(range: completion.range,

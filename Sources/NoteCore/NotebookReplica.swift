@@ -664,7 +664,9 @@ public final class NotebookReplica {
 
     public func createNoteFromTemplate(
         _ id: UUID, name: String? = nil,
-        destination: NotebookTemplateDestination? = nil
+        destination: NotebookTemplateDestination? = nil,
+        date: Date = Date(), timeZone: TimeZone = .current,
+        locale: Locale = .autoupdatingCurrent
     ) async throws -> UUID {
         try await withCatalogWrite {
             guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
@@ -705,12 +707,15 @@ public final class NotebookReplica {
             } else {
                 proposedName = try NotebookTemplateFilename.preview(
                     pattern: template.effectiveSettings.filenamePattern,
-                    templateName: template.name)
+                    templateName: template.name, date: date, timeZone: timeZone)
             }
             let existing = self.placements.filter { !$0.isInTrash && $0.parentID == parentID }
                 .flatMap { [$0.item.name, $0.displayName] }
             let uniqueName = NotebookTemplateFilename.unique(proposedName, existing: existing)
-            let note = try NoteDocument(text: text)
+            let body = NotebookSnippetText.expand(
+                text: text, title: NotebookTemplateFilename.stem(uniqueName),
+                date: date, timeZone: timeZone, locale: locale)
+            let note = try NoteDocument(text: body)
             let next = try catalog.fork()
             try next.add(id: note.noteID, kind: .note, name: uniqueName, parentID: parentID)
             try await self.noteStorage(note.noteID).save(note.snapshot())

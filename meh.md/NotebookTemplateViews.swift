@@ -425,7 +425,7 @@ private struct NotebookTemplateOptionsView: View {
                           }) {
                     Text("Available through \(parent.name). Defaults come from that folder unless you override them here.")
                 } else {
-                    Text("The source note stays ordinary Markdown. New notes receive a copy of its current content.")
+                    Text("The source note stays ordinary Markdown. New notes receive a copy of its current content. Type {{ in the source for variables.")
                 }
             }
             NotebookTemplateDestinationSection(
