@@ -23,6 +23,8 @@ import FoundationNetworking
 /// There is no push: the app checks for changes on its own schedule.
 public actor S3SyncTransport: SyncTransport {
     public nonisolated let scope: String
+    /// Requests one operation keeps in flight at once.
+    static let concurrency = 8
 
     private let client: any S3Client
     private let root: String
@@ -230,11 +232,21 @@ public actor S3SyncTransport: SyncTransport {
         guard !pending.isEmpty else { return }
         let client = client
         let root = root
+        // A notebook moved from another storage can bring hundreds of deleted
+        // notes with no bodies here; one listing then replaces one per note.
+        let prefix = root + "records/"
+        let bodies: [UUID?: [String]]? = pending.count <= Self.concurrency ? nil
+            : Dictionary(grouping: try await client.listAll(prefix: prefix).map(\.key)) {
+                $0.dropFirst(prefix.count).split(separator: "/").first
+                    .flatMap { UUID(uuidString: String($0)) }
+            }
+        // Each marker first, so no device stores that body again once it is gone.
         _ = try await concurrentMap(Array(pending)) { id in
             _ = try await client.put(root + "purged/" + id.uuidString.lowercased(), Data())
-            for object in try await client.listAll(prefix: Self.documentPrefix(root: root, id)) {
-                try await client.delete(object.key)
+            let keys = if let bodies { bodies[id] ?? [] } else {
+                try await client.listAll(prefix: Self.documentPrefix(root: root, id)).map(\.key)
             }
+            for key in keys { try await client.delete(key) }
         }
         purged.formUnion(pending)
         await diagnostics?("s3_purge", ["notes": pending.count])
@@ -696,7 +708,7 @@ public struct S3ConnectionReport: Equatable, Sendable {
 
 /// Runs `body` for every item with a few requests in flight, keeping order.
 private func concurrentMap<Item: Sendable, Output: Sendable>(
-    _ items: [Item], limit: Int = 8,
+    _ items: [Item], limit: Int = S3SyncTransport.concurrency,
     _ body: @escaping @Sendable (Item) async throws -> Output
 ) async rethrows -> [Output] {
     guard !items.isEmpty else { return [] }

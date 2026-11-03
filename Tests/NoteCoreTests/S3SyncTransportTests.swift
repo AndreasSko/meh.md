@@ -343,6 +343,50 @@ final class S3SyncTransportTests: XCTestCase {
         XCTAssertEqual(devices().count, 1)
     }
 
+    func testPurgeListsStoredBodiesOnceForManyNotes() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publish(fixture.notes[0])
+        let notebookID = try XCTUnwrap(fixture.catalog.notebookID)
+        let deleted = Set((0..<40).map { _ in UUID() } + [fixture.notes[0].snapshot.noteID])
+
+        let before = server.requests.count
+        try await writer.purgeDeletedNotes(deleted, notebookID: notebookID)
+        let listings = server.requests.dropFirst(before).filter { $0 == "GET /notes" }
+        XCTAssertEqual(listings.count, 2, "purged markers and stored bodies")
+        XCTAssertEqual(
+            server.keys(bucket: "notes", prefix: "meh/meh-notebook/records/"
+                + fixture.notes[0].snapshot.noteID.uuidString.lowercased()), []
+        )
+        XCTAssertEqual(
+            server.keys(bucket: "notes", prefix: "meh/meh-notebook/purged/").count, deleted.count
+        )
+    }
+
+    func testPurgeOfAFewNotesListsOnlyTheirFolders() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publishBatch(fixture.notes).error.map { throw $0 }
+        let notebookID = try XCTUnwrap(fixture.catalog.notebookID)
+        let id = fixture.notes[0].snapshot.noteID
+
+        let before = server.requests.count
+        try await writer.purgeDeletedNotes([id], notebookID: notebookID)
+        XCTAssertEqual(server.requests.dropFirst(before).filter { $0 == "GET /notes" }.count, 2)
+        XCTAssertEqual(
+            server.keys(bucket: "notes", prefix: "meh/meh-notebook/records/"
+                + id.uuidString.lowercased()), []
+        )
+        XCTAssertNotEqual(
+            server.keys(bucket: "notes", prefix: "meh/meh-notebook/records/"
+                + fixture.notes[1].snapshot.noteID.uuidString.lowercased()), []
+        )
+    }
+
     func testSetupWritesTheFormatRecordAfterAnEarlierFailure() async throws {
         let server = FakeS3Server()
         let fixture = try Fixture()
