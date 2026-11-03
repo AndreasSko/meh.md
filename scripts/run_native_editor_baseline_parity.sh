@@ -86,7 +86,7 @@ fi
   cd "$package_root"
   xcodebuild build-for-testing -scheme MehCore-Package \
     -destination 'generic/platform=iOS Simulator' -derivedDataPath "$derived" \
-    CODE_SIGNING_ALLOWED=NO \
+    -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO \
     'OTHER_SWIFT_FLAGS=$(inherited) -D ICLOUD_ENABLED -D ICLOUD_DEV'
 ) 2>&1 | tee "$evidence_root/current-build.log"
 test_run="$(python3 - "$derived/Build/Products" <<'PY'

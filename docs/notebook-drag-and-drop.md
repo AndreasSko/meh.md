@@ -146,7 +146,7 @@ xcodebuild test -project meh.md.xcodeproj \
   -scheme 'meh.md iCloud Dev' -configuration Debug-iCloud \
   -destination '<platform and device>' \
   -only-testing:meh.mdUITests/NotebookDragUITests \
-  -parallel-testing-enabled NO
+  -parallel-testing-enabled NO -skipPackagePluginValidation
 ```
 
 For successful screen recordings, copy the generated `.xctestrun` beside

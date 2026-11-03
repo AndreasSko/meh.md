@@ -564,8 +564,21 @@ public final class NotebookSyncCoordinator {
             if !deleted.isEmpty {
                 updateProgress(phase: .cleaningUp, cleanupItemCount: deleted.count)
                 diagnosticLog?.record("deletion_cleanup_start", counts: ["items": deleted.count])
-                try await transport.purgeDeletedNotes(deleted, notebookID: notebookID)
-                diagnosticLog?.record("deletion_cleanup_end", counts: ["items": deleted.count])
+                // Every change is stored by now; bodies of deleted notes are
+                // never delivered again and only take space. A temporary
+                // cleanup failure therefore doesn't fail sync, and the next
+                // pass retries it. Anything else still needs attention.
+                do {
+                    try await transport.purgeDeletedNotes(deleted, notebookID: notebookID)
+                    diagnosticLog?.record("deletion_cleanup_end", counts: ["items": deleted.count])
+                } catch where Task.isCancelled || !NotebookSyncRetryPolicy.isTransient(error) {
+                    throw error
+                } catch {
+                    diagnosticLog?.record(
+                        "deletion_cleanup_error:" + NotebookSyncEventLog.errorCode(error),
+                        counts: ["items": deleted.count]
+                    )
+                }
             }
         }
         if let oversizedError { throw oversizedError }

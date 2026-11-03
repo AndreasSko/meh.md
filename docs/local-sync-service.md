@@ -93,7 +93,7 @@ Start the service on port 8765 as above. Build the UI-test bundle:
 ```sh
 xcodebuild -project meh.md.xcodeproj -scheme 'meh.md iCloud Dev' \
   -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath /tmp/meh-sync-build \
+  -derivedDataPath /tmp/meh-sync-build -skipPackagePluginValidation \
   CODE_SIGNING_ALLOWED=NO build-for-testing
 ```
 

@@ -23,8 +23,10 @@ import FoundationNetworking
 /// There is no push: the app checks for changes on its own schedule.
 public actor S3SyncTransport: SyncTransport {
     public nonisolated let scope: String
+    /// Requests one operation keeps in flight at once.
+    static let concurrency = 8
 
-    private let client: S3Client
+    private let client: any S3Client
     private let root: String
     private let stateURL: URL
     private let pageSize: Int
@@ -34,6 +36,7 @@ public actor S3SyncTransport: SyncTransport {
     private var publishedIDs = Set<String>()
     /// Records already counted for cleanup status, so replays don't inflate it.
     private var countedIDs = Set<String>()
+    private var purgedInPass = 0
     private var formatChecked = false
     private var isWriting = false
     private var writeWaiters: [CheckedContinuation<Void, Never>] = []
@@ -42,17 +45,12 @@ public actor S3SyncTransport: SyncTransport {
 
     public init(
         configuration: S3SyncConfiguration,
-        credentials: S3Credentials,
+        client: any S3Client,
         stateDirectory: URL,
-        session: URLSession = .shared,
-        timeout: TimeInterval = 30,
         pageSize: Int = 200
     ) {
         scope = configuration.scope
-        client = S3Client(
-            configuration: configuration, credentials: credentials,
-            session: session, timeout: timeout
-        )
+        self.client = client
         let prefix = configuration.normalizedPrefix
         root = (prefix.isEmpty ? "" : prefix + "/") + "meh-notebook/"
         stateURL = stateDirectory.appending(path: "s3-device.json")
@@ -230,19 +228,61 @@ public actor S3SyncTransport: SyncTransport {
         guard try await requireNotebookID() == notebookID else { throw SyncError.invalidRecord }
         try await refreshPurged()
         // The coordinator passes every deleted note on every pass. Notes
-        // already marked are done; bodies stored later go in cleanup.
+        // marked by another device are its to sweep; bodies stored later go
+        // in cleanup. Notes this device marked stay in `unswept` until their
+        // bodies are gone, so a failed delete is retried on the next pass.
         let pending = noteIDs.subtracting(purged)
-        guard !pending.isEmpty else { return }
+        var state = try loadDevice()
+        let work = pending.union(state.unswept)
+        guard !work.isEmpty else { return }
+        state.unswept = work
+        device = state
+        try saveDevice()
+        defer { try? saveDevice() }
         let client = client
         let root = root
-        _ = try await concurrentMap(Array(pending)) { id in
-            _ = try await client.put(root + "purged/" + id.uuidString.lowercased(), Data())
-            for object in try await client.listAll(prefix: Self.documentPrefix(root: root, id)) {
-                try await client.delete(object.key)
+        let busyBefore = client.busyReplyCount
+        // A notebook moved from another storage can bring hundreds of deleted
+        // notes with no bodies here; one listing then replaces one per note.
+        let prefix = root + "records/"
+        let bodies: [UUID?: [String]]? = work.count <= Self.concurrency ? nil
+            : Dictionary(grouping: try await client.listAll(prefix: prefix).map(\.key)) {
+                $0.dropFirst(prefix.count).split(separator: "/").first
+                    .flatMap { UUID(uuidString: String($0)) }
             }
+        purgedInPass = 0
+        await cleanupProgress?(
+            SyncCleanupProgress(stage: .deletion, completedCount: 0, totalCount: work.count)
+        )
+        // Each marker first, so no device stores that body again once it is gone.
+        _ = try await concurrentMap(Array(work)) { [self] id in
+            _ = try await client.put(root + "purged/" + id.uuidString.lowercased(), Data())
+            let keys = if let bodies { bodies[id] ?? [] } else {
+                try await client.listAll(prefix: Self.documentPrefix(root: root, id)).map(\.key)
+            }
+            for key in keys { try await client.delete(key) }
+            await notePurged(id, of: work.count, busySince: busyBefore)
         }
-        purged.formUnion(pending)
-        await diagnostics?("s3_purge", ["notes": pending.count])
+        purged.formUnion(work)
+        await diagnostics?("s3_purge", [
+            "notes": work.count, "busy": client.busyReplyCount - busyBefore,
+        ])
+    }
+
+    /// Progress for the sync indicator, and every 50 notes for the sync log,
+    /// with how many replies asked for a retry so far.
+    private func notePurged(_ id: UUID, of total: Int, busySince busyBefore: Int) async {
+        device?.unswept.remove(id)
+        purgedInPass += 1
+        await cleanupProgress?(
+            SyncCleanupProgress(stage: .deletion, completedCount: purgedInPass, totalCount: total)
+        )
+        if purgedInPass.isMultiple(of: 50), purgedInPass < total {
+            await diagnostics?("s3_purge_progress", [
+                "done": purgedInPass, "total": total,
+                "busy": client.busyReplyCount - busyBefore,
+            ])
+        }
     }
 
     public func cleanupRedundantSnapshots(
@@ -435,6 +475,8 @@ public actor S3SyncTransport: SyncTransport {
                 _ = try await client.put(key, body)
                 return
             case .alreadyExists:
+                // A retried write can find the entry its first try stored.
+                if try await client.get(key) == body { return }
                 var state = try loadDevice()
                 state.deviceID = UUID().uuidString.lowercased()
                 state.nextSequence = 1
@@ -660,8 +702,24 @@ public actor S3SyncTransport: SyncTransport {
         var snapshotCounts: [String: Int] = [:]
         var retainedBytes = 0
         var hasNewSnapshots = false
+        /// Notes this device marked as purged whose bodies may remain.
+        var unswept: Set<UUID> = []
 
         init(scope: String) { self.scope = scope }
+
+        init(from decoder: any Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            version = try values.decode(Int.self, forKey: .version)
+            scope = try values.decode(String.self, forKey: .scope)
+            deviceID = try values.decode(String.self, forKey: .deviceID)
+            nextSequence = try values.decode(UInt64.self, forKey: .nextSequence)
+            lastCleanup = try values.decodeIfPresent(Date.self, forKey: .lastCleanup)
+            snapshotCounts = try values.decode([String: Int].self, forKey: .snapshotCounts)
+            retainedBytes = try values.decode(Int.self, forKey: .retainedBytes)
+            hasNewSnapshots = try values.decode(Bool.self, forKey: .hasNewSnapshots)
+            // Saved by builds before it existed.
+            unswept = try values.decodeIfPresent(Set<UUID>.self, forKey: .unswept) ?? []
+        }
     }
 
     private struct Manifest: Codable {
@@ -699,7 +757,7 @@ public struct S3ConnectionReport: Equatable, Sendable {
 
 /// Runs `body` for every item with a few requests in flight, keeping order.
 private func concurrentMap<Item: Sendable, Output: Sendable>(
-    _ items: [Item], limit: Int = 8,
+    _ items: [Item], limit: Int = S3SyncTransport.concurrency,
     _ body: @escaping @Sendable (Item) async throws -> Output
 ) async rethrows -> [Output] {
     guard !items.isEmpty else { return [] }

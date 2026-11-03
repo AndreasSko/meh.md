@@ -378,6 +378,7 @@ def main():
                 destination,
                 "-derivedDataPath",
                 str(work / "build"),
+                "-skipPackagePluginValidation",
             ]
             stage(
                 "build",

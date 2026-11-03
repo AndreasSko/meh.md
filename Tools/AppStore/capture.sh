@@ -67,7 +67,7 @@ mkdir -p "$build"
 if (( ${devices[(Ie)iphone]} || ${devices[(Ie)ipad]} )); then
   xcodebuild build-for-testing -project meh.md.xcodeproj -scheme "$scheme" \
     -destination 'generic/platform=iOS Simulator' -derivedDataPath "$build/dd" \
-    -quiet > "$build/ios-build.log" 2>&1
+    -skipPackagePluginValidation -quiet > "$build/ios-build.log" 2>&1
 fi
 if (( ${devices[(Ie)iphone]} )); then
   id=$(simulator iphone)
@@ -86,6 +86,6 @@ fi
 if (( ${devices[(Ie)mac]} )); then
   xcodebuild build-for-testing -project meh.md.xcodeproj -scheme "$scheme" \
     -destination 'platform=macOS' -derivedDataPath "$build/dd" \
-    -quiet > "$build/mac-build.log" 2>&1
+    -skipPackagePluginValidation -quiet > "$build/mac-build.log" 2>&1
   run "platform=macOS" mac mac
 fi

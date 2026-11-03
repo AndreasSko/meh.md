@@ -3,6 +3,7 @@ import TestSupport
 import XCTest
 
 @testable import NoteCore
+@testable import NoteCoreAWS
 
 /// Moving a notebook between iCloud and S3, including into storage that holds
 /// another notebook. An in-memory store with a non-S3 scope stands in for

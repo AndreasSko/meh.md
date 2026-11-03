@@ -3,6 +3,7 @@ import TestSupport
 import XCTest
 
 @testable import NoteCore
+@testable import NoteCoreAWS
 
 /// The behavior every sync backend must provide for the coordinator. Each
 /// check runs against every backend, so a new storage system is covered by

@@ -39,14 +39,14 @@ jobs:
         run: |
           xcodebuild -project meh.md.xcodeproj -scheme meh.md \
             -configuration Release -destination "generic/platform=iOS Simulator" \
-            -derivedDataPath "$RUNNER_TEMP/build" \
+            -derivedDataPath "$RUNNER_TEMP/build" -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO build
       - name: Build Mac Release without signing
         if: ${{ !cancelled() }}
         run: |
           xcodebuild -project meh.md.xcodeproj -scheme meh.md \
             -configuration Release -destination "generic/platform=macOS" \
-            -derivedDataPath "$RUNNER_TEMP/build" \
+            -derivedDataPath "$RUNNER_TEMP/build" -skipPackagePluginValidation \
             CODE_SIGNING_ALLOWED=NO build
 
   validate:
@@ -133,7 +133,7 @@ jobs:
         run: |
           xcodebuild -project meh.md.xcodeproj -scheme meh.md \
             -configuration Release -destination "$DESTINATION" \
-            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" -skipPackagePluginValidation \
             CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY='Apple Distribution' \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \

@@ -13,7 +13,7 @@ simulator. Replace `SIMULATOR_UDID` with that simulator's UDID:
 xcodebuild build-for-testing \
   -project meh.md.xcodeproj -scheme 'meh.md iCloud Dev' \
   -destination 'platform=iOS Simulator,id=SIMULATOR_UDID' \
-  -derivedDataPath /tmp/meh-import-regression
+  -derivedDataPath /tmp/meh-import-regression -skipPackagePluginValidation
 
 python3 Tools/Import/run_simulator_checks.py \
   --products-dir /tmp/meh-import-regression/Build/Products \

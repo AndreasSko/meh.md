@@ -40,7 +40,8 @@ final class NotebookDeletionSyncTests: XCTestCase {
 
         await transport.failNextPurge()
         await coordinator.synchronize()
-        if case .failed = coordinator.status {} else { XCTFail("Expected retryable cleanup") }
+        // Every change is stored, so a failed cleanup doesn't fail sync.
+        if case .exchanged = coordinator.status {} else { XCTFail("\(coordinator.status)") }
         let failedPurgeCalls = await transport.purgeCalls
         XCTAssertEqual(failedPurgeCalls, 1)
 
@@ -54,6 +55,23 @@ final class NotebookDeletionSyncTests: XCTestCase {
         XCTAssertTrue(remaining.records.contains { $0.kind == .catalog })
         let allPurgesHadMarkers = await transport.allPurgesHadMarkers
         XCTAssertTrue(allPurgesHadMarkers)
+    }
+
+    func testCleanupErrorsThatNeedAttentionStillFailSync() async throws {
+        let transport = DeletionCheckingTransport()
+        let local = replica()
+        let coordinator = NotebookSyncCoordinator(replica: local, transport: transport)
+        await coordinator.synchronize()
+        let note = try await local.createNote(name: "remove.md", text: "private body")
+        await coordinator.synchronize()
+        try await local.setTrashed(note, true)
+        try await local.permanentlyDelete(try local.deletionSelection())
+
+        await transport.failNextPurge(with: SyncError.identityConflict)
+        await coordinator.synchronize()
+        if case .failed = coordinator.status {} else { XCTFail("\(coordinator.status)") }
+        await coordinator.synchronize()
+        if case .exchanged = coordinator.status {} else { XCTFail("\(coordinator.status)") }
     }
 
     func testOfflineChildSurvivesPurgeAndOldBodyCannotReturn() async throws {
@@ -119,12 +137,14 @@ private actor DeletionCheckingTransport: SyncTransport {
     nonisolated let scope = "deletion-checking"
     private let base = InMemorySyncTransport(scope: "deletion-checking")
     private var failCatalog = false
-    private var failPurge = false
+    private var purgeFailure: (any Error)?
     private(set) var purgeCalls = 0
     private(set) var allPurgesHadMarkers = true
 
     func failNextCatalog() { failCatalog = true }
-    func failNextPurge() { failPurge = true }
+    func failNextPurge(
+        with error: any Error = SyncError.unavailable("Injected cleanup failure")
+    ) { purgeFailure = error }
     func bootstrap(proposing record: SyncRecord) async throws -> SyncRecord {
         try await base.bootstrap(proposing: record)
     }
@@ -149,9 +169,9 @@ private actor DeletionCheckingTransport: SyncTransport {
             }
         }
         allPurgesHadMarkers = allPurgesHadMarkers && ids.isSubset(of: marked)
-        if failPurge {
-            failPurge = false
-            throw SyncError.unavailable("Injected cleanup failure")
+        if let purgeFailure {
+            self.purgeFailure = nil
+            throw purgeFailure
         }
         try await base.purgeDeletedNotes(ids, notebookID: notebookID)
     }

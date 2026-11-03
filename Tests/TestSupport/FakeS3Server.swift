@@ -24,10 +24,33 @@ public final class FakeS3Server: @unchecked Sendable {
     private var _offline = false
     private var _conditionalWrites = ConditionalWrites.supported
     private var _requests: [String] = []
-    private var _failNextPuts = 0
+    private var _putFailures: [PutFailure] = []
+    private var _putFailurePrefix = ""
+    private var _putFailureMethod = "PUT"
 
-    public init() {
-        host = "s3-\(UUID().uuidString.lowercased().prefix(8)).local"
+    /// A failed PUT. With `afterStoring`, the object is stored but the
+    /// reply is still an error, as when a response is lost on the way back.
+    public struct PutFailure: Sendable {
+        public var status: Int
+        public var code: String
+        /// Replaces the S3 error XML, as a proxy in front of the service would.
+        public var body: String?
+        public var afterStoring: Bool
+
+        public init(
+            status: Int = 503, code: String = "SlowDown",
+            body: String? = nil, afterStoring: Bool = false
+        ) {
+            self.status = status
+            self.code = code
+            self.body = body
+            self.afterStoring = afterStoring
+        }
+    }
+
+    /// Serves `host`, or a made-up local name when none is given.
+    public init(host: String? = nil) {
+        self.host = host ?? "s3-\(UUID().uuidString.lowercased().prefix(8)).local"
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FakeS3Protocol.self]
         session = URLSession(configuration: configuration)
@@ -49,8 +72,26 @@ public final class FakeS3Server: @unchecked Sendable {
     /// Method and path of every request, for request-count checks.
     public var requests: [String] { lock.withLock { _requests } }
 
-    /// Fails the next PUT requests with a 503.
-    public func failNextPuts(_ count: Int) { lock.withLock { _failNextPuts = count } }
+    /// Fails the next PUT requests to keys under `prefix`, with a 503
+    /// SlowDown unless told otherwise.
+    public func failNextPuts(
+        _ count: Int, with failure: PutFailure = PutFailure(), prefix: String = ""
+    ) {
+        failNext(count, method: "PUT", with: failure, prefix: prefix)
+    }
+
+    /// Fails the next DELETE requests to keys under `prefix` with a 503.
+    public func failNextDeletes(_ count: Int, prefix: String = "") {
+        failNext(count, method: "DELETE", with: PutFailure(), prefix: prefix)
+    }
+
+    private func failNext(_ count: Int, method: String, with failure: PutFailure, prefix: String) {
+        lock.withLock {
+            _putFailures = Array(repeating: failure, count: count)
+            _putFailurePrefix = prefix
+            _putFailureMethod = method
+        }
+    }
 
     public func keys(bucket: String, prefix: String = "") -> [String] {
         lock.withLock {
@@ -86,12 +127,17 @@ public final class FakeS3Server: @unchecked Sendable {
             }
             let key = parts.count > 1 ? String(parts[1]) : ""
             let full = bucket + "/" + key
+            if !_putFailures.isEmpty, method == _putFailureMethod,
+               key.hasPrefix(_putFailurePrefix) {
+                let failure = _putFailures.removeFirst()
+                if failure.afterStoring { objects[full] = body }
+                return (
+                    failure.status, [:],
+                    failure.body.map { Data($0.utf8) } ?? Self.error(failure.code)
+                )
+            }
             switch method {
             case "PUT":
-                if _failNextPuts > 0 {
-                    _failNextPuts -= 1
-                    return (503, [:], Self.error("SlowDown"))
-                }
                 if request.value(forHTTPHeaderField: "If-None-Match") == "*" {
                     switch _conditionalWrites {
                     case .supported where objects[full] != nil:

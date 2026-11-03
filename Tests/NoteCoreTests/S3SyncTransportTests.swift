@@ -1,8 +1,10 @@
 import Foundation
+import SmithyRetriesAPI
 import TestSupport
 import XCTest
 
 @testable import NoteCore
+@testable import NoteCoreAWS
 
 /// S3-specific behavior beyond the shared transport contract.
 @MainActor
@@ -12,36 +14,10 @@ final class S3SyncTransportTests: XCTestCase {
         secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
     )
 
-    func testSignatureMatchesTheAWSExample() throws {
-        // "Example: GET Object" from the AWS Signature Version 4 docs.
-        let authorization = S3Signer.authorization(
-            method: "GET",
-            url: try XCTUnwrap(URL(string: "https://examplebucket.s3.amazonaws.com/test.txt")),
-            headers: [
-                "Host": "examplebucket.s3.amazonaws.com",
-                "Range": "bytes=0-9",
-                "x-amz-content-sha256": S3Signer.emptyPayloadHash,
-                "x-amz-date": "20130524T000000Z",
-            ],
-            payloadHash: S3Signer.emptyPayloadHash,
-            credentials: credentials, region: "us-east-1", amzDate: "20130524T000000Z"
-        )
-        XCTAssertEqual(
-            authorization,
-            "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, "
-                + "SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, "
-                + "Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"
-        )
-    }
-
     func testConfigurationBuildsAddressesAndScopes() throws {
         let aws = S3SyncConfiguration(
             endpoint: "https://s3.eu-central-1.amazonaws.com/", region: "eu-central-1",
             bucket: "notes", prefix: "/meh/"
-        )
-        XCTAssertEqual(
-            try aws.url(forKey: "meh/a b.json").absoluteString,
-            "https://notes.s3.eu-central-1.amazonaws.com/meh/a%20b.json"
         )
         XCTAssertEqual(aws.scope, "s3://aws/notes/meh")
         var otherRegion = aws
@@ -50,11 +26,6 @@ final class S3SyncTransportTests: XCTestCase {
 
         let minio = S3SyncConfiguration(
             endpoint: "http://192.168.1.20:9000", region: "us-east-1", bucket: "notes"
-        )
-        XCTAssertEqual(
-            try minio.url(forKey: "k", query: [("prefix", "a/"), ("list-type", "2")])
-                .absoluteString,
-            "http://192.168.1.20:9000/notes/k?list-type=2&prefix=a%2F"
         )
         XCTAssertEqual(minio.scope, "s3://192.168.1.20:9000/notes/")
         XCTAssertTrue(minio.usesUnencryptedConnection)
@@ -70,6 +41,16 @@ final class S3SyncTransportTests: XCTestCase {
         ] {
             XCTAssertThrowsError(try invalid.validate(), invalid.endpoint)
         }
+    }
+
+    func testAWSAddressesUseVirtualHostedBuckets() async throws {
+        let server = FakeS3Server(host: "notes.s3.eu-central-1.amazonaws.com")
+        let transport = transport(server, configuration: S3SyncConfiguration(
+            endpoint: "https://s3.eu-central-1.amazonaws.com", region: "eu-central-1",
+            bucket: "notes", prefix: "meh"
+        ))
+        _ = try? await transport.fetch(after: nil)
+        XCTAssertEqual(server.requests.first, "GET /meh/meh-notebook/format.json")
     }
 
     func testBootstrapWithoutConditionalWritesStillAgreesOnTheStoredSeed() async throws {
@@ -184,7 +165,8 @@ final class S3SyncTransportTests: XCTestCase {
         let fixture = try Fixture()
         let writer = transport(server, device: "writer")
         _ = try await writer.bootstrap(proposing: fixture.catalog)
-        server.failNextPuts(1)
+        server.failNextPuts(AWSS3Client.maxAttempts, prefix: "meh/meh-notebook/records/"
+            + fixture.notes[0].snapshot.noteID.uuidString.lowercased())
         let result = try await writer.publishBatch(fixture.notes)
         XCTAssertNotNil(result.error)
         XCTAssertEqual(result.acknowledgedIDs.count, 1, "the other record was logged")
@@ -288,6 +270,202 @@ final class S3SyncTransportTests: XCTestCase {
         XCTAssertFalse(repeated.contains { $0.hasPrefix("PUT") || $0.hasPrefix("DELETE") })
     }
 
+    /// The replies Backblaze B2 sent while a notebook moved to it.
+    func testBusyOrFailingRequestsAreRetried() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        server.failNextPuts(2, with: .init(status: 500, code: "InternalError"))
+        try await writer.publish(fixture.notes[0])
+        server.failNextPuts(2, with: .init(status: 503, code: "ServiceUnavailable"))
+        try await writer.publish(fixture.notes[1])
+        server.failNextPuts(1)
+        try await writer.publish(fixture.catalog)
+
+        let received = try await transport(server, device: "reader").fetch(after: nil).records
+        XCTAssertTrue(Set(received.map(\.id)).isSuperset(of: fixture.notes.map(\.id)))
+    }
+
+    func testProxyErrorsWithoutAnS3CodeAreRetriedAndTemporary() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        server.failNextPuts(1, with: .init(status: 503, body: ""))
+        try await writer.publish(fixture.notes[0])
+
+        let gateway = "<html><body><h1>502 Bad Gateway</h1><hr><center>nginx</center>"
+        server.failNextPuts(5, with: .init(status: 502, body: gateway))
+        do {
+            try await writer.publish(fixture.notes[1])
+            XCTFail("Published although every attempt failed")
+        } catch {
+            XCTAssertEqual(error as? S3SyncTransportError, .requestFailed(status: 502, code: "HTTP502"))
+            XCTAssertTrue(NotebookSyncRetryPolicy.isTransient(error))
+        }
+    }
+
+    func testRetriesStopAfterFiveAttempts() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        let notebookID = try XCTUnwrap(fixture.catalog.notebookID)
+        let id = fixture.notes[0].snapshot.noteID
+
+        server.failNextPuts(5)
+        let before = server.requests.count
+        do {
+            try await writer.purgeDeletedNotes([id], notebookID: notebookID)
+            XCTFail("Purged although every attempt failed")
+        } catch S3SyncTransportError.requestFailed(503, "SlowDown") {}
+        XCTAssertEqual(server.requests.dropFirst(before).filter { $0.hasPrefix("PUT") }.count, 5)
+        try await writer.purgeDeletedNotes([id], notebookID: notebookID)
+    }
+
+    func testRetriedLogWriteThatWasStoredKeepsTheDeviceID() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publish(fixture.notes[0])
+        let devices = { Set(server.keys(bucket: "notes", prefix: "meh/meh-notebook/log/")
+            .map { $0.split(separator: "/")[3] }) }
+        XCTAssertEqual(devices().count, 1)
+
+        // The log entry is stored, but its reply is lost.
+        server.failNextPuts(
+            1, with: .init(status: 500, code: "InternalError", afterStoring: true),
+            prefix: "meh/meh-notebook/log/"
+        )
+        try await writer.publish(fixture.notes[1])
+        XCTAssertEqual(devices().count, 1)
+    }
+
+    func testPurgeListsStoredBodiesOnceForManyNotes() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publish(fixture.notes[0])
+        let notebookID = try XCTUnwrap(fixture.catalog.notebookID)
+        let deleted = Set((0..<40).map { _ in UUID() } + [fixture.notes[0].snapshot.noteID])
+
+        let before = server.requests.count
+        try await writer.purgeDeletedNotes(deleted, notebookID: notebookID)
+        let listings = server.requests.dropFirst(before).filter { $0 == "GET /notes" }
+        XCTAssertEqual(listings.count, 2, "purged markers and stored bodies")
+        XCTAssertEqual(
+            server.keys(bucket: "notes", prefix: "meh/meh-notebook/records/"
+                + fixture.notes[0].snapshot.noteID.uuidString.lowercased()), []
+        )
+        XCTAssertEqual(
+            server.keys(bucket: "notes", prefix: "meh/meh-notebook/purged/").count, deleted.count
+        )
+    }
+
+    func testPurgeReportsProgressAndBusyReplies() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        let notebookID = try XCTUnwrap(fixture.catalog.notebookID)
+        let events = Recorder<(String, [String: Int])>()
+        let progress = Recorder<SyncCleanupProgress>()
+        await writer.setDiagnosticsHandler { await events.append(($0, $1)) }
+        await writer.setCleanupProgressHandler { await progress.append($0) }
+
+        server.failNextPuts(3, prefix: "meh/meh-notebook/purged/")
+        try await writer.purgeDeletedNotes(Set((0..<120).map { _ in UUID() }), notebookID: notebookID)
+
+        let logged = await events.items
+        XCTAssertEqual(
+            logged.filter { $0.0 == "s3_purge_progress" }.map { $0.1["done"] }, [50, 100]
+        )
+        XCTAssertEqual(logged.last?.0, "s3_purge")
+        XCTAssertEqual(logged.last?.1, ["notes": 120, "busy": 3])
+        let reported = await progress.items
+        XCTAssertEqual(reported.first?.completedCount, 0)
+        XCTAssertEqual(reported.last?.completedCount, 120)
+        XCTAssertEqual(reported.last?.totalCount, 120)
+    }
+
+    func testBodiesLeftByAFailedPurgeAreDeletedOnTheNextOne() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let root = temporaryDirectory()
+        let writer = transport(server, device: "writer", root: root)
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publish(fixture.notes[0])
+        let notebookID = try XCTUnwrap(fixture.catalog.notebookID)
+        let id = fixture.notes[0].snapshot.noteID
+        let bodies = "meh/meh-notebook/records/" + id.uuidString.lowercased()
+
+        server.failNextDeletes(AWSS3Client.maxAttempts, prefix: bodies)
+        do {
+            try await writer.purgeDeletedNotes([id], notebookID: notebookID)
+            XCTFail("Purged although every delete failed")
+        } catch {}
+        XCTAssertNotEqual(server.keys(bucket: "notes", prefix: bodies), [])
+
+        // The marker is stored, yet the next pass, here after a restart,
+        // still removes the bodies.
+        let restarted = transport(server, device: "writer", root: root)
+        _ = try await restarted.fetch(after: nil)
+        try await restarted.purgeDeletedNotes([id], notebookID: notebookID)
+        XCTAssertEqual(server.keys(bucket: "notes", prefix: bodies), [])
+        let before = server.requests.count
+        try await restarted.purgeDeletedNotes([id], notebookID: notebookID)
+        XCTAssertFalse(server.requests.dropFirst(before).contains { $0.hasPrefix("PUT") })
+    }
+
+    func testDeviceStateSavedBeforeUnsweptStillLoads() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let root = temporaryDirectory()
+        let writer = transport(server, device: "writer", root: root)
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        let state = root.appending(path: "s3-writer/s3-device.json")
+        try FileManager.default.createDirectory(
+            at: state.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        // The format 0.25.0 saved, before `unswept` was added.
+        let legacy = """
+            {"version":1,"scope":"\(writer.scope)","deviceID":"legacy-device",
+             "nextSequence":7,"snapshotCounts":{},"retainedBytes":0,
+             "hasNewSnapshots":false}
+            """
+        try Data(legacy.utf8).write(to: state)
+
+        let reopened = transport(server, device: "writer", root: root)
+        try await reopened.publish(fixture.notes[0])
+        XCTAssertTrue(server.keys(bucket: "notes", prefix: "meh/meh-notebook/log/")
+            .contains("meh/meh-notebook/log/legacy-device/00000000000000000007.json"))
+    }
+
+    func testPurgeOfAFewNotesListsOnlyTheirFolders() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publishBatch(fixture.notes).error.map { throw $0 }
+        let notebookID = try XCTUnwrap(fixture.catalog.notebookID)
+        let id = fixture.notes[0].snapshot.noteID
+
+        let before = server.requests.count
+        try await writer.purgeDeletedNotes([id], notebookID: notebookID)
+        XCTAssertEqual(server.requests.dropFirst(before).filter { $0 == "GET /notes" }.count, 2)
+        XCTAssertEqual(
+            server.keys(bucket: "notes", prefix: "meh/meh-notebook/records/"
+                + id.uuidString.lowercased()), []
+        )
+        XCTAssertNotEqual(
+            server.keys(bucket: "notes", prefix: "meh/meh-notebook/records/"
+                + fixture.notes[1].snapshot.noteID.uuidString.lowercased()), []
+        )
+    }
+
     func testSetupWritesTheFormatRecordAfterAnEarlierFailure() async throws {
         let server = FakeS3Server()
         let fixture = try Fixture()
@@ -340,15 +518,20 @@ final class S3SyncTransportTests: XCTestCase {
     // MARK: - Helpers
 
     private func transport(
-        _ server: FakeS3Server, device: String, root: URL? = nil
+        _ server: FakeS3Server, device: String = "device", root: URL? = nil,
+        configuration: S3SyncConfiguration? = nil
     ) -> S3SyncTransport {
-        S3SyncTransport(
-            configuration: S3SyncConfiguration(
-                endpoint: server.endpoint, region: "us-east-1", bucket: "notes", prefix: "meh"
+        let configuration = configuration ?? S3SyncConfiguration(
+            endpoint: server.endpoint, region: "us-east-1", bucket: "notes", prefix: "meh"
+        )
+        return S3SyncTransport(
+            configuration: configuration,
+            client: AWSS3Client(
+                configuration: configuration, credentials: credentials,
+                session: server.session, timeout: 30,
+                maxAttempts: AWSS3Client.maxAttempts, retryBackoff: NoBackoff()
             ),
-            credentials: credentials,
-            stateDirectory: (root ?? temporaryDirectory()).appending(path: "s3-\(device)"),
-            session: server.session
+            stateDirectory: (root ?? temporaryDirectory()).appending(path: "s3-\(device)")
         )
     }
 
@@ -373,6 +556,16 @@ final class S3SyncTransportTests: XCTestCase {
             SyncRecord(catalog: try NotebookCatalogDocument().snapshot())
         }
     }
+}
+
+private actor Recorder<Item: Sendable> {
+    private(set) var items: [Item] = []
+    func append(_ item: Item) { items.append(item) }
+}
+
+/// Retries at once, so tests of failing requests stay fast.
+private struct NoBackoff: RetryBackoffStrategy {
+    func computeNextBackoffDelay(attempt: Int) -> TimeInterval { 0 }
 }
 
 private extension NotebookSyncCoordinator.Status {
