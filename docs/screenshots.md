@@ -61,7 +61,9 @@ to 9:41 with a full battery that is not charging. Before each run it
 removes the app, which also removes the widgets an earlier run added. The
 iPhone runs twice, the second time in dark mode for the iPhone snippets
 image. The Mac run takes over the mouse for about a minute and sizes the
-window to 1440 × 900 points, the App Store's 2880 × 1800 pixels. The Mac
+window to 1440 × 900 points, the App Store's 2880 × 1800 pixels. Scroll
+tools such as Mos and LinearMouse drop the test's synthetic scroll
+events, so the script quits them for the Mac run and reopens them after. The Mac
 set has no widget screenshot yet.
 
 The script exports the attachments into `Tools/AppStore/raw/`.

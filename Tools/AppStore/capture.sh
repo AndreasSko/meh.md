@@ -99,5 +99,16 @@ if (( ${devices[(Ie)mac]} )); then
     -allowProvisioningUpdates -skipPackagePluginValidation -quiet \
     > "$build/mac-build.log" 2>&1 \
     || { echo "Mac build failed, see $build/mac-build.log"; exit 1; }
-  run "platform=macOS" mac mac
+  # Scroll tools like Mos and LinearMouse swallow the test's synthetic
+  # scroll events, so they are quit for the run and reopened after.
+  quit=()
+  for tool in Mos LinearMouse; do
+    if pgrep -xq "$tool"; then
+      osascript -e "quit app \"$tool\"" && quit+=("$tool")
+    fi
+  done
+  failed=0
+  run "platform=macOS" mac mac || failed=1
+  for tool in $quit; do open -a "$tool"; done
+  (( ! failed ))
 fi

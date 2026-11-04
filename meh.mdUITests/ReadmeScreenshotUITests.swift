@@ -91,10 +91,21 @@ final class ReadmeScreenshotUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Pull"].firstMatch.waitForExistence(timeout: 5))
         shot("\(device)-snippets") { XCUIScreen.main.screenshot() }
 #else
-        editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)).click()
+        // Focus the editor, so the sidebar selection turns grey, and put
+        // the cursor on the empty last line.
+        editor.click()
+        editor.typeKey(.downArrow, modifierFlags: .command)
         app.buttons["editor-formatting"].click()
         let menu = app.descendants(matching: .any)["editor-snippet-menu"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        // The menu sits past the end of the formatting row. The row itself
+        // is covered by its buttons, so scroll at a point instead.
+        let row = app.descendants(matching: .any)["editor-formatting-commands"].firstMatch
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        for _ in 0 ..< 3 where !menu.isHittable {
+            row.scroll(byDeltaX: -150, deltaY: 0)
+            pause(0.5)
+        }
         menu.click()
         XCTAssertTrue(app.menuItems["Pull"].firstMatch.waitForExistence(timeout: 5))
         // Menus are separate windows, so crop the whole screen to the window.
