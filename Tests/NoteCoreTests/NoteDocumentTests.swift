@@ -24,6 +24,17 @@ final class NoteDocumentTests: XCTestCase {
         XCTAssertGreaterThan(reloaded.historyCount, 1)
     }
 
+    func testHexMatchesAutomergeHashText() throws {
+        let note = try NoteDocument(noteID: noteID, text: "one")
+        try note.replaceAll(with: "one two")
+        let history = note.historyHashes
+        XCTAssertGreaterThan(history.count, 1)
+        for hash in history {
+            XCTAssertEqual(hash.hex, hash.debugDescription)
+        }
+        XCTAssertEqual(note.historyHeads, Set(history.map(\.debugDescription)))
+    }
+
     func testReloadedOfflineForkStillMerges() throws {
         let base = try NoteDocument(noteID: noteID, text: "one two")
         let left = try base.fork()

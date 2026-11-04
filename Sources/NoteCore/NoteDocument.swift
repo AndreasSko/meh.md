@@ -59,7 +59,7 @@ final class NoteDocument {
     }
 
     var heads: Set<String> {
-        Set(document.heads().map(\.debugDescription))
+        Set(document.heads().map(\.hex))
     }
 
     /// An editor revision contains only the current change heads, not a
@@ -83,7 +83,7 @@ final class NoteDocument {
     }
 
     var historyHeads: Set<String> {
-        Set(document.getHistory().map(\.debugDescription))
+        Set(document.getHistory().map(\.hex))
     }
 
     var historyHashes: Set<ChangeHash> {
@@ -505,7 +505,7 @@ final class NoteDocument {
         }
 
         private static func id(of frontier: Set<ChangeHash>) -> String {
-            frontier.map(\.debugDescription).sorted().joined(separator: ",")
+            frontier.map(\.hex).sorted().joined(separator: ",")
         }
     }
 
@@ -570,7 +570,7 @@ final class NoteDocument {
             // selection is open. Its causal frontier remains reconstructable.
             let byID = Dictionary(
                 uniqueKeysWithValues: document.getHistory().map {
-                    ($0.debugDescription, $0)
+                    ($0.hex, $0)
                 }
             )
             let parts = version.id.split(separator: ",").map(String.init)
@@ -831,7 +831,7 @@ final class NoteDocument {
         // ObjId's opaque bytes may contain replica-local lookup hints. Shared
         // change hashes, rather than byte equality of handles from different
         // Document instances, establish a common persisted history.
-        guard !historyHeads.isDisjoint(with: other.historyHeads) else {
+        guard !historyHashes.isDisjoint(with: other.historyHashes) else {
             throw SyncError.disconnectedHistory
         }
         try document.merge(other: other.document)
@@ -891,4 +891,23 @@ final class NoteDocument {
 private extension Change {
     /// Old app versions committed without a time.
     var hasTimestamp: Bool { timestamp.timeIntervalSince1970 != 0 }
+}
+
+extension ChangeHash {
+    /// The same text as `debugDescription`, which formats each byte on its
+    /// own. Over a long note history that made merges take over a second.
+    var hex: String {
+        let bytes = Set([self]).raw()
+        return String(unsafeUninitializedCapacity: bytes.count * 2) { buffer in
+            var index = 0
+            for byte in bytes {
+                buffer[index] = Self.hexDigits[Int(byte >> 4)]
+                buffer[index + 1] = Self.hexDigits[Int(byte & 0x0f)]
+                index += 2
+            }
+            return index
+        }
+    }
+
+    private static let hexDigits = Array("0123456789abcdef".utf8)
 }

@@ -120,11 +120,11 @@ final class NotebookCatalogDocument {
     let notebookID: UUID
 
     var heads: Set<String> {
-        Set(document.heads().map(\.debugDescription))
+        Set(document.heads().map(\.hex))
     }
 
     var historyHeads: Set<String> {
-        Set(document.getHistory().map(\.debugDescription))
+        Set(document.getHistory().map(\.hex))
     }
 
     var historyHashes: Set<ChangeHash> {
@@ -667,7 +667,7 @@ final class NotebookCatalogDocument {
 
     func merge(_ other: NotebookCatalogDocument) throws {
         guard notebookID == other.notebookID else { throw NotebookCatalogError.identityMismatch }
-        guard !historyHeads.isDisjoint(with: other.historyHeads) else {
+        guard !historyHashes.isDisjoint(with: other.historyHashes) else {
             throw NotebookCatalogError.disconnectedHistory
         }
         // Validate on a branch first: a rejected merge cannot poison live state.
