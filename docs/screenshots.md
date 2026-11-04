@@ -75,6 +75,11 @@ with zoomed details where a feature is small on screen. Headlines and
 layouts live in `shots.js`. Crop positions are in raw screenshot pixels,
 so check them after a UI change moves things around. The script needs
 Google Chrome, which renders `template.html` headless at the exact App
-Store sizes.
+Store sizes. It skips a slide whose raw screenshots are missing and says
+which ones, so one failed capture doesn't hold up the rest.
+
+The images in `out/` are committed, so the App Store set can be
+published from any checkout and a PR shows how they change. The raw
+screenshots are not.
 
 To upload the images to the App Store, see [App Store page](app-store.md).
