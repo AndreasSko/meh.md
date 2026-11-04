@@ -72,7 +72,8 @@ mkdir -p "$build"
 if (( ${devices[(Ie)iphone]} || ${devices[(Ie)ipad]} )); then
   xcodebuild build-for-testing -project meh.md.xcodeproj -scheme "$scheme" \
     -destination 'generic/platform=iOS Simulator' -derivedDataPath "$build/dd" \
-    -skipPackagePluginValidation -quiet > "$build/ios-build.log" 2>&1
+    -skipPackagePluginValidation -quiet > "$build/ios-build.log" 2>&1 \
+    || { echo "iOS build failed, see $build/ios-build.log"; exit 1; }
 fi
 if (( ${devices[(Ie)iphone]} )); then
   id=$(simulator iphone)
@@ -91,8 +92,12 @@ if (( ${devices[(Ie)ipad]} )); then
   run "id=$id" ipad ipad
 fi
 if (( ${devices[(Ie)mac]} )); then
+  # The app and its widgets share an App Group, which the Mac's development
+  # profiles only include once Xcode may update them.
   xcodebuild build-for-testing -project meh.md.xcodeproj -scheme "$scheme" \
     -destination 'platform=macOS' -derivedDataPath "$build/dd" \
-    -skipPackagePluginValidation -quiet > "$build/mac-build.log" 2>&1
+    -allowProvisioningUpdates -skipPackagePluginValidation -quiet \
+    > "$build/mac-build.log" 2>&1 \
+    || { echo "Mac build failed, see $build/mac-build.log"; exit 1; }
   run "platform=macOS" mac mac
 fi
