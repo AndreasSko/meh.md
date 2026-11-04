@@ -379,6 +379,10 @@ enum NotebookUITestFixture: String, CaseIterable {
         let resources = try await replica.createFolder(name: "Resources")
         let archive = try await replica.createFolder(name: "Archive")
         try await replica.setDefaultNewNoteParentID(inbox)
+        // Older edits, so Recents and the widgets show a range of times.
+        func written(hoursAgo: Double, _ text: String) -> [NotebookReplica.FixtureEdit] {
+            [.init(date: .now.addingTimeInterval(-hoursAgo * 3_600), text: text)]
+        }
 
         _ = try await replica.createNote(
             name: "Call landlord.md",
@@ -386,11 +390,11 @@ enum NotebookUITestFixture: String, CaseIterable {
             parentID: inbox)
         let groceries = try await replica.createNote(
             name: "Groceries.md",
-            text: "For Saturday: oat milk, lemons, coffee.\n",
+            history: written(hoursAgo: 3, "For Saturday: oat milk, lemons, coffee.\n"),
             parentID: inbox)
         _ = try await replica.createNote(
             name: "Packing list.md",
-            text: """
+            history: written(hoursAgo: 30, """
                 Light. Everything else can be bought there.
 
                 - [x] Passport
@@ -398,11 +402,11 @@ enum NotebookUITestFixture: String, CaseIterable {
                 - [ ] Chargers
                 - [ ] Sunscreen
                 - [ ] Comfortable shoes
-                """,
+                """),
             parentID: resources)
         let book = try await replica.createNote(
             name: "Book notes.md",
-            text: "> We are what we repeatedly do.\n",
+            history: written(hoursAgo: 24 * 9, "> We are what we repeatedly do.\n"),
             parentID: resources)
         _ = try await replica.createNote(
             name: "Barcelona 2025.md",
@@ -440,9 +444,9 @@ enum NotebookUITestFixture: String, CaseIterable {
             _ = try await replica.createNote(name: "\(name).md", text: text, parentID: snippets)
         }
         try await replica.setSnippetSource(snippets, enabled: true)
-        _ = try await replica.createNote(
+        let training = try await replica.createNote(
             name: "Training log.md",
-            text: """
+            history: written(hoursAgo: 24 * 2 + 5, """
                 ## 10/19 · Pull
 
                 - Pull-ups (+20 kg): 9, 8
@@ -466,7 +470,7 @@ enum NotebookUITestFixture: String, CaseIterable {
                 - Calf raises: 20, 20
 
 
-                """,
+                """),
             parentID: areas)
 
         let review = try await replica.createNoteFromTemplate(
@@ -491,9 +495,10 @@ enum NotebookUITestFixture: String, CaseIterable {
 
         let lisbon = try await replica.createNote(
             name: "Lisbon in May.md", history: Self.lisbonHistory(), parentID: projects)
-        for id in [book, groceries, review, lisbon] {
+        for id in [book, training, groceries, review, lisbon] {
             try await replica.recordRecentActivity(for: id)
         }
+        try await replica.setPinnedInRecents(true, for: lisbon)
     }
     #endif
 }
