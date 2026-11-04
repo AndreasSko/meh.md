@@ -16,7 +16,7 @@ jobs:
     name: UI goals (${{ matrix.platform }})
     runs-on: xcode-27
     # Harness watchdog with export/cleanup headroom, not an app speed budget.
-    timeout-minutes: 180
+    timeout-minutes: 195
     strategy:
       fail-fast: false
       matrix:

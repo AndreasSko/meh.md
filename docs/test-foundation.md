@@ -133,7 +133,7 @@ Boot, build, discovery, execution and export retain bounded process watchdogs
 and cleanup. These stop stuck tools, not performance regressions. The native
 plans retain the previous effective 30-minute UI case allowance, capped at
 45 minutes; moving policy into plans does not tighten these watchdogs. The
-separate 180-minute job watchdog provides export and cleanup headroom.
+separate 195-minute job watchdog provides export and cleanup headroom.
 Timeouts or cancellation kill the owned process group
 before cleanup. Only the lane's simulator is removed. Mac UI execution requires
 a hosted Actions guest because it drives the desktop. Raw XCTest failures and
