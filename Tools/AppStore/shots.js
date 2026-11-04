@@ -87,7 +87,7 @@ const layouts = {
     // Magnified snippet menu over its spot in the toolbar
     snippets: [
       { img: "mac/mac-snippets", frame: "mac", w: 2080, css: center },
-      { img: "mac/mac-snippets", crop: [1840, 110, 500, 240], scale: 2, css: "right:220px;top:30px" },
+      { img: "mac/mac-snippets", crop: [1880, 95, 560, 260], scale: 2, css: "right:180px;top:20px" },
     ],
   },
 };
