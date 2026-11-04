@@ -65,7 +65,7 @@ def report_retries(manifest, retried):
 # Harness watchdogs stop stuck tools; scored performance probes judge app speed.
 WATCHDOG_SECONDS = {
     "startup": 600,
-    "build": 1800,
+    "build": 2700,
     "discovery": 300,
     "test": 4200,
     "nightly_test": 13200,
