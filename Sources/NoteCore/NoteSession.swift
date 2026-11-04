@@ -219,7 +219,7 @@ public final class NoteSession {
 
     public func replaceAll(with replacement: String) throws {
         guard isEditingEnabled, let document else { return }
-        guard !replacement.utf8.elementsEqual(text.utf8) else { return }
+        guard !replacement.literallyEquals(text) else { return }
         try document.replaceAll(with: replacement)
         text = try document.text
         queueSave()
@@ -327,7 +327,7 @@ public final class NoteSession {
             // A validated length-changing replacement cannot be a no-op.
             // Avoid comparing the whole note again for ordinary typing.
             if change.range.length == change.replacement.utf16.count,
-               text.utf8.elementsEqual(replacement.utf8) {
+               text.literallyEquals(replacement) {
                 return editorIdentity + heads
             }
             try document.applyValidatedEditorChange(

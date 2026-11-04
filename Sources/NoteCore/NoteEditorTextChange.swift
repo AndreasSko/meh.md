@@ -36,3 +36,19 @@ public struct NoteEditorTextChange: Sendable, Equatable {
         return scalarRange
     }
 }
+
+extension String {
+    /// Literal UTF-8 equality, unlike `==`, which treats canonically
+    /// equivalent text as equal. The editor compares whole notes on every
+    /// keystroke, so it answers from the stored byte counts or a shared
+    /// buffer when it can, and only otherwise compares every byte.
+    public func literallyEquals(_ other: String) -> Bool {
+        guard utf8.count == other.utf8.count else { return false }
+        let sharesBuffer = utf8.withContiguousStorageIfAvailable { bytes in
+            other.utf8.withContiguousStorageIfAvailable {
+                bytes.baseAddress == $0.baseAddress
+            } ?? false
+        } ?? false
+        return sharesBuffer || utf8.elementsEqual(other.utf8)
+    }
+}

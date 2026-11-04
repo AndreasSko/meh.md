@@ -1591,7 +1591,7 @@ struct MarkdownEditor: NSViewRepresentable {
             guard let storage = textView.textStorage else { return }
             let nativeText = MarkdownPresentation.syntaxCache(for: textView)
                 .textSnapshot(in: storage)
-            guard !displayedText.utf8.elementsEqual(nativeText.utf8) else {
+            guard !displayedText.literallyEquals(nativeText) else {
                 MarkdownPresentation.syntaxCache(for: textView).acknowledgeNativeText()
                 return
             }
@@ -1614,7 +1614,7 @@ struct MarkdownEditor: NSViewRepresentable {
                 cache.acknowledgeNativeText()
                 hasUncommittedText = false
                 staleParentRevision = baseRevision
-                if nativeText.utf8.elementsEqual(commit.text.utf8) {
+                if nativeText.literallyEquals(commit.text) {
                     displayedText = nativeText
                     displayedRevision = commit.revision
                     schedulePresentationRefresh(for: textView)
@@ -3135,7 +3135,7 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             let nativeText = MarkdownPresentation.syntaxCache(for: textView)
                 .textSnapshot(in: textView.textStorage)
-            guard !displayedText.utf8.elementsEqual(nativeText.utf8) else {
+            guard !displayedText.literallyEquals(nativeText) else {
                 MarkdownPresentation.syntaxCache(for: textView).acknowledgeNativeText()
                 return
             }
@@ -3158,7 +3158,7 @@ struct MarkdownEditor: UIViewRepresentable {
                 cache.acknowledgeNativeText()
                 hasUncommittedText = false
                 staleParentRevision = baseRevision
-                if nativeText.utf8.elementsEqual(commit.text.utf8) {
+                if nativeText.literallyEquals(commit.text) {
                     displayedText = nativeText
                     displayedRevision = commit.revision
                     schedulePresentationRefresh(for: textView)

@@ -5,6 +5,22 @@ import XCTest
 
 @MainActor
 final class NoteEditorTextChangeTests: XCTestCase {
+    func testLiteralEqualityComparesBytesNotCanonicalText() {
+        let composed = "Caf\u{E9} " + String(repeating: "long text ", count: 10)
+        let decomposed = "Cafe\u{301} " + String(repeating: "long text ", count: 10)
+        XCTAssertEqual(composed, decomposed)
+        XCTAssertFalse(composed.literallyEquals(decomposed))
+        XCTAssertTrue(composed.literallyEquals(composed))
+        let copy = String(decoding: Array(composed.utf8), as: UTF8.self)
+        XCTAssertTrue(composed.literallyEquals(copy))
+        XCTAssertFalse(composed.literallyEquals(composed.replacingOccurrences(of: "C", with: "c")))
+        XCTAssertTrue("".literallyEquals(""))
+        XCTAssertTrue("a👋🏽".literallyEquals("a👋🏽"))
+        XCTAssertFalse("ab".literallyEquals("ba"))
+        let bridged = NSMutableString(string: composed) as String
+        XCTAssertTrue(bridged.literallyEquals(composed))
+    }
+
     func testValidationReadsFoundationResultWithoutNormalizing() throws {
         let prefix = String(repeating: "Fictional 🪐 café. ", count: 100)
         let source = prefix + "tail"
