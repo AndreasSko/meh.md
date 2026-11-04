@@ -24,13 +24,6 @@ struct NotebookNoteEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if isInTrash {
-                Label(
-                    "In Trash · Your content is still retained.",
-                    systemImage: "trash"
-                )
-                .font(.caption).padding(10)
-            }
             if session.isEditingEnabled {
                 MarkdownEditor(
                     text: Binding(

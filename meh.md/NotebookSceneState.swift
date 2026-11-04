@@ -33,7 +33,9 @@ final class NotebookSceneState {
     var editorNavigation = MarkdownEditorNavigation()
     var bodyFocusRequest = 0
     var unrecordedEdit = false
-    var trashedOpenNote = 0
+    /// The open note that just went to Trash, which the Undo bar can bring
+    /// back for a few seconds.
+    var trashedOpenNote: NotebookTrashedNote?
     var recentActivityFailureIDs = Set<UUID>()
     var preferredCompactColumn = NavigationSplitViewColumn.sidebar
     /// Mirrors the window's size class for actions; views read their own.
@@ -241,6 +243,7 @@ final class NotebookSceneState {
     }
 
     func selectedNoteChanged(to id: UUID?) {
+        if id != nil { trashedOpenNote = nil }
         historyLoadTask?.cancel()
         dismissEditorCompletion()
         updateSnippetMenu()
