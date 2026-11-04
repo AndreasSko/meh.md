@@ -42,8 +42,9 @@ extension NotebookSceneState {
         }
         navigation.requestLink = { [weak self, weak navigation] text, range in
             guard let self, let selectedID, !busy else { return }
+            // A plain address is text here: wrapping it keeps the address.
             let existing = NotebookLinkParser.parse(text).first {
-                !$0.isEmbed && (NSIntersectionRange($0.range, range).length > 0
+                !$0.isEmbed && $0.kind != .url && (NSIntersectionRange($0.range, range).length > 0
                     || NSLocationInRange(range.location, $0.range))
             }
             let selectedText = (text as NSString).substring(with: range)

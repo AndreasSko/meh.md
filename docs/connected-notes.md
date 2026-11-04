@@ -71,8 +71,11 @@ and bypasses CloudKit. Normal iCloud Dev launches keep their usual cloud mode.
 ## Implementation
 
 - `NotebookLinkParser` interprets explicit Wikilinks and inline Markdown links,
-  labels, path destinations, headings, and existing block identifiers.
-  Headings include underline headings, using the same rule as the editor. UTF-16
+  labels, path destinations, headings, and existing block identifiers. Plain
+  `https://`, `http://`, and `www.` addresses and `<...>` autolinks are links
+  too, of their own `url` kind: they always open outside the app and never
+  resolve to a note, so indexing and export skip them. Headings include
+  underline headings, using the same rule as the editor. UTF-16
   ranges are shared by presentation, activation, indexing, and export. Code,
   comments, and frontmatter are excluded. Incomplete Markdown links remain
   styled during typing, but are excluded from semantic resolution.

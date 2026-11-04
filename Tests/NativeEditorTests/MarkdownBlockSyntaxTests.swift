@@ -68,6 +68,16 @@ final class MarkdownBlockSyntaxTests: XCTestCase {
         XCTAssertEqual(hidden(in: text, selection: NSRange(location: source.length, length: 0)), [])
     }
 
+    func testLivePreviewHidesAutolinkBrackets() {
+        let text = "x\nSee <https://example.com> or https://apple.com"
+        let result = MarkdownSyntax.parse(text)
+        XCTAssertEqual(
+            result.spans.filter { $0.role == .link }.map { (text as NSString).substring(with: $0.range) },
+            ["<https://example.com>", "https://apple.com"]
+        )
+        XCTAssertEqual(hidden(in: text, selection: NSRange(location: 1, length: 0)), ["<", ">"])
+    }
+
     func testIncrementalEditsMatchFullParse() {
         let edits: [(String, String, String)] = [
             ("Intro\n\nTitle\nTail", "Tail", "==="),

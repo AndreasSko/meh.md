@@ -353,6 +353,11 @@ enum MarkdownLivePreview {
         for range: NSRange,
         in source: NSString
     ) -> [NSRange] {
+        if range.length > 2, source.character(at: range.location) == 60,
+           source.character(at: NSMaxRange(range) - 1) == 62 {
+            return [NSRange(location: range.location, length: 1),
+                    NSRange(location: NSMaxRange(range) - 1, length: 1)]
+        }
         if range.length >= 4, source.character(at: range.location) == 91,
            source.character(at: range.location + 1) == 91,
            let link = NotebookLinkParser.parse(source.substring(with: range)).first,
