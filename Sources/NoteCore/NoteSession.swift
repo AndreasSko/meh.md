@@ -86,6 +86,9 @@ public final class NoteSession {
     @ObservationIgnored private var delayedSaveTask: Task<Void, Never>?
     @ObservationIgnored private var scheduledSaveID = 0
     @ObservationIgnored private var pendingSince: UInt64?
+    /// An immediate request makes the running save loop write everything
+    /// before it ends. Otherwise edits made during a save wait for the delay.
+    @ObservationIgnored private var drainsPendingSaves = false
     @ObservationIgnored private var loadStarted = false
     @ObservationIgnored private var loadInFlight = false
     @ObservationIgnored private var recoveryInFlight = false
@@ -482,12 +485,17 @@ public final class NoteSession {
             document.heads != persistedHeads
         else { return }
         status = .saving
+        if immediately { drainsPendingSaves = true }
         guard saveTask == nil else { return }
         if immediately {
             cancelDelayedSave()
             startSaveLoop()
             return
         }
+        scheduleDelayedSave()
+    }
+
+    private func scheduleDelayedSave() {
         let now = saveScheduling.now()
         if pendingSince == nil { pendingSince = now }
         let started = pendingSince!
@@ -525,6 +533,7 @@ public final class NoteSession {
     }
 
     private func runSaveLoop() async {
+        var failed = false
         while !isPermanentlyDeleted,
             let document,
             document.heads != persistedHeads
@@ -544,10 +553,19 @@ public final class NoteSession {
             } catch {
                 lastSaveFailure = LocalNoteSaveFailure(underlyingError: error)
                 status = .saveFailed(message: Self.message(for: error))
+                failed = true
                 break
             }
+            // Each save serializes the whole note. Back-to-back saves while
+            // typing blocked the main thread about once a second.
+            guard drainsPendingSaves else { break }
         }
         saveTask = nil
+        drainsPendingSaves = false
+        if !failed, !isPermanentlyDeleted, !isEditingSuspended,
+           let document, document.heads != persistedHeads {
+            scheduleDelayedSave()
+        }
         resumeOperationWaiters()
     }
 

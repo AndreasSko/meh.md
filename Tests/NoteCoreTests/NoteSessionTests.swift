@@ -334,6 +334,68 @@ final class NoteSessionTests: XCTestCase {
         XCTAssertEqual(try NoteDocument(snapshot: saved[0]).text, "latest")
     }
 
+    func testEditsDuringSaveWaitForTheDelay() async throws {
+        let initial = try NoteDocument(text: "initial").snapshot()
+        let clock = TestClock()
+        let sleeper = ManualSleeper()
+        let storage = ControlledStorage(loadResult: .current(initial))
+        let session = NoteSession(
+            storage: storage,
+            saveScheduling: .manual(clock: clock, sleeper: sleeper)
+        )
+        await session.load()
+        await storage.setPaused(true)
+        try session.replaceAll(with: "first")
+        await waitUntil { await sleeper.requestCount == 1 }
+        await sleeper.releaseAll()
+        await waitUntil { await storage.saveCount == 1 }
+
+        try session.replaceAll(with: "during save")
+        await storage.setPaused(false)
+        await storage.releaseOneSave()
+        await waitUntil { await sleeper.requestCount == 2 }
+
+        let saved = await storage.savedSnapshots
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(session.status, .saving)
+        await sleeper.releaseAll()
+        await waitUntil { session.status == .saved }
+        let latest = await storage.savedSnapshots
+        XCTAssertEqual(try NoteDocument(snapshot: XCTUnwrap(latest.last)).text, "during save")
+    }
+
+    func testFlushDuringSaveAlsoWritesLaterEdits() async throws {
+        let initial = try NoteDocument(text: "initial").snapshot()
+        let clock = TestClock()
+        let sleeper = ManualSleeper()
+        let storage = ControlledStorage(loadResult: .current(initial))
+        let session = NoteSession(
+            storage: storage,
+            saveScheduling: .manual(clock: clock, sleeper: sleeper)
+        )
+        await session.load()
+        await storage.setPaused(true)
+        try session.replaceAll(with: "first")
+        await waitUntil { await sleeper.requestCount == 1 }
+        await sleeper.releaseAll()
+        await waitUntil { await storage.saveCount == 1 }
+
+        try session.replaceAll(with: "during save")
+        // This task runs only once flush() has requested the drain and waits.
+        let release = Task {
+            await storage.setPaused(false)
+            await storage.releaseOneSave()
+        }
+        try await session.flush()
+        await release.value
+
+        let saved = await storage.savedSnapshots
+        XCTAssertEqual(saved.count, 2)
+        XCTAssertEqual(try NoteDocument(snapshot: saved[1]).text, "during save")
+        let requestCount = await sleeper.requestCount
+        XCTAssertEqual(requestCount, 1)
+    }
+
     func testFlushBypassesDelayedSaveAndWaitsForLatestText() async throws {
         let initial = try NoteDocument(text: "initial").snapshot()
         let clock = TestClock()

@@ -35,6 +35,25 @@ final class NoteFileStorageTests: XCTestCase {
         XCTAssertTrue(originalHeads.isSubset(of: current.historyHeads))
     }
 
+    func testSaveStillChecksCurrentFileReplacedAfterLastSave() async throws {
+        let directory = temporaryDirectory()
+        let store = NoteFileStorage(directory: directory)
+        let note = try NoteDocument(noteID: noteID, text: "one")
+        try await store.save(note.snapshot())
+        try note.replaceAll(with: "two")
+        try await store.save(note.snapshot())
+
+        let unrelated = try NoteDocument(noteID: noteID, text: "elsewhere")
+        try unrelated.snapshot().data.write(to: store.currentURL)
+        try note.replaceAll(with: "three")
+        do {
+            try await store.save(note.snapshot())
+            XCTFail("A save must not replace a disconnected current file")
+        } catch NoteFileStorageError.disconnectedHistory {
+        }
+        XCTAssertEqual(try document(at: store.currentURL).text, "elsewhere")
+    }
+
     func testInterruptedWritesAlwaysLeaveRecoverableCurrent() async throws {
         for stage in NoteFileWriteStage.allCases {
             let directory = temporaryDirectory()
