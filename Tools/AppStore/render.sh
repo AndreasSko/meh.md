@@ -6,8 +6,8 @@ cd "${0:A:h}"
 chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 typeset -A size=(iphone 1320,2868 ipad 2048,2732 mac 2880,1800)
 typeset -A names=(
-  iphone "note recents sync history snippets"
-  ipad "note recents sync history snippets"
+  iphone "note recents sync history snippets widgets"
+  ipad "note recents sync history snippets widgets"
   mac "note recents sync history snippets"
 )
 

@@ -24,6 +24,10 @@ const copy = {
     h1: "*Snippets* for what you keep typing.",
     sub: "Like today's workout, in one tap. Templates do the same for whole new notes.",
   },
+  widgets: {
+    h1: "Notes on your *Home Screen.*",
+    sub: "Pinned and recent notes, or one note you pick. The + starts a new one.",
+  },
 };
 
 // The iPhone shows the snippets screen in dark mode, for some contrast.
@@ -42,6 +46,8 @@ const layouts = {
     ],
     history: [{ img: "iphone/iphone-history", frame: "phone", w: 980, css: center }],
     snippets: [{ img: "dark/iphone-snippets", frame: "phone", w: 980, css: center }],
+    // Close-up: the phone runs off the bottom edge so the widgets read large
+    widgets: [{ img: "iphone/iphone-widgets", frame: "phone", w: 1180, css: "left:50%;top:40px;transform:translateX(-50%)" }],
   },
   ipad: {
     // Close-up: the iPad runs off the right and bottom edge so the text reads large
@@ -60,6 +66,7 @@ const layouts = {
     ],
     // Close-up of the note and the menu, without the keyboard
     snippets: [{ img: "ipad/ipad-snippets", crop: [545, 170, 1045, 1760], scale: 1.1, plain: true, css: "left:50%;top:60px;transform:translateX(-50%)" }],
+    widgets: [{ img: "ipad/ipad-widgets", frame: "ipad", w: 2010, css: "left:50%;top:70px;transform:translateX(-50%)" }],
   },
   mac: {
     // Close-up of just the editor

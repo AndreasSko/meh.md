@@ -2,7 +2,9 @@
 # Captures the raw App Store screenshots on iPhone, iPad and Mac into raw/.
 # Usage: capture.sh [iphone] [ipad] [mac]   (default: all three)
 # SCREENSHOT_TEST=testSnippetScreens capture.sh  retakes only one test's shots.
-# The Mac run takes over the mouse for about a minute.
+# The Mac run takes over the mouse for about a minute. On iPhone and iPad the
+# widget shots add widgets to the Home Screen; each run removes the app first,
+# which removes them again.
 set -euo pipefail
 here="${0:A:h}"
 cd "$here/../.."
@@ -40,6 +42,9 @@ simulator() {
 run() {
   local destination=$1 result=$build/$2.xcresult folder=$3
   rm -rf "$result" "$build/$2"
+  if [[ $destination == id=* ]]; then
+    xcrun simctl uninstall "${destination#id=}" de.andreas-sk.meh-md
+  fi
   TEST_RUNNER_MEH_README_SCREENS=1 xcodebuild test-without-building \
     -project meh.md.xcodeproj -scheme "$scheme" -destination "$destination" \
     -derivedDataPath "$build/dd" -resultBundlePath "$result" \
@@ -73,10 +78,12 @@ if (( ${devices[(Ie)iphone]} )); then
   id=$(simulator iphone)
   xcrun simctl ui "$id" appearance light
   run "id=$id" iphone iphone
-  # The iPhone set uses one dark-mode screenshot.
-  xcrun simctl ui "$id" appearance dark
-  run "id=$id" iphone-dark dark
-  xcrun simctl ui "$id" appearance light
+  # The iPhone set uses one dark-mode screenshot, of the snippets.
+  if [[ ${SCREENSHOT_TEST:-testSnippetScreens} == testSnippetScreens ]]; then
+    xcrun simctl ui "$id" appearance dark
+    SCREENSHOT_TEST=testSnippetScreens run "id=$id" iphone-dark dark
+    xcrun simctl ui "$id" appearance light
+  fi
 fi
 if (( ${devices[(Ie)ipad]} )); then
   id=$(simulator ipad)
