@@ -572,12 +572,8 @@ private struct NotebookScenePresentation: ViewModifier {
         .task(id: scene.navigationState.recentSessionsRequest) {
             await scene.navigationState.loadRecentSessions()
         }
-        .task(id: NotebookRecentPreviewRequest(
-            ids: scene.visibleRecentPreviewIDs,
-            revision: scene.navigationState.recentPreviewRevision
-        )) {
-            guard !scene.visibleRecentPreviewIDs.isEmpty else { return }
-            await scene.navigationState.loadRecentPreviews(for: scene.visibleRecentPreviewIDs)
+        .task(id: scene.recentPreviewIDs) {
+            await scene.navigationState.maintainRecentPreviews(for: scene.recentPreviewIDs)
         }
         .onChange(of: scene.search.isPresented) { _, presented in
             if presented { scene.browsingAllRecents = false }
@@ -621,9 +617,4 @@ private struct NotebookScenePresentation: ViewModifier {
         UIApplication.willTerminateNotification
         #endif
     }
-}
-
-private struct NotebookRecentPreviewRequest: Equatable {
-    let ids: [UUID]
-    let revision: NotebookSearchRevision
 }

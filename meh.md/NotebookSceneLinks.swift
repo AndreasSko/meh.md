@@ -110,7 +110,7 @@ extension NotebookSceneState {
             guard let self else { return }
             guard navigation === editorNavigation, editing, !busy, historyBrowser == nil,
                   let session, session.isEditingEnabled,
-                  text.utf8.elementsEqual(session.text.utf8), linkInsertion == nil else {
+                  text.literallyEquals(session.text), linkInsertion == nil else {
                 dismissEditorCompletion()
                 navigation?.hasLinkCompletion = false
                 return

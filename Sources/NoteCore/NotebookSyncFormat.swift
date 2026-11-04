@@ -25,7 +25,7 @@ public enum NotebookSyncFormat {
         of document: Document, snapshot: NotebookCatalogSnapshot
     ) throws {
         let identities = try document.getAll(obj: .ROOT, key: "notebookID")
-        guard Set(document.heads().map(\.debugDescription)) == snapshot.heads,
+        guard Set(document.heads().map(\.hex)) == snapshot.heads,
               identities.count == 1,
               case .Scalar(.String(let identity)) = identities.first,
               UUID(uuidString: identity) == snapshot.notebookID else {

@@ -34,6 +34,9 @@ public actor NoteFileStorage: NoteStorage {
 
     public nonisolated let currentURL: URL
     public nonisolated let previousURL: URL
+    /// The bytes this storage last wrote and decoded. While the current file
+    /// still holds exactly them, the next save does not decode it again.
+    private var lastWritten: ValidatedSnapshot?
 
     public init(directory: URL) {
         currentURL = directory.appendingPathComponent("note.automerge")
@@ -232,15 +235,15 @@ public actor NoteFileStorage: NoteStorage {
         try DurableFileIO.writeAndSync(snapshot.data, to: temporary)
         try afterStage(.temporarySynced)
 
-        switch candidate(at: currentURL) {
+        switch candidate(at: currentURL, reusing: lastWritten) {
         case .absent:
             break
         case let .valid(currentSnapshot):
-            let current = try NoteDocument(snapshot: currentSnapshot)
-            guard current.noteID == incoming.noteID else {
+            // The candidate's identity and heads come from decoding its bytes.
+            guard currentSnapshot.noteID == incoming.noteID else {
                 throw NoteFileStorageError.noteIdentityMismatch
             }
-            guard current.heads.isSubset(of: incoming.historyHeads) else {
+            guard currentSnapshot.heads.isSubset(of: incoming.historyHeads) else {
                 throw NoteFileStorageError.disconnectedHistory
             }
             try DurableFileIO.writeAndSync(
@@ -258,6 +261,9 @@ public actor NoteFileStorage: NoteStorage {
         }
 
         try DurableFileIO.renameReplacing(temporary, with: currentURL)
+        lastWritten = ValidatedSnapshot(NoteSnapshot(
+            data: snapshot.data, heads: incoming.heads, noteID: incoming.noteID
+        ))
         try afterStage(.currentReplaced)
         try DurableFileIO.syncDirectory(directory)
         try afterStage(.directorySynced)
