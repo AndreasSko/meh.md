@@ -28,7 +28,7 @@ struct NotesWidget: Widget {
 
 struct NotesEntry: TimelineEntry {
     enum Content {
-        case recents(pinnedOnly: Bool)
+        case recents(count: Int, previews: Bool)
         case note(UUID?)
     }
 
@@ -39,7 +39,10 @@ struct NotesEntry: TimelineEntry {
 
 struct NotesProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> NotesEntry {
-        NotesEntry(date: .now, snapshot: .sample, content: .recents(pinnedOnly: false))
+        NotesEntry(
+            date: .now, snapshot: .sample,
+            content: .recents(count: NotesCountOptions.defaultCount, previews: false)
+        )
     }
 
     func snapshot(for configuration: NotesWidgetIntent, in context: Context) async -> NotesEntry {
@@ -67,7 +70,10 @@ struct NotesProvider: AppIntentTimelineProvider {
         var snapshot = MehWidgetStore()?.load()
         if preview, snapshot?.notes.isEmpty != false { snapshot = .sample }
         let content: NotesEntry.Content = switch configuration.content {
-        case .recents: .recents(pinnedOnly: configuration.filter == .pinnedOnly)
+        case .recents: .recents(
+            count: configuration.count ?? NotesCountOptions.defaultCount,
+            previews: configuration.previews
+        )
         case .note: .note(configuration.note?.id ?? (preview ? snapshot?.recents.first?.id : nil))
         }
         return NotesEntry(date: date, snapshot: snapshot, content: content)
@@ -86,13 +92,19 @@ extension MehWidgetSnapshot {
         let review = note("Weekly review", ["Areas"])
         let packing = note("Packing list", ["Projects"])
         let books = note("Book notes", ["Resources"])
-        let notes = [lisbon, books, groceries, review, packing]
-        let texts = [
+        let garden = note("Garden ideas", ["Areas"])
+        let bike = note("Bike repair")
+        let recipes = note("Recipes to try", ["Resources"])
+        let notes = [lisbon, books, groceries, review, packing, garden, bike, recipes]
+        let texts: [(Note, String, TimeInterval)] = [
             (lisbon, "Four days, no plans before ten. What to bring is in [[Packing list]].", -86_400.0 * 2),
             (books, "We are what we repeatedly do.", -86_400.0 * 9),
             (groceries, "- [x] oat milk\n- [ ] lemons\n- [ ] coffee\n- [ ] bread", -120.0),
             (review, "Good: Lisbon is booked. Next week: ==call the landlord==.", -3_600.0),
             (packing, "Charger, adapter, the good sunglasses.", -86_400.0 * 3),
+            (garden, "Tomatoes along the south wall, herbs by the door.", -86_400.0 * 4),
+            (bike, "Rear brake squeaks, chain needs oil.", -86_400.0 * 5),
+            (recipes, "Lentil soup, the miso one from Kim.", -86_400.0 * 8),
         ]
         return MehWidgetSnapshot(
             notes: notes,
@@ -100,6 +112,8 @@ extension MehWidgetSnapshot {
                 Recent(id: lisbon.id, isPinned: true), Recent(id: books.id, isPinned: true),
                 Recent(id: groceries.id, isPinned: false),
                 Recent(id: review.id, isPinned: false), Recent(id: packing.id, isPinned: false),
+                Recent(id: garden.id, isPinned: false), Recent(id: bike.id, isPinned: false),
+                Recent(id: recipes.id, isPinned: false),
             ],
             contents: texts.map { note, text, age in
                 Content(

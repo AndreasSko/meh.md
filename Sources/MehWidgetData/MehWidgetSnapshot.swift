@@ -81,9 +81,8 @@ public struct MehWidgetSnapshot: Codable, Equatable, Sendable {
     }
 
     /// The rows a Recents widget shows, cut at the widget's size.
-    public func recentRows(pinnedOnly: Bool, limit: Int) -> [Row] {
+    public func recentRows(limit: Int) -> [Row] {
         Array(recents.lazy
-            .filter { !pinnedOnly || $0.isPinned }
             .compactMap { recent in
                 note(recent.id).map {
                     Row(note: $0, isPinned: recent.isPinned, content: content(recent.id))

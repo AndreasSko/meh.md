@@ -10,15 +10,31 @@ corner starts a new note in the default New Note folder, like the app's own
 Long-press the widget and choose Edit Widget to pick what it shows:
 
 - **Recents** (default): the same order as the app's Recents, pins first,
-  then the most recently edited notes. Small and medium widgets show three
-  titles with the time of the last change. Large shows five notes with the
-  same excerpt as the app. Extra large (iPad and Mac only) shows pins on
-  the left and recent notes on the right. *Pinned Only* drops the recent
-  notes. Each row opens its note.
+  then the most recently edited notes. Pinned notes show a pin, the others
+  the time of their last change, except under the yellow +. Each row
+  opens its note. *Number of Notes* picks how many notes
+  the widget shows, five by default. *Show Previews* adds the same excerpt
+  as the app below each title.
 - **One Note**: the start of a single note, drawn like Live Preview with
   checklists, bullets, highlights and links. The picker lists pinned and
   recent notes first; search finds any other note. Tapping the widget opens
   that note.
+
+Edit Widget offers the same choices for every size: 3 to 12 notes, or 3
+to 8 with previews. Each size shows at most what still reads well:
+
+| Size | Without previews | With previews |
+| --- | --- | --- |
+| Small | 5 | 3 |
+| Medium | 6 | 3 |
+| Large | 12 | 8 |
+| Extra large | 12 | 8 |
+
+The notes share the widget's height. When they get too close, the titles
+switch to a smaller font. Extra large (iPad and Mac only) splits the notes
+into two columns. At larger text sizes the widget shows fewer notes, so
+they don't get cut off. With fewer notes in Recents than chosen, the list
+keeps the same row height and leaves the rest of the widget empty.
 
 The widget follows the paper, the chosen highlighter and ink, and dark mode.
 Recents leaves out hidden and trashed notes, as in the app. The One Note

@@ -15,9 +15,10 @@ struct NotesWidgetView: View {
         Group {
             if let snapshot = entry.snapshot {
                 switch entry.content {
-                case .recents(let pinnedOnly):
+                case .recents(let count, let previews):
                     NotesRecentsView(
-                        snapshot: snapshot, pinnedOnly: pinnedOnly, date: entry.date
+                        snapshot: snapshot, count: count, previews: previews,
+                        date: entry.date
                     )
                 case .note(let id):
                     NotesSingleNoteView(snapshot: snapshot, id: id, date: entry.date)
@@ -36,61 +37,91 @@ struct NotesWidgetView: View {
 
 private struct NotesRecentsView: View {
     let snapshot: MehWidgetSnapshot
-    let pinnedOnly: Bool
+    let count: Int
+    let previews: Bool
     let date: Date
     @Environment(\.widgetFamily) private var family
+    // The line heights of the row fonts, which follow the text size.
+    @ScaledMetric(relativeTo: .subheadline) private var titleLine: CGFloat = 20
+    @ScaledMetric(relativeTo: .footnote) private var compactTitleLine: CGFloat = 18
+    @ScaledMetric(relativeTo: .caption) private var previewLine: CGFloat = 16
+    @ScaledMetric(relativeTo: .caption2) private var compactPreviewLine: CGFloat = 13
 
     var body: some View {
-        let rows = snapshot.recentRows(pinnedOnly: pinnedOnly, limit: limit)
-        // A full list of titles fills the widget, so its last row makes room
-        // for the new note button. Otherwise the button sits below the notes.
-        let fills = !showsExcerpts && rows.count == limit
-        content(rows: rows, fills: fills)
-            .padding(.bottom, fills ? 0 : NotesNewNoteButton.size + 4)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .overlay(alignment: .bottomTrailing) {
-                NotesNewNoteButton().padding(-8)
+        let limit = MehWidgetRecentsLayout.limit(count: count, previews: previews, size: size)
+        let rows = snapshot.recentRows(limit: limit)
+        Group {
+            if rows.isEmpty {
+                NotesWidgetMessage(text: "No recent notes yet.")
+            } else {
+                GeometryReader { proxy in
+                    list(rows: rows, limit: limit, height: proxy.size.height)
+                }
             }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            NotesNewNoteButton().padding(-8)
+        }
     }
 
-    @ViewBuilder private func content(
-        rows: [MehWidgetSnapshot.Row], fills: Bool
+    /// The notes in one card, or in two side by side on extra large.
+    private func list(
+        rows: [MehWidgetSnapshot.Row], limit: Int, height: CGFloat
     ) -> some View {
-        if rows.isEmpty {
-            NotesWidgetMessage(text: pinnedOnly ? "No pinned notes." : "No recent notes yet.")
-        } else if family == .systemExtraLarge && !pinnedOnly {
-            let all = snapshot.recentRows(pinnedOnly: false, limit: .max)
-            let pins = all.filter(\.isPinned).prefix(4)
-            let others = all.filter { !$0.isPinned }.prefix(10 - pins.count)
-            HStack(alignment: .top, spacing: 12) {
-                if !pins.isEmpty {
-                    NotesRecentsCard(rows: Array(pins), date: date, excerpts: true)
-                }
-                if !others.isEmpty {
-                    NotesRecentsCard(rows: Array(others), date: date, excerpts: pins.isEmpty)
-                }
+        let columns = family == .systemExtraLarge ? 2 : 1
+        let plan = MehWidgetRecentsLayout.plan(
+            limit: limit, columns: columns, height: height,
+            regularText: textHeight(compact: false),
+            compactText: textHeight(compact: true)
+        )
+        let shown = Array(rows.prefix(plan.count))
+        let perColumn = (shown.count + columns - 1) / columns
+        let groups = stride(from: 0, to: shown.count, by: perColumn).map {
+            Array(shown[$0..<min($0 + perColumn, shown.count)])
+        }
+        return HStack(alignment: .top, spacing: 12) {
+            ForEach(groups.indices, id: \.self) { index in
+                let group = groups[index]
+                let covered = index == groups.count - 1
+                    ? MehWidgetRecentsLayout.rowsUnderButton(
+                        rows: group.count, rowHeight: plan.rowHeight,
+                        text: textHeight(compact: plan.isCompact),
+                        gap: height - CGFloat(group.count) * plan.rowHeight,
+                        buttonTop: NotesNewNoteButton.reach
+                    )
+                    : 0
+                NotesRecentsCard(
+                    rows: group, date: date, previews: previews,
+                    compact: plan.isCompact, rowHeight: plan.rowHeight,
+                    rowsUnderButton: covered
+                )
             }
-        } else {
-            NotesRecentsCard(rows: rows, date: date, excerpts: showsExcerpts, fills: fills)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private var limit: Int {
+    private func textHeight(compact: Bool) -> CGFloat {
+        let title = compact ? compactTitleLine : titleLine
+        guard previews else { return title }
+        return title + 1 + (compact ? compactPreviewLine : previewLine)
+    }
+
+    private var size: MehWidgetRecentsLayout.Size {
         switch family {
-        case .systemSmall, .systemMedium: 3
-        case .systemExtraLarge: pinnedOnly ? 5 : 10
-        default: 5
+        case .systemSmall: .small
+        case .systemMedium: .medium
+        case .systemExtraLarge: .extraLarge
+        default: .large
         }
-    }
-
-    private var showsExcerpts: Bool {
-        family == .systemLarge || family == .systemExtraLarge
     }
 }
 
 /// The yellow + in the bottom-right corner, like the app's own button.
 private struct NotesNewNoteButton: View {
     static let size: CGFloat = 32
+    /// How far the circle reaches up from the bottom of the widget's
+    /// content: it hangs 2 points past the edge.
+    static let reach: CGFloat = size - 2
     @Environment(\.notesWidgetPens) private var pens
 
     var body: some View {
@@ -111,25 +142,29 @@ private struct NotesNewNoteButton: View {
 private struct NotesRecentsCard: View {
     let rows: [MehWidgetSnapshot.Row]
     let date: Date
-    let excerpts: Bool
-    /// A full list of titles spreads over the widget's height.
-    var fills = false
+    let previews: Bool
+    let compact: Bool
+    let rowHeight: CGFloat
+    /// The last rows, which leave the corner to the new note button.
+    let rowsUnderButton: Int
     @Environment(\.notesWidgetPens) private var pens
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                if index > 0 { Divider().padding(.leading, 12) }
                 Link(destination: MehWidgetLink.note(row.id).url) {
                     NotesRecentRow(
-                        row: row, date: date, excerpt: excerpts,
-                        clearsButton: fills && index == rows.count - 1
+                        row: row, date: date, preview: previews, compact: compact,
+                        clearsButton: index >= rows.count - rowsUnderButton
                     )
-                    .frame(maxHeight: fills ? .infinity : nil)
+                }
+                .frame(height: rowHeight)
+                .overlay(alignment: .top) {
+                    if index > 0 { Divider().padding(.leading, 12) }
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: fills ? .infinity : nil)
+        .frame(maxWidth: .infinity)
         .background(pens.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
@@ -137,24 +172,27 @@ private struct NotesRecentsCard: View {
 private struct NotesRecentRow: View {
     let row: MehWidgetSnapshot.Row
     let date: Date
-    let excerpt: Bool
+    let preview: Bool
+    let compact: Bool
     /// Leaves the bottom-right corner to the new note button.
-    var clearsButton = false
+    let clearsButton: Bool
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(row.note.title)
-                    .font(.subheadline.weight(.medium))
+                    .font((compact ? Font.footnote : .subheadline).weight(.medium))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if !clearsButton { trailing }
             }
-            if excerpt, let text = row.content?.excerpt, !text.isEmpty {
-                Text(text)
-                    .font(.caption)
+            if preview {
+                let excerpt = row.content?.excerpt ?? ""
+                // A blank line keeps every row's title at the same height.
+                Text(excerpt.isEmpty ? " " : excerpt)
+                    .font(compact ? .caption2 : .caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -162,8 +200,7 @@ private struct NotesRecentRow: View {
         .privacySensitive()
         .padding(.leading, 12)
         .padding(.trailing, clearsButton ? 38 : 12)
-        .padding(.vertical, excerpt ? 7 : 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 
