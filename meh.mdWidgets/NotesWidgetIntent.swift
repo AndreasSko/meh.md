@@ -13,17 +13,6 @@ enum NotesWidgetContent: String, AppEnum {
     ]
 }
 
-enum NotesWidgetFilter: String, AppEnum {
-    case pinnedAndRecent
-    case pinnedOnly
-
-    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Notes"
-    static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
-        .pinnedAndRecent: "Pinned & Recent",
-        .pinnedOnly: "Pinned Only",
-    ]
-}
-
 struct NotesWidgetIntent: WidgetConfigurationIntent {
     static let title: LocalizedStringResource = "Notes"
     static let description = IntentDescription("Shows Recents or one note.")
@@ -31,8 +20,12 @@ struct NotesWidgetIntent: WidgetConfigurationIntent {
     @Parameter(title: "Show", default: .recents)
     var content: NotesWidgetContent
 
-    @Parameter(title: "Notes", default: .pinnedAndRecent)
-    var filter: NotesWidgetFilter
+    /// Each size shows at most what fits; see `MehWidgetRecentsLayout`.
+    @Parameter(title: "Number of Notes", optionsProvider: NotesCountOptions())
+    var count: Int?
+
+    @Parameter(title: "Show Previews", default: false)
+    var previews: Bool
 
     @Parameter(title: "Note")
     var note: NoteEntity?
@@ -41,8 +34,28 @@ struct NotesWidgetIntent: WidgetConfigurationIntent {
         When(\.$content, .equalTo, .note) {
             Summary("Show \(\.$content)") { \.$note }
         } otherwise: {
-            Summary("Show \(\.$content)") { \.$filter }
+            Summary("Show \(\.$content)") {
+                \.$count
+                \.$previews
+            }
         }
+    }
+}
+
+/// Edit Widget offers fewer notes when rows show a preview, since each row
+/// needs more room. The choices are the same for every widget size.
+struct NotesCountOptions: DynamicOptionsProvider {
+    static let defaultCount = 5
+
+    @IntentParameterDependency<NotesWidgetIntent>(\.$previews)
+    var intent
+
+    func results() async throws -> [Int] {
+        Array(3...(intent?.previews == true ? 8 : 12))
+    }
+
+    func defaultResult() async -> Int? {
+        Self.defaultCount
     }
 }
 

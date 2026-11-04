@@ -13,8 +13,8 @@ import UIKit
 final class NotebookWidgetSnapshotWriter {
     static let shared = NotebookWidgetSnapshotWriter()
 
-    /// Pins plus this many other notes cover the largest widget.
-    static let recentLimit = 10
+    /// Pins plus this many other notes cover the most notes a widget shows.
+    static let recentLimit = 12
     static let contentCharacterLimit = 1_200
 
     private let store = MehWidgetStore()
