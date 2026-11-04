@@ -41,19 +41,24 @@ struct NotesProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> NotesEntry {
         NotesEntry(
             date: .now, snapshot: .sample,
-            content: .recents(count: NotesCountOptions.defaultCount, previews: false)
+            content: .recents(count: 5, previews: false)
         )
     }
 
     func snapshot(for configuration: NotesWidgetIntent, in context: Context) async -> NotesEntry {
-        entry(for: configuration, at: .now, preview: context.isPreview)
+        entry(
+            for: configuration, at: .now, family: context.family,
+            preview: context.isPreview
+        )
     }
 
     func timeline(
         for configuration: NotesWidgetIntent, in context: Context
     ) async -> Timeline<NotesEntry> {
         let now = Date.now
-        let first = entry(for: configuration, at: now, preview: false)
+        let first = entry(
+            for: configuration, at: now, family: context.family, preview: false
+        )
         if case .note(let id?) = first.content, let store = MehWidgetStore(),
            first.snapshot?.note(id) != nil, first.snapshot?.content(id) == nil {
             try? store.requestContent(for: id)
@@ -65,18 +70,30 @@ struct NotesProvider: AppIntentTimelineProvider {
     }
 
     private func entry(
-        for configuration: NotesWidgetIntent, at date: Date, preview: Bool
+        for configuration: NotesWidgetIntent, at date: Date,
+        family: WidgetFamily, preview: Bool
     ) -> NotesEntry {
         var snapshot = MehWidgetStore()?.load()
         if preview, snapshot?.notes.isEmpty != false { snapshot = .sample }
         let content: NotesEntry.Content = switch configuration.content {
         case .recents: .recents(
-            count: configuration.count ?? NotesCountOptions.defaultCount,
+            count: configuration.count(for: .init(family)),
             previews: configuration.previews
         )
         case .note: .note(configuration.note?.id ?? (preview ? snapshot?.recents.first?.id : nil))
         }
         return NotesEntry(date: date, snapshot: snapshot, content: content)
+    }
+}
+
+extension MehWidgetRecentsLayout.Size {
+    init(_ family: WidgetFamily) {
+        self = switch family {
+        case .systemSmall: .small
+        case .systemMedium: .medium
+        case .systemExtraLarge: .extraLarge
+        default: .large
+        }
     }
 }
 

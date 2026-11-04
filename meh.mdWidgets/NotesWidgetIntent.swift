@@ -20,9 +20,21 @@ struct NotesWidgetIntent: WidgetConfigurationIntent {
     @Parameter(title: "Show", default: .recents)
     var content: NotesWidgetContent
 
-    /// Each size shows at most what fits; see `MehWidgetRecentsLayout`.
-    @Parameter(title: "Number of Notes", optionsProvider: NotesCountOptions())
-    var count: Int?
+    // Edit Widget shows the count that fits the widget's size and
+    // previews. Without an explicit `.stepper` it draws a text field that
+    // ignores the range. The ranges repeat `MehWidgetRecentsLayout.most`;
+    // small and medium with previews always show 3.
+    @Parameter(title: "Number of Notes", default: 5, controlStyle: .stepper, inclusiveRange: (3, 5))
+    var smallCount: Int
+
+    @Parameter(title: "Number of Notes", default: 5, controlStyle: .stepper, inclusiveRange: (3, 6))
+    var mediumCount: Int
+
+    @Parameter(title: "Number of Notes", default: 5, controlStyle: .stepper, inclusiveRange: (3, 12))
+    var largeCount: Int
+
+    @Parameter(title: "Number of Notes", default: 5, controlStyle: .stepper, inclusiveRange: (3, 8))
+    var largePreviewCount: Int
 
     @Parameter(title: "Show Previews", default: false)
     var previews: Bool
@@ -34,28 +46,49 @@ struct NotesWidgetIntent: WidgetConfigurationIntent {
         When(\.$content, .equalTo, .note) {
             Summary("Show \(\.$content)") { \.$note }
         } otherwise: {
-            Summary("Show \(\.$content)") {
-                \.$count
-                \.$previews
+            When(\.$previews, .equalTo, true) {
+                When(widgetFamily: .oneOf, [.systemLarge, .systemExtraLarge]) {
+                    Summary("Show \(\.$content)") {
+                        \.$largePreviewCount
+                        \.$previews
+                    }
+                } otherwise: {
+                    Summary("Show \(\.$content)") { \.$previews }
+                }
+            } otherwise: {
+                Switch(.widgetFamily) {
+                    Case(.systemSmall) {
+                        Summary("Show \(\.$content)") {
+                            \.$smallCount
+                            \.$previews
+                        }
+                    }
+                    Case(.systemMedium) {
+                        Summary("Show \(\.$content)") {
+                            \.$mediumCount
+                            \.$previews
+                        }
+                    }
+                    DefaultCase {
+                        Summary("Show \(\.$content)") {
+                            \.$largeCount
+                            \.$previews
+                        }
+                    }
+                }
             }
         }
     }
-}
 
-/// Edit Widget offers fewer notes when rows show a preview, since each row
-/// needs more room. The choices are the same for every widget size.
-struct NotesCountOptions: DynamicOptionsProvider {
-    static let defaultCount = 5
-
-    @IntentParameterDependency<NotesWidgetIntent>(\.$previews)
-    var intent
-
-    func results() async throws -> [Int] {
-        Array(3...(intent?.previews == true ? 8 : 12))
-    }
-
-    func defaultResult() async -> Int? {
-        Self.defaultCount
+    func count(for size: MehWidgetRecentsLayout.Size) -> Int {
+        switch (size, previews) {
+        case (.small, false): smallCount
+        case (.medium, false): mediumCount
+        case (.large, false), (.extraLarge, false): largeCount
+        case (.large, true), (.extraLarge, true): largePreviewCount
+        case (.small, true), (.medium, true):
+            MehWidgetRecentsLayout.most(previews: true, size: size)
+        }
     }
 }
 

@@ -12,7 +12,7 @@ Long-press the widget and choose Edit Widget to pick what it shows:
 - **Recents** (default): the same order as the app's Recents, pins first,
   then the most recently edited notes. Pinned notes show a pin, the others
   the time of their last change, except under the yellow +. Each row
-  opens its note. *Number of Notes* picks how many notes
+  opens its note. *Number of Notes* is a stepper that picks how many notes
   the widget shows, five by default. *Show Previews* adds the same excerpt
   as the app below each title.
 - **One Note**: the start of a single note, drawn like Live Preview with
@@ -20,8 +20,9 @@ Long-press the widget and choose Edit Widget to pick what it shows:
   recent notes first; search finds any other note. Tapping the widget opens
   that note.
 
-Edit Widget offers the same choices for every size: 3 to 12 notes, or 3
-to 8 with previews. Each size shows at most what still reads well:
+Number of Notes starts at 3 and goes up to what still reads well at the
+widget's size. Small and medium widgets with previews always show 3, so
+Edit Widget hides the setting there:
 
 | Size | Without previews | With previews |
 | --- | --- | --- |
@@ -88,3 +89,12 @@ Markdown blocks the widget draws. It does not link NoteCore, so the widget
 stays well within the extension memory limit. The app side is
 `NotebookWidgetSnapshotWriter`; the widget lives in `meh.mdWidgets/`.
 `MehWidgetDataTests` covers the shared code.
+
+Each size and preview choice keeps its own number, because an App Intent
+parameter's range is fixed when the app is built. `NotesWidgetIntent`
+has one parameter per range, and its parameter summary shows the one that
+fits the widget's size and Show Previews. Turning previews on or off on a
+large widget switches between two separate numbers. The ranges repeat
+`MehWidgetRecentsLayout.most`, which also caps the count when the widget
+draws. The parameters set `controlStyle: .stepper` explicitly: without it,
+Edit Widget shows a number field that accepts any value.

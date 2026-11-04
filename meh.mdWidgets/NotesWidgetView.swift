@@ -48,7 +48,9 @@ private struct NotesRecentsView: View {
     @ScaledMetric(relativeTo: .caption2) private var compactPreviewLine: CGFloat = 13
 
     var body: some View {
-        let limit = MehWidgetRecentsLayout.limit(count: count, previews: previews, size: size)
+        let limit = MehWidgetRecentsLayout.limit(
+            count: count, previews: previews, size: .init(family)
+        )
         let rows = snapshot.recentRows(limit: limit)
         Group {
             if rows.isEmpty {
@@ -104,15 +106,6 @@ private struct NotesRecentsView: View {
         let title = compact ? compactTitleLine : titleLine
         guard previews else { return title }
         return title + 1 + (compact ? compactPreviewLine : previewLine)
-    }
-
-    private var size: MehWidgetRecentsLayout.Size {
-        switch family {
-        case .systemSmall: .small
-        case .systemMedium: .medium
-        case .systemExtraLarge: .extraLarge
-        default: .large
-        }
     }
 }
 
