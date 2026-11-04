@@ -133,7 +133,12 @@ public final class NotebookReplica {
     @ObservationIgnored private var acceptedCatalog: AcceptedCatalog?
     @ObservationIgnored private var recordReadCache:
         [UUID: NoteFileStorage.ValidatedSnapshot] = [:]
-    @ObservationIgnored private var sessions: [UUID: NoteSession] = [:]
+    @ObservationIgnored private var sessions: [UUID: NoteSession] = [:] {
+        didSet { sessionsGeneration &+= 1 }
+    }
+    /// Changes when a session opens or closes. `searchRevision` reads it, so
+    /// its observers also track the editors of sessions opened later.
+    private var sessionsGeneration: UInt64 = 0
     @ObservationIgnored private var sessionLoads: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var rememberedDeletions: Set<UUID> = []
     @ObservationIgnored private var loaded = false
@@ -150,7 +155,8 @@ public final class NotebookReplica {
     /// observes live editor revisions, so unsaved local typing invalidates a
     /// cached corpus without requiring a second copy of note text.
     public var searchRevision: NotebookSearchRevision {
-        NotebookSearchRevision(
+        _ = sessionsGeneration
+        return NotebookSearchRevision(
             notebookID: catalogSnapshot?.notebookID,
             catalogHeads: catalogSnapshot?.heads ?? [],
             bodyGeneration: searchBodyGeneration,

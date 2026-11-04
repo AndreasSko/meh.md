@@ -277,6 +277,68 @@ final class NotebookNavigationStateTests: XCTestCase {
         XCTAssertEqual(fixture.replica.allRecentNotes, editedOrder)
     }
 
+    func testEditKeepsShownPreviewsUntilTheyRefresh() async throws {
+        let fixture = try await Fixture()
+        let edited = try await fixture.replica.createNote(name: "Edited.md", text: "old")
+        let other = try await fixture.replica.createNote(name: "Other.md", text: "other")
+        for id in [edited, other] { try await fixture.replica.recordRecentActivity(for: id) }
+        let state = fixture.makeState()
+        await state.loadRecentPreviews(for: [edited, other])
+
+        let session = try await fixture.replica.openNote(edited)
+        try session.replaceAll(with: "new")
+        let request = Task { await state.loadRecentPreviews(for: [edited, other]) }
+        request.cancel()
+        await request.value
+        XCTAssertEqual(state.recentPreviewText, [edited: "old", other: "other"])
+
+        await state.loadRecentPreviews(for: [edited, other])
+        XCTAssertEqual(state.recentPreviewText, [edited: "new", other: "other"])
+    }
+
+    func testMaintainedPreviewsRefreshOnceEditsPause() async throws {
+        let fixture = try await Fixture()
+        let id = try await fixture.replica.createNote(name: "Draft.md", text: "old")
+        try await fixture.replica.recordRecentActivity(for: id)
+        let state = fixture.makeState()
+        state.recentPreviewRefreshDelay = .seconds(1)
+        let session = try await fixture.replica.openNote(id)
+        let maintenance = Task { await state.maintainRecentPreviews(for: [id]) }
+        try await waitUntil { state.recentPreviewText[id] == "old" }
+
+        try session.replaceAll(with: "new")
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(state.recentPreviewText[id], "old")
+        try await waitUntil { state.recentPreviewText[id] == "new" }
+        maintenance.cancel()
+        await maintenance.value
+    }
+
+    func testMaintainedPreviewsFollowNotesOpenedLater() async throws {
+        let fixture = try await Fixture()
+        let id = try await fixture.replica.createNote(name: "Draft.md", text: "old")
+        try await fixture.replica.recordRecentActivity(for: id)
+        let reader = NotebookReplica(directory: fixture.root)
+        try await reader.load()
+        let state = NotebookNavigationState(replica: reader, store: fixture.store)
+        state.recentPreviewRefreshDelay = .milliseconds(50)
+        let maintenance = Task { await state.maintainRecentPreviews(for: [id]) }
+        try await waitUntil { state.recentPreviewText[id] == "old" }
+
+        let session = try await reader.openNote(id)
+        try session.replaceAll(with: "new")
+        try await waitUntil { state.recentPreviewText[id] == "new" }
+        maintenance.cancel()
+        await maintenance.value
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0..<200 where !condition() {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(condition())
+    }
+
     func testCancelledExpandedPreviewRequestDoesNotPublish() async throws {
         let fixture = try await Fixture()
         let id = try await fixture.replica.createNote(name: "Draft.md", text: "draft")

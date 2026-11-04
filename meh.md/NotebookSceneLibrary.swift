@@ -74,13 +74,20 @@ extension NotebookSceneState {
     }
     #endif
 
+    /// The compact rows, then the expanded rows on screen.
+    var recentPreviewIDs: [UUID] {
+        navigationState.recentNoteIDs + visibleRecentPreviewIDs
+    }
+
+    /// Reads the cached excerpt, so rows don't redraw on every keystroke.
     func recentPreview(for id: UUID) -> String {
+        let cached = navigationState.recentPreviewText[id]
         guard let recent = navigationState.recentSessions[id] else {
-            return navigationState.recentPreviewText[id] ?? "Preview unavailable"
+            return cached ?? "Preview unavailable"
         }
         if workspace?.isResetPending == true { return "Restart to finish reset" }
         guard recent.isEditingEnabled else { return "Note unavailable" }
-        let preview = NotebookRecentPreview.text(from: recent.text)
+        let preview = cached ?? NotebookRecentPreview.text(from: recent.text)
         return preview.isEmpty ? "Empty note" : preview
     }
 
