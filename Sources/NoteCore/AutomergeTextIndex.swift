@@ -10,26 +10,63 @@ public enum AutomergeTextIndex {
         forUTF16Range range: NSRange,
         in text: String
     ) throws -> (start: UInt64, length: UInt64) {
-        guard range.location != NSNotFound else {
-            throw AutomergeTextIndexError.invalidUTF16Range(range)
-        }
+        let (lower, upper) = try scalarBounds(forUTF16Range: range, in: text)
+        return scalarRange(from: lower, to: upper, in: text)
+    }
 
+    /// Both ends of a UTF-16 range, which must fall between scalars. Indexing
+    /// the string directly avoids copying a whole note into UTF-16 per edit.
+    static func scalarBounds(
+        forUTF16Range range: NSRange,
+        in text: String
+    ) throws -> (lower: String.Index, upper: String.Index) {
         let (upperBound, overflow) = range.location.addingReportingOverflow(
             range.length
         )
-        let codeUnits = Array(text.utf16)
-        guard !overflow,
+        let utf16 = text.utf16
+        guard range.location != NSNotFound,
+              !overflow,
               range.location >= 0,
               range.length >= 0,
-              upperBound <= codeUnits.count,
-              isScalarBoundary(range.location, in: codeUnits),
-              isScalarBoundary(upperBound, in: codeUnits) else {
+              upperBound <= utf16.count else {
             throw AutomergeTextIndexError.invalidUTF16Range(range)
         }
+        let lower = utf16.index(utf16.startIndex, offsetBy: range.location)
+        let upper = utf16.index(lower, offsetBy: range.length)
+        guard let lower = lower.samePosition(in: text.unicodeScalars),
+              let upper = upper.samePosition(in: text.unicodeScalars) else {
+            throw AutomergeTextIndexError.invalidUTF16Range(range)
+        }
+        return (lower, upper)
+    }
 
-        let start = scalarCount(beforeUTF16Offset: range.location, in: codeUnits)
-        let end = scalarCount(beforeUTF16Offset: upperBound, in: codeUnits)
-        return (UInt64(start), UInt64(end - start))
+    static func scalarRange(
+        from lower: String.Index,
+        to upper: String.Index,
+        in text: String
+    ) -> (start: UInt64, length: UInt64) {
+        let utf8 = text.utf8
+        let lowerOffset = utf8.distance(from: utf8.startIndex, to: lower)
+        let upperOffset = utf8.distance(from: utf8.startIndex, to: upper)
+        if let counts = utf8.withContiguousStorageIfAvailable({ bytes in
+            (scalarCount(bytes[..<lowerOffset]),
+             scalarCount(bytes[lowerOffset..<upperOffset]))
+        }) {
+            return (UInt64(counts.0), UInt64(counts.1))
+        }
+        let scalars = text.unicodeScalars
+        let start = scalars.distance(from: scalars.startIndex, to: lower)
+        return (UInt64(start), UInt64(scalars.distance(from: lower, to: upper)))
+    }
+
+    /// Each scalar starts with exactly one byte that is not a UTF-8
+    /// continuation byte. Counting those is far faster than decoding.
+    private static func scalarCount(
+        _ bytes: Slice<UnsafeBufferPointer<UInt8>>
+    ) -> Int {
+        var count = 0
+        for byte in bytes where byte & 0xC0 != 0x80 { count += 1 }
+        return count
     }
 
     public static func utf16Range(
@@ -55,32 +92,6 @@ public enum AutomergeTextIndex {
             in: text
         )
         return NSRange(location: startOffset, length: endOffset - startOffset)
-    }
-
-    private static func isScalarBoundary(
-        _ offset: Int,
-        in codeUnits: [UInt16]
-    ) -> Bool {
-        guard offset > 0, offset < codeUnits.count else { return true }
-        return !UTF16.isLeadSurrogate(codeUnits[offset - 1])
-            || !UTF16.isTrailSurrogate(codeUnits[offset])
-    }
-
-    private static func scalarCount(
-        beforeUTF16Offset offset: Int,
-        in codeUnits: [UInt16]
-    ) -> Int {
-        var count = 0
-        var codeUnitOffset = 0
-        while codeUnitOffset < offset {
-            if UTF16.isLeadSurrogate(codeUnits[codeUnitOffset]) {
-                codeUnitOffset += 2
-            } else {
-                codeUnitOffset += 1
-            }
-            count += 1
-        }
-        return count
     }
 
     private static func utf16Offset(

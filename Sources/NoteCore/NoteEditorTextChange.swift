@@ -14,26 +14,42 @@ public struct NoteEditorTextChange: Sendable, Equatable {
     func validatedScalarRange(
         in source: String, resultingIn text: String
     ) throws -> (start: UInt64, length: UInt64)? {
-        let scalarRange = try AutomergeTextIndex.unicodeScalarRange(
+        let (lower, upper) = try AutomergeTextIndex.scalarBounds(
             forUTF16Range: range, in: source
         )
-        // Compare literal code units without reconstructing a Foundation
-        // string and transcoding its entire foreign UTF-8 view. Scalar-boundary
-        // validation above also permits edits inside a composed grapheme.
-        var sourceUnits = source.utf16.makeIterator()
-        var resultUnits = text.utf16.makeIterator()
-        for _ in 0..<range.location {
-            guard sourceUnits.next() == resultUnits.next() else { return nil }
+        // Compare literal bytes: the text before the edit, the replacement,
+        // and the text after it. Both ends fall between scalars, so equal
+        // bytes mean equal UTF-16 units. This also permits edits inside a
+        // composed grapheme.
+        let sourceUTF8 = source.utf8
+        let prefix = sourceUTF8.distance(from: sourceUTF8.startIndex, to: lower)
+        let removed = sourceUTF8.distance(from: lower, to: upper)
+        let inserted = replacement.utf8.count
+        guard text.utf8.count == source.utf8.count - removed + inserted,
+              Self.bytes(of: source, in: 0..<prefix, equal: text, at: 0),
+              Self.bytes(of: replacement, in: 0..<inserted, equal: text, at: prefix),
+              Self.bytes(
+                  of: source, in: (prefix + removed)..<source.utf8.count,
+                  equal: text, at: prefix + inserted
+              ) else { return nil }
+        return AutomergeTextIndex.scalarRange(from: lower, to: upper, in: source)
+    }
+
+    private static func bytes(
+        of source: String, in range: Range<Int>, equal text: String, at offset: Int
+    ) -> Bool {
+        guard !range.isEmpty else { return true }
+        let compared = source.utf8.withContiguousStorageIfAvailable { sourceBytes in
+            text.utf8.withContiguousStorageIfAvailable { textBytes in
+                memcmp(
+                    sourceBytes.baseAddress! + range.lowerBound,
+                    textBytes.baseAddress! + offset, range.count
+                ) == 0
+            }
         }
-        for _ in 0..<range.length { _ = sourceUnits.next() }
-        for unit in replacement.utf16 {
-            guard resultUnits.next() == unit else { return nil }
-        }
-        while let unit = sourceUnits.next() {
-            guard resultUnits.next() == unit else { return nil }
-        }
-        guard resultUnits.next() == nil else { return nil }
-        return scalarRange
+        if let compared = compared ?? nil { return compared }
+        return source.utf8.dropFirst(range.lowerBound).prefix(range.count)
+            .elementsEqual(text.utf8.dropFirst(offset).prefix(range.count))
     }
 }
 
