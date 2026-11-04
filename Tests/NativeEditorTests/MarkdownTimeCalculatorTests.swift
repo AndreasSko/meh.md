@@ -7,7 +7,7 @@ import XCTest
 final class MarkdownTimeCalculatorTests: XCTestCase {
     /// The formatted result of every `=` line, parsed as the editor does.
     private func results(_ text: String) -> [String] {
-        MarkdownTimeCalculator.sums(in: text, result: MarkdownSyntax.parse(text))
+        MarkdownTimeCalculator.sums(in: text, result: MarkdownSyntax.parse(text, timeSums: true))
             .map { MarkdownTimeCalculator.format($0.seconds) }
     }
 

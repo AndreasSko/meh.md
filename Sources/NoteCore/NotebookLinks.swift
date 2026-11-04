@@ -304,31 +304,37 @@ public enum NotebookLinkParser {
         source.enumerateSubstrings(in: NSRange(location: 0, length: source.length), options: .byLines) { line, range, _, _ in
             lines.append((line ?? "", range))
         }
+        func isExcluded(_ index: Int) -> Bool {
+            let location = lines[index].1.location
+            return location < blocked.count && blocked[location]
+        }
+        let setext = Dictionary(
+            MarkdownSetextHeadings.find(in: source, lines: lines.map(\.1),
+                                        isExcluded: isExcluded)
+                .map { ($0.paragraph.lowerBound, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         var result: [(title: String, level: Int, range: NSRange)] = []
         for (index, entry) in lines.enumerated() {
             let (line, range) = entry
-            guard range.location < blocked.count, !blocked[range.location] else { continue }
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            var title: String?
-            var level = 1
-            if trimmed.hasPrefix("#") {
-                let prefix = trimmed.prefix(while: { $0 == "#" })
-                if prefix.count <= 6, trimmed.dropFirst(prefix.count).first?.isWhitespace == true {
-                    level = prefix.count
-                    title = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
-                        .replacingOccurrences(of: #"\s+#+\s*$"#, with: "", options: .regularExpression)
-                }
-            } else if index + 1 < lines.count {
-                let underline = lines[index + 1].0.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty, !underline.isEmpty,
-                   !blocked[lines[index + 1].1.location],
-                   (underline.allSatisfy { $0 == "=" } || underline.allSatisfy { $0 == "-" }) {
-                    level = underline.first == "=" ? 1 : 2
-                    title = trimmed
-                }
+            guard !isExcluded(index) else { continue }
+            if let heading = setext[index] {
+                let paragraph = lines[heading.paragraph]
+                let title = paragraph.map { $0.0.trimmingCharacters(in: .whitespaces) }
+                    .joined(separator: " ")
+                let end = NSMaxRange(paragraph.last!.1)
+                result.append((title, heading.level,
+                               NSRange(location: range.location, length: end - range.location)))
+                continue
             }
-            guard let title else { continue }
-            result.append((title, level, range))
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("#") else { continue }
+            let prefix = trimmed.prefix(while: { $0 == "#" })
+            guard prefix.count <= 6,
+                  trimmed.dropFirst(prefix.count).first?.isWhitespace == true else { continue }
+            let title = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: #"\s+#+\s*$"#, with: "", options: .regularExpression)
+            result.append((title, prefix.count, range))
         }
         return result
     }

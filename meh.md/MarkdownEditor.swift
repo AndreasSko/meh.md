@@ -335,7 +335,9 @@ final class MarkdownTextView: NSTextView {
     /// Whether this note shows time calculator results.
     var markdownTimeCalculator = false {
         didSet {
-            if markdownTimeCalculator != oldValue { MarkdownTimeCalculator.update(self) }
+            guard markdownTimeCalculator != oldValue else { return }
+            markdownSyntaxCache.timeSums = markdownTimeCalculator
+            MarkdownTimeCalculator.update(self)
         }
     }
     var markdownTimeSums: [MarkdownTimeSum] = []
@@ -938,6 +940,8 @@ struct MarkdownEditor: NSViewRepresentable {
             isReadOnly ? "note-history-preview" : "markdown-editor"
         )
         MehStyle.palette = palette
+        // The first parse must already know whether underlines make headings.
+        textView.markdownSyntaxCache.timeSums = timeCalculator
         MarkdownPresentation.configure(
             textView,
             fontSize: fontSize,
@@ -1134,7 +1138,12 @@ struct MarkdownEditor: NSViewRepresentable {
         func update(parent: MarkdownEditor, textView: NSTextView) {
             self.parent = parent
             (textView as? MarkdownTextView)?.markdownHistoryChanges = parent.historyChanges
-            (textView as? MarkdownTextView)?.markdownTimeCalculator = parent.timeCalculator
+            if let nativeView = textView as? MarkdownTextView,
+               nativeView.markdownTimeCalculator != parent.timeCalculator {
+                // Underline headings come and go with the calculator.
+                nativeView.markdownTimeCalculator = parent.timeCalculator
+                schedulePresentationRefresh(for: textView)
+            }
             if let nativeView = textView as? MarkdownTextView,
                nativeView.markdownLinkNavigation !== parent.navigation {
                 attachNavigation(to: nativeView)
@@ -2156,6 +2165,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         set {
             guard newValue != markdownState.timeCalculator else { return }
             markdownState.timeCalculator = newValue
+            markdownSyntaxCache.timeSums = newValue
             MarkdownTimeCalculator.update(self)
         }
     }
@@ -2795,6 +2805,8 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.accessibilityIdentifier = isReadOnly
             ? "note-history-preview" : "markdown-editor"
         MehStyle.palette = palette
+        // The first parse must already know whether underlines make headings.
+        textView.markdownSyntaxCache.timeSums = timeCalculator
         MarkdownPresentation.configure(
             textView,
             fontSize: fontSize,
@@ -3031,7 +3043,12 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             self.parent = parent
             (textView as? MarkdownTextView)?.markdownHistoryChanges = parent.historyChanges
-            (textView as? MarkdownTextView)?.markdownTimeCalculator = parent.timeCalculator
+            if let nativeView = textView as? MarkdownTextView,
+               nativeView.markdownTimeCalculator != parent.timeCalculator {
+                // Underline headings come and go with the calculator.
+                nativeView.markdownTimeCalculator = parent.timeCalculator
+                schedulePresentationRefresh(for: textView)
+            }
             applyInitialPreviewInsets(in: textView)
             // SwiftUI can retain the native view while a navigation visit or
             // History changes its owner. Selection reporting uses the updated

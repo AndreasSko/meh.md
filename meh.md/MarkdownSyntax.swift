@@ -13,6 +13,8 @@ enum MarkdownStyleRole: Equatable {
     case taskMarker(checked: Bool)
     case blockquote
     case blockquoteMarker
+    /// A horizontal rule or a heading underline: one line of `---` or `===`.
+    case rule
 }
 
 struct MarkdownStyleSpan: Equatable {
@@ -87,7 +89,11 @@ struct MarkdownSyntaxIncrementalResult: Equatable {
 }
 
 enum MarkdownSyntax {
-    static func parse(_ text: String, isDocumentStart: Bool = true) -> MarkdownSyntaxResult {
+    /// `timeSums` leaves out underline headings, so the time calculator can
+    /// read `=` lines as sums and a `---` separator doesn't end a sum.
+    static func parse(
+        _ text: String, isDocumentStart: Bool = true, timeSums: Bool = false
+    ) -> MarkdownSyntaxResult {
         let source = contiguousSource(text)
         let fences = fencedCodeRanges(in: source)
         let fenced = fences.ranges
@@ -112,10 +118,19 @@ enum MarkdownSyntax {
             lines: lines,
             source: source
         )
+        let linkContext = NotebookLinkParser.incrementalContext(
+            in: text, allowFrontmatter: isDocumentStart
+        )
+        let rules = appendRuleSpans(
+            in: source, lines: lines, fenced: fenced, tableLines: tableLines,
+            context: linkContext.ranges, timeSums: timeSums,
+            spans: &spans
+        )
         appendLineSpans(
             in: source,
             excluding: codeRanges,
             tableLines: tableLines,
+            ruleLines: rules.lines,
             spans: &spans,
             paragraphRuns: &paragraphRuns
         )
@@ -168,13 +183,22 @@ enum MarkdownSyntax {
             }
             return left.range.location < right.range.location
         }
-        let linkContext = NotebookLinkParser.incrementalContext(
-            in: text, allowFrontmatter: isDocumentStart
-        )
         let canRestartAtEnd = emphasis.atEnd && !fences.hasOpenFence
             && !linkContext.hasOpenComment
+        // Text above an underline belongs to its heading, so an incremental
+        // parse must not restart inside one or at its first line.
+        let setextHeadings = rules.headings
+        var setextIndex = setextHeadings.startIndex
         var restartOffsets = emphasis.offsets.filter { offset in
-            !(linkContext.hasOpenComment && offset == source.length)
+            while setextIndex < setextHeadings.endIndex,
+                  NSMaxRange(setextHeadings[setextIndex]) <= offset {
+                setextIndex += 1
+            }
+            if setextIndex < setextHeadings.endIndex,
+               setextHeadings[setextIndex].location <= offset {
+                return false
+            }
+            return !(linkContext.hasOpenComment && offset == source.length)
                 && !linkContext.ranges.contains { $0.location < offset && offset < NSMaxRange($0) }
         }
         if canRestartAtEnd, restartOffsets.last != source.length {
@@ -235,7 +259,8 @@ enum MarkdownSyntax {
         previousText: String,
         previousResult: MarkdownSyntaxResult,
         editedRange: NSRange,
-        changeInLength: Int
+        changeInLength: Int,
+        timeSums: Bool = false
     ) -> MarkdownSyntaxIncrementalResult? {
         let source = text as NSString
         let previousSource = previousText as NSString
@@ -306,7 +331,8 @@ enum MarkdownSyntax {
             // A full parse remains the correctness fallback for those cases.
             guard newEnd - start <= 65_536 else { return nil }
             let region = NSRange(location: start, length: newEnd - start)
-            let local = parse(source.substring(with: region), isDocumentStart: start == 0)
+            let local = parse(source.substring(with: region), isDocumentStart: start == 0,
+                              timeSums: timeSums)
             // A distant fence edit can expose a table within this region.
             // Tables are not spliced into incremental results yet.
             guard local.tables.isEmpty else { return nil }
@@ -327,7 +353,9 @@ enum MarkdownSyntax {
             // Grow geometrically instead of reparsing every larger prefix.
             minimumEnd = start + max(128, 2 * (oldEnd - start))
         }
-        guard let replacement else { return nil }
+        guard let replacement,
+              timeSums || !mayChangeUnderlineHeadings(around: replacement.new, in: source)
+        else { return nil }
         let previousLine = replacement.old
         let line = replacement.new
         let local = replacement.syntax
@@ -403,6 +431,31 @@ enum MarkdownSyntax {
             result: result,
             invalidatedRange: line
         )
+    }
+
+    /// An underline heading reaches across lines: a reparsed region next to
+    /// text that ends in an underline could change how that text reads.
+    private static func mayChangeUnderlineHeadings(
+        around region: NSRange, in source: NSString
+    ) -> Bool {
+        func isBlankLine(containing location: Int) -> Bool {
+            let line = syntaxLineRange(
+                containing: NSRange(location: location, length: 0), in: source
+            )
+            let end = contentEndOfLine(containing: line.location, in: source)
+            return skipHorizontalWhitespace(from: line.location, before: end, in: source) == end
+        }
+        if region.location > 0, !isBlankLine(containing: region.location - 1),
+           MarkdownSetextHeadings.paragraphReachesUnderline(
+               from: region.location, in: source
+           ) {
+            return true
+        }
+        // The region's last line decides whether the text below continues a
+        // paragraph or a list, even when it is blank.
+        let end = NSMaxRange(region)
+        return end < source.length
+            && MarkdownSetextHeadings.paragraphReachesUnderline(from: end, in: source)
     }
 
     /// Matches ``lineRanges(in:)`` exactly. `NSString.lineRange(for:)` also
@@ -627,10 +680,15 @@ enum MarkdownSyntax {
         in source: NSString,
         excluding codeRanges: [NSRange],
         tableLines: [NSRange],
+        ruleLines: [Int: MarkdownParagraphRun?],
         spans: inout [MarkdownStyleSpan],
         paragraphRuns: inout [MarkdownParagraphRun]
     ) {
         for line in lineRanges(in: source) {
+            if let run = ruleLines[line.location] {
+                if let run { paragraphRuns.append(run) }
+                continue
+            }
             if tableLines.contains(where: { $0.location == line.location }) {
                 continue
             }
@@ -816,6 +874,77 @@ enum MarkdownSyntax {
         }
     }
 
+    /// Horizontal rules and underline headings, which are whole top-level
+    /// lines. Returns each heading's range, from its text to its underline,
+    /// and every line these blocks own, with a heading line's paragraph run.
+    private static func appendRuleSpans(
+        in source: NSString,
+        lines: [NSRange],
+        fenced: [NSRange],
+        tableLines: [NSRange],
+        context: [NSRange],
+        timeSums: Bool,
+        spans: inout [MarkdownStyleSpan]
+    ) -> (headings: [NSRange], lines: [Int: MarkdownParagraphRun?]) {
+        let content = lines.map {
+            NSRange(location: $0.location, length: contentEnd(for: $0, in: source) - $0.location)
+        }
+        let tableStarts = Set(tableLines.map(\.location))
+        func isExcluded(_ index: Int) -> Bool {
+            let location = lines[index].location
+            return tableStarts.contains(location) || isContained(location, in: fenced)
+                || isContained(location, in: context)
+        }
+        func marker(_ line: NSRange) -> NSRange {
+            let start = skipHorizontalWhitespace(
+                from: line.location, before: NSMaxRange(line), in: source
+            )
+            var end = NSMaxRange(line)
+            while end > start, isHorizontalWhitespace(source.character(at: end - 1)) {
+                end -= 1
+            }
+            return NSRange(location: start, length: end - start)
+        }
+        let headings = MarkdownSetextHeadings.find(
+            in: source, lines: content, timeSums: timeSums,
+            isExcluded: isExcluded
+        )
+        var underlines = Set<Int>()
+        var owned: [Int: MarkdownParagraphRun?] = [:]
+        var ranges: [NSRange] = []
+        for heading in headings {
+            let first = marker(content[heading.paragraph.lowerBound])
+            let last = content[heading.paragraph.upperBound - 1]
+            spans.append(MarkdownStyleSpan(
+                range: NSRange(location: first.location,
+                               length: NSMaxRange(last) - first.location),
+                role: .heading(level: heading.level)
+            ))
+            for index in heading.paragraph {
+                owned[lines[index].location] = MarkdownParagraphRun(
+                    range: paragraphRange(for: content[index], in: source),
+                    kind: .heading(level: heading.level),
+                    contentColumn: 0,
+                    contentPrefixRange: NSRange(location: lines[index].location, length: 0)
+                )
+            }
+            underlines.insert(heading.underline)
+            ranges.append(NSRange(
+                location: lines[heading.paragraph.lowerBound].location,
+                length: NSMaxRange(lines[heading.underline])
+                    - lines[heading.paragraph.lowerBound].location
+            ))
+        }
+        for index in lines.indices where !isExcluded(index) {
+            guard underlines.contains(index)
+                    || MarkdownSetextHeadings.isThematicBreak(content[index], in: source)
+            else { continue }
+            spans.append(MarkdownStyleSpan(range: marker(content[index]), role: .rule))
+            owned[lines[index].location] = .some(nil)
+        }
+        return (ranges, owned)
+    }
+
     private static func appendPairedSpans(
         in source: NSString,
         marker: unichar,
@@ -912,10 +1041,10 @@ enum MarkdownSyntax {
         }
         for span in spans {
             switch span.role {
-            case .heading, .listMarker:
+            case .heading, .listMarker, .rule:
                 let line = syntaxLineRange(containing: span.range, in: source)
                 boundaries.insert(line.location)
-                if case .heading = span.role {
+                if span.role != .listMarker {
                     // Reset before consuming the newline, so it becomes a
                     // neutral restart even if the heading has an open marker.
                     let end = NSMaxRange(line)
@@ -1030,7 +1159,7 @@ enum MarkdownSyntax {
             case .heading, .strong, .emphasis, .code:
                 return true
             case .highlight, .strikethrough, .link, .listMarker, .taskMarker,
-                    .blockquote, .blockquoteMarker:
+                    .blockquote, .blockquoteMarker, .rule:
                 return false
             }
         }
@@ -1109,7 +1238,7 @@ enum MarkdownSyntax {
             case .code:
                 traits.insert(.monospaced)
             case .highlight, .strikethrough, .link, .listMarker, .taskMarker,
-                    .blockquote, .blockquoteMarker:
+                    .blockquote, .blockquoteMarker, .rule:
                 break
             }
         }

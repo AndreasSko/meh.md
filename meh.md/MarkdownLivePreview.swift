@@ -133,7 +133,8 @@ enum MarkdownLivePreview {
         for span in result.spans {
             collapsed.append(contentsOf: markerRanges(for: span, in: source))
             switch span.role {
-            case .blockquoteMarker:
+            case .blockquoteMarker, .rule:
+                // A rule keeps its line; the editor draws a hairline instead.
                 transparent.append(span.range)
             case .listMarker where span.range.length == 1:
                 let marker = source.character(at: span.range.location)
@@ -289,7 +290,7 @@ enum MarkdownLivePreview {
             return inlineCodeMarkerRanges(for: span.range, in: source)
         case .link:
             return linkMarkerRanges(for: span.range, in: source)
-        case .listMarker, .taskMarker, .blockquote, .blockquoteMarker:
+        case .listMarker, .taskMarker, .blockquote, .blockquoteMarker, .rule:
             return []
         }
     }
@@ -303,12 +304,15 @@ enum MarkdownLivePreview {
         while end < limit, source.character(at: end) == 35 {
             end += 1
         }
+        // An underline heading's text can start with `#`, as in `#tag`.
+        let openingEnd = end
         while end < limit {
             let character = source.character(at: end)
             guard character == 32 || character == 9 else { break }
             end += 1
         }
-        guard end > range.location, end < limit else { return [] }
+        guard openingEnd > range.location, openingEnd - range.location <= 6,
+              end > openingEnd, end < limit else { return [] }
         return [NSRange(location: range.location, length: end - range.location)]
     }
 

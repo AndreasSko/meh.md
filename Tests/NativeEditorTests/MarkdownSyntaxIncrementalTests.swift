@@ -254,11 +254,17 @@ final class MarkdownSyntaxIncrementalTests: XCTestCase {
                     let end = offsets[min(index + 1, offsets.count - 1)]
                     let edit = NSRange(location: offsets[index], length: end - offsets[index])
                     let text = (previous as NSString).replacingCharacters(in: edit, with: replacement)
-                    let update = try XCTUnwrap(MarkdownSyntax.incrementallyParse(
+                    let incremental = MarkdownSyntax.incrementallyParse(
                         text, previousText: previous, previousResult: previousResult,
                         editedRange: NSRange(location: edit.location, length: replacement.utf16.count),
                         changeInLength: replacement.utf16.count - edit.length
-                    ))
+                    )
+                    // An edit that underlines the line above it reparses fully.
+                    if incremental == nil,
+                       MarkdownSyntax.parse(text).spans.contains(where: { $0.role == .rule }) {
+                        continue
+                    }
+                    let update = try XCTUnwrap(incremental)
                     XCTAssertEqual(update.result, MarkdownSyntax.parse(text),
                                    "source=\(previous.debugDescription), edit=\(edit), replacement=\(replacement.debugDescription)")
                 }

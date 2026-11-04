@@ -64,6 +64,10 @@ enum MarkdownPresentation {
         let rect: CGRect
     }
 
+    struct RuleDecoration: Equatable {
+        let rect: CGRect
+    }
+
     struct TaskCheckboxDecoration: Equatable {
         let range: NSRange
         let rect: CGRect
@@ -305,6 +309,23 @@ enum MarkdownPresentation {
                 result: presentation.result,
                 layoutManager: layoutManager,
                 snapshot: MarkdownLivePreview.snapshot(for: textView),
+                visibleRange: visibleRange,
+                spanIndices: presentation.spanCandidateIndices(
+                    intersecting: visibleRange
+                )
+            ),
+            offset: textView.textContainerOrigin,
+            dirtyRect: dirtyRect,
+            context: context
+        )
+        drawRules(
+            ruleDecorations(
+                text: text,
+                result: presentation.result,
+                layoutManager: layoutManager,
+                snapshot: MarkdownLivePreview.snapshot(for: textView),
+                containerWidth: textContainer.size.width,
+                lineFragmentPadding: textContainer.lineFragmentPadding,
                 visibleRange: visibleRange,
                 spanIndices: presentation.spanCandidateIndices(
                     intersecting: visibleRange
@@ -611,6 +632,23 @@ enum MarkdownPresentation {
             dirtyRect: surfaceBounds,
             context: context
         )
+        drawRules(
+            ruleDecorations(
+                text: text,
+                result: result,
+                layoutManager: layoutManager,
+                snapshot: MarkdownLivePreview.snapshot(for: textView),
+                containerWidth: textView.textContainer.size.width,
+                lineFragmentPadding: textView.textContainer.lineFragmentPadding,
+                visibleRange: fragmentRange,
+                spanIndices: presentation.spanCandidateIndices(
+                    intersecting: fragmentRange
+                )
+            ),
+            offset: drawingOffset,
+            dirtyRect: surfaceBounds,
+            context: context
+        )
         drawTaskCheckboxes(
             taskCheckboxDecorations(
                 text: text,
@@ -848,6 +886,44 @@ enum MarkdownPresentation {
         return decorations
     }
 
+    /// Live Preview draws a hairline across the text width in place of a
+    /// rule's hidden `---` or a heading's hidden underline.
+    static func ruleDecorations(
+        text: String,
+        result: MarkdownSyntaxResult,
+        layoutManager: NSTextLayoutManager,
+        snapshot: MarkdownLivePreviewSnapshot,
+        containerWidth: CGFloat,
+        lineFragmentPadding: CGFloat,
+        visibleRange: NSRange? = nil,
+        spanIndices: Range<Int>? = nil
+    ) -> [RuleDecoration] {
+        guard snapshot.mode == .livePreview,
+              let contentManager = layoutManager.textContentManager else { return [] }
+        let source = text as NSString
+        if let storage = contentManager as? NSTextContentStorage,
+           storage.textStorage?.length != source.length { return [] }
+        let indices = spanIndices ?? result.spans.indices
+        return result.spans[indices].compactMap { span in
+            guard span.role == .rule,
+                  NSMaxRange(span.range) <= source.length,
+                  visibleRange.map({ NSIntersectionRange($0, span.range).length > 0 })
+                    ?? true,
+                  MarkdownLivePreview.conceals(span.range, in: source, snapshot: snapshot),
+                  let frame = textSegmentFrames(
+                      for: span.range,
+                      layoutManager: layoutManager,
+                      contentManager: contentManager
+                  ).first else { return nil }
+            return RuleDecoration(rect: CGRect(
+                x: lineFragmentPadding,
+                y: (frame.midY - 0.5).rounded(),
+                width: max(0, containerWidth - 2 * lineFragmentPadding),
+                height: 1
+            ))
+        }
+    }
+
     static func taskCheckboxDecorations(
         text: String,
         result: MarkdownSyntaxResult,
@@ -1009,6 +1085,22 @@ enum MarkdownPresentation {
                 context.strokePath()
             }
             context.restoreGState()
+        }
+    }
+
+    private static func drawRules(
+        _ decorations: [RuleDecoration],
+        offset: CGPoint,
+        dirtyRect: CGRect,
+        context: CGContext
+    ) {
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.setFillColor(tertiaryTextColor.cgColor)
+        for decoration in decorations {
+            let rect = decoration.rect.offsetBy(dx: offset.x, dy: offset.y)
+            guard rect.intersects(dirtyRect) else { continue }
+            context.fill(rect)
         }
     }
 
@@ -1724,7 +1816,7 @@ enum MarkdownPresentation {
             ]
         case .link:
             return [.foregroundColor: MehStyle.ink]
-        case .listMarker, .taskMarker:
+        case .listMarker, .taskMarker, .rule:
             return [.foregroundColor: secondaryTextColor]
         case .blockquote:
             return [
@@ -2377,7 +2469,7 @@ struct MarkdownRenderingPresentation {
             case .highlight: 2
             case .strikethrough: 3
             case .link: 4
-            case .listMarker, .taskMarker: 5
+            case .listMarker, .taskMarker, .rule: 5
             case .blockquote: 6
             case .blockquoteMarker: 7
             case .heading, .strong, .emphasis: nil
@@ -2659,6 +2751,15 @@ final class MarkdownSyntaxCache: NSObject {
     }
 
     private var cachedText: String?
+    /// On in time calculator notes, which have no underline headings.
+    var timeSums = false {
+        didSet {
+            guard timeSums != oldValue else { return }
+            cachedText = nil
+            cachedResult = nil
+            presentationIsCurrent = false
+        }
+    }
     private var storageSnapshot: String?
     private var snapshotRevision: UInt64?
     private var parsedStorageRevision: UInt64?
@@ -2760,7 +2861,8 @@ final class MarkdownSyntaxCache: NSObject {
               let cachedText, let cachedResult,
               let update = MarkdownSyntax.incrementallyParse(
                 text, previousText: cachedText, previousResult: cachedResult,
-                editedRange: edit.range, changeInLength: edit.delta
+                editedRange: edit.range, changeInLength: edit.delta,
+                timeSums: timeSums
               ) else { return false }
         let oldPreview = appliedPreviewRanges
         let oldDirty = dirtyLayoutRange
@@ -2849,7 +2951,7 @@ final class MarkdownSyntaxCache: NSObject {
             }
         }
         // Only the observed storage path can apply its pending edit range.
-        let result = MarkdownSyntax.parse(text)
+        let result = MarkdownSyntax.parse(text, timeSums: timeSums)
         parseCount += 1
         install(result, for: text)
         return result
@@ -2859,7 +2961,7 @@ final class MarkdownSyntaxCache: NSObject {
         if prepareIncrementally(for: text), let cachedResult {
             return cachedResult
         }
-        let result = MarkdownSyntax.parse(text)
+        let result = MarkdownSyntax.parse(text, timeSums: timeSums)
         parseCount += 1
         install(result, for: text)
         return result

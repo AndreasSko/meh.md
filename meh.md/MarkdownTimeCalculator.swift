@@ -27,7 +27,7 @@ enum MarkdownTimeCalculator {
         var boundaries: [NSRange] = []
         for span in result.spans {
             switch span.role {
-            case .code, .link, .listMarker: skipped.append(span.range)
+            case .code, .link, .listMarker, .rule: skipped.append(span.range)
             case .heading: boundaries.append(span.range)
             default: break
             }
