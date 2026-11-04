@@ -1,9 +1,9 @@
 import Foundation
 
 /// How many notes a Recents widget shows, and how tall its rows are.
-/// People pick a number of notes in Edit Widget. Each size shows at most
-/// what still reads well, fewer when rows carry a preview line, and fewer
-/// again when a large text size leaves no room.
+/// People pick a number of notes in Edit Widget, up to what still reads
+/// well at the widget's size: fewer when rows carry a preview line. A large
+/// text size can leave room for fewer still.
 public enum MehWidgetRecentsLayout {
     public enum Size: Sendable {
         case small, medium, large, extraLarge
@@ -16,17 +16,20 @@ public enum MehWidgetRecentsLayout {
         public let rowHeight: Double
     }
 
-    /// The most notes a size shows. Edit Widget offers the same choices for
-    /// every size, so a small widget set to 12 shows 5.
-    public static func limit(count: Int, previews: Bool, size: Size) -> Int {
-        let most = switch (size, previews) {
+    /// The most notes a size shows. Edit Widget's Number of Notes stops
+    /// here; `NotesWidgetIntent` repeats these numbers as its ranges.
+    public static func most(previews: Bool, size: Size) -> Int {
+        switch (size, previews) {
         case (.small, false): 5
         case (.medium, false): 6
         case (.small, true), (.medium, true): 3
         case (.large, true), (.extraLarge, true): 8
         case (.large, false), (.extraLarge, false): 12
         }
-        return min(max(count, 1), most)
+    }
+
+    public static func limit(count: Int, previews: Bool, size: Size) -> Int {
+        min(max(count, 1), most(previews: previews, size: size))
     }
 
     /// Picks the text size and row height for up to `limit` notes. The rows

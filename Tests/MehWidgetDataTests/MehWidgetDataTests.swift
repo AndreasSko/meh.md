@@ -173,18 +173,25 @@ import Testing
 @Suite struct MehWidgetRecentsLayoutTests {
     typealias Layout = MehWidgetRecentsLayout
 
-    @Test func eachSizeCapsTheChosenCount() {
-        #expect(Layout.limit(count: 12, previews: false, size: .small) == 5)
-        #expect(Layout.limit(count: 12, previews: false, size: .medium) == 6)
-        #expect(Layout.limit(count: 12, previews: false, size: .large) == 12)
-        #expect(Layout.limit(count: 4, previews: false, size: .medium) == 4)
+    @Test func eachSizeHasItsOwnMost() {
+        #expect(Layout.most(previews: false, size: .small) == 5)
+        #expect(Layout.most(previews: false, size: .medium) == 6)
+        #expect(Layout.most(previews: false, size: .large) == 12)
+        #expect(Layout.most(previews: false, size: .extraLarge) == 12)
     }
 
     @Test func previewsShowFewerNotes() {
-        #expect(Layout.limit(count: 12, previews: true, size: .small) == 3)
-        #expect(Layout.limit(count: 12, previews: true, size: .medium) == 3)
+        #expect(Layout.most(previews: true, size: .small) == 3)
+        #expect(Layout.most(previews: true, size: .medium) == 3)
+        #expect(Layout.most(previews: true, size: .large) == 8)
+        #expect(Layout.most(previews: true, size: .extraLarge) == 8)
+    }
+
+    @Test func limitKeepsTheCountInRange() {
+        #expect(Layout.limit(count: 12, previews: false, size: .small) == 5)
+        #expect(Layout.limit(count: 4, previews: false, size: .medium) == 4)
         #expect(Layout.limit(count: 12, previews: true, size: .large) == 8)
-        #expect(Layout.limit(count: 12, previews: true, size: .extraLarge) == 8)
+        #expect(Layout.limit(count: 0, previews: false, size: .large) == 1)
     }
 
     // Line heights of the default text size: subheadline 20, footnote 18.
