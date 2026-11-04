@@ -13,20 +13,20 @@ const copy = {
   },
   sync: {
     theme: "yellow",
-    h1: "Sync, *boringly reliable.*",
-    sub: "Across iPhone, iPad, and Mac, all through iCloud. No extra account, no subscription.",
+    h1: "Edit anywhere, *even offline.*",
+    sub: "Change the same note on multiple devices. Synced through iCloud, without conflicts.",
   },
   history: {
     h1: "Rewrite *without worry.*",
     sub: "Scrub back through older versions and restore any of them.",
   },
   snippets: {
-    h1: "*Snippets* for what you keep typing.",
-    sub: "Like today's workout, in one tap. Templates do the same for whole new notes.",
+    h1: "*Snippets* and templates.",
+    sub: "Add things you need again and again in one tap.",
   },
   widgets: {
-    h1: "Notes on your *Home Screen.*",
-    sub: "Pinned and recent notes, or one note you pick. The + starts a new one.",
+    h1: "*Widgets.*",
+    sub: "Open pinned and recent notes right from your Home Screen.",
   },
 };
 
