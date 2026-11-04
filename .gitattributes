@@ -1,0 +1,10 @@
+# Images live in Git LFS, so screenshots don't pile up in the history.
+# Images the app is built from stay regular files, so CI can build
+# without fetching LFS.
+*.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+meh.md/** !filter !diff !merge
+meh.mdWidgets/** !filter !diff !merge
+icon.icon/** !filter !diff !merge
+Sources/** !filter !diff !merge
