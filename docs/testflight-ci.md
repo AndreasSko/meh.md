@@ -96,6 +96,8 @@ Add these GitHub environment secrets:
 | `SIGNING_CERTIFICATES_PASSWORD` | Password protecting that `.p12` export. |
 | `IOS_PROFILE_BASE64` | Base64 of the iOS App Store profile. |
 | `MACOS_PROFILE_BASE64` | Base64 of the Mac App Store profile. |
+| `IOS_WIDGETS_PROFILE_BASE64` | Base64 of the iOS widget profile. |
+| `MACOS_WIDGETS_PROFILE_BASE64` | Base64 of the Mac widget profile. |
 
 The `.p8` key authenticates Apple API requests. It does not sign the app and
 does not replace the `.p12` identities or provisioning profiles.
@@ -113,7 +115,11 @@ Using your Apple account locally, prepare:
 3. An iOS App Store Connect distribution profile and a Mac App Store
    distribution profile for `de.andreas-sk.meh-md`, tied to the exported
    app-signing identities. Both must authorize the existing iCloud container,
-   Production CloudKit, and production push notifications.
+   Production CloudKit, production push notifications, and the App Group
+   `group.de.andreas-sk.meh-md`.
+4. The same two kinds of profile for the widget extension,
+   `de.andreas-sk.meh-md.widgets`. Its App ID needs only the App Group
+   `group.de.andreas-sk.meh-md`. See [Widgets](widgets.md).
 
 Use App Store distribution assets, not Developer ID or development profiles.
 The certificate-import action manages a temporary keychain and its cleanup.
@@ -126,8 +132,12 @@ and internal-only distribution. GitHub destroys the hosted VM after the job.
 
 The selected profile names are checked into the workflow and export plists:
 
-- iOS: `meh.md iOS TestFlight`
-- macOS: `meh.md Mac TestFlight`
+- iOS: `meh.md iOS TestFlight` and `meh.md Widgets iOS TestFlight`
+- macOS: `meh.md Mac TestFlight` and `meh.md Widgets Mac TestFlight`
+
+The archive step passes them as `MEH_APP_PROFILE` and
+`MEH_WIDGETS_PROFILE`, which the Release configurations of the app and
+the widget targets use as their provisioning profile.
 
 Preserve those names when renewing profiles, or update both places.
 The Mac export selects the installer certificate by its full Keychain name,

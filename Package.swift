@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "NativeEditor", targets: ["NativeEditor"]),
         .library(name: "NoteCore", targets: ["NoteCore"]),
         .library(name: "NoteCoreAWS", targets: ["NoteCoreAWS"]),
+        .library(name: "MehWidgetData", targets: ["MehWidgetData"]),
     ],
     dependencies: [
         .package(
@@ -37,6 +38,9 @@ let package = Package(
                 .product(name: "AWSS3", package: "aws-sdk-swift"),
             ]
         ),
+        // Shared with the widget extension, which stays small: no NoteCore.
+        .target(name: "MehWidgetData"),
+        .testTarget(name: "MehWidgetDataTests", dependencies: ["MehWidgetData"]),
         .target(name: "TestSupport", path: "Tests/TestSupport"),
         .testTarget(
             name: "NoteCoreTests",
@@ -77,6 +81,7 @@ let package = Package(
                 "MarkdownHistoryMarks.swift", "MarkdownTimeCalculator.swift",
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
                 "NotebookQuickActionRequests.swift",
+                "NotebookWidgetSnapshotWriter.swift",
                 "NotebookBackupBackgroundScheduler.swift",
                 "NotebookSettingsView.swift", "NotebookStorageView.swift",
                 "NotebookSyncStorageView.swift",
@@ -186,6 +191,7 @@ let package = Package(
                 "NotebookSyncLabApp.swift",
                 "NotebookAppDelegate.swift", "NotebookBackupBackgroundScheduler.swift",
                 "NotebookQuickActionRequests.swift",
+                "NotebookWidgetSnapshotWriter.swift",
                 "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",
             ],
             sources: [

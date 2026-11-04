@@ -1,3 +1,4 @@
+import MehWidgetData
 import NoteCore
 import SwiftUI
 
@@ -60,7 +61,17 @@ struct NotebookApplicationView: View {
         // column; keep it paper instead of a white strip.
         .containerBackground(MehStyle.paperColor, for: .window)
         #endif
-        .onOpenURL { incomingImports.receive($0) }
+        .onOpenURL { url in
+            if let link = MehWidgetLink(url: url) {
+                NotebookQuickActionRequests.shared.receive(link, in: sceneID)
+            } else {
+                incomingImports.receive(url)
+            }
+        }
+        #if os(macOS)
+        // Widget links go to an open window instead of opening a new one.
+        .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+        #endif
         .mehAppearance()
         .overlay {
             if incomingImports.readingCount > 0 {

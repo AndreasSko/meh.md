@@ -173,6 +173,13 @@ if [[ "$cache_hit" == 0 ]]; then
       "$products/NoteCore.o" "$products/Automerge.o"
       "$products/AutomergeUniffi.o" "$products/AutomergeUtilities.o")
   fi
+  if grep -rqs "import MehWidgetData" "$check_root/sources"; then
+    build_args=(--package-path "$repo_root" -c release --product MehWidgetData
+                --triple "$target" --sdk "$sdk")
+    env -u SDKROOT swift build "${build_args[@]}"
+    products="$(env -u SDKROOT swift build "${build_args[@]}" --show-bin-path)"
+    extra_arguments+=(-I "$products" "$products/MehWidgetData.o")
+  fi
   if [[ "$scenario" == large-note ]]; then
     extra_arguments+=(
       "$repo_root/Tools/EditorQuoteCheck/LargeNotePerformanceProbe.swift"

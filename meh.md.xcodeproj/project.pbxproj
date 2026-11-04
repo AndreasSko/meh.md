@@ -9,6 +9,9 @@
 /* Begin PBXBuildFile section */
 		000000000000000000000201 /* NoteCore in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000202 /* NoteCore */; };
 		000000000000000000000205 /* NoteCoreAWS in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000206 /* NoteCoreAWS */; };
+		000000000000000000000207 /* MehWidgetData in Frameworks */ = {isa = PBXBuildFile; productRef = 000000000000000000000208 /* MehWidgetData */; };
+		000000000000000000000209 /* MehWidgetData in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000020A /* MehWidgetData */; };
+		000000000000000000000210 /* meh.mdWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 000000000000000000000122 /* meh.mdWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -19,11 +22,31 @@
 			remoteGlobalIDString = 000000000000000100000000;
 			remoteInfo = meh.md;
 		};
+		000000000000000150000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000100000002;
+			remoteInfo = meh.mdWidgets;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		000000000000000170000000 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				000000000000000000000210 /* meh.mdWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* meh.md.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = meh.md.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000121 /* meh.mdUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = meh.mdUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000000122 /* meh.mdWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = meh.mdWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -34,6 +57,14 @@
 				Info.plist,
 			);
 			target = 000000000000000100000000 /* meh.md */;
+		};
+		00000000000000000000020B /* Exceptions for "meh.mdWidgets" folder in "meh.mdWidgets" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				Widgets.entitlements,
+			);
+			target = 000000000000000100000002 /* meh.mdWidgets */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -51,6 +82,14 @@
 			path = meh.mdUITests;
 			sourceTree = "<group>";
 		};
+		000000000000000000000012 /* meh.mdWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				00000000000000000000020B /* Exceptions for "meh.mdWidgets" folder in "meh.mdWidgets" target */,
+			);
+			path = meh.mdWidgets;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -59,11 +98,18 @@
 			files = (
 				000000000000000000000201 /* NoteCore in Frameworks */,
 				000000000000000000000205 /* NoteCoreAWS in Frameworks */,
+				000000000000000000000207 /* MehWidgetData in Frameworks */,
 			);
 		};
 		000000000000000130000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+			);
+		};
+		000000000000000130000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				000000000000000000000209 /* MehWidgetData in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -74,6 +120,7 @@
 			children = (
 				000000000000000000000010 /* meh.md */,
 				000000000000000000000011 /* meh.mdUITests */,
+				000000000000000000000012 /* meh.mdWidgets */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -83,6 +130,7 @@
 			children = (
 				000000000000000000000120 /* meh.md.app */,
 				000000000000000000000121 /* meh.mdUITests.xctest */,
+				000000000000000000000122 /* meh.mdWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -97,8 +145,12 @@
 				000000000000000120000000 /* Sources */,
 				000000000000000130000000 /* Frameworks */,
 				000000000000000140000000 /* Resources */,
+				000000000000000170000000 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
+			);
+			dependencies = (
+				000000000000000160000002 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				000000000000000000000010 /* meh.md */,
@@ -107,6 +159,7 @@
 			packageProductDependencies = (
 				000000000000000000000202 /* NoteCore */,
 				000000000000000000000206 /* NoteCoreAWS */,
+				000000000000000000000208 /* MehWidgetData */,
 			);
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* meh.md.app */;
@@ -132,6 +185,27 @@
 			productName = meh.mdUITests;
 			productReference = 000000000000000000000121 /* meh.mdUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		000000000000000100000002 /* meh.mdWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000110000002 /* Build configuration list for PBXNativeTarget "meh.mdWidgets" */;
+			buildPhases = (
+				000000000000000120000002 /* Sources */,
+				000000000000000130000002 /* Frameworks */,
+				000000000000000140000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				000000000000000000000012 /* meh.mdWidgets */,
+			);
+			name = meh.mdWidgets;
+			packageProductDependencies = (
+				00000000000000000000020A /* MehWidgetData */,
+			);
+			productName = meh.mdWidgets;
+			productReference = 000000000000000000000122 /* meh.mdWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -161,6 +235,9 @@
 						CreatedOnToolsVersion = 27.0;
 						TestTargetID = 000000000000000100000000;
 					};
+					000000000000000100000002 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 				};
 			};
 			buildConfigurationList = 000000000000000010000000 /* Build configuration list for PBXProject "meh.md" */;
@@ -182,6 +259,7 @@
 			targets = (
 				000000000000000100000000 /* meh.md */,
 				000000000000000100000001 /* meh.mdUITests */,
+				000000000000000100000002 /* meh.mdWidgets */,
 			);
 		};
 /* End PBXProject section */
@@ -193,6 +271,11 @@
 			);
 		};
 		000000000000000140000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		000000000000000140000002 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -210,6 +293,11 @@
 			files = (
 			);
 		};
+		000000000000000120000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -217,6 +305,11 @@
 			isa = PBXTargetDependency;
 			target = 000000000000000100000000 /* meh.md */;
 			targetProxy = 000000000000000150000001 /* PBXContainerItemProxy */;
+		};
+		000000000000000160000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000100000002 /* meh.mdWidgets */;
+			targetProxy = 000000000000000150000002 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -277,6 +370,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MEH_APP_GROUP = "group.de.andreas-sk.meh-md";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -341,6 +435,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MEH_APP_GROUP = "group.de.andreas-sk.meh-md";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -410,6 +505,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MEH_APP_GROUP = "group.de.andreas-sk.meh-md.icloud-dev";
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -528,6 +624,7 @@
 				MARKETING_VERSION = 0.28.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "de.andreas-sk.meh-md";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(MEH_APP_PROFILE)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -629,6 +726,94 @@
 			};
 			name = "Debug-iCloud";
 		};
+		000000000000000111000002 /* Debug configuration for PBXNativeTarget "meh.mdWidgets" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = meh.mdWidgets/Widgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9YFM7J3EH3;
+				ENABLE_APP_SANDBOX = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = meh.mdWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = meh.md;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MARKETING_VERSION = 0.28.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "de.andreas-sk.meh-md.widgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		000000000000000113000002 /* Debug-iCloud configuration for PBXNativeTarget "meh.mdWidgets" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = meh.mdWidgets/Widgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9YFM7J3EH3;
+				ENABLE_APP_SANDBOX = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = meh.mdWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = meh.md;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MARKETING_VERSION = 0.28.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "de.andreas-sk.meh-md.icloud-dev.widgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = "Debug-iCloud";
+		};
+		000000000000000112000002 /* Release configuration for PBXNativeTarget "meh.mdWidgets" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = meh.mdWidgets/Widgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9YFM7J3EH3;
+				ENABLE_APP_SANDBOX = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = meh.mdWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = meh.md;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks @executable_path/../../Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks @executable_path/../../../../Frameworks";
+				MARKETING_VERSION = 0.28.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "de.andreas-sk.meh-md.widgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "$(MEH_WIDGETS_PROFILE)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -647,6 +832,15 @@
 				000000000000000111000000 /* Debug configuration for PBXNativeTarget "meh.md" */,
 				000000000000000113000000 /* Debug-iCloud configuration for PBXNativeTarget "meh.md" */,
 				000000000000000112000000 /* Release configuration for PBXNativeTarget "meh.md" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		000000000000000110000002 /* Build configuration list for PBXNativeTarget "meh.mdWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000111000002 /* Debug configuration for PBXNativeTarget "meh.mdWidgets" */,
+				000000000000000113000002 /* Debug-iCloud configuration for PBXNativeTarget "meh.mdWidgets" */,
+				000000000000000112000002 /* Release configuration for PBXNativeTarget "meh.mdWidgets" */,
 			);
 			defaultConfigurationName = Release;
 		};
@@ -676,6 +870,14 @@
 		000000000000000000000206 /* NoteCoreAWS */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = NoteCoreAWS;
+		};
+		000000000000000000000208 /* MehWidgetData */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MehWidgetData;
+		};
+		00000000000000000000020A /* MehWidgetData */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MehWidgetData;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

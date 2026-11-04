@@ -26,6 +26,32 @@ final class NotebookRecentsTests: XCTestCase {
     }
 
     @MainActor
+    func testNotePreviewIncludesLastChangeForStoredAndOpenNotes() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "recents-preview-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replica = NotebookReplica(directory: directory)
+        try await replica.createLocalNotebook()
+        let start = Date()
+        let id = try await replica.createNote(name: "Groceries.md", text: "oat milk, lemons")
+
+        let storedPreview = try await replica.notePreview(for: id, characterLimit: 8)
+        let stored = try XCTUnwrap(storedPreview)
+        XCTAssertEqual(stored.text, "oat milk")
+        let storedDate = try XCTUnwrap(stored.modifiedAt)
+        XCTAssertGreaterThanOrEqual(storedDate.timeIntervalSince(start), -1)
+
+        let session = try await replica.openNote(id)
+        try session.replaceAll(with: "coffee")
+        let openPreview = try await replica.notePreview(for: id)
+        let open = try XCTUnwrap(openPreview)
+        XCTAssertEqual(open.text, "coffee")
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(open.modifiedAt), storedDate)
+        let text = try await replica.noteTextPrefix(for: id)
+        XCTAssertEqual(text, "coffee")
+    }
+
+    @MainActor
     func testHiddenNoteStaysEditableAndExcludedUntilExplicitlyShown() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "recents-hidden-\(UUID().uuidString)")

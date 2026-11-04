@@ -43,6 +43,11 @@ public struct NotebookRecentNote: Equatable, Sendable, Identifiable {
     public let isPinned: Bool
 }
 
+public struct NotebookNotePreview: Equatable, Sendable {
+    public let text: String
+    public let modifiedAt: Date?
+}
+
 public enum NotebookDeletionError: Error, Equatable, LocalizedError {
     case invalidSelection
     case notebookIdentityMismatch
@@ -1508,6 +1513,14 @@ public final class NotebookReplica {
         for id: UUID,
         characterLimit: Int = 1_280
     ) async throws -> String? {
+        try await notePreview(for: id, characterLimit: characterLimit)?.text
+    }
+
+    /// Like `noteTextPrefix`, plus when the note last changed.
+    public func notePreview(
+        for id: UUID,
+        characterLimit: Int = 1_280
+    ) async throws -> NotebookNotePreview? {
         try Task.checkCancellation()
         await waitForWrites()
         let notebookID = catalogSnapshot?.notebookID
@@ -1515,33 +1528,39 @@ public final class NotebookReplica {
             $0.item.id == id && $0.item.kind == .note && !$0.isInTrash
                 && !$0.item.isPermanentlyDeleted
         }) else { return nil }
-        let text: String?
+        let preview: NotebookNotePreview?
         if let session = sessions[id] {
             if let load = sessionLoads[id] { await load.value }
-            text = session.isEditingEnabled
-                ? String(session.text.prefix(characterLimit)) : nil
+            preview = session.isEditingEnabled
+                ? NotebookNotePreview(
+                    text: String(session.text.prefix(characterLimit)),
+                    modifiedAt: session.modifiedAt
+                ) : nil
         } else if case .current(let snapshot) = await noteStorage(id).load(),
                   snapshot.noteID == id {
             let decode = Task.detached(priority: .userInitiated) {
                 try Task.checkCancellation()
                 let document = try NoteDocument(snapshot: snapshot)
                 try Task.checkCancellation()
-                return String(try document.text.prefix(characterLimit))
+                return NotebookNotePreview(
+                    text: String(try document.text.prefix(characterLimit)),
+                    modifiedAt: try? document.metadata.modifiedAt
+                )
             }
-            text = try await withTaskCancellationHandler {
+            preview = try await withTaskCancellationHandler {
                 try await decode.value
             } onCancel: {
                 decode.cancel()
             }
         } else {
-            text = nil
+            preview = nil
         }
         try Task.checkCancellation()
         guard notebookID == catalogSnapshot?.notebookID,
               placements.contains(where: {
                   $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
               }) else { return nil }
-        return text
+        return preview
     }
 
     /// Capture searchable note text without flushing edits or opening editor

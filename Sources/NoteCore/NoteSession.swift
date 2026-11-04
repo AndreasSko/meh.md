@@ -56,6 +56,10 @@ public final class NoteSession {
         return snapshot
     }
 
+    var modifiedAt: Date? {
+        try? document?.metadata.modifiedAt
+    }
+
     public var isEditingEnabled: Bool {
         if isPermanentlyDeleted || isEditingSuspended { return false }
         return switch status {
