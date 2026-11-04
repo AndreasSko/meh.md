@@ -1,7 +1,9 @@
 import Foundation
 
 public enum NotebookLinkKind: String, Sendable, Equatable {
-    case wiki, markdown
+    /// `url` is a plain web address or a `<...>` autolink. It opens outside
+    /// the app and never resolves to a note.
+    case wiki, markdown, url
 }
 
 public struct NotebookLinkOccurrence: Sendable, Equatable {
@@ -44,6 +46,12 @@ public enum NotebookLinkParser {
             offset < units.count && !blocked[offset]
         }
         while i < units.count {
+            if available(i), !escaped(i), let link = autolink(at: i, in: source, units: units,
+                                                              available: available) {
+                result.append(link)
+                i = NSMaxRange(link.range)
+                continue
+            }
             guard available(i), units[i] == 91, !escaped(i) else { i += 1; continue }
             let embed = i > 0 && units[i - 1] == 33 && !escaped(i - 1)
             let start = embed ? i - 1 : i
@@ -132,6 +140,85 @@ public enum NotebookLinkParser {
             i = upper
         }
         return result
+    }
+
+    /// A CommonMark `<scheme:...>` or `<name@example.com>` autolink, or a
+    /// GitHub-style plain `http://`, `https://`, or `www.` address.
+    private static func autolink(at start: Int, in source: NSString, units: [UInt16],
+                                 available: (Int) -> Bool) -> NotebookLinkOccurrence? {
+        func occurrence(_ range: NSRange, _ destination: NSRange) -> NotebookLinkOccurrence {
+            .init(range: range, destinationRange: destination,
+                  destination: source.substring(with: destination),
+                  label: nil, kind: .url, isEmbed: false)
+        }
+        if units[start] == 60 {
+            var end = start + 1
+            while available(end), units[end] > 32, units[end] != 60, units[end] != 62 { end += 1 }
+            guard available(end), units[end] == 62, end > start + 1 else { return nil }
+            let destination = NSRange(location: start + 1, length: end - start - 1)
+            let content = source.substring(with: destination)
+            let isURI = content.range(of: #"^[A-Za-z][A-Za-z0-9+.-]{1,31}:"#,
+                                      options: .regularExpression) != nil
+            let isEmail = content.range(
+                of: #"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$"#,
+                options: .regularExpression) != nil
+            guard isURI || isEmail else { return nil }
+            return occurrence(NSRange(location: start, length: end + 1 - start), destination)
+        }
+        guard [UInt16(104), 72, 119, 87].contains(units[start]) else { return nil }
+        // Like GitHub, a plain address starts a word or follows `*`, `_`, `~`, or `(`.
+        if start > 0 {
+            let previous = units[start - 1]
+            guard [UInt16(32), 9, 10, 13, 42, 95, 126, 40].contains(previous) else { return nil }
+        }
+        func hasPrefix(_ prefix: [UInt16]) -> Bool {
+            guard start + prefix.count <= units.count else { return false }
+            // ASCII letters compare without case; other characters must match.
+            return prefix.indices.allSatisfy { offset in
+                let unit = units[start + offset]
+                return unit == prefix[offset]
+                    || (65...90).contains(unit) && unit + 32 == prefix[offset]
+            }
+        }
+        guard let prefix = autolinkPrefixes.first(where: hasPrefix) else { return nil }
+        // A link right after the address, as in `(https://a.b)[[Note]]`, stays a link.
+        var end = start
+        while available(end), units[end] > 32, units[end] != 60, units[end] != 91 { end += 1 }
+        // Trailing punctuation belongs to the sentence, and so does a closing
+        // parenthesis without a matching opening one inside the address.
+        var opening = 0, closing = 0
+        for unit in units[start..<end] where unit == 40 || unit == 41 {
+            if unit == 40 { opening += 1 } else { closing += 1 }
+        }
+        while end > start {
+            let last = units[end - 1]
+            if [UInt16(63), 33, 46, 44, 58, 42, 95, 126, 39, 34].contains(last) { end -= 1; continue }
+            if last == 41, opening < closing {
+                end -= 1
+                closing -= 1
+                continue
+            }
+            break
+        }
+        guard end > start + prefix.count else { return nil }
+        let range = NSRange(location: start, length: end - start)
+        return occurrence(range, range)
+    }
+
+    private static let autolinkPrefixes = ["https://", "http://", "www."].map { Array($0.utf16) }
+
+    /// The address a `url` link opens; `www.` and email addresses get a scheme.
+    public static func url(of occurrence: NotebookLinkOccurrence) -> URL? {
+        let destination = occurrence.destination
+        if destination.lowercased().hasPrefix("www.") { return URL(string: "https://" + destination) }
+        if !destination.contains(":"), destination.contains("@") {
+            // A `#` or `?` is part of the address, not a fragment or query.
+            var components = URLComponents()
+            components.scheme = "mailto"
+            components.path = destination
+            return components.url
+        }
+        return URL(string: destination)
     }
 
     /// Split on a literal fragment separator; escaped hashes belong to paths.
@@ -304,31 +391,37 @@ public enum NotebookLinkParser {
         source.enumerateSubstrings(in: NSRange(location: 0, length: source.length), options: .byLines) { line, range, _, _ in
             lines.append((line ?? "", range))
         }
+        func isExcluded(_ index: Int) -> Bool {
+            let location = lines[index].1.location
+            return location < blocked.count && blocked[location]
+        }
+        let setext = Dictionary(
+            MarkdownSetextHeadings.find(in: source, lines: lines.map(\.1),
+                                        isExcluded: isExcluded)
+                .map { ($0.paragraph.lowerBound, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         var result: [(title: String, level: Int, range: NSRange)] = []
         for (index, entry) in lines.enumerated() {
             let (line, range) = entry
-            guard range.location < blocked.count, !blocked[range.location] else { continue }
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            var title: String?
-            var level = 1
-            if trimmed.hasPrefix("#") {
-                let prefix = trimmed.prefix(while: { $0 == "#" })
-                if prefix.count <= 6, trimmed.dropFirst(prefix.count).first?.isWhitespace == true {
-                    level = prefix.count
-                    title = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
-                        .replacingOccurrences(of: #"\s+#+\s*$"#, with: "", options: .regularExpression)
-                }
-            } else if index + 1 < lines.count {
-                let underline = lines[index + 1].0.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty, !underline.isEmpty,
-                   !blocked[lines[index + 1].1.location],
-                   (underline.allSatisfy { $0 == "=" } || underline.allSatisfy { $0 == "-" }) {
-                    level = underline.first == "=" ? 1 : 2
-                    title = trimmed
-                }
+            guard !isExcluded(index) else { continue }
+            if let heading = setext[index] {
+                let paragraph = lines[heading.paragraph]
+                let title = paragraph.map { $0.0.trimmingCharacters(in: .whitespaces) }
+                    .joined(separator: " ")
+                let end = NSMaxRange(paragraph.last!.1)
+                result.append((title, heading.level,
+                               NSRange(location: range.location, length: end - range.location)))
+                continue
             }
-            guard let title else { continue }
-            result.append((title, level, range))
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("#") else { continue }
+            let prefix = trimmed.prefix(while: { $0 == "#" })
+            guard prefix.count <= 6,
+                  trimmed.dropFirst(prefix.count).first?.isWhitespace == true else { continue }
+            let title = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: #"\s+#+\s*$"#, with: "", options: .regularExpression)
+            result.append((title, prefix.count, range))
         }
         return result
     }
@@ -760,6 +853,9 @@ public enum NotebookLinkResolver {
         private func resolve(_ occurrence: NotebookLinkOccurrence, sourceID: UUID,
                              includeHistory: Bool) -> NotebookLinkResolution {
             guard !occurrence.isEmbed else { return .unsupported }
+            if occurrence.kind == .url {
+                return NotebookLinkParser.url(of: occurrence).map { .external($0) } ?? .unsupported
+            }
             let destination = Destination(occurrence)
             let externalURL = URL(string: destination.raw).flatMap {
                 $0.scheme == nil ? nil : $0

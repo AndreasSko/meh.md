@@ -301,7 +301,10 @@ final class NotebookLinksTests: XCTestCase {
 
     func testIncompleteLinksAreOnlyAvailableForPresentation() {
         let text = "[draft](https://example.com/path\n[[Complete]]"
-        XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination), ["Complete"])
+        // Without its closing parenthesis, only the plain address is a link.
+        XCTAssertEqual(NotebookLinkParser.parse(text).map(\.kind), [.url, .wiki])
+        XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination),
+                       ["https://example.com/path", "Complete"])
         let painted = NotebookLinkParser.parse(text, includingIncomplete: true)
         XCTAssertEqual(painted.map(\.destination), ["https://example.com/path", "Complete"])
         XCTAssertEqual((text as NSString).substring(with: painted[0].range), "[draft](https://example.com/path")

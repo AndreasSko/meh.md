@@ -76,17 +76,19 @@ note looks the same in any other app, just without results.
 A line with only `=` also works in a calculator note, but other apps read it
 as a heading underline: the whole paragraph directly above it becomes a
 level-1 heading ([CommonMark setext headings][setext]). The text stays, only
-its style changes. Writing a label before the `=` avoids that. meh.md's
-editor does not recognize underline headings yet; see #272. Once it does, a
-calculator note should keep treating `=` lines as sums.
+its style changes. Writing a label before the `=` avoids that. meh.md shows
+underline headings too, but not in a calculator note: there `=` lines stay
+sums and `---` stays a rule, so neither turns the times above into a heading
+that ends the sum. Use `#` headings in calculator notes.
 
 [setext]: https://spec.commonmark.org/0.31.2/#setext-headings
 
 ## Implementation
 
 - **Sums:** `MarkdownTimeCalculator` reads the values and operators from the
-  note text. It skips list markers, code and links and ends a sum at
-  headings, using the editor's existing syntax parse.
+  note text. It skips list markers, rules, code and links and ends a sum at
+  headings, using the editor's existing syntax parse. In a calculator note
+  the parse leaves out underline headings, so `=` lines can ask for sums.
 - **Drawing:** the result is drawn after the `=` next to the History margin
   marks: in each layout fragment on iPhone and iPad, and in the text view's
   background on the Mac. Nothing touches the text storage, so selection,

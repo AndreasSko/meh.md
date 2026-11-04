@@ -66,7 +66,7 @@
     "MarkdownLivePreviewTests/testCaretAfterTrailingNewlineDoesNotRevealPreviousParagraph()",
     "MarkdownLivePreviewTests/testEmptyHeadingBeforeTrailingNewlineRemainsVisible()",
     "MarkdownLivePreviewTests/testInactiveEmptyHeadingsKeepTheirSourceMarkersVisible()",
-    "MarkdownLivePreviewTests/testInactiveHeadingWithContentStillCollapsesOpeningMarker()",
+    "MarkdownLivePreviewTests/testInactiveHeadingCollapsesOpeningAndClosingMarkers()",
     "MarkdownLivePreviewTests/testInactiveParagraphCollapsesCommonInlineSyntax()",
     "MarkdownLivePreviewTests/testInactiveUnorderedAndQuoteMarkersUseTransparentPresentation()",
     "MarkdownLivePreviewTests/testModeCasesRemainStableForPersistence()",

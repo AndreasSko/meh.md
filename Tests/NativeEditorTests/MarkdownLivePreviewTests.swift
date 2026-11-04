@@ -131,13 +131,13 @@ final class MarkdownLivePreviewTests: XCTestCase {
         )
     }
 
-    func testInactiveHeadingWithContentStillCollapsesOpeningMarker() {
+    func testInactiveHeadingCollapsesOpeningAndClosingMarkers() {
         let source = "## Heading ##\nActive"
         let selection = (source as NSString).range(of: "Active")
 
         XCTAssertEqual(
             hiddenSubstrings(in: source, selection: selection),
-            ["## "]
+            ["## ", " ##"]
         )
     }
 

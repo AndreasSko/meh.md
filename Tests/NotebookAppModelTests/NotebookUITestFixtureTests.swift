@@ -34,6 +34,7 @@ final class NotebookUITestFixtureTests: XCTestCase {
             case .dragSubtree: expected = ["Packing list.md", "Trips", "Archive"]
             case .flair: expected = ["Home", "Pancakes.md"]
             case .longNote: expected = ["Island journal.md"]
+            case .markdownTour: expected = ["Lisbon in May.md"]
             case .readme:
                 expected = ["Inbox", "Projects", "Areas", "Resources", "Archive"]
             case .snippets: expected = ["Snippets", "Training log.md"]
