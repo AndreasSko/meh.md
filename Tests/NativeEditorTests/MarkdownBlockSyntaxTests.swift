@@ -51,6 +51,21 @@ final class MarkdownBlockSyntaxTests: XCTestCase {
         ))
     }
 
+    func testParenthesisListsEscapesAndClosingHashes() {
+        let text = "1) first\n\\*literal\\* `\\*code\\*` \\a\n## Title ##"
+        XCTAssertEqual(roles(in: text, MarkdownSyntax.parse(text)), [
+            "listMarker=1)", "escape=\\", "escape=\\", "code=`\\*code\\*`",
+            "heading(level: 2)=## Title ##",
+        ])
+        let selection = NSRange(location: 0, length: 0)
+        XCTAssertEqual(hidden(in: text, selection: selection), ["\\", "\\", "`", "`", "## ", " ##"])
+        XCTAssertEqual(hidden(in: "# C#\n", selection: NSRange(location: 5, length: 0)), ["# "])
+        // A backslash in an address is part of it.
+        let address = "https://a.com/a\\_b <https://x.y/\\_z>\nActive"
+        XCTAssertEqual(hidden(in: address, selection: (address as NSString).range(of: "Active")),
+                       ["<", ">"])
+    }
+
     func testLivePreviewHidesRules() {
         let text = "Title\n---\n\n***\n\nEnd"
         let source = text as NSString

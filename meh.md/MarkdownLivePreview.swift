@@ -290,6 +290,8 @@ enum MarkdownLivePreview {
             return inlineCodeMarkerRanges(for: span.range, in: source)
         case .link:
             return linkMarkerRanges(for: span.range, in: source)
+        case .escape:
+            return [span.range]
         case .listMarker, .taskMarker, .blockquote, .blockquoteMarker, .rule:
             return []
         }
@@ -313,7 +315,21 @@ enum MarkdownLivePreview {
         }
         guard openingEnd > range.location, openingEnd - range.location <= 6,
               end > openingEnd, end < limit else { return [] }
-        return [NSRange(location: range.location, length: end - range.location)]
+        let opening = NSRange(location: range.location, length: end - range.location)
+        // An optional closing sequence, as in `## Title ##`.
+        var closing = limit
+        while closing > end, isSpace(source.character(at: closing - 1)) { closing -= 1 }
+        let hashesEnd = closing
+        while closing > end, source.character(at: closing - 1) == 35 { closing -= 1 }
+        guard closing < hashesEnd, closing > end,
+              isSpace(source.character(at: closing - 1)) else { return [opening] }
+        while closing > end, isSpace(source.character(at: closing - 1)) { closing -= 1 }
+        guard closing > end else { return [opening] }
+        return [opening, NSRange(location: closing, length: limit - closing)]
+    }
+
+    private static func isSpace(_ character: unichar) -> Bool {
+        character == 32 || character == 9
     }
 
     private static func pairedMarkerRanges(

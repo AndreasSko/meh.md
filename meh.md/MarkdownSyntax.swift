@@ -15,6 +15,8 @@ enum MarkdownStyleRole: Equatable {
     case blockquoteMarker
     /// A horizontal rule or a heading underline: one line of `---` or `===`.
     case rule
+    /// The backslash before an escaped punctuation character.
+    case escape
 }
 
 struct MarkdownStyleSpan: Equatable {
@@ -134,8 +136,11 @@ enum MarkdownSyntax {
             spans: &spans,
             paragraphRuns: &paragraphRuns
         )
-        appendLinkSpans(in: source, excluding: codeRanges, spans: &spans,
-                        allowFrontmatter: isDocumentStart)
+        let addresses = appendLinkSpans(in: source, excluding: codeRanges, spans: &spans,
+                                        allowFrontmatter: isDocumentStart)
+        appendEscapeSpans(
+            in: source, excluding: [codeRanges, linkContext.ranges, addresses], spans: &spans
+        )
         let emphasis = appendEmphasisSpans(
             in: source,
             excluding: codeRanges,
@@ -945,6 +950,39 @@ enum MarkdownSyntax {
         return (ranges, owned)
     }
 
+    /// Each list in `excluded` is sorted and free of overlaps.
+    private static func appendEscapeSpans(
+        in source: NSString,
+        excluding excluded: [[NSRange]],
+        spans: inout [MarkdownStyleSpan]
+    ) {
+        var location = 0
+        while location + 1 < source.length {
+            let found = source.range(
+                of: "\\",
+                options: .literal,
+                range: NSRange(location: location, length: source.length - 1 - location)
+            )
+            guard found.location != NSNotFound else { break }
+            location = found.location
+            let next = source.character(at: location + 1)
+            if isASCIIPunctuation(next), !isEscaped(location, in: source),
+               !excluded.contains(where: { isContained(location, in: $0) }) {
+                spans.append(MarkdownStyleSpan(
+                    range: NSRange(location: location, length: 1), role: .escape
+                ))
+                location += 2
+            } else {
+                location += 1
+            }
+        }
+    }
+
+    private static func isASCIIPunctuation(_ character: unichar) -> Bool {
+        (33...47).contains(character) || (58...64).contains(character)
+            || (91...96).contains(character) || (123...126).contains(character)
+    }
+
     private static func appendPairedSpans(
         in source: NSString,
         marker: unichar,
@@ -997,19 +1035,24 @@ enum MarkdownSyntax {
         }
     }
 
+    /// Returns the plain addresses, whose backslashes stay literal.
+    @discardableResult
     private static func appendLinkSpans(
         in source: NSString,
         excluding codeRanges: [NSRange],
         spans: inout [MarkdownStyleSpan],
         allowFrontmatter: Bool = true
-    ) {
+    ) -> [NSRange] {
+        var addresses: [NSRange] = []
         for link in NotebookLinkParser.parse(source as String, includingIncomplete: true,
                                               allowFrontmatter: allowFrontmatter) where !link.isEmbed {
             guard !codeRanges.contains(where: {
                 NSLocationInRange(link.range.location, $0)
             }) else { continue }
             spans.append(MarkdownStyleSpan(range: link.range, role: .link))
+            if link.kind == .url { addresses.append(link.range) }
         }
+        return addresses
     }
 
     private struct EmphasisDelimiter {
@@ -1159,7 +1202,7 @@ enum MarkdownSyntax {
             case .heading, .strong, .emphasis, .code:
                 return true
             case .highlight, .strikethrough, .link, .listMarker, .taskMarker,
-                    .blockquote, .blockquoteMarker, .rule:
+                    .blockquote, .blockquoteMarker, .rule, .escape:
                 return false
             }
         }
@@ -1238,7 +1281,7 @@ enum MarkdownSyntax {
             case .code:
                 traits.insert(.monospaced)
             case .highlight, .strikethrough, .link, .listMarker, .taskMarker,
-                    .blockquote, .blockquoteMarker, .rule:
+                    .blockquote, .blockquoteMarker, .rule, .escape:
                 break
             }
         }
@@ -1618,7 +1661,9 @@ enum MarkdownSyntax {
             end += 1
         }
         guard end > location, end < lineEnd,
-              source.character(at: end) == ASCII.period else { return nil }
+              source.character(at: end) == ASCII.period
+                || source.character(at: end) == ASCII.closingParenthesis
+        else { return nil }
         let markerEnd = end + 1
         guard markerEnd == lineEnd
                 || isWhitespace(source.character(at: markerEnd)) else {
@@ -1804,6 +1849,7 @@ private enum ASCII {
     static let plus: unichar = 43
     static let hyphen: unichar = 45
     static let period: unichar = 46
+    static let closingParenthesis: unichar = 41
     static let greaterThan: unichar = 62
     static let equals: unichar = 61
     static let zero: unichar = 48

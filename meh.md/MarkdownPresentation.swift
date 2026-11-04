@@ -1816,7 +1816,7 @@ enum MarkdownPresentation {
             ]
         case .link:
             return [.foregroundColor: MehStyle.ink]
-        case .listMarker, .taskMarker, .rule:
+        case .listMarker, .taskMarker, .rule, .escape:
             return [.foregroundColor: secondaryTextColor]
         case .blockquote:
             return [
@@ -2469,7 +2469,7 @@ struct MarkdownRenderingPresentation {
             case .highlight: 2
             case .strikethrough: 3
             case .link: 4
-            case .listMarker, .taskMarker, .rule: 5
+            case .listMarker, .taskMarker, .rule, .escape: 5
             case .blockquote: 6
             case .blockquoteMarker: 7
             case .heading, .strong, .emphasis: nil
