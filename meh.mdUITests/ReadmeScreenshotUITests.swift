@@ -117,6 +117,119 @@ final class ReadmeScreenshotUITests: XCTestCase {
 #endif
     }
 
+#if os(iOS)
+    /// The widgets on the Home Screen: Recents, and notes picked on their own.
+    func testWidgetScreens() throws {
+        let app = try launch()
+        let device = app.frame.width >= 600 ? "ipad" : "iphone"
+        // The app writes the widgets' copy of the notebook shortly after launch.
+        pause(4)
+        XCUIDevice.shared.press(.home)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCTAssertTrue(springboard.wait(for: .runningForeground, timeout: 10))
+
+        // Gallery sizes count from 1, the small widget. The widgets fill the
+        // top of the page and push the apps further down. In reading order,
+        // each shows one note, or Recents for nil.
+        let (sizes, notes): ([Int], [String?]) = device == "ipad"
+            ? ([3, 3, 4], [nil, "Weekly review 2026-10-24", "Training log"])
+            : ([3, 2], ["Packing list", nil])
+        for size in sizes { addWidget(size: size, on: springboard) }
+
+        let widgets = springboard.icons.matching(NSPredicate(
+            format: "identifier == %@ AND value BEGINSWITH %@", "meh.md", "Widget"
+        )).allElementsBoundByIndex.map { $0.frame }
+            .sorted { ($0.minY, $0.minX) < ($1.minY, $1.minX) }
+        XCTAssertEqual(widgets.count, sizes.count)
+        for (frame, note) in zip(widgets, notes) {
+            if let note { pick(note, forWidgetAt: frame, on: springboard) }
+        }
+
+        let done = springboard.buttons["Done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        done.tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5))
+        // The app adds a picked note's text the next time it runs.
+        pause(2)
+        app.activate()
+        pause(4)
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(springboard.wait(for: .runningForeground, timeout: 10))
+        shot("\(device)-widgets") { XCUIScreen.main.screenshot() }
+    }
+
+    /// Switches the widget at `frame` to show one note, while editing the
+    /// Home Screen.
+    private func pick(_ note: String, forWidgetAt frame: CGRect, on springboard: XCUIApplication) {
+        springboard.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
+        let show = springboard.buttons["Recents"]
+        XCTAssertTrue(show.waitForExistence(timeout: 10))
+        show.tap()
+        let oneNote = springboard.buttons["One Note"].firstMatch
+        XCTAssertTrue(oneNote.waitForExistence(timeout: 5))
+        oneNote.tap()
+        let choose = springboard.buttons["Choose"]
+        XCTAssertTrue(choose.waitForExistence(timeout: 5))
+        choose.tap()
+        // The picker comes before the Home Screen, whose widgets show titles too.
+        let row = springboard.staticTexts[note].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        let picked = springboard.buttons[note]
+        XCTAssertTrue(picked.waitForExistence(timeout: 5))
+        // A tap below the settings closes them.
+        point(0.5, 0.9, on: springboard).tap()
+        XCTAssertTrue(picked.waitForNonExistence(timeout: 5))
+        pause(1)
+    }
+
+    /// Adds the Notes widget in the gallery's `size`-th size, 1 being small.
+    private func addWidget(size: Int, on springboard: XCUIApplication) {
+        let edit = springboard.buttons["Edit"]
+        let menuItem = springboard.buttons["Add Widget"]
+        let meh = springboard.cells["meh.md"]
+        // Right after an install the gallery can miss the app for a while.
+        for _ in 0 ..< 12 {
+            for _ in 0 ..< 3 where !menuItem.exists {
+                if !edit.waitForExistence(timeout: 2) {
+                    // The dock's empty end starts editing, even on a full page.
+                    point(0.88, 0.92, on: springboard).press(forDuration: 1.5)
+                    _ = edit.waitForExistence(timeout: 3)
+                }
+                if edit.exists { edit.tap() }
+                _ = menuItem.waitForExistence(timeout: 3)
+            }
+            menuItem.tap()
+            let search = springboard.searchFields["Search Widgets"]
+            XCTAssertTrue(search.waitForExistence(timeout: 10))
+            search.tap()
+            search.typeText("meh")
+            if meh.waitForExistence(timeout: 3) { break }
+            springboard.buttons["Close"].tap()
+            pause(5)
+        }
+        XCTAssertTrue(meh.exists, "Expected meh.md in the widget gallery")
+        pause(1)
+        meh.tap()
+        // The gallery's button has an icon in front of its label.
+        let add = springboard.buttons
+            .matching(NSPredicate(format: "label ENDSWITH %@", "Add Widget")).firstMatch
+        XCTAssertTrue(add.waitForExistence(timeout: 10))
+        let preview = springboard.buttons["meh.md, Notes"].firstMatch
+        for _ in 1 ..< size {
+            preview.swipeLeft()
+            pause(1)
+        }
+        add.tap()
+        pause(2)
+    }
+
+    private func point(_ x: CGFloat, _ y: CGFloat, on app: XCUIApplication) -> XCUICoordinate {
+        app.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y))
+    }
+#endif
+
     /// Launches the sample notebook. On the Mac, the window gets the App
     /// Store size: 1440 × 900 points is 2880 × 1800 pixels on Retina.
     private func launch() throws -> XCUIApplication {

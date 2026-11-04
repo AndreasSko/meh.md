@@ -12,8 +12,11 @@ seeds a small PARA-style notebook: the "Lisbon in May" trip note with a
 version history, a weekly review made from a template, and a training log
 with one snippet per workout.
 `testReadmeScreens` opens the library, notes, and History.
-`testSnippetScreens` opens the snippet menu over the training log. Each
-screen is attached to the test result.
+`testSnippetScreens` opens the snippet menu over the training log.
+`testWidgetScreens` adds the Notes widget to the Home Screen on iPhone
+and iPad, sets some of them to show one note, and opens the app once
+more so the widget gets that note's text. Each screen is attached to the
+test result.
 
 To change what a screenshot shows, change the fixture in
 `NotebookUITestFixture.seedReadme` or the steps in the test. Keep the
@@ -54,10 +57,12 @@ The script builds the `meh.md Local` scheme and runs the test on its own
 simulators, named "meh shots iPhone" and "meh shots iPad", so it never
 touches a simulator another session is using. It creates them on the
 latest iOS runtime if needed, sets them to English, and sets the status bar
-to 9:41 with a full battery that is not charging. The iPhone runs twice,
-the second time in dark mode for the iPhone snippets image. The Mac run
-takes over the mouse for about a minute and sizes the window to
-1440 × 900 points, the App Store's 2880 × 1800 pixels.
+to 9:41 with a full battery that is not charging. Before each run it
+removes the app, which also removes the widgets an earlier run added. The
+iPhone runs twice, the second time in dark mode for the iPhone snippets
+image. The Mac run takes over the mouse for about a minute and sizes the
+window to 1440 × 900 points, the App Store's 2880 × 1800 pixels. The Mac
+set has no widget screenshot yet.
 
 The script exports the attachments into `Tools/AppStore/raw/`.
 Logs and result bundles stay in `build/app-store-shots/`.
@@ -70,6 +75,11 @@ with zoomed details where a feature is small on screen. Headlines and
 layouts live in `shots.js`. Crop positions are in raw screenshot pixels,
 so check them after a UI change moves things around. The script needs
 Google Chrome, which renders `template.html` headless at the exact App
-Store sizes.
+Store sizes. It skips a slide whose raw screenshots are missing and says
+which ones, so one failed capture doesn't hold up the rest.
+
+The images in `out/` are committed, so the App Store set can be
+published from any checkout and a PR shows how they change. The raw
+screenshots are not.
 
 To upload the images to the App Store, see [App Store page](app-store.md).
