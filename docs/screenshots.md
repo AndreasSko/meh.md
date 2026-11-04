@@ -78,8 +78,10 @@ Google Chrome, which renders `template.html` headless at the exact App
 Store sizes. It skips a slide whose raw screenshots are missing and says
 which ones, so one failed capture doesn't hold up the rest.
 
-The images in `out/` are committed, so the App Store set can be
-published from any checkout and a PR shows how they change. The raw
-screenshots are not.
+The raw screenshots in `raw/` and the images in `out/` are both
+committed. That way a headline can be changed and the set re-rendered
+from any checkout, without capturing again, and a PR shows how the
+images change. Both are stored in Git LFS, so a checkout needs
+`git-lfs` installed to get the actual images.
 
 To upload the images to the App Store, see [App Store page](app-store.md).
