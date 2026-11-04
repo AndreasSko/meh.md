@@ -19,9 +19,36 @@ enum NotebookUITestFixture: String, CaseIterable {
     case readme
     case longNote = "long-note"
     case snippets
+    case markdownTour = "markdown-tour"
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
+
+    /// Underline headings, rules, plain addresses, and escapes.
+    static let markdownTourSource = """
+        Lisbon in May
+        =============
+
+        Three slow days by the river.
+
+        Before we leave
+        ---------------
+
+        1) Book the tram tour
+        2) Pack the camera
+
+        ***
+
+        ## Day one ##
+
+        Tickets: https://www.visitlisbon.com and <https://example.com/tram>.
+        Prices are in \\*euros\\*, tips are optional.
+
+        ---
+
+        Pastéis at four.
+
+        """
 
     static let literalSource =
         "# Fictional voyage\n\nLiteral **Markdown** stays intact."
@@ -175,6 +202,9 @@ enum NotebookUITestFixture: String, CaseIterable {
             _ = try await replica.createNote(
                 name: "Pancakes.md",
                 text: "Flour, milk, two eggs, a pinch of salt.\n")
+        case .markdownTour:
+            _ = try await replica.createNote(
+                name: "Lisbon in May.md", text: Self.markdownTourSource)
         case .longNote:
             let paragraphs = (1...60).map {
                 "Paragraph \($0) of a fictional journal. The morning was quiet, "
