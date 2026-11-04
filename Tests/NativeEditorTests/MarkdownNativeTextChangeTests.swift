@@ -42,6 +42,21 @@ final class MarkdownNativeTextChangeTests: XCTestCase {
     }
 #endif
 
+    func testSnapshotMatchesBridgedStorageText() {
+        var units = Array("a👋🏽e\u{301}\r\n\0ß 👨‍👩‍👧‍👦".utf16)
+        units.insert(0xD83D, at: 3)
+        units.append(0xDC00)
+        for sample in ["", "plain", NSString(characters: units, length: units.count) as String] {
+            let storage = NSTextStorage(string: sample)
+            let cache = MarkdownSyntaxCache()
+            _ = cache.textSnapshot(in: storage)
+            storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "x")
+            var expected = storage.string
+            expected.makeContiguousUTF8()
+            XCTAssertTrue(cache.textSnapshot(in: storage).utf8.elementsEqual(expected.utf8))
+        }
+    }
+
     func testMarkedReplacementUsesStaleRevisionMergeFallback() async throws {
         let original = try NoteDocument(text: "hello")
         let storage = NativeHintStorage(original.snapshot())

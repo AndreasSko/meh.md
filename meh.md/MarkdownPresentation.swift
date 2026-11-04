@@ -2916,12 +2916,25 @@ final class MarkdownSyntaxCache: NSObject {
         if snapshotRevision == characterRevision, let storageSnapshot {
             return storageSnapshot
         }
-        var text = textStorage.string
-        text.makeContiguousUTF8()
+        let text = Self.contiguousCopy(of: textStorage.string as NSString)
         storageSnapshot = text
         snapshotRevision = characterRevision
         snapshotCount += 1
         return text
+    }
+
+    /// Copies the characters in one call. Making the bridged string
+    /// contiguous reads them one Objective-C message at a time, which took
+    /// 20-40 ms per keystroke in a 1 MB note. Both repair lone surrogates.
+    static func contiguousCopy(of source: NSString) -> String {
+        let length = source.length
+        guard length > 0 else { return "" }
+        return withUnsafeTemporaryAllocation(of: unichar.self, capacity: length) { buffer in
+            source.getCharacters(
+                buffer.baseAddress!, range: NSRange(location: 0, length: length)
+            )
+            return String(decoding: buffer, as: UTF16.self)
+        }
     }
 
     @discardableResult
