@@ -145,6 +145,53 @@ final class NotebookTrashUITests: XCTestCase {
         XCTAssertFalse(title(ids[4], in: app).exists)
     }
 
+    func testTrashBarUndoesAndRestoresTheOpenNote() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        app.launch()
+
+        let id = createNote(in: app)
+        title(id, in: app).tap()
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.tap()
+        editor.typeText("Keep me")
+        app.buttons["notebook-note-actions"].tap()
+        app.buttons["Move to Trash"].tap()
+
+        let undo = app.buttons["notebook-trash-bar-action"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        XCTAssertTrue(title(id, in: app).waitForNonExistence(timeout: 5))
+        XCTAssertNil(openedNote(in: app))
+        capture(app, "Moved to Trash")
+
+        undo.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertTrue((editor.value as? String)?.contains("Keep me") == true)
+        XCTAssertTrue(undo.waitForNonExistence(timeout: 5))
+
+        app.buttons["notebook-note-actions"].tap()
+        app.buttons["Move to Trash"].tap()
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        app.descendants(matching: .any)["notebook-trash-bar"].firstMatch.swipeDown()
+        XCTAssertTrue(undo.waitForNonExistence(timeout: 3))
+        app.openTrash()
+        let row = trashRow(id, in: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+        let restore = app.buttons["notebook-trash-bar-action"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
+        XCTAssertEqual(restore.label, "Restore")
+        capture(app, "In Trash")
+        restore.tap()
+        XCTAssertTrue(restore.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertTrue((editor.value as? String)?.contains("Keep me") == true)
+    }
+
     func testEmptyTrashRequiresConfirmation() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

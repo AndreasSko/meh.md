@@ -49,9 +49,11 @@ Permanent deletion remains a separate confirmed action.
 
 The browser menu offers Undo Move / Redo Move for the latest applicable move.
 These apply compensating edits to parent and position, leaving unrelated
-renames, content, and visibility changes intact. Trash recovery uses Restore
-in Trash; no Undo Trash control is exposed. Moving out of Trash clears browser
-undo history and is not covered by Move undo.
+renames, content, and visibility changes intact. Trashing the open note
+offers Undo in a short-lived bar, which reverts that Trash change with the
+same receipt and reopens the note; it hides once another change replaces the
+receipt. Other Trash recovery uses Restore in Trash. Moving out of Trash
+clears browser undo history and is not covered by Move undo.
 
 An undo that would overwrite newer targeted changes, revive a permanently
 deleted identity, or create invalid ancestry is rejected without a save.

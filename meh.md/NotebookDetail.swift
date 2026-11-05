@@ -104,7 +104,18 @@ struct NotebookDetail: View {
                             timeCalculator: timeCalculatorLabs
                                 && scene.replica.timeCalculatorNoteIDs.contains(selectedID)
                         )
-                        .mehCrumple(trigger: scene.trashedOpenNote)
+                        }
+                        if let placement = scene.selectedPlacement, placement.isInTrash,
+                           scene.historyBrowser == nil {
+                            NotebookTrashBar(
+                                message: "In Trash",
+                                actionTitle: placement.item.isTrashed ? "Restore" : nil,
+                                isEnabled: !scene.busy
+                            ) {
+                                scene.changeTrash(placement, trashed: false)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .background(MehStyle.paperColor)
                         }
                         if let snippetReturn = scene.visibleSnippetReturn {
                             NotebookSnippetReturnBar(

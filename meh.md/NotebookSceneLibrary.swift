@@ -4,12 +4,20 @@ import SwiftUI
 
 #if os(iOS)
     import UIKit
+#elseif os(macOS)
+    import AppKit
 #endif
 
 struct NotebookFileReveal: Equatable {
     let id: UUID
     var highlights = true
     let token = UUID()
+}
+
+struct NotebookTrashedNote: Equatable {
+    let noteID: UUID
+    let receipt: NotebookBrowserUndo
+    let id = UUID()
 }
 
 struct NotebookSidebarRow: Identifiable {
@@ -558,21 +566,66 @@ extension NotebookSceneState {
         }
     }
 
-    /// Swipe actions pass `crumplesOpenNote: false` to keep the list's own
-    /// animation; everywhere else the open note crumples once it's trashed.
+    /// Trashing the open note closes it, like leaving it, and offers Undo.
+    /// On iPhone the note stays selected after going back to Files, but it
+    /// only counts as open while it's on screen.
     func trashItems(
-        _ ids: [UUID], crumplesOpenNote: Bool = true,
-        onCompletion: @escaping (Bool) -> Void = { _ in }
+        _ ids: [UUID], onCompletion: @escaping (Bool) -> Void = { _ in }
     ) {
-        let trashesOpenNote = crumplesOpenNote && containsOpenNote(ids)
+        let isShowingNote = !isCompact || preferredCompactColumn == .detail
+        let openNoteID = isShowingNote && containsOpenNote(ids) ? selectedID : nil
         perform({ [self] in
             try await flushEditor()
-            browserUndo = try await replica.trashItems(ids)
-            if trashesOpenNote { trashedOpenNote += 1 }
+            let receipt = try await replica.trashItems(ids)
+            browserUndo = receipt
             browserRedo = nil
             browserSelection.clear()
             selectingItems = false
+            if let openNoteID {
+                offerUndo(for: NotebookTrashedNote(noteID: openNoteID, receipt: receipt))
+                closeSelectedNote()
+            }
         }, onCompletion: onCompletion)
+    }
+
+    /// VoiceOver users keep the Undo bar until they move on, since six
+    /// seconds is rarely enough to reach it.
+    private func offerUndo(for trashed: NotebookTrashedNote) {
+        trashedOpenNote = trashed
+        AccessibilityNotification.Announcement("Moved to Trash. Undo available.").post()
+        #if os(iOS)
+        let isVoiceOverRunning = UIAccessibility.isVoiceOverRunning
+        #else
+        let isVoiceOverRunning = NSWorkspace.shared.isVoiceOverEnabled
+        #endif
+        guard !isVoiceOverRunning else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            if self?.trashedOpenNote?.id == trashed.id { self?.trashedOpenNote = nil }
+        }
+    }
+
+    /// Restores the note trashed while it was open and opens it again.
+    func undoTrashingOpenNote() {
+        guard let trashed = undoableTrashedNote else { return }
+        trashedOpenNote = nil
+        perform { [self] in
+            guard browserUndo == trashed.receipt else { return }
+            try await applyBrowserUndo(redo: false)
+            try await selectNote(trashed.noteID)
+        }
+    }
+
+    /// The trashed note while its Trash change is still the one Undo reverts.
+    var undoableTrashedNote: NotebookTrashedNote? {
+        trashedOpenNote.flatMap { $0.receipt == browserUndo ? $0 : nil }
+    }
+
+    private func closeSelectedNote() {
+        navigationState.clearSelection()
+        resetLinkJourney()
+        unrecordedEdit = false
+        preferredCompactColumn = .sidebar
     }
 
     /// Whether trashing `ids` takes the open note with it, directly or
@@ -595,10 +648,7 @@ extension NotebookSceneState {
         browserRedo = nil
         if let selectedID,
            !replica.placements.contains(where: { $0.item.id == selectedID }) {
-            navigationState.clearSelection()
-            resetLinkJourney()
-            unrecordedEdit = false
-            preferredCompactColumn = .sidebar
+            closeSelectedNote()
         }
         workspace?.contentDidSave(trigger: "trash changed")
     }
@@ -643,10 +693,7 @@ extension NotebookSceneState {
                 browserRedo = nil
             }
             if let selectedID, selection.ids.contains(selectedID) {
-                navigationState.clearSelection()
-                resetLinkJourney()
-                unrecordedEdit = false
-                preferredCompactColumn = .sidebar
+                closeSelectedNote()
             }
             expandedIDs.subtract(selection.ids)
             workspace?.contentDidSave(trigger: "permanent deletion")
@@ -779,27 +826,30 @@ extension NotebookSceneState {
     }
 
     func undoBrowserChange(redo: Bool) {
+        guard (redo ? browserRedo : browserUndo) != nil else { return }
+        perform { [self] in try await applyBrowserUndo(redo: redo) }
+    }
+
+    private func applyBrowserUndo(redo: Bool) async throws {
         guard let receipt = redo ? browserRedo : browserUndo else { return }
-        perform { [self] in
-            try await flushEditor()
-            let inverse: NotebookBrowserUndo
-            do {
-                inverse = try await replica.undoBrowserChange(receipt)
-            } catch let error as NotebookBrowserChangeError {
-                if error == .staleUndo || error == .notebookIdentityMismatch {
-                    if redo { browserRedo = nil } else { browserUndo = nil }
-                }
-                throw error
+        try await flushEditor()
+        let inverse: NotebookBrowserUndo
+        do {
+            inverse = try await replica.undoBrowserChange(receipt)
+        } catch let error as NotebookBrowserChangeError {
+            if error == .staleUndo || error == .notebookIdentityMismatch {
+                if redo { browserRedo = nil } else { browserUndo = nil }
             }
-            if redo {
-                browserRedo = nil
-                browserUndo = inverse
-            } else {
-                browserUndo = nil
-                browserRedo = inverse
-            }
-            for id in receipt.itemIDs { reveal(id) }
+            throw error
         }
+        if redo {
+            browserRedo = nil
+            browserUndo = inverse
+        } else {
+            browserUndo = nil
+            browserRedo = inverse
+        }
+        for id in receipt.itemIDs { reveal(id) }
     }
 
     func sort(_ parentID: UUID?, by order: NotebookSortOrder) {

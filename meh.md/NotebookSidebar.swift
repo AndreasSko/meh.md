@@ -82,6 +82,9 @@ struct NotebookSidebar: View {
             .scrollIndicators(.automatic)
             #endif
             .overlay(alignment: .bottom) {
+                if isCompact { NotebookTrashUndoBar(scene: scene) }
+            }
+            .overlay(alignment: .bottom) {
                 if !isCompact && !search.isPresented && !scene.showsSelectionControls
                     && !scene.browsingAllRecents {
                     NotebookSidebarControls(
@@ -311,8 +314,7 @@ private struct NotebookLibraryBrowser: View {
                     scene.setRecentPinned(!scene.replica.isPinnedInRecents(id), for: id)
                 },
                 onTrash: { id, completion in
-                    scene.trashItems([id], crumplesOpenNote: false,
-                                     onCompletion: completion)
+                    scene.trashItems([id], onCompletion: completion)
                 },
                 onHide: { id, completion in
                     scene.setRecentHidden(true, for: id, onCompletion: completion)
@@ -514,8 +516,7 @@ private struct NotebookLibraryBrowser: View {
                                                       for: id)
                             },
                             onTrash: { id, completion in
-                                scene.trashItems([id], crumplesOpenNote: false,
-                                                 onCompletion: completion)
+                                scene.trashItems([id], onCompletion: completion)
                             },
                             onHide: { id, completion in
                                 scene.setRecentHidden(true, for: id, onCompletion: completion)
@@ -895,7 +896,7 @@ private struct NotebookRecentNoteRow: View {
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
-                scene.trashItems([id], crumplesOpenNote: false)
+                scene.trashItems([id])
             } label: {
                 Image(systemName: "trash")
             }
@@ -1111,7 +1112,7 @@ private struct NotebookFileRow: View {
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 if !scene.selectingItems, scene.editingID == nil {
                     Button(role: .destructive) {
-                        scene.trashItems([row.id], crumplesOpenNote: false)
+                        scene.trashItems([row.id])
                     } label: {
                         Label("Trash", systemImage: "trash")
                     }

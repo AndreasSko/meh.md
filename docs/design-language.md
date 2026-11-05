@@ -91,7 +91,10 @@ uses `LaunchPaper` and `LaunchFace`.
 
 ## Small moments
 
-- Moving the open note to Trash briefly crumples the page toward its top
-  corner. Swipe actions in lists keep the system animation.
+- Moving the open note to Trash closes it, like going back, and a dark
+  toast offers Undo for a few seconds. Undo restores the note and opens it
+  again; a flick down dismisses the toast. A note opened from Trash shows
+  a glass "In Trash" bar at the bottom of the page, with Restore when the
+  note itself was trashed rather than its folder.
 - Checking the last open task of a note plays a light success haptic on
   iPhone. iPads have no haptics.

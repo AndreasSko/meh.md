@@ -110,6 +110,7 @@ private struct NotebookNavigationContainer: View {
         )) {
             NotebookSidebar(scene: scene, focus: focus, isCompact: isCompact)
         } detail: {
+            Group {
             #if os(iOS)
             // One container for every width, so folding iPhone Duo or
             // resizing a window keeps the editor and its link visits.
@@ -130,6 +131,11 @@ private struct NotebookNavigationContainer: View {
             #else
             NotebookDetail(scene: scene, isCompact: isCompact)
             #endif
+            }
+            // Outside the note screens, which ignore the bottom safe area.
+            .overlay(alignment: .bottom) {
+                if !isCompact { NotebookTrashUndoBar(scene: scene) }
+            }
         }
     }
 
@@ -164,7 +170,8 @@ private struct NotebookLinkScreen: View {
         let showsLiveEditor = (isRoot && scene.selectedID == nil)
             || (scene.activeLinkRouteID == route?.id && route?.noteID == scene.selectedID)
         let showsHistory = showsLiveEditor && scene.historyBrowser != nil
-        let showsSnippetReturn = showsLiveEditor && scene.visibleSnippetReturn != nil
+        let showsBottomBar = showsLiveEditor
+            && (scene.visibleSnippetReturn != nil || scene.selectedPlacement?.isInTrash == true)
         let isRestoring = scene.session?.isEditingEnabled == true
             && (route.map { scene.restoringLinkRouteID == $0.id } ?? false)
         return ZStack {
@@ -192,10 +199,10 @@ private struct NotebookLinkScreen: View {
         }
         // Editor previews manage their own bar insets. History uses a SwiftUI
         // heading, which must stay below the status and navigation bars, and
-        // the snippet return bar must stay above the home indicator.
+        // the snippet return and Trash bars must stay above the home indicator.
         // Keep editor geometry fixed when a link preview is removed.
         .ignoresSafeArea(.container, edges: showsHistory ? .bottom
-                         : showsSnippetReturn ? .top : [.top, .bottom])
+                         : showsBottomBar ? .top : [.top, .bottom])
         .animation(nil, value: isRestoring)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
