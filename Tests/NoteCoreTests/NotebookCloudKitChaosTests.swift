@@ -9,11 +9,22 @@ import XCTest
 /// Afterwards every device must hold the same notebook, with no lost edit
 /// and no deleted note brought back.
 ///
+/// Some notes are only ever edited by the device that created them. Their
+/// edits replace random ranges with Unicode, CRLF and Markdown snippets, and
+/// every device must end up with exactly the bytes a plain string model
+/// predicts.
+///
 /// A failing seed can be replayed with `MEH_CLOUDKIT_CHAOS_SEEDS=<seed>`.
 @MainActor
 final class NotebookCloudKitChaosTests: XCTestCase {
     private static let defaultSeeds: [UInt64] = [0x5EED, 0xC0FFEE, 0xBAD5EED]
-    private static let steps = 80
+    private static let steps = 120
+    private static let snippets = [
+        "a", " ", "\n", "\r\n", "\t", "  \n", "# ", "**", "_", "`", "\\*",
+        "- [ ] ", "1. ", "> ", "```\n", "[link](x)", "---\n",
+        "e\u{301}", "\u{301}", "é", "🇩🇪", "👩\u{200D}👩\u{200D}👧",
+        "👍🏽", "\u{200C}", "שלום", "مرحبا", "日本語", "\u{FEFF}",
+    ]
 
     func testDevicesConvergeUnderRandomFaults() async throws {
         for seed in configuredSeeds() {
@@ -40,6 +51,7 @@ final class NotebookCloudKitChaosTests: XCTestCase {
         for device in devices { await device.coordinator.synchronize() }
 
         var markers: [UUID: Set<String>] = [:]
+        var exact: [UUID: (owner: Int, scalars: [Unicode.Scalar])] = [:]
         var deleted = Set<UUID>()
         var folders: [UUID] = []
         var crashes = 0
@@ -49,27 +61,50 @@ final class NotebookCloudKitChaosTests: XCTestCase {
             let index = Int.random(in: 0..<devices.count, using: &random)
             let device = devices[index]
             let notes = device.liveNoteIDs
+            let editable = notes.filter {
+                exact[$0].map { $0.owner == index } ?? true
+            }
             let marker = "d\(index)-s\(step)"
             switch Int.random(in: 0..<100, using: &random) {
-            case 0..<22 where !notes.isEmpty:
-                let id = notes.randomElement(using: &random)!
-                log.append("\(marker) edit \(id)")
+            case 0..<22 where !editable.isEmpty:
+                let id = editable.randomElement(using: &random)!
                 let session = try await device.replica.openNote(id)
-                try session.replaceText(
-                    in: NSRange(location: session.text.utf16.count, length: 0),
-                    with: marker + "\n"
-                )
+                if var scalars = exact[id]?.scalars {
+                    let edit = randomEdit(of: scalars, using: &random)
+                    log.append("\(marker) exact edit \(id) \(edit.log)")
+                    try session.replaceText(
+                        in: edit.utf16Range, with: edit.replacement
+                    )
+                    scalars.replaceSubrange(
+                        edit.range, with: edit.replacement.unicodeScalars
+                    )
+                    exact[id]?.scalars = scalars
+                } else {
+                    log.append("\(marker) edit \(id)")
+                    try session.replaceText(
+                        in: NSRange(
+                            location: session.text.utf16.count, length: 0
+                        ),
+                        with: marker + "\n"
+                    )
+                    markers[id, default: []].insert(marker)
+                }
                 try await session.flush()
-                markers[id, default: []].insert(marker)
             case 0..<34 where device.isJoined:
                 log.append("\(marker) create")
                 let parent = folders.filter {
                     device.replica.placements.map(\.item.id).contains($0)
                 }.randomElement(using: &random)
+                let text = marker + "\n"
                 let id = try await device.replica.createNote(
-                    name: "\(marker).md", text: marker + "\n", parentID: parent
+                    name: "\(marker).md", text: text, parentID: parent
                 )
-                markers[id] = [marker]
+                if Bool.random(using: &random) {
+                    log[log.count - 1] += " exact"
+                    exact[id] = (index, Array(text.unicodeScalars))
+                } else {
+                    markers[id] = [marker]
+                }
             case 34..<38 where device.isJoined:
                 log.append("\(marker) folder")
                 folders.append(
@@ -111,7 +146,8 @@ final class NotebookCloudKitChaosTests: XCTestCase {
             }
         }
         let summary = "Chaos seed \(String(seed, radix: 16)): "
-            + "\(markers.count) notes, \(deleted.count) deleted, "
+            + "\(markers.count + exact.count) notes, "
+            + "\(deleted.count) deleted, "
             + "\(crashes) crashes, \(failedPasses) failed passes\n"
         FileHandle.standardOutput.write(Data(summary.utf8))
 
@@ -152,6 +188,18 @@ final class NotebookCloudKitChaosTests: XCTestCase {
                     )
                 }
             }
+            for (id, note) in exact where !deleted.contains(id) {
+                let expectedText = String(String.UnicodeScalarView(note.scalars))
+                guard let text = try? await device.replica.openNote(id).text
+                else {
+                    XCTFail("\(device.name) cannot open \(id)\n\(context)")
+                    continue
+                }
+                XCTAssertEqual(
+                    Array(text.utf8), Array(expectedText.utf8),
+                    "\(device.name) changed the bytes of \(id)\n\(context)"
+                )
+            }
             for id in deleted {
                 XCTAssertFalse(
                     device.replica.placements.contains { $0.item.id == id },
@@ -167,6 +215,42 @@ final class NotebookCloudKitChaosTests: XCTestCase {
                 "\(device.name) differs after reopening\n\(context)"
             )
         }
+    }
+
+    /// Replaces a random range of whole Unicode scalars, so an edit can land
+    /// inside a grapheme cluster, as typing next to an accent does.
+    private func randomEdit(
+        of scalars: [Unicode.Scalar], using random: inout SeededGenerator
+    ) -> (
+        range: Range<Int>, utf16Range: NSRange, replacement: String,
+        log: String
+    ) {
+        let start = Int.random(in: 0...scalars.count, using: &random)
+        let length = Int.random(
+            in: 0...min(4, scalars.count - start), using: &random
+        )
+        var replacement = ""
+        if length == 0 || Bool.random(using: &random) {
+            for _ in 0..<Int.random(in: 1...3, using: &random) {
+                replacement += Self.snippets.randomElement(using: &random)!
+            }
+        }
+        let utf16Offset = { (end: Int) in
+            scalars[..<end].reduce(0) { $0 + $1.utf16.count }
+        }
+        let location = utf16Offset(start)
+        let utf16Range = NSRange(
+            location: location,
+            length: utf16Offset(start + length) - location
+        )
+        let escaped = replacement.unicodeScalars.map {
+            $0.isASCII && $0.value >= 0x20
+                ? String($0) : String(format: "\\u{%X}", $0.value)
+        }.joined()
+        return (
+            start..<(start + length), utf16Range, replacement,
+            "\(utf16Range.location)+\(utf16Range.length) \"\(escaped)\""
+        )
     }
 
     private func randomFault(

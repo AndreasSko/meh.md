@@ -37,8 +37,26 @@ final class NoteDocument {
 
     var text: String {
         get throws {
-            try document.text(obj: textObject)
+            Self.restoringByteOrderMark(
+                try document.text(obj: textObject),
+                storedLength: document.length(obj: textObject)
+            )
         }
+    }
+
+    /// Automerge's Swift binding decodes text with `String(bytes:encoding:)`,
+    /// which drops a leading U+FEFF that the document still stores, for
+    /// example from an imported file that starts with a byte order mark.
+    /// Without it every edit would land one character too early.
+    static func restoringByteOrderMark(
+        _ text: String, storedLength: UInt64
+    ) -> String {
+        var text = text
+        let scalars = text.withUTF8 { bytes in
+            bytes.reduce(0) { $1 & 0xC0 == 0x80 ? $0 : $0 + 1 }
+        }
+        guard storedLength == scalars + 1 else { return text }
+        return "\u{FEFF}" + text
     }
 
     var metadata: NoteMetadata {
@@ -583,7 +601,10 @@ final class NoteDocument {
             }
             frontier = Set(hashes)
         }
-        return try document.textAt(obj: textObject, heads: frontier)
+        return Self.restoringByteOrderMark(
+            try document.textAt(obj: textObject, heads: frontier),
+            storedLength: document.lengthAt(obj: textObject, heads: frontier)
+        )
     }
 
     func restoreHistoryVersion(
