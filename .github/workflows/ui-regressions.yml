@@ -16,23 +16,28 @@ jobs:
     name: Select UI goals
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # Reads the nightly coverage indexes from ui-coverage.yml's artifacts.
+      actions: read
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          # The merge base with the PR's base branch must be in the checkout.
+          # The diff starts at the coverage index's commit or the merge base.
           fetch-depth: 0
       # Here, so harness changes are checked even when no UI lane starts.
       - name: Check selection and result gates
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 -m unittest discover -s scripts -p 'test_*ui*.py'
-      - name: Pick goals from the diff
+      - name: Pick goals from the diff and coverage
         id: select
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ -n "$BASE" ]; then
             python3 scripts/select_ui_tests.py --github-output --base "$BASE"

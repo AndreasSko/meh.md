@@ -112,9 +112,10 @@ tools, other scripts and workflows, the widget extension and a version
 bump need no UI goal. A Swift change needs none on a lane that compiles
 the same code as before: only comments or blank lines changed, or only
 code inside an `#if` for another platform. So a Mac-only fix skips the
-iPhone and iPad lanes. A changed UI test file runs just its own class,
-which is all such a file may declare. Anything else, and any change to
-the UI harness, runs the whole plan.
+iPhone and iPad lanes. Other Swift changes pick goals from coverage, as
+the next section describes. Without coverage, a changed UI test file runs
+just its own class, which is all such a file may declare, and anything
+else runs the whole plan. So does any change to the UI harness.
 
 When in doubt the rule runs everything, so no goal is dropped on a guess.
 
@@ -126,6 +127,32 @@ run summary. Manual runs use the whole plan. Locally,
 `scripts/select_ui_tests.py iphone` compares the branch and its
 uncommitted changes with `origin/main` and prints the matching
 `xcodebuild` arguments, with the reason for each file on stderr.
+
+## Picking goals from coverage
+
+Every night `ui-coverage.yml` runs each PR goal of every lane on its own,
+with code coverage, on `main`. `run_ui_foundation.py --coverage` saves
+which source lines each goal ran, per lane, as the `ui-coverage-iphone`,
+`-ipad` and `-mac` artifacts. That run also checks every PR goal on
+`main` each night.
+
+A PR then runs the goals that ran a line it changes. New code runs the
+goals that ran the lines around it. The diff starts at the commit the
+index was taken at, so changes merged since then count too; that can only
+add goals. Goals the index does not know yet always run.
+
+Coverage cannot see code that runs without a changed caller. So these run
+the whole plan: new initializers, overrides, conformances and enum cases,
+attributes such as `@objc`, a new func or type that no changed line uses
+(it may be a delegate method), `#if` conditions the lane cannot decide,
+and changes to lines with no line data, such as a `static let` table or
+a file of only declarations. A new file runs through the changed lines
+that use it, unless it declares one of those things itself.
+
+Most app changes still touch code that nearly every goal runs, such as
+startup and the root view, so they still run most goals. The savings are
+in narrower changes: a single screen, sync status, a widget-only change
+or a fix for another platform.
 
 ## Execution and evidence
 
