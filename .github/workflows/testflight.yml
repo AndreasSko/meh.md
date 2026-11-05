@@ -17,6 +17,9 @@ concurrency:
 
 jobs:
   build:
+    # On main the signed archives in publish compile the same code, so
+    # the unsigned builds only run where nothing is published.
+    if: github.ref != 'refs/heads/main'
     # One runner builds both platforms, which keeps a macOS runner free
     # for the UI lanes.
     name: Release builds
@@ -59,32 +62,14 @@ jobs:
           persist-credentials: false
       - run: scripts/run_notebook_sync_validation.sh
 
+  # One runner archives both platforms. The iOS build uploads and waits
+  # for Apple processing in the background while the Mac archive builds.
   publish:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: [build, validate]
+    needs: validate
     environment: testflight
     runs-on: xcode-27
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: IOS
-            destination: generic/platform=iOS
-            profile_secret: IOS_PROFILE_BASE64
-            profile_name: 'meh.md iOS TestFlight'
-            widgets_profile_secret: IOS_WIDGETS_PROFILE_BASE64
-            widgets_profile_name: 'meh.md Widgets iOS TestFlight'
-            profile_extension: mobileprovision
-            artifact: ipa
-          - platform: MAC_OS
-            destination: generic/platform=macOS
-            profile_secret: MACOS_PROFILE_BASE64
-            profile_name: meh.md Mac TestFlight
-            widgets_profile_secret: MACOS_WIDGETS_PROFILE_BASE64
-            widgets_profile_name: meh.md Widgets Mac TestFlight
-            profile_extension: provisionprofile
-            artifact: pkg
+    timeout-minutes: 90
     env:
       ASC_APP_ID: ${{ vars.ASC_APP_ID }}
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -92,8 +77,8 @@ jobs:
       ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
       ASC_BYPASS_KEYCHAIN: '1'
       ASC_NO_UPDATE: '1'
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
       GROUP_ID: ${{ vars.TESTFLIGHT_INTERNAL_GROUP_ID }}
-      PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -101,27 +86,25 @@ jobs:
       - uses: rudrankriyam/setup-asc@5358c70a27a3f0d1517604b0f1fdc43e70c1cc4d
         with:
           version: 5.3.4
-      - name: Check internal audience and choose build number
-        id: release
+      - name: Check toolchain and internal audience
         run: |
+          xcodebuild -version
+          xcodebuild -version | head -1 | grep -Eq '^Xcode 27([. ]|$)'
           asc testflight groups list --app "$ASC_APP_ID" --internal \
             --paginate --output json | jq -e --arg id "$GROUP_ID" \
             'any(.data[]; .id == $id and .attributes.isInternalGroup == true)'
-          number=$(asc builds next-build-number --app "$ASC_APP_ID" \
-            --platform "$PLATFORM" --output json | jq -er '.nextBuildNumber')
-          [[ "$number" =~ ^[1-9][0-9]*$ ]]
-          echo "number=$number" >> "$GITHUB_OUTPUT"
       - name: Import signing identities
+        id: identities
         uses: apple-actions/import-codesign-certs@a533c09a88c7f2d5f26c2cb7925ba7a4b92173c8
         with:
           p12-file-base64: ${{ secrets.SIGNING_CERTIFICATES_P12_BASE64 }}
           p12-password: ${{ secrets.SIGNING_CERTIFICATES_PASSWORD }}
-      - name: Install distribution profiles
+      - name: Install iOS profiles
         env:
-          APP_PROFILE_BASE64: ${{ secrets[matrix.profile_secret] }}
-          WIDGETS_PROFILE_BASE64: ${{ secrets[matrix.widgets_profile_secret] }}
-          PROFILE_EXTENSION: ${{ matrix.profile_extension }}
-        run: |
+          APP_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+          WIDGETS_PROFILE_BASE64: ${{ secrets.IOS_WIDGETS_PROFILE_BASE64 }}
+          PROFILE_EXTENSION: mobileprovision
+        run: &profiles |
           umask 077
           directory="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
           mkdir -p "$directory"
@@ -133,46 +116,77 @@ jobs:
             uuid=$(plutil -extract UUID raw "$RUNNER_TEMP/profile.plist")
             cp "$RUNNER_TEMP/profile" "$directory/$uuid.$PROFILE_EXTENSION"
           done
-      - name: Archive Release
+      - name: Archive iOS
+        id: ios_archive
         env:
-          DESTINATION: ${{ matrix.destination }}
-          PROFILE_NAME: ${{ matrix.profile_name }}
-          WIDGETS_PROFILE_NAME: ${{ matrix.widgets_profile_name }}
-          BUILD_NUMBER: ${{ steps.release.outputs.number }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-        run: |
+          PLATFORM: IOS
+          DESTINATION: generic/platform=iOS
+          APP_PROFILE: meh.md iOS TestFlight
+          WIDGETS_PROFILE: meh.md Widgets iOS TestFlight
+        run: &archive |
+          number=$(asc builds next-build-number --app "$ASC_APP_ID" \
+            --platform "$PLATFORM" --output json | jq -er '.nextBuildNumber')
+          [[ "$number" =~ ^[1-9][0-9]*$ ]]
+          echo "number=$number" >> "$GITHUB_OUTPUT"
           xcodebuild -project meh.md.xcodeproj -scheme meh.md \
             -configuration Release -destination "$DESTINATION" \
-            -archivePath "$RUNNER_TEMP/App.xcarchive" -skipPackagePluginValidation \
+            -archivePath "$RUNNER_TEMP/$PLATFORM.xcarchive" -skipPackagePluginValidation \
             CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY='Apple Distribution' \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            MEH_APP_PROFILE="$PROFILE_NAME" \
-            MEH_WIDGETS_PROFILE="$WIDGETS_PROFILE_NAME" \
-            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" archive
-      - name: Export internal-only build
-        run: |
-          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/App.xcarchive" \
-            -exportPath "$RUNNER_TEMP/export" \
+            MEH_APP_PROFILE="$APP_PROFILE" \
+            MEH_WIDGETS_PROFILE="$WIDGETS_PROFILE" \
+            CURRENT_PROJECT_VERSION="$number" archive
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/$PLATFORM.xcarchive" \
+            -exportPath "$RUNNER_TEMP/$PLATFORM" \
             -exportOptionsPlist ".github/testflight/$PLATFORM.plist"
-      - name: Publish to internal testers
+      - name: Publish iOS to internal testers
+        background: true
         env:
-          ARTIFACT: ${{ matrix.artifact }}
-          BUILD_NUMBER: ${{ steps.release.outputs.number }}
-        run: |
-          files=("$RUNNER_TEMP/export/"*."$ARTIFACT")
+          PLATFORM: IOS
+          ARTIFACT: ipa
+          BUILD_NUMBER: ${{ steps.ios_archive.outputs.number }}
+        run: &publish |
+          files=("$RUNNER_TEMP/$PLATFORM/"*."$ARTIFACT")
           [[ ${#files[@]} == 1 && -f "${files[0]}" ]]
           version=$(plutil -extract ApplicationProperties.CFBundleShortVersionString \
-            raw "$RUNNER_TEMP/App.xcarchive/Info.plist")
+            raw "$RUNNER_TEMP/$PLATFORM.xcarchive/Info.plist")
           asc publish testflight --app "$ASC_APP_ID" \
             "--$ARTIFACT" "${files[0]}" --platform "$PLATFORM" \
             --version "$version" --build-number "$BUILD_NUMBER" \
             --group "$GROUP_ID" --wait --timeout 30m \
             --test-notes "Automatic $PLATFORM build from main, commit $GITHUB_SHA." \
-            --locale en-US --output json > "$RUNNER_TEMP/publish.json"
-          build_id=$(jq -er '.buildId' "$RUNNER_TEMP/publish.json")
+            --locale en-US --output json > "$RUNNER_TEMP/$PLATFORM-publish.json"
+          build_id=$(jq -er '.buildId' "$RUNNER_TEMP/$PLATFORM-publish.json")
           asc testflight groups list --build-id "$build_id" --output json \
             | jq -e --arg id "$GROUP_ID" \
                 '.complete == true and any(.groups[]; .id == $id and .type == "internal")'
           printf '### %s %s (%s)\n\nCommit: `%s`\n\nProcessed and assigned to the internal group. Build ID: `%s`\n' \
             "$PLATFORM" "$version" "$BUILD_NUMBER" "$GITHUB_SHA" "$build_id" \
             >> "$GITHUB_STEP_SUMMARY"
+      # A failed iOS step does not stop the Mac build.
+      - name: Install Mac profiles
+        id: mac_profiles
+        if: ${{ !cancelled() && steps.identities.outcome == 'success' }}
+        env:
+          APP_PROFILE_BASE64: ${{ secrets.MACOS_PROFILE_BASE64 }}
+          WIDGETS_PROFILE_BASE64: ${{ secrets.MACOS_WIDGETS_PROFILE_BASE64 }}
+          PROFILE_EXTENSION: provisionprofile
+        run: *profiles
+      - name: Archive Mac
+        id: mac_archive
+        if: ${{ !cancelled() && steps.mac_profiles.outcome == 'success' }}
+        env:
+          PLATFORM: MAC_OS
+          DESTINATION: generic/platform=macOS
+          APP_PROFILE: meh.md Mac TestFlight
+          WIDGETS_PROFILE: meh.md Widgets Mac TestFlight
+        run: *archive
+      - name: Publish Mac to internal testers
+        if: ${{ !cancelled() && steps.mac_archive.outcome == 'success' }}
+        env:
+          PLATFORM: MAC_OS
+          ARTIFACT: pkg
+          BUILD_NUMBER: ${{ steps.mac_archive.outputs.number }}
+        run: *publish
+      - name: Wait for iOS publishing
+        wait-all:
