@@ -25,6 +25,8 @@ from run_ui_foundation import (
     finalize,
     select_simulator,
     selected,
+    archive_lines,
+    coverage_index,
 )
 
 
@@ -62,6 +64,7 @@ class FoundationTests(unittest.TestCase):
     def test_watchdogs_leave_export_and_cleanup_headroom(self):
         for workflow_name, test_key in [
             ("ui-regressions.yml", "test"), ("nightly-ui.yml", "nightly_test"),
+            ("ui-coverage.yml", "coverage_test"),
         ]:
             with self.subTest(workflow_name):
                 self.assert_headroom(workflow_name, test_key)
@@ -176,6 +179,31 @@ class FoundationTests(unittest.TestCase):
         for outside in ["Case/testC", "Cas"]:
             with self.assertRaisesRegex(ValueError, outside):
                 selected(self.expected, ["Case/testA", outside])
+
+    def test_coverage_index_records_which_goal_ran_which_line(self):
+        root = str(Path(__file__).resolve().parents[1]) + "/"
+        archive = {
+            root + "meh.md/A.swift": [
+                {"line": 1, "isExecutable": False},
+                {"line": 2, "isExecutable": True, "executionCount": 3},
+                {"line": 3, "isExecutable": True, "executionCount": 1},
+                {"line": 4, "isExecutable": True, "executionCount": 0},
+                {"line": 6, "isExecutable": True, "executionCount": 2},
+            ],
+            "/elsewhere/Dependency.swift": [
+                {"line": 1, "isExecutable": True, "executionCount": 1},
+            ],
+        }
+        executable, ran = archive_lines(archive)
+        index = coverage_index(
+            "iphone", "abc", {"Case/testB": ran, "Case/testA": {}}, executable,
+            {root + "meh.md/A.swift", root + "meh.md/B.swift", "/elsewhere/C.swift"},
+        )
+        self.assertEqual(index["tests"], ["Case/testA", "Case/testB"])
+        self.assertEqual(index["compiled"], ["meh.md/A.swift", "meh.md/B.swift"])
+        self.assertEqual(index["files"], {
+            "meh.md/A.swift": {"executable": [[2, 4], [6, 6]], "ran": {"1": [[2, 3], [6, 6]]}},
+        })
 
     def test_invalid_retries_fail_closed(self):
         first = {"Case/testA": "Failed", "Case/testB": "Passed"}

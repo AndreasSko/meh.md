@@ -44,6 +44,57 @@ def selected(expected, only):
     return chosen
 
 
+def archive_lines(archive):
+    """({path: executable lines}, {path: lines that ran}) of an xccov archive."""
+    executable, ran = {}, {}
+    for path, lines in archive.items():
+        executable[path] = [line["line"] for line in lines if line.get("isExecutable")]
+        ran[path] = [
+            line["line"] for line in lines
+            if line.get("isExecutable") and line.get("executionCount")
+        ]
+    return executable, ran
+
+
+def coverage_index(platform, commit, ran, executable, compiled):
+    """Which goal ran which line, keyed by paths relative to the checkout.
+
+    `ran` maps each goal to {path: lines it ran}, `executable` maps each
+    instrumented path to its executable lines, and `compiled` lists the Swift
+    files the lane built. Lines are [first, last] ranges to keep it small.
+    """
+    prefix = str(ROOT) + "/"
+
+    def ranges(lines):
+        spans = []
+        for line in sorted(lines):
+            if spans and spans[-1][1] == line - 1:
+                spans[-1][1] = line
+            else:
+                spans.append([line, line])
+        return spans
+
+    tests = sorted(ran)
+    files = {
+        path[len(prefix):]: {"executable": ranges(lines), "ran": {}}
+        for path, lines in executable.items() if path.startswith(prefix)
+    }
+    for number, test in enumerate(tests):
+        for path, lines in ran[test].items():
+            relative = path[len(prefix):] if path.startswith(prefix) else None
+            if relative in files and lines:
+                files[relative]["ran"][str(number)] = ranges(lines)
+    return {
+        "platform": platform,
+        "commit": commit,
+        "tests": tests,
+        "compiled": sorted(
+            path[len(prefix):] for path in compiled if path.startswith(prefix)
+        ),
+        "files": files,
+    }
+
+
 def in_background(function):
     """Start `function` on a thread; the returned call waits and re-raises."""
     outcome = {}
@@ -83,6 +134,7 @@ WATCHDOG_SECONDS = {
     "discovery": 300,
     "test": 4200,
     "nightly_test": 13200,
+    "coverage_test": 13200,
     "retry": 1800,
     "json_export": 120,
     "attachment_export": 300,
@@ -188,7 +240,14 @@ def main():
         "--only", nargs="+", metavar="CASE",
         help="Run just these Class/test cases of the plan (see select_ui_tests.py)",
     )
+    parser.add_argument(
+        "--coverage", action="store_true",
+        help="Run each plan case alone with code coverage and write the index "
+        "select_ui_tests.py reads",
+    )
     args = parser.parse_args()
+    if args.coverage and (args.nightly or args.only):
+        parser.error("--coverage runs the whole CI plan")
 
     def interrupted(signum, frame):
         raise RuntimeError(f"Interrupted by signal {signum}")
@@ -407,6 +466,7 @@ def main():
                     "-testPlan",
                     plan_name,
                     *signing,
+                    *(["-enableCodeCoverage", "YES"] if args.coverage else []),
                 ],
                 WATCHDOG_SECONDS["build"],
             )
@@ -451,10 +511,40 @@ def main():
             )
             (evidence / "platform.xctestrun").write_bytes(runs[0].read_bytes())
             xctestrun = runs[0]
-            first = run_pass(
-                "test", only_testing_arguments(expected) if args.only else [],
-                WATCHDOG_SECONDS["nightly_test" if args.nightly else "test"],
-            )
+            if args.coverage:
+                ran, executable = {}, {}
+
+                def run_alone(name, case, deadline):
+                    """Run one case with coverage and keep the lines it ran."""
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise RuntimeError(f"Coverage budget used up before {case}")
+                    result = run_pass(
+                        name,
+                        only_testing_arguments([case]) + ["-enableCodeCoverage", "YES"],
+                        min(remaining, WATCHDOG_SECONDS["retry"]),
+                    )
+                    bundle = evidence / (name + ".xcresult")
+                    if result.get(case) == "Passed":
+                        lines, ran[case] = archive_lines(json.loads(subprocess.run(
+                            ["xcrun", "xccov", "view", "--archive", "--json", str(bundle)],
+                            check=True, capture_output=True, text=True,
+                            timeout=WATCHDOG_SECONDS["json_export"],
+                        ).stdout))
+                        executable.update(lines)
+                        # The exported results stay; the bundle is mostly coverage.
+                        subprocess.run(["rm", "-rf", str(bundle)], check=True)
+                    return result
+
+                first = {}
+                deadline = time.monotonic() + WATCHDOG_SECONDS["coverage_test"]
+                for number, case in enumerate(sorted(expected), 1):
+                    first.update(run_alone(f"test-{number:02d}", case, deadline))
+            else:
+                first = run_pass(
+                    "test", only_testing_arguments(expected) if args.only else [],
+                    WATCHDOG_SECONDS["nightly_test" if args.nightly else "test"],
+                )
             manifest["skippedTests"] = sorted(
                 case for case, result in first.items() if result == "Skipped"
             )
@@ -467,10 +557,29 @@ def main():
                         f"{len(retry_cases)} UI tests failed; not retrying more "
                         f"than {MAX_RETRIED_TESTS}: {sorted(retry_cases)}"
                     )
-                retry = run_pass(
-                    "retry", only_testing_arguments(retry_cases), WATCHDOG_SECONDS["retry"]
-                )
+                if args.coverage:
+                    retry = {}
+                    deadline = time.monotonic() + WATCHDOG_SECONDS["retry"]
+                    for number, case in enumerate(sorted(retry_cases), 1):
+                        retry.update(run_alone(f"retry-{number:02d}", case, deadline))
+                else:
+                    retry = run_pass(
+                        "retry", only_testing_arguments(retry_cases),
+                        WATCHDOG_SECONDS["retry"],
+                    )
             report_retries(manifest, check(first, expected, retry))
+            if args.coverage:
+                compiled = set()
+                for files in (work / "build/Build/Intermediates.noindex").glob(
+                    "**/*.SwiftFileList"
+                ):
+                    compiled.update(files.read_text().splitlines())
+                index = coverage_index(
+                    args.platform, manifest["gitSHA"], ran, executable, compiled,
+                )
+                (evidence / f"coverage-{args.platform}.json").write_text(
+                    json.dumps(index, separators=(",", ":")) + "\n"
+                )
             validation_complete = True
         except BaseException as error:
             manifest["error"] = f"{type(error).__name__}: {error}"

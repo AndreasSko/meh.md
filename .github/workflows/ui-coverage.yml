@@ -1,0 +1,55 @@
+name: UI goal coverage
+
+# Runs each PR goal alone with code coverage on main once a night. PRs then
+# run only the goals that ran a line they change (see select_ui_tests.py).
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-coverage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    name: UI coverage (${{ matrix.platform }})
+    runs-on: xcode-27
+    # A 220-minute test watchdog plus build, retry, export and cleanup
+    # headroom, within GitHub's six-hour job limit.
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [iphone, ipad, mac]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check execution and result gates
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s scripts -p 'test_ui_foundation.py'
+      - name: Run each PR goal alone with code coverage
+        run: |
+          python3 scripts/run_ui_foundation.py '${{ matrix.platform }}' --coverage \
+            --evidence-root "$RUNNER_TEMP/ui-coverage"
+      # select_ui_tests.py finds this by name; keep it in step with INDEX_ARTIFACT.
+      - name: Publish the coverage index
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-coverage-${{ matrix.platform }}
+          path: ${{ runner.temp }}/ui-coverage/coverage-${{ matrix.platform }}.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve inventory, timings and UI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-coverage-evidence-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-coverage
+          if-no-files-found: error
+          retention-days: 14
