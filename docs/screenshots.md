@@ -61,7 +61,9 @@ to 9:41 with a full battery that is not charging. Before each run it
 removes the app, which also removes the widgets an earlier run added. The
 iPhone runs twice, the second time in dark mode for the iPhone snippets
 image. The Mac run takes over the mouse for about a minute and sizes the
-window to 1440 × 900 points, the App Store's 2880 × 1800 pixels. The Mac
+window to 1440 × 900 points, the App Store's 2880 × 1800 pixels. Scroll
+tools such as Mos and LinearMouse drop the test's synthetic scroll
+events, so the script quits them for the Mac run and reopens them after. The Mac
 set has no widget screenshot yet.
 
 The script exports the attachments into `Tools/AppStore/raw/`.
@@ -78,8 +80,10 @@ Google Chrome, which renders `template.html` headless at the exact App
 Store sizes. It skips a slide whose raw screenshots are missing and says
 which ones, so one failed capture doesn't hold up the rest.
 
-The images in `out/` are committed, so the App Store set can be
-published from any checkout and a PR shows how they change. The raw
-screenshots are not.
+The raw screenshots in `raw/` and the images in `out/` are both
+committed. That way a headline can be changed and the set re-rendered
+from any checkout, without capturing again, and a PR shows how the
+images change. Both are stored in Git LFS, so a checkout needs
+`git-lfs` installed to get the actual images.
 
 To upload the images to the App Store, see [App Store page](app-store.md).

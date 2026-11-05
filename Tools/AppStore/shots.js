@@ -13,20 +13,20 @@ const copy = {
   },
   sync: {
     theme: "yellow",
-    h1: "Sync, *boringly reliable.*",
-    sub: "Across iPhone, iPad, and Mac, all through iCloud. No extra account, no subscription.",
+    h1: "Edit anywhere, *even offline.*",
+    sub: "Change the same note on multiple devices. Synced through iCloud, without conflicts.",
   },
   history: {
     h1: "Rewrite *without worry.*",
     sub: "Scrub back through older versions and restore any of them.",
   },
   snippets: {
-    h1: "*Snippets* for what you keep typing.",
-    sub: "Like today's workout, in one tap. Templates do the same for whole new notes.",
+    h1: "*Snippets* and templates.",
+    sub: "Add things you need again and again in one tap.",
   },
   widgets: {
-    h1: "Notes on your *Home Screen.*",
-    sub: "Pinned and recent notes, or one note you pick. The + starts a new one.",
+    h1: "*Widgets.*",
+    sub: "Open pinned and recent notes right from your Home Screen.",
   },
 };
 
@@ -87,7 +87,7 @@ const layouts = {
     // Magnified snippet menu over its spot in the toolbar
     snippets: [
       { img: "mac/mac-snippets", frame: "mac", w: 2080, css: center },
-      { img: "mac/mac-snippets", crop: [1840, 110, 500, 240], scale: 2, css: "right:220px;top:30px" },
+      { img: "mac/mac-snippets", crop: [1880, 95, 560, 260], scale: 2, css: "right:180px;top:20px" },
     ],
   },
 };

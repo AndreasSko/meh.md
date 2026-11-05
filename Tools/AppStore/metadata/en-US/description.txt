@@ -1,12 +1,15 @@
 The note-taking app of my dreams - that was the goal of this app.
 Markdown first, minimalistic, and having a great sync. It’s not meant as an Obsidian replacement, but borrows some of its (and other plugins') features that were most useful to me, including:
-- Pretty nice iCloud sync: You can edit the same note on multiple devices, and don't need to worry about conflicts
+- Pretty nice iCloud* sync: You can edit the same note on multiple devices, and don't need to worry about conflicts
 - Snippets and templates
 - Version history (which gives me peace of mind when rewriting notes)
+- Widgets, so you can open pinned and recent notes directly from your Home Screen
 - (Back)links
 - iPhone, iPad, and Mac support
-- ..and: no need for yet another account or subscription
+- ..and: no need for yet another account or subscription!
 
-But why is it called meh? Well.. First of all I found it funny. It also sounded like “my” (because it’s MY Markdown app), and it should be a bit.. Meh. Nothing fancy; an app that Just. Works.
+But why is it called meh? Well.. First of all I found it funny. It also sounded like “my” (because it’s MY Markdown app), and it should be a bit.. Meh. Nothing too fancy; an app that Just. Works.
 
 Maybe it works for you too? :)
+
+*there is also support for S3-compatible storage for the nerds, but it is still “in beta”

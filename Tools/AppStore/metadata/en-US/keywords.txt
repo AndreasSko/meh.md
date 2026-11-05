@@ -1,1 +1,1 @@
-icloud,backlinks,templates,snippets,version,history,offline,editor,writing,text,wiki,zettelkasten
+note,notebook,backlink,template,snippet,wiki,zettelkasten,pkm,second brain,editor,icloud,offline
