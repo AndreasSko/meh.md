@@ -2,7 +2,7 @@
 # Publishes the App Store page from metadata/ and out/ to App Store Connect.
 # Without --confirm it only shows what would change.
 #
-#   publish.sh                      dry run for the app's current version
+#   publish.sh                      dry run for the version main builds
 #   publish.sh --confirm            write text and screenshots
 #   publish.sh --version 1.1        target another App Store version
 #   publish.sh --skip-screenshots   text only
@@ -28,9 +28,7 @@ if [[ -z $version ]]; then
   if (( check )); then
     version=check
   else
-    version=$(xcodebuild -showBuildSettings -project ../../meh.md.xcodeproj \
-      -scheme meh.md -configuration Release 2>/dev/null \
-      | awk '$1 == "MARKETING_VERSION" { print $3; exit }')
+    version=$(../../scripts/app_version.sh)
   fi
 fi
 
@@ -85,7 +83,7 @@ for platform in IOS MAC_OS; do
       print "Would create App Store version $version, can't preview further without it."
       continue
     fi
-    asc versions create --app $app --version $version --platform $platform --release-type MANUAL --output table
+    asc versions create --app $app --version $version --platform $platform --release-type AFTER_APPROVAL --output table
   elif [[ ${editable#* } != $version ]]; then
     if (( confirm )); then
       asc versions update --version-id ${editable% *} --version $version --output table
