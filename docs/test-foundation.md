@@ -104,6 +104,56 @@ run. A PR goal is skipped nightly on every platform, including ones its PR
 plan leaves out. Scheduled runs need the workflow on `main`; it can also be
 started by hand from the Actions tab.
 
+## Skipping lanes a PR cannot affect
+
+A PR skips the UI goals of a lane when nothing it changes can reach them.
+Each lane (iPhone, iPad, Mac) decides on its own. Docs, unit tests,
+tools, other scripts and workflows, the widget extension and a version
+bump need no UI goal. A Swift change needs none on a lane that compiles
+the same code as before: only comments or blank lines changed, or only
+code inside an `#if` for another platform. So a Mac-only fix skips the
+iPhone and iPad lanes. Other Swift changes pick goals from coverage, as
+the next section describes. Without coverage, a changed UI test file runs
+just its own class, which is all such a file may declare, and anything
+else runs the whole plan. So does any change to the UI harness.
+
+When in doubt the rule runs everything, so no goal is dropped on a guess.
+
+`scripts/select_ui_tests.py` applies these rules. A small job on Linux
+runs the harness unit tests, picks the goals and starts only the lanes
+with something to run. It passes a UI test class to
+`run_ui_foundation.py --only` and lists the reason for each file in the
+run summary. Manual runs use the whole plan. Locally,
+`scripts/select_ui_tests.py iphone` compares the branch and its
+uncommitted changes with `origin/main` and prints the matching
+`xcodebuild` arguments, with the reason for each file on stderr.
+
+## Picking goals from coverage
+
+Every night `ui-coverage.yml` runs each PR goal of every lane on its own,
+with code coverage, on `main`. `run_ui_foundation.py --coverage` saves
+which source lines each goal ran, per lane, as the `ui-coverage-iphone`,
+`-ipad` and `-mac` artifacts. That run also checks every PR goal on
+`main` each night.
+
+A PR then runs the goals that ran a line it changes. New code runs the
+goals that ran the lines around it. The diff starts at the commit the
+index was taken at, so changes merged since then count too; that can only
+add goals. Goals the index does not know yet always run.
+
+Coverage cannot see code that runs without a changed caller. So these run
+the whole plan: new initializers, overrides, conformances and enum cases,
+attributes such as `@objc`, a new func or type that no changed line uses
+(it may be a delegate method), `#if` conditions the lane cannot decide,
+and changes to lines with no line data, such as a `static let` table or
+a file of only declarations. A new file runs through the changed lines
+that use it, unless it declares one of those things itself.
+
+Most app changes still touch code that nearly every goal runs, such as
+startup and the root view, so they still run most goals. The savings are
+in narrower changes: a single screen, sync status, a widget-only change
+or a fix for another platform.
+
 ## Execution and evidence
 
 The `meh.md CI` scheme uses Debug-iCloud. Each lane builds its platform
