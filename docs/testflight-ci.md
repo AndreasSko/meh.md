@@ -2,23 +2,23 @@
 
 The `Internal TestFlight` workflow validates the merged commit, archives the
 regular `meh.md` Release scheme for iOS/iPadOS and macOS, and distributes both
-builds to one existing internal TestFlight group. Exports are marked
-internal-only. External testing and App Store submission are out of scope.
+builds to one existing internal TestFlight group. It is the first step of
+[Releasing](releasing.md): the beta and App Store workflows promote these
+builds instead of building their own.
 
 ## Pull request checks
 
-Every PR installs the pinned ASC CLI, validates the export plists, and builds
-Release for iOS Simulator and macOS with signing disabled. These jobs have
+Every PR installs the pinned ASC CLI, validates the export plists, runs the
+tests of the release scripts, and builds Release for iOS Simulator and macOS
+with signing disabled. These jobs have
 no Apple secrets and never upload builds. The separate notebook workflow runs
 its existing tests. Signed archives and Apple processing are checked only
 when publishing from `main`; there is no separate signing rehearsal.
 
 ## Triggers and concurrency
 
-- Pushes to `main` that change `meh.md.xcodeproj/project.pbxproj` trigger
-  a run.
-  The file contains the app version and build number. Other project-file
-  changes also qualify; this is a path filter, not a semantic version check.
+- Every push to `main` triggers a run, unless it only changes `docs/`,
+  Markdown files or `Tools/AppStore/`.
 - Use Actions > Internal TestFlight > Run workflow on `main` to retry or build
   after changing only credentials or workflow configuration.
 - GitHub's built-in concurrency cancels superseded runs and replaces pending
@@ -35,11 +35,21 @@ when publishing from `main`; there is no separate signing rehearsal.
   the Mac while the iOS build uploads and waits for Apple processing in a
   background step. A failure on one platform does not stop the other.
 
-The repository's per-PR marketing-version bump remains in place. At build
-time, `asc builds next-build-number` chooses the next integer from processed
-builds and in-flight uploads across versions, separately for each platform.
-The override is not committed. Retries receive new numbers, and existing
-manual uploads are included. Do not upload independently while CI publishes.
+## Version, build number and test notes
+
+The version comes from `scripts/app_version.sh`, one minor version above
+the newest release tag; [Releasing](releasing.md#version-numbers) explains
+the rule. At build time, `asc builds next-build-number` chooses the next
+integer from processed builds and in-flight uploads across versions,
+separately for each platform. Both are passed to `xcodebuild` and never
+committed. Retries receive new numbers, and existing manual uploads are
+included. Do not upload independently while CI publishes.
+
+The test notes are the first paragraph of the merged PR's description,
+followed by the commit. After each platform is processed and assigned, the
+job records the build on its commit as a commit status, `testflight/IOS` or
+`testflight/MAC_OS`, described as `<version> (<build number>)`. The beta
+and release workflows use it to find a commit's builds.
 
 ## GitHub environment
 
@@ -131,7 +141,8 @@ from its existing secret in the Xcode 27 profile directory. Xcode-managed
 team profiles cannot be used with this manual-signing workflow.
 Xcode validates signing compatibility during
 archive and export; the export plists explicitly select Production CloudKit
-and internal-only distribution. GitHub destroys the hosted VM after the job.
+and leave the builds open to external testing and the App Store. GitHub
+destroys the hosted VM after the job.
 
 The selected profile names are checked into the workflow and export plists:
 
@@ -165,14 +176,16 @@ verify launch and Production CloudKit sync on real devices.
 If Apple processing times out or a run is canceled after upload, inspect the
 build in App Store Connect first. It may still finish processing. A full
 rerun creates new builds; to reuse an existing processed build, add it to the
-internal group in App Store Connect. API errors and partial publish results
-remain in the Actions logs. Do not interpret an upload alone as delivery.
+internal group in App Store Connect. Such a build has no commit status, so
+the beta and release workflows won't find it; rerun the workflow for that.
+API errors and partial publish results remain in the Actions logs. Do not
+interpret an upload alone as delivery.
 
 The setup action installs ASC 5.3.4 with checksum verification and caching.
 All new actions are pinned to commit SHAs. Export settings live in
 `.github/testflight/`; no custom publishing or signing scripts are needed. No
-personal
-GitHub token is required; the workflow's token only has `contents: read`.
+personal GitHub token is required. The publish job's token can read the
+repository and pull requests and write commit statuses, nothing else.
 
 ## References
 

@@ -19,6 +19,8 @@ and the evidence collected along the way.
 - [Development builds](development-builds.md): Local, development-cloud, and
   production-cloud schemes.
 - [CloudKit setup](cloudkit-sync-setup.md): signing and container setup.
+- [Releasing](releasing.md): versions, release notes, and how a build moves
+  from internal TestFlight to the beta and the App Store.
 - [Internal TestFlight delivery](testflight-ci.md): CI triggers, credentials,
   signing assets, and first-run verification.
 - [Local sync service](local-sync-service.md): account-free replication tests.
