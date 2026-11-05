@@ -72,10 +72,12 @@ def expected_cases(plan, universe):
 
 
 def results(summary, tests, platform, allow_skips=False):
-    """Map each executed case to Passed, Failed or Skipped for one bundle.
+    """Map each executed case to its XCTest result for one bundle.
 
     Only nightly runs allow skips: they include every compiled case, and
-    some skip themselves on devices they do not apply to.
+    some skip themselves on devices they do not apply to. Expected
+    failures come from XCTExpectFailure in the test itself and count as
+    neither passed nor failed, matching the Xcode summary.
     """
     cases = {}
 
@@ -84,7 +86,7 @@ def results(summary, tests, platform, allow_skips=False):
             identifier = canonical(node.get("nodeIdentifier"))
             if identifier in cases:
                 raise ValueError(f"Duplicate case: {identifier}")
-            allowed = {"Passed", "Failed"} | ({"Skipped"} if allow_skips else set())
+            allowed = {"Passed", "Failed", "Expected Failure"} | ({"Skipped"} if allow_skips else set())
             if node.get("result") not in allowed:
                 raise ValueError(f"Unexpected test result: {node}")
             if any(
@@ -100,12 +102,15 @@ def results(summary, tests, platform, allow_skips=False):
         visit(node)
     failed = sum(result == "Failed" for result in cases.values())
     skipped = sum(result == "Skipped" for result in cases.values())
+    expected_failures = sum(
+        result == "Expected Failure" for result in cases.values()
+    )
     for key, value in {
-        "passedTests": len(cases) - failed - skipped,
+        "passedTests": len(cases) - failed - skipped - expected_failures,
         "totalTestCount": len(cases),
         "failedTests": failed,
         "skippedTests": skipped,
-        "expectedFailures": 0,
+        "expectedFailures": expected_failures,
     }.items():
         if summary.get(key) != value:
             raise ValueError(f"{key}: expected {value}, got {summary.get(key)}")
@@ -151,7 +156,10 @@ def check(first, expected, retry=None):
         return {}
     if retry is None or set(retry) != retried:
         raise ValueError(f"Retry must run exactly the failed cases: {sorted(retried)}")
-    still_failing = sorted(case for case in retried if retry[case] != "Passed")
+    still_failing = sorted(
+        case for case in retried
+        if retry[case] not in {"Passed", "Expected Failure"}
+    )
     if still_failing:
         raise ValueError(f"Failed again on retry: {still_failing}")
-    return {case: ["Failed", "Passed"] for case in sorted(retried)}
+    return {case: ["Failed", retry[case]] for case in sorted(retried)}
