@@ -24,6 +24,31 @@ final class NoteDocumentTests: XCTestCase {
         XCTAssertGreaterThan(reloaded.historyCount, 1)
     }
 
+    func testLeadingByteOrderMarkSurvivesEditsReloadAndHistory() throws {
+        let original = "\u{FEFF}ab"
+        let note = try NoteDocument(noteID: noteID, text: original)
+        XCTAssertEqual(Array(try note.text.utf8), Array(original.utf8))
+
+        try note.replaceUTF16(
+            range: NSRange(location: original.utf16.count, length: 0),
+            with: "c",
+            at: Date().addingTimeInterval(86_400)
+        )
+        let edited = "\u{FEFF}abc"
+        XCTAssertEqual(Array(try note.text.utf8), Array(edited.utf8))
+
+        let reloaded = try NoteDocument(snapshot: note.snapshot())
+        XCTAssertEqual(Array(try reloaded.text.utf8), Array(edited.utf8))
+        let versions = try reloaded.historyVersions(detailed: true)
+        XCTAssertFalse(versions.isEmpty)
+        for version in versions {
+            XCTAssertEqual(
+                try reloaded.historicalText(for: version).unicodeScalars.first,
+                "\u{FEFF}"
+            )
+        }
+    }
+
     func testHexMatchesAutomergeHashText() throws {
         let note = try NoteDocument(noteID: noteID, text: "one")
         try note.replaceAll(with: "one two")
