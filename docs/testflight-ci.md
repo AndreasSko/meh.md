@@ -28,9 +28,12 @@ when publishing from `main`; there is no separate signing rehearsal.
   both platforms. Pushes excluded by the path filter do not cancel a run.
 - Both platforms use the standard `xcode-27` arm64 runner. It is currently a
   public preview. The workflow fails if its selected Xcode is not version 27.
-- Release builds and notebook validation must pass before signing starts. A
-failure
-  on one platform does not cancel the other platform's job.
+- Notebook validation must pass before signing starts. Pushes to `main`
+  skip the unsigned Release builds, since the signed archives compile the
+  same code.
+- One job publishes both platforms. It archives iOS first, then archives
+  the Mac while the iOS build uploads and waits for Apple processing in a
+  background step. A failure on one platform does not stop the other.
 
 The repository's per-PR marketing-version bump remains in place. At build
 time, `asc builds next-build-number` chooses the next integer from processed
@@ -154,9 +157,9 @@ The pipeline intentionally does not create or revoke Apple signing assets.
 ## First run and recovery
 
 After adding the configuration, manually run the workflow on `main`. Check
-each platform's Actions summary for the commit, version, build number, and
-Apple build ID. Success means processing completed and the internal group
-assignment was read back. Finally install both builds using TestFlight and
+the run's Actions summary for each platform's commit, version, build
+number, and Apple build ID. Success means processing completed and the
+internal group assignment was read back. Finally install both builds using TestFlight and
 verify launch and Production CloudKit sync on real devices.
 
 If Apple processing times out or a run is canceled after upload, inspect the
