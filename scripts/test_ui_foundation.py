@@ -231,6 +231,27 @@ class FoundationTests(unittest.TestCase):
         self.assertNotIn("selectedTests", nightly)
         self.assertEqual(set(nightly["skippedTests"]), pr_goals | tools)
 
+    def test_expected_failures_neither_pass_nor_retry(self):
+        self.tests["testNodes"][0]["result"] = "Expected Failure"
+        self.summary["passedTests"] = 1
+        with self.assertRaises(ValueError):
+            results(self.summary, self.tests, "mac")
+        self.summary["expectedFailures"] = 1
+        self.summary["devicesAndConfigurations"][0]["device"] = {
+            "platform": "macOS",
+            "osVersion": "27.0",
+        }
+        first = results(self.summary, self.tests, "mac")
+        self.assertEqual(sorted(first.values()), ["Expected Failure", "Passed"])
+        self.assertEqual(failed(first, self.expected), set())
+        self.assertEqual(check(first, self.expected), {})
+        # An earlier assertion can fail the case before its known issue runs.
+        first = {"Case/testA": "Failed", "Case/testB": "Passed"}
+        self.assertEqual(
+            check(first, self.expected, {"Case/testA": "Expected Failure"}),
+            {"Case/testA": ["Failed", "Expected Failure"]},
+        )
+
     def test_skip_only_plan_runs_every_compiled_case(self):
         plan = {"testTargets": [{
             "target": {"name": "meh.mdUITests"},
