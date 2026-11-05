@@ -1,0 +1,111 @@
+name: App Store release
+
+# Publishing a GitHub release submits the builds of its commit to App
+# Review, with the release text as What's New. Nothing is rebuilt.
+# See docs/releasing.md.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to submit again, like v0.31.0
+        required: true
+
+permissions:
+  contents: read
+  statuses: read
+
+concurrency:
+  group: app-store-release
+  cancel-in-progress: false
+
+# bash -eo pipefail, so a failing command in a pipe fails its step
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  submit:
+    name: Submit to App Review
+    environment: app-store
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      ASC_APP_ID: ${{ vars.ASC_APP_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+      ASC_BYPASS_KEYCHAIN: '1'
+      ASC_NO_UPDATE: '1'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - uses: rudrankriyam/setup-asc@5358c70a27a3f0d1517604b0f1fdc43e70c1cc4d
+        with:
+          version: 6.3.0
+      - name: Find the builds
+        id: builds
+        run: |
+          [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::$TAG is not a release tag like v0.31.0."
+            exit 1
+          }
+          scripts/testflight_builds.sh "$TAG" | tee -a "$GITHUB_OUTPUT" > builds.txt
+          version=$(sed -n 's/^version=//p' builds.txt)
+          [[ $version == "${TAG#v}" ]] || {
+            echo "::error::$TAG points at builds of version $version."
+            exit 1
+          }
+      - name: Write What's New
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body \
+            | scripts/release_notes.py plain > Tools/AppStore/metadata/en-US/whats_new.txt
+          [[ -s Tools/AppStore/metadata/en-US/whats_new.txt ]] || {
+            echo "::error::The release $TAG has no text for What's New."
+            exit 1
+          }
+          cat Tools/AppStore/metadata/en-US/whats_new.txt
+      # Each platform on its own, so a rerun after a partial failure submits
+      # only what's still missing.
+      - name: Prepare and submit each platform
+        env:
+          VERSION: ${{ steps.builds.outputs.version }}
+          IOS_BUILD: ${{ steps.builds.outputs.ios }}
+          MAC_BUILD: ${{ steps.builds.outputs.mac }}
+        run: |
+          # The states in which publish.sh can still edit a version
+          editable='PREPARE_FOR_SUBMISSION DEVELOPER_REJECTED REJECTED METADATA_REJECTED INVALID_BINARY'
+          version_of() {
+            asc versions list --app "$ASC_APP_ID" --platform "$1" --paginate --output json \
+              | jq -r --arg v "$VERSION" \
+                "[.data[] | select(.attributes.versionString == \$v)][0] | $2 // empty"
+          }
+          for platform in IOS MAC_OS; do
+            state=$(version_of "$platform" .attributes.appStoreState)
+            if [[ -n $state && " $editable " != *" $state "* ]]; then
+              echo "::notice::$platform $VERSION is already $state, so it isn't submitted again."
+              continue
+            fi
+            number=$([[ $platform == IOS ]] && echo "$IOS_BUILD" || echo "$MAC_BUILD")
+            Tools/AppStore/publish.sh --confirm --skip-screenshots \
+              --version "$VERSION" --platform "$platform"
+            version_id=$(version_of "$platform" .id)
+            build_id=$(asc builds list --app "$ASC_APP_ID" --platform "$platform" \
+              --version "$VERSION" --build-number "$number" --output json | jq -er '.data[0].id')
+            # Goes live for everyone as soon as Apple approves it.
+            asc versions update --version-id "$version_id" --release-type AFTER_APPROVAL \
+              --output table
+            asc versions attach-build --version-id "$version_id" --build-id "$build_id" \
+              --output table
+            asc validate --app "$ASC_APP_ID" --version-id "$version_id" --output table
+            asc review submit --app "$ASC_APP_ID" --version-id "$version_id" \
+              --build-id "$build_id" --confirm --output table
+            printf '%s %s (%s) is submitted to App Review.\n\n' \
+              "$platform" "$VERSION" "$number" >> "$GITHUB_STEP_SUMMARY"
+          done

@@ -6,19 +6,21 @@
 #   publish.sh --confirm            write text and screenshots
 #   publish.sh --version 1.1        target another App Store version
 #   publish.sh --skip-screenshots   text only
+#   publish.sh --platform MAC_OS    one platform, IOS or MAC_OS
 #   publish.sh --check              validate the text offline, nothing else
 set -euo pipefail
 cd "${0:A:h}"
 # Apple can take minutes to process an uploaded screenshot
 export ASC_TIMEOUT=${ASC_TIMEOUT:-5m} ASC_UPLOAD_TIMEOUT=${ASC_UPLOAD_TIMEOUT:-20m}
 
-confirm=0 check=0 screenshots=1 version=""
+confirm=0 check=0 screenshots=1 version="" platforms=(IOS MAC_OS)
 while (( $# )); do
   case $1 in
     --confirm) confirm=1 ;;
     --check) check=1 ;;
     --skip-screenshots) screenshots=0 ;;
     --version) version=$2; shift ;;
+    --platform) platforms=($2); shift ;;
     *) print -u2 "Unknown option: $1"; exit 2 ;;
   esac
   shift
@@ -69,7 +71,7 @@ fi
 failed=()
 typeset -A platform_devices=(IOS "iphone ipad" MAC_OS "mac")
 typeset -A display_type=(iphone IPHONE_69 ipad IPAD_PRO_3GEN_129 mac DESKTOP)
-for platform in IOS MAC_OS; do
+for platform in $platforms; do
   print "\n== $platform"
   # Apple allows one version in preparation per platform. Reuse it and give it
   # the app's version, so it always matches the build that gets submitted.
