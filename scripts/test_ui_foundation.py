@@ -20,10 +20,11 @@ from run_ui_foundation import (
     WATCHDOG_SECONDS,
     in_background,
     report_retries,
-    retry_arguments,
+    only_testing_arguments,
     bounded,
     finalize,
     select_simulator,
+    selected,
 )
 
 
@@ -69,7 +70,8 @@ class FoundationTests(unittest.TestCase):
         workflow = (
             Path(__file__).resolve().parents[1] / ".github/workflows" / workflow_name
         ).read_text()
-        job_minutes = int(re.search(r"timeout-minutes: (\d+)", workflow)[1])
+        # The UI lane has the longest job timeout; a selection job may come first.
+        job_minutes = max(map(int, re.findall(r"timeout-minutes: (\d+)", workflow)))
         # Both passes' exports, two simulator cleanup commands and four minutes
         # for metadata/setup must fit even if every major phase hits its cap.
         maximum_lane = (
@@ -155,7 +157,7 @@ class FoundationTests(unittest.TestCase):
         first = results(self.summary, self.tests, "iphone")
         self.assertEqual(failed(first, self.expected), {"Case/testA"})
         self.assertEqual(
-            retry_arguments({"Case/testA"}),
+            only_testing_arguments({"Case/testA"}),
             ["-only-testing:meh.mdUITests/Case/testA"],
         )
         retry = {"Case/testA": "Passed"}
@@ -167,6 +169,13 @@ class FoundationTests(unittest.TestCase):
         self.assertEqual(manifest["retriedTests"], ["Case/testA"])
         self.assertIn("::warning", output.call_args.args[0])
         self.assertIn("Case/testA: Failed -> Passed", output.call_args.args[0])
+
+    def test_selection_must_stay_inside_the_plan(self):
+        self.assertEqual(selected(self.expected, ["Case/testA"]), {"Case/testA"})
+        self.assertEqual(selected(self.expected, ["Case"]), self.expected)
+        for outside in ["Case/testC", "Cas"]:
+            with self.assertRaisesRegex(ValueError, outside):
+                selected(self.expected, ["Case/testA", outside])
 
     def test_invalid_retries_fail_closed(self):
         first = {"Case/testA": "Failed", "Case/testB": "Passed"}

@@ -25,9 +25,23 @@ ROOT = Path(__file__).resolve().parent.parent
 MAX_RETRIED_TESTS = 5
 
 
-def retry_arguments(cases):
-    """Select only the failed cases for one rerun in a fresh test runner."""
+def only_testing_arguments(cases):
+    """Run just these cases, such as the failed ones on a rerun."""
     return [f"-only-testing:meh.mdUITests/{case}" for case in sorted(cases)]
+
+
+def selected(expected, only):
+    """Narrow the plan to the chosen classes or cases; each must be in it."""
+    chosen = set()
+    for selector in only:
+        matches = {
+            case for case in expected
+            if case == selector or case.startswith(selector + "/")
+        }
+        if not matches:
+            raise ValueError(f"Selected tests outside the plan: {selector}")
+        chosen |= matches
+    return chosen
 
 
 def in_background(function):
@@ -169,6 +183,10 @@ def main():
     parser.add_argument(
         "--nightly", action="store_true",
         help="Run every compiled UI test except tools, via the Nightly plan",
+    )
+    parser.add_argument(
+        "--only", nargs="+", metavar="CASE",
+        help="Run just these Class/test cases of the plan (see select_ui_tests.py)",
     )
     args = parser.parse_args()
 
@@ -424,6 +442,9 @@ def main():
             expected = expected_cases(json.loads(plan_path.read_text()), compiled)
             if compiled != expected:
                 raise ValueError("Compiled platform selection differs from its plan")
+            if args.only:
+                expected = selected(expected, args.only)
+                manifest["selectedTests"] = sorted(expected)
             manifest["expectedTests"] = sorted(expected)
             (evidence / "expected-tests.json").write_text(
                 json.dumps(sorted(expected), indent=2) + "\n"
@@ -431,7 +452,7 @@ def main():
             (evidence / "platform.xctestrun").write_bytes(runs[0].read_bytes())
             xctestrun = runs[0]
             first = run_pass(
-                "test", [],
+                "test", only_testing_arguments(expected) if args.only else [],
                 WATCHDOG_SECONDS["nightly_test" if args.nightly else "test"],
             )
             manifest["skippedTests"] = sorted(
@@ -447,7 +468,7 @@ def main():
                         f"than {MAX_RETRIED_TESTS}: {sorted(retry_cases)}"
                     )
                 retry = run_pass(
-                    "retry", retry_arguments(retry_cases), WATCHDOG_SECONDS["retry"]
+                    "retry", only_testing_arguments(retry_cases), WATCHDOG_SECONDS["retry"]
                 )
             report_retries(manifest, check(first, expected, retry))
             validation_complete = True

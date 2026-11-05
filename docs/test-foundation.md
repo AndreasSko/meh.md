@@ -104,6 +104,29 @@ run. A PR goal is skipped nightly on every platform, including ones its PR
 plan leaves out. Scheduled runs need the workflow on `main`; it can also be
 started by hand from the Actions tab.
 
+## Skipping lanes a PR cannot affect
+
+A PR skips the UI goals of a lane when nothing it changes can reach them.
+Each lane (iPhone, iPad, Mac) decides on its own. Docs, unit tests,
+tools, other scripts and workflows, the widget extension and a version
+bump need no UI goal. A Swift change needs none on a lane that compiles
+the same code as before: only comments or blank lines changed, or only
+code inside an `#if` for another platform. So a Mac-only fix skips the
+iPhone and iPad lanes. A changed UI test file runs just its own class,
+which is all such a file may declare. Anything else, and any change to
+the UI harness, runs the whole plan.
+
+When in doubt the rule runs everything, so no goal is dropped on a guess.
+
+`scripts/select_ui_tests.py` applies these rules. A small job on Linux
+runs the harness unit tests, picks the goals and starts only the lanes
+with something to run. It passes a UI test class to
+`run_ui_foundation.py --only` and lists the reason for each file in the
+run summary. Manual runs use the whole plan. Locally,
+`scripts/select_ui_tests.py iphone` compares the branch and its
+uncommitted changes with `origin/main` and prints the matching
+`xcodebuild` arguments, with the reason for each file on stderr.
+
 ## Execution and evidence
 
 The `meh.md CI` scheme uses Debug-iCloud. Each lane builds its platform

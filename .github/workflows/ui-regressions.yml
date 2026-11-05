@@ -12,15 +12,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  select:
+    name: Select UI goals
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          # The merge base with the PR's base branch must be in the checkout.
+          fetch-depth: 0
+      # Here, so harness changes are checked even when no UI lane starts.
+      - name: Check selection and result gates
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s scripts -p 'test_*ui*.py'
+      - name: Pick goals from the diff
+        id: select
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE" ]; then
+            python3 scripts/select_ui_tests.py --github-output --base "$BASE"
+          else
+            python3 scripts/select_ui_tests.py --github-output --all
+          fi
+
   ui:
     name: UI goals (${{ matrix.platform }})
+    needs: select
+    if: needs.select.outputs.matrix != '[]'
     runs-on: xcode-27
     # Harness watchdog with export/cleanup headroom, not an app speed budget.
     timeout-minutes: 195
     strategy:
       fail-fast: false
       matrix:
-        platform: [iphone, ipad, mac]
+        include: ${{ fromJSON(needs.select.outputs.matrix) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -29,9 +59,15 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 -m unittest discover -s scripts -p 'test_ui_foundation.py'
-      - name: Build once and exercise independent UI goals
+      - name: Build once and exercise the selected UI goals
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          SELECTION: ${{ matrix.selection }}
         run: |
-          python3 scripts/run_ui_foundation.py '${{ matrix.platform }}' \
+          set -f --
+          # Selectors are plain Class or Class/testName words, split on purpose.
+          if [ "$SELECTION" != full ]; then set -- --only $SELECTION; fi
+          python3 scripts/run_ui_foundation.py "$PLATFORM" "$@" \
             --evidence-root "$RUNNER_TEMP/ui-foundation"
       - name: Preserve inventory, timings and UI evidence
         if: always()
