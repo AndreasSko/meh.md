@@ -24,6 +24,7 @@
       },
       "parallelizable": false,
       "selectedTests": [
+        "EditorRenderingUITests",
         "EditorScrollTypingUITests/testSourceColdFocusAndReturnKeepInsertionVisible",
         "EditorScrollTypingUITests/testPreviewColdFocusTypesIntoTappedParagraph",
         "EditorScrollTypingUITests/testPreviewTypingAndListReturnKeepInsertionVisible",
