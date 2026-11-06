@@ -43,6 +43,12 @@ private struct NotebookMacRecentsCompactGeometry: Equatable {
     let viewportWidth: CGFloat
 }
 
+/// The compact rows move on every scroll step. Keeping their geometry out of
+/// observed state avoids rebuilding the whole Files list each frame.
+private final class NotebookMacRecentsCompactGeometryBox {
+    var value: NotebookMacRecentsCompactGeometry?
+}
+
 struct NotebookMacRecentsExpansionHost<Browser: View, Row: View>: View {
     let items: [NotebookPlacement]
     let selectedNoteID: UUID?
@@ -53,7 +59,7 @@ struct NotebookMacRecentsExpansionHost<Browser: View, Row: View>: View {
     @ViewBuilder let rowContent: (NotebookPlacement, Int, Int) -> Row
     @ViewBuilder let browser: () -> Browser
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var compactGeometry: NotebookMacRecentsCompactGeometry?
+    @State private var compactGeometry = NotebookMacRecentsCompactGeometryBox()
 
     var body: some View {
         GeometryReader { geometry in
@@ -86,7 +92,7 @@ struct NotebookMacRecentsExpansionHost<Browser: View, Row: View>: View {
                         // Disabling Files can remove its scrollbar and widen
                         // the anchors. Preserve the bounds from before opening.
                         let source = isExpanded
-                            ? compactGeometry ?? measuredGeometry : measuredGeometry
+                            ? compactGeometry.value ?? measuredGeometry : measuredGeometry
                         let compactFrame = source.frame
                         // The host already sits below the window toolbar.
                         let minimumTop: CGFloat = 0
@@ -124,7 +130,7 @@ struct NotebookMacRecentsExpansionHost<Browser: View, Row: View>: View {
                                    value: isExpanded)
                         .onChange(of: measuredGeometry, initial: true) { _, value in
                             if !isExpanded, !anchors.isEmpty {
-                                compactGeometry = value
+                                compactGeometry.value = value
                             }
                         }
                     }
