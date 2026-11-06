@@ -57,3 +57,13 @@ func countingCatalogDecodes(_ body: () throws -> Void) throws -> Int {
     try body()
     return NotebookCatalogDocument.itemDecodes.load(ordering: .relaxed) - before
 }
+
+/// Full catalog reads `body` caused on the main thread.
+@MainActor
+func countingMainThreadCatalogDecodes(
+    _ body: () async throws -> Void
+) async throws -> Int {
+    let before = NotebookCatalogDocument.mainThreadItemDecodes.load(ordering: .relaxed)
+    try await body()
+    return NotebookCatalogDocument.mainThreadItemDecodes.load(ordering: .relaxed) - before
+}

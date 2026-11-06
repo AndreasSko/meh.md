@@ -273,18 +273,31 @@ public final class NotebookReplica {
         try NotebookCatalogDocument(snapshot: snapshot)
     }
 
+    /// Validates off the main actor: a record the validation cache doesn't
+    /// hold is read in full.
+    @concurrent nonisolated private static func validate(_ record: SyncRecord) async throws {
+        try record.validate()
+    }
+
+    /// Validates an incoming catalog record off the main actor. The caller
+    /// owns the catalog validation read.
+    @concurrent nonisolated private static func prepareCatalog(
+        record: SyncRecord
+    ) async throws -> sending NotebookCatalogDocument {
+        try record.validatedCatalog()
+    }
+
     /// Items marked permanently deleted in exactly `snapshot`. Uses the
     /// installed catalog only when it holds that version: a deletion made
     /// since then must not be included.
-    func permanentlyDeletedIDs(in snapshot: NotebookCatalogSnapshot) throws -> Set<UUID> {
-        let source = if let catalog, catalog.notebookID == snapshot.notebookID,
+    func permanentlyDeletedIDs(in snapshot: NotebookCatalogSnapshot) async throws -> Set<UUID> {
+        if let catalog, catalog.notebookID == snapshot.notebookID,
             catalog.heads == snapshot.heads
         {
-            catalog
-        } else {
-            try NotebookCatalogDocument(snapshot: snapshot)
+            return Set(try catalog.items().filter(\.isPermanentlyDeleted).map(\.id))
         }
-        return Set(try source.items().filter(\.isPermanentlyDeleted).map(\.id))
+        return Set(try await Self.prepareCatalog(snapshot: snapshot).items()
+            .filter(\.isPermanentlyDeleted).map(\.id))
     }
 
     public var deletedIDs: Set<UUID> {
@@ -1691,35 +1704,37 @@ public final class NotebookReplica {
                 // Often this device's own catalog coming back. There is
                 // nothing to read or merge, but persisting still applies
                 // deletions from the ledger and saves the catalog.
-                try record.validate()
+                try await Self.validate(record)
                 try await self.persistCatalog(try catalog.fork())
-            } else if let catalog = self.catalog {
-                let incoming = try record.validatedCatalog()
-                let next = try catalog.fork()
-                try next.merge(incoming)
-                let mergedLocations = Dictionary(uniqueKeysWithValues:
-                    Self.linkNotes(in: try next.placements()).map { ($0.id, $0) })
-                // A concurrent losing name/parent may have been used to author
-                // offline links. Preserve every observed remote location even
-                // if this replica's current placement wins the merge.
-                let remoteFormerLocations = Self.linkNotes(in: try incoming.placements())
-                    .filter { remote in
-                        guard let current = mergedLocations[remote.id] else { return false }
-                        return remote.location != current.location
-                    }
-                try next.recordLinkLocations(remoteFormerLocations)
-                let former = Set(self.placements.filter {
-                    !$0.isInTrash && $0.item.kind == .note
-                        && !$0.item.isPermanentlyDeleted
-                }.map { $0.item.id })
-                let now = Set(try next.placements().filter {
-                    !$0.isInTrash && $0.item.kind == .note
-                        && !$0.item.isPermanentlyDeleted
-                }.map { $0.item.id })
-                try next.clearRecents(for: former.subtracting(now))
-                try await self.persistCatalog(next)
             } else {
-                try await self.persistCatalog(record.validatedCatalog())
+                let incoming = try await Self.prepareCatalog(record: record)
+                if let catalog = self.catalog {
+                    let next = try catalog.fork()
+                    try next.merge(incoming)
+                    let mergedLocations = Dictionary(uniqueKeysWithValues:
+                        Self.linkNotes(in: try next.placements()).map { ($0.id, $0) })
+                    // A concurrent losing name/parent may have been used to author
+                    // offline links. Preserve every observed remote location even
+                    // if this replica's current placement wins the merge.
+                    let remoteFormerLocations = Self.linkNotes(in: try incoming.placements())
+                        .filter { remote in
+                            guard let current = mergedLocations[remote.id] else { return false }
+                            return remote.location != current.location
+                        }
+                    try next.recordLinkLocations(remoteFormerLocations)
+                    let former = Set(self.placements.filter {
+                        !$0.isInTrash && $0.item.kind == .note
+                            && !$0.item.isPermanentlyDeleted
+                    }.map { $0.item.id })
+                    let now = Set(try next.placements().filter {
+                        !$0.isInTrash && $0.item.kind == .note
+                            && !$0.item.isPermanentlyDeleted
+                    }.map { $0.item.id })
+                    try next.clearRecents(for: former.subtracting(now))
+                    try await self.persistCatalog(next)
+                } else {
+                    try await self.persistCatalog(incoming)
+                }
             }
             if let installed = self.catalogSnapshot,
                 record.snapshot.data.count + installed.data.count <= 16 * 1_024 * 1_024
@@ -1765,7 +1780,7 @@ public final class NotebookReplica {
     }
 
     func apply(_ record: SyncRecord) async throws {
-        try record.validate()
+        try await Self.validate(record)
         guard let catalog, record.protocolVersion == 2,
             record.notebookID == catalog.notebookID
         else { throw SyncError.identityConflict }

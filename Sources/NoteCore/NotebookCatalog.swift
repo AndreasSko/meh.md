@@ -126,6 +126,8 @@ final class NotebookCatalogDocument {
     /// Full item decodes across all catalogs, so tests can bound how often
     /// one sync step reads the whole catalog.
     static let itemDecodes = Atomic<Int>(0)
+    /// The part of `itemDecodes` that ran on the main thread.
+    static let mainThreadItemDecodes = Atomic<Int>(0)
     private var linkLocationsCache: (
         heads: Set<ChangeHash>, locations: [UUID: [NotebookLinkLocation]]
     )?
@@ -1509,6 +1511,7 @@ final class NotebookCatalogDocument {
         }
         readItemsDecodeCount += 1
         Self.itemDecodes.add(1, ordering: .relaxed)
+        if Thread.isMainThread { Self.mainThreadItemDecodes.add(1, ordering: .relaxed) }
         var cache = ItemsCache(heads: currentHeads, entries: [], conflictedKeys: [])
         for key in document.keys(obj: itemsObject).sorted() {
             let decoded = try decodeItem(at: key)

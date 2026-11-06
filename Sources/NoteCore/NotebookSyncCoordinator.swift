@@ -563,7 +563,7 @@ public final class NotebookSyncCoordinator {
                 == publishedCatalog.snapshot.heads,
             let snapshot = publishedCatalog.catalogSnapshot
         {
-            let deleted = try replica.permanentlyDeletedIDs(in: snapshot)
+            let deleted = try await replica.permanentlyDeletedIDs(in: snapshot)
             if !deleted.isEmpty {
                 updateProgress(phase: .cleaningUp, cleanupItemCount: deleted.count)
                 diagnosticLog?.record("deletion_cleanup_start", counts: ["items": deleted.count])

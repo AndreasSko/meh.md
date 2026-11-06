@@ -31,6 +31,43 @@ final class NotebookCatalogDecodeBudgetTests: XCTestCase {
             Set(local.placements.map(\.item.name)), ["Local.md", "Remote.md"])
     }
 
+    func testApplyingRemoteCatalogReadsNothingOnTheMainThread() async throws {
+        let local = NotebookReplica(directory: temporaryDirectory())
+        try await local.createLocalNotebook()
+        let remote = NotebookReplica(directory: temporaryDirectory())
+        try await remote.acceptSeed(
+            SyncRecord(catalog: try XCTUnwrap(local.catalogSnapshot)))
+        _ = try await remote.createNote(name: "Remote.md")
+        let record = SyncRecord(catalog: try XCTUnwrap(remote.catalogSnapshot))
+
+        let decodes = try await countingMainThreadCatalogDecodes {
+            try await local.acceptSeed(record)
+        }
+
+        XCTAssertEqual(decodes, 0)
+        XCTAssertEqual(local.placements.map(\.item.name), ["Remote.md"])
+    }
+
+    func testApplyingAnUnvalidatedRemoteCatalogReadsNothingOnTheMainThread()
+        async throws
+    {
+        let local = NotebookReplica(directory: temporaryDirectory())
+        try await local.createLocalNotebook()
+        let remote = NotebookReplica(directory: temporaryDirectory())
+        try await remote.acceptSeed(
+            SyncRecord(catalog: try XCTUnwrap(local.catalogSnapshot)))
+        _ = try await remote.createNote(name: "Remote.md")
+        // Never validated here, as after the validation cache dropped it.
+        let record = SyncRecord(catalog: try XCTUnwrap(remote.catalogSnapshot))
+
+        let decodes = try await countingMainThreadCatalogDecodes {
+            try await local.apply(record)
+        }
+
+        XCTAssertEqual(decodes, 0)
+        XCTAssertEqual(local.placements.map(\.item.name), ["Remote.md"])
+    }
+
     func testApplyingOwnPublishedCatalogReadsItOncePerNeededStep() async throws {
         let local = NotebookReplica(directory: temporaryDirectory())
         try await local.createLocalNotebook()
@@ -42,6 +79,23 @@ final class NotebookCatalogDecodeBudgetTests: XCTestCase {
 
         let decodes = try await countingCatalogDecodes {
             try await local.apply(record)
+        }
+
+        XCTAssertEqual(decodes, 0)
+        XCTAssertEqual(local.catalogSnapshot, record.catalogSnapshot)
+    }
+
+    func testAcceptingTheUnvalidatedInstalledCatalogReadsNothingOnTheMainThread()
+        async throws
+    {
+        let local = NotebookReplica(directory: temporaryDirectory())
+        try await local.createLocalNotebook()
+        _ = try await local.createNote(name: "Local.md")
+        // Never validated, as for a record the validation cache dropped.
+        let record = SyncRecord(catalog: try XCTUnwrap(local.catalogSnapshot))
+
+        let decodes = try await countingMainThreadCatalogDecodes {
+            try await local.acceptSeed(record)
         }
 
         XCTAssertEqual(decodes, 0)
@@ -90,13 +144,22 @@ final class NotebookCatalogDecodeBudgetTests: XCTestCase {
         let note = try await replica.createNote(name: "Note.md")
         try await replica.setTrashed(note, true)
         let published = try XCTUnwrap(replica.catalogSnapshot)
-        XCTAssertEqual(try replica.permanentlyDeletedIDs(in: published), [])
+        let beforeDeletion = try await replica.permanentlyDeletedIDs(in: published)
+        XCTAssertEqual(beforeDeletion, [])
 
         try await replica.permanentlyDelete(
             try replica.deletionSelection(rootIDs: [note]))
 
-        XCTAssertEqual(try replica.permanentlyDeletedIDs(in: published), [])
+        var afterDeletion: Set<UUID> = []
+        // The published version is no longer installed, so it is read in
+        // the background.
+        let decodes = try await countingMainThreadCatalogDecodes {
+            afterDeletion = try await replica.permanentlyDeletedIDs(in: published)
+        }
+        XCTAssertEqual(afterDeletion, [])
+        XCTAssertEqual(decodes, 0)
         let current = try XCTUnwrap(replica.catalogSnapshot)
-        XCTAssertEqual(try replica.permanentlyDeletedIDs(in: current), [note])
+        let currentDeleted = try await replica.permanentlyDeletedIDs(in: current)
+        XCTAssertEqual(currentDeleted, [note])
     }
 }
