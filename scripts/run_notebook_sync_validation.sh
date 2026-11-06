@@ -69,6 +69,8 @@ if ! python3 -m unittest discover -s Tools/CloudKit -p 'test_notebook_lab.py' \
 fi
 
 if ! swift test --disable-sandbox >"$test_log" 2>&1; then
+    # Failures can scroll out of the tail below; list them first.
+    grep -E ': error: |failed \(' "$test_log" || true
     tail -n 200 "$test_log"
     printf 'Full test log: %s\n' "$test_log"
     printf 'Service log: %s\n' "$service_log"

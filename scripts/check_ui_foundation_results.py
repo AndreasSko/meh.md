@@ -147,6 +147,11 @@ def failed(first, expected):
     return {case for case, result in first.items() if result == "Failed"}
 
 
+# A screen that showed a wrong drawing once is a finding, even if the next
+# run draws it right; their retry only tells a lasting bug from a rare one.
+FIRST_RUN_ONLY = {"EditorRenderingUITests"}
+
+
 def check(first, expected, retry=None):
     """Pass when every case passed, once or on its single retry."""
     retried = failed(first, expected)
@@ -156,6 +161,12 @@ def check(first, expected, retry=None):
         return {}
     if retry is None or set(retry) != retried:
         raise ValueError(f"Retry must run exactly the failed cases: {sorted(retried)}")
+    first_run_only = sorted(
+        case for case in retried if case.split("/")[0] in FIRST_RUN_ONLY
+    )
+    if first_run_only:
+        again = {case: retry[case] for case in first_run_only}
+        raise ValueError(f"Failed on the first run, which counts: {again}")
     still_failing = sorted(
         case for case in retried
         if retry[case] not in {"Passed", "Expected Failure"}

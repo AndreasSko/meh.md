@@ -33,8 +33,21 @@ jobs:
           fetch-depth: 0
       - name: Check native result gates
         run: python3 -m unittest discover -s scripts -p 'test_*native_editor_baseline_parity.py'
-      - name: Check Mac formatting wheel input
-        run: swift test --filter EditorMacFormattingScrollTests
+      - name: Check Mac formatting wheel input and editor drawing
+        id: mac_editor
+        env:
+          EDITOR_RENDERING_ARTIFACTS: ${{ runner.temp }}/editor-rendering
+        run: |
+          mkdir -p "$EDITOR_RENDERING_ARTIFACTS"
+          swift test --filter 'EditorMacFormattingScrollTests|EditorRenderingTests'
+      - name: Preserve Mac editor drawings that failed
+        if: failure() && steps.mac_editor.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: editor-rendering-mac-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/editor-rendering
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Run full native suite against recorded inventory
         id: native_parity
         # Allow broad runner variance
