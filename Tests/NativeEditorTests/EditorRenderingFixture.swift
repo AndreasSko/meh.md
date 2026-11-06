@@ -92,9 +92,9 @@ struct EditorRenderingFixture {
         rules.append(block("---"))
     }
 
-    /// Time values followed by a `Total =` line.
-    mutating func total(_ lines: [String]) {
-        let text = (lines + ["Total ="]).joined(separator: "\n")
+    /// Time values followed by a line ending in `=`.
+    mutating func total(_ lines: [String], label: String = "Total") {
+        let text = (lines + [label + " ="]).joined(separator: "\n")
         let start = block(text)
         totals.append(start + (text as NSString).length - 1)
     }
@@ -180,6 +180,18 @@ extension EditorRenderingFixture {
             }
         }
         note.paragraph("End of the journal.")
+        return note
+    }
+
+    /// The same sum after lines that end a little further right each time,
+    /// so some end near the right edge of the text before they wrap.
+    static var sums: Self {
+        var note = Self()
+        note.total([], label: "Ferry 1h 20m, walk 45m")
+        for extra in 0..<32 {
+            note.total([], label: "Ferry 1h 20m, walk 45m, from the first boat of the "
+                + "morning to the old harbor w" + String(repeating: "o", count: extra))
+        }
         return note
     }
 

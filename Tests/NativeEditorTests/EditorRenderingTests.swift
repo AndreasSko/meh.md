@@ -91,6 +91,38 @@ final class EditorRenderingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(check(harness, fixture, "back from source mode"), 8)
     }
 
+    /// A sum follows its `=`, so near the right edge it reaches past the
+    /// text into the margin, and its line must draw that far.
+    func testSumsAreNotCutAtTheRightEdge() throws {
+        let fixture = EditorRenderingFixture.sums
+        let harness = try EditorRenderingHarness(
+            source: fixture.source,
+            options: .init(size: CGSize(width: 1100, height: 700), timeCalculator: true)
+        )
+        defer { harness.tearDown() }
+        // Page through the note: a window taller than the screen would not fit.
+        var sums: [(total: Int, width: CGFloat, room: CGFloat, start: CGFloat)] = []
+        var page = 0
+        while true {
+            let check = EditorRenderingCheck(harness, fixture, scale: 2)
+            check.assertPasses("sums near the right edge, page \(page)", in: self)
+            sums += check.sums
+            let top = harness.visibleRect.minY
+            harness.scroll(by: 0.8 * harness.visibleRect.height)
+            page += 1
+            if harness.visibleRect.minY <= top + 1 || page > 20 { break }
+        }
+        XCTAssertEqual(Set(sums.map(\.total)), Set(fixture.totals), "Not every sum was on screen")
+        // The first sum, after a short line, shows the full width.
+        let reference = try XCTUnwrap(sums.first).width
+        var reachedMargin = false
+        for (index, sum) in sums.enumerated() where sum.room > reference + 4 {
+            reachedMargin = reachedMargin || sum.start + reference > 0
+            XCTAssertEqual(sum.width, reference, accuracy: 1.5, "Sum \(index) is cut short")
+        }
+        XCTAssertTrue(reachedMargin, "No sum reached past the text into the margin")
+    }
+
     func testHistoryMarksSitBesideChangedLines() throws {
         let fixture = EditorRenderingFixture.history
         let harness = try EditorRenderingHarness(

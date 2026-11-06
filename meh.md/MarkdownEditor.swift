@@ -3738,7 +3738,10 @@ nonisolated private final class MarkdownTextLayoutFragment:
                     + 3 + marksExtension,
                 height: fragmentFrame.height + 2 * verticalPadding
             )
-            return defaultBounds.union(panelBounds)
+            let sumBounds = MarkdownTimeCalculator.surfaceBounds(
+                of: fragment.value, textView: textView
+            ) ?? .null
+            return defaultBounds.union(panelBounds).union(sumBounds)
         }
     }
 

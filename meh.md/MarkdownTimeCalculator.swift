@@ -353,6 +353,32 @@ enum MarkdownTimeCalculator {
         }
     }
 
+    /// Where a fragment draws its results, relative to the fragment. A result
+    /// follows its `=`, so near the right edge it reaches past the text.
+    static func surfaceBounds(
+        of fragment: NSTextLayoutFragment, textView: MarkdownTextView
+    ) -> CGRect? {
+        guard !textView.markdownTimeSums.isEmpty,
+              let layoutManager = fragment.textLayoutManager,
+              let range = MarkdownHistoryMarks.nsRange(of: fragment, in: layoutManager)
+        else { return nil }
+        let sums = textView.markdownTimeSums.filter { NSLocationInRange($0.location, range) }
+        guard !sums.isEmpty else { return nil }
+        let frame = fragment.layoutFragmentFrame
+        return results(for: sums, in: textView, layoutManager: layoutManager)
+            .map { result -> CGRect in
+                let width = (result.text as NSString)
+                    .size(withAttributes: [.font: result.font]).width
+                return CGRect(
+                    x: result.origin.x - frame.minX,
+                    y: result.origin.y - frame.minY - result.font.ascender,
+                    width: width,
+                    height: result.font.ascender - result.font.descender
+                )
+            }
+            .reduce(CGRect.null) { $0.union($1) }
+    }
+
     /// Each fragment draws the results on its own lines.
     static func draw(
         in fragment: NSTextLayoutFragment,

@@ -20,6 +20,9 @@ struct EditorRenderingCheck {
     private(set) var failures: [Failure] = []
     /// How many decorations were on screen and checked.
     private(set) var checked = 0
+    /// Each sum on screen, in fixture order: its drawn width, the room
+    /// left of it in the view, and how far it starts from the text's edge.
+    private(set) var sums: [(total: Int, width: CGFloat, room: CGFloat, start: CGFloat)] = []
 
     init(_ harness: EditorRenderingHarness, _ fixture: EditorRenderingFixture, scale: CGFloat) {
         self.harness = harness
@@ -185,10 +188,10 @@ struct EditorRenderingCheck {
             else { continue }
             checked += 1
             // Only its own line: a sum a line off leaves this band empty.
+            // To the window's edge, so a sum cut at the text's edge shows.
             let area = CGRect(
                 x: line.maxX + 1, y: line.minY,
-                width: min(6 * line.height, harness.textColumn.upperBound - line.maxX - 1),
-                height: line.height
+                width: harness.visibleRect.maxX - line.maxX - 1, height: line.height
             )
             let ink = image.components(in: area, threshold: 40)
             guard !ink.isEmpty else {
@@ -196,6 +199,9 @@ struct EditorRenderingCheck {
                 continue
             }
             let bounds = ink.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
+            sums.append((
+                total, bounds.width, area.width, line.maxX - harness.textColumn.upperBound
+            ))
             if abs(bounds.midY - line.midY) > 0.3 * line.height {
                 fail("The sum is centered at y \(bounds.midY), its line at \(line.midY)",
                      bounds)
