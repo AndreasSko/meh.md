@@ -57,8 +57,9 @@ same English screenshots for now.
 Apple only accepts changes to a version that's still being prepared. Once a
 version is live, most text changes go with the next version. Publishing a
 GitHub release runs this script with `--skip-screenshots`, then picks the
-build and submits it; see [Releasing](releasing.md). Run the script
-yourself for screenshots, or to change the text before a release.
+build and validates the version. You can then edit review notes and submit
+for review in App Store Connect; see [Releasing](releasing.md). Run the
+script yourself for screenshots, or to change the text before a release.
 
 ## Credentials
 

@@ -2,14 +2,15 @@
 
 Every merge to `main` reaches internal testers on TestFlight. When a build
 feels right, one workflow sends it to the public beta, and publishing a
-GitHub release sends that same build to App Review. Nothing is rebuilt on
-the way, so what ships is the binary people tested.
+GitHub release prepares that same build in App Store Connect. You submit
+it for review there after checking the details. Nothing is rebuilt on the
+way, so what ships is the binary people tested.
 
 | Channel | Who gets it | Starts with | Workflow |
 | --- | --- | --- | --- |
 | Internal | Internal testers | A merge to `main` | `testflight.yml` |
 | Beta | The public TestFlight group | Running Beta | `beta.yml` |
-| App Store | Everyone | Publishing the release | `release.yml` |
+| App Store | Everyone | Publish, then submit manually | `release.yml` |
 
 Merges that only touch `docs/`, Markdown files or `Tools/AppStore/` don't
 build. How the internal builds are signed and uploaded is in
@@ -90,9 +91,13 @@ Publish only once the previous version is live on the App Store.
    draft's commit: the beta build if you promoted one, otherwise `main`.
 3. `release.yml` finds that commit's builds and checks their version
    matches the tag. It writes What's New, updates the App Store text with
-   `Tools/AppStore/publish.sh` (not the screenshots), then submits iOS and
-   Mac to App Review. The run summary lists what went out.
-4. Once Apple approves, the update goes live for everyone right away.
+   `Tools/AppStore/publish.sh` (not the screenshots), attaches the iOS and
+   Mac builds, and validates each version. It stops before submitting for
+   review. The run summary links to App Store Connect.
+4. Open App Store Connect, check both platform versions, and adjust review
+   notes or other details as needed. Submit each platform for review there
+   when you are ready.
+5. Once Apple approves, the update goes live for everyone right away.
 
 From the tag on, `main` builds the next minor version, and the next merged
 PR starts a new draft release.
@@ -102,7 +107,7 @@ with `publish.sh`, as [App Store page](app-store.md) describes.
 
 ## When something goes wrong
 
-- **The workflow fails before submitting.** Fix the cause and rerun the
+- **The preparation workflow fails.** Fix the cause and rerun the
   failed run, or run Actions > App Store release with the tag.
 - **Apple rejects the text or screenshots.** Fix them in `Tools/AppStore/`
   or App Store Connect and resubmit in App Store Connect. The build stays.
@@ -117,9 +122,9 @@ with `publish.sh`, as [App Store page](app-store.md) describes.
 
   Merge the fix, wait for its build, and publish the release again. PRs
   merged while the tag existed went into a `v0.32.0` draft but now ship in
-  `0.31.0`: move their notes over and delete that draft. If submitting
+  `0.31.0`: move their notes over and delete that draft. If submission
   fails because the rejected submission is still open, remove it in App
-  Store Connect, then rerun the release workflow.
+  Store Connect, then submit manually again.
 
 ## Asking Claude
 
@@ -130,7 +135,7 @@ These are the commands behind each step:
 gh release list                       # drafts and past releases
 gh release view v0.31.0               # the draft's text and target
 gh workflow run beta.yml              # send the newest build to beta
-gh release edit v0.31.0 --draft=false # release to the App Store
+gh release edit v0.31.0 --draft=false # prepare in App Store Connect
 gh run list --workflow release.yml    # then follow it with gh run watch
 ```
 
