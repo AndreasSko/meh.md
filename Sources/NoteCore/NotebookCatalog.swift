@@ -194,18 +194,20 @@ final class NotebookCatalogDocument {
         self.document = document
         itemsObject = source.itemsObject
         notebookID = source.notebookID
+        reuseCaches(of: source)
+    }
 
-        let sourceHeads = Set(source.document.heads())
-        let forkHeads = Set(document.heads())
-        guard sourceHeads == forkHeads else { return }
-        if let cache = source.itemsCache, cache.heads == sourceHeads {
-            itemsCache = (heads: forkHeads, entries: cache.entries)
+    private func reuseCaches(of source: NotebookCatalogDocument) {
+        let heads = Set(document.heads())
+        guard Set(source.document.heads()) == heads else { return }
+        if let cache = source.itemsCache, cache.heads == heads {
+            itemsCache = cache
         }
-        if let cache = source.recentCache, cache.heads == sourceHeads {
+        if let cache = source.recentCache, cache.heads == heads {
             recentCache = cache
         }
-        if let cache = source.linkLocationsCache, cache.heads == sourceHeads {
-            linkLocationsCache = (heads: forkHeads, locations: cache.locations)
+        if let cache = source.linkLocationsCache, cache.heads == heads {
+            linkLocationsCache = cache
         }
     }
 
@@ -677,8 +679,10 @@ final class NotebookCatalogDocument {
         // Validate on a branch first: a rejected merge cannot poison live state.
         let candidate = document.fork()
         try candidate.merge(other: other.document)
-        _ = try NotebookCatalogDocument(validating: candidate)
+        let validated = try NotebookCatalogDocument(validating: candidate)
         try document.merge(other: other.document)
+        // Same merge, same content: keep what validation read.
+        reuseCaches(of: validated)
     }
 
     /// First connection copies metadata onto the canonical cloud history.

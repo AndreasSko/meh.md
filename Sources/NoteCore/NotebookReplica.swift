@@ -273,6 +273,20 @@ public final class NotebookReplica {
         try NotebookCatalogDocument(snapshot: snapshot)
     }
 
+    /// Items marked permanently deleted in exactly `snapshot`. Uses the
+    /// installed catalog only when it holds that version: a deletion made
+    /// since then must not be included.
+    func permanentlyDeletedIDs(in snapshot: NotebookCatalogSnapshot) throws -> Set<UUID> {
+        let source = if let catalog, catalog.notebookID == snapshot.notebookID,
+            catalog.heads == snapshot.heads
+        {
+            catalog
+        } else {
+            try NotebookCatalogDocument(snapshot: snapshot)
+        }
+        return Set(try source.items().filter(\.isPermanentlyDeleted).map(\.id))
+    }
+
     public var deletedIDs: Set<UUID> {
         get throws {
             guard let catalog else { return rememberedDeletions }

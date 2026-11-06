@@ -95,7 +95,8 @@ final class NotebookCatalogCacheTests: XCTestCase {
         try local.merge(remote)
 
         XCTAssertEqual(Set(try local.items().map(\.id)), [first, second])
-        XCTAssertEqual(local.readItemsDecodeCount, before + 1)
+        // The merge's own check read the merged items; they are reused.
+        XCTAssertEqual(local.readItemsDecodeCount, before)
     }
 
     func testRejectedMergeKeepsCachedLiveItems() throws {
@@ -158,7 +159,8 @@ final class NotebookCatalogCacheTests: XCTestCase {
         try local.merge(remote)
         let locations = try XCTUnwrap(local.historicalLinkLocations()[id])
         XCTAssertEqual(Set(locations.map(\.name)), ["First.md", "Second.md"])
-        XCTAssertEqual(local.historicalLinkLocationsDecodeCount, before + 1)
+        // The merge's own check read the merged history; it is reused.
+        XCTAssertEqual(local.historicalLinkLocationsDecodeCount, before)
     }
 
     func testVerifiedHistoryCacheCannotHideMalformedReloadOrConflict() throws {
@@ -287,7 +289,8 @@ final class NotebookCatalogCacheTests: XCTestCase {
         try remote.recordRecentActivity(for: id)
         try catalog.merge(remote)
         try assertRecentMatchesReopened(catalog)
-        XCTAssertEqual(catalog.recentStatesDecodeCount, before + 2)
+        // The merge's own check read the merged recents; they are reused.
+        XCTAssertEqual(catalog.recentStatesDecodeCount, before + 1)
         XCTAssertEqual(try catalog.recentStates()[id]?.activityOrder, 2)
         XCTAssertTrue(try XCTUnwrap(catalog.recentStates()[id]).pinned)
     }
