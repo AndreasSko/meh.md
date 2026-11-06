@@ -24,8 +24,9 @@ final class NotebookCatalogDecodeBudgetTests: XCTestCase {
             try await local.apply(record)
         }
 
-        // The incoming catalog, the merge check, and the storage write.
-        XCTAssertEqual(decodes, 3)
+        // The incoming catalog and the storage write. The merge check reads
+        // only the changed items.
+        XCTAssertEqual(decodes, 2)
         XCTAssertEqual(
             Set(local.placements.map(\.item.name)), ["Local.md", "Remote.md"])
     }
