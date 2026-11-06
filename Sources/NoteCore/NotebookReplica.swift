@@ -1671,11 +1671,9 @@ public final class NotebookReplica {
             if try await self.canReuseAcceptedCatalog(record) { return }
             // Failed validation or persistence cannot establish reusable trust.
             self.acceptedCatalog = nil
-            try record.validate()
-            guard let snapshot = record.catalogSnapshot else { throw SyncError.invalidRecord }
+            let incoming = try record.validatedCatalog()
             if let catalog = self.catalog {
                 let next = try catalog.fork()
-                let incoming = try NotebookCatalogDocument(snapshot: snapshot)
                 try next.merge(incoming)
                 let mergedLocations = Dictionary(uniqueKeysWithValues:
                     Self.linkNotes(in: try next.placements()).map { ($0.id, $0) })
@@ -1699,7 +1697,7 @@ public final class NotebookReplica {
                 try next.clearRecents(for: former.subtracting(now))
                 try await self.persistCatalog(next)
             } else {
-                try await self.persistCatalog(NotebookCatalogDocument(snapshot: snapshot))
+                try await self.persistCatalog(incoming)
             }
             if let installed = self.catalogSnapshot,
                 record.snapshot.data.count + installed.data.count <= 16 * 1_024 * 1_024

@@ -17,17 +17,25 @@ struct CloudKitRecordEvidenceCache<Value> {
     mutating func value(
         for record: SyncRecord, compute: (SyncRecord) throws -> Value
     ) throws -> Value {
-        if let entry = entries[record.id], entry.record == record {
-            return entry.value
-        }
+        if let value = cachedValue(for: record) { return value }
         try Task.checkCancellation()
         let value = try compute(record)
+        store(value, for: record)
+        return value
+    }
+
+    func cachedValue(for record: SyncRecord) -> Value? {
+        guard let entry = entries[record.id], entry.record == record else { return nil }
+        return entry.value
+    }
+
+    mutating func store(_ value: Value, for record: SyncRecord) {
         if let old = entries.removeValue(forKey: record.id) {
             payloadBytes -= old.record.snapshot.data.count
             insertionOrder.removeAll { $0 == record.id }
         }
         let bytes = record.snapshot.data.count
-        guard maximumEntries > 0, bytes <= maximumPayloadBytes else { return value }
+        guard maximumEntries > 0, bytes <= maximumPayloadBytes else { return }
         while !insertionOrder.isEmpty && (entries.count >= maximumEntries
             || payloadBytes > maximumPayloadBytes - bytes) {
             let id = insertionOrder.removeFirst()
@@ -38,7 +46,6 @@ struct CloudKitRecordEvidenceCache<Value> {
         entries[record.id] = (record, value)
         insertionOrder.append(record.id)
         payloadBytes += bytes
-        return value
     }
 
     mutating func retain(recordIDs: Set<String>) {

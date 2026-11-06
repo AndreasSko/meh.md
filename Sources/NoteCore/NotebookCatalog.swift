@@ -1,6 +1,7 @@
 import Automerge
 import CryptoKit
 import Foundation
+import Synchronization
 
 public enum NotebookItemKind: String, Codable, Sendable {
     case note, folder
@@ -113,6 +114,9 @@ final class NotebookCatalogDocument {
     )
     private var itemsCache: (heads: Set<ChangeHash>, entries: [ItemEntry])?
     private(set) var readItemsDecodeCount = 0
+    /// Full item decodes across all catalogs, so tests can bound how often
+    /// one sync step reads the whole catalog.
+    static let itemDecodes = Atomic<Int>(0)
     private var linkLocationsCache: (
         heads: Set<ChangeHash>, locations: [UUID: [NotebookLinkLocation]]
     )?
@@ -1453,6 +1457,7 @@ final class NotebookCatalogDocument {
         // This non-Sendable document has one serial owner. All mutations,
         // including writes inside a batch, change the heads used here.
         readItemsDecodeCount += 1
+        Self.itemDecodes.add(1, ordering: .relaxed)
         let entries = try decodeItems()
         itemsCache = (heads: currentHeads, entries: entries)
         return entries
