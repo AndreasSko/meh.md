@@ -1070,8 +1070,6 @@ private struct KeyboardCommandDefinition: Identifiable {
               command: .insertTable),
         .init(id: "snippets", title: "Insert Snippet", image: "text.badge.plus",
               command: nil),
-        .init(id: "toggleTask", title: "Toggle Task",
-              image: "checkmark.square", command: .toggleTask),
     ]
 }
 
