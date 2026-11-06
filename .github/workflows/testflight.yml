@@ -4,7 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
-    paths: [meh.md.xcodeproj/project.pbxproj]
+    # Every merge that can change the app becomes a build.
+    paths-ignore: ['docs/**', '**/*.md', 'Tools/AppStore/**']
   workflow_dispatch:
 
 permissions:
@@ -38,6 +39,10 @@ jobs:
           xcodebuild -version | head -1 | grep -Eq '^Xcode 27([. ]|$)'
           asc --version
           plutil -lint .github/testflight/*.plist
+      - name: Check release scripts
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s scripts -p 'test_release*.py'
       - name: Build iOS Release without signing
         run: |
           xcodebuild -project meh.md.xcodeproj -scheme meh.md \
@@ -70,6 +75,12 @@ jobs:
     environment: testflight
     runs-on: xcode-27
     timeout-minutes: 90
+    permissions:
+      contents: read
+      # Finds the merged PR for the test notes.
+      pull-requests: read
+      # Records each build on its commit, for beta.yml and release.yml.
+      statuses: write
     env:
       ASC_APP_ID: ${{ vars.ASC_APP_ID }}
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -79,10 +90,27 @@ jobs:
       ASC_NO_UPDATE: '1'
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
       GROUP_ID: ${{ vars.TESTFLIGHT_INTERNAL_GROUP_ID }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          # The version comes from the release tags.
+          fetch-depth: 0
+      - name: Pick version and test notes
+        run: |
+          version=$(scripts/app_version.sh)
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          notes=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+            | jq -r '.[0].body // ""' | scripts/release_notes.py paragraph \
+            | scripts/release_notes.py plain)
+          {
+            echo 'TEST_NOTES<<END_OF_NOTES'
+            printf '%s\n\nCommit %s\n' "${notes:-Automatic build from main.}" "$GITHUB_SHA"
+            echo 'END_OF_NOTES'
+          } >> "$GITHUB_ENV"
+          echo "Version $version" >> "$GITHUB_STEP_SUMMARY"
       - uses: rudrankriyam/setup-asc@5358c70a27a3f0d1517604b0f1fdc43e70c1cc4d
         with:
           version: 5.3.4
@@ -135,6 +163,7 @@ jobs:
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             MEH_APP_PROFILE="$APP_PROFILE" \
             MEH_WIDGETS_PROFILE="$WIDGETS_PROFILE" \
+            MARKETING_VERSION="$APP_VERSION" \
             CURRENT_PROJECT_VERSION="$number" archive
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/$PLATFORM.xcarchive" \
             -exportPath "$RUNNER_TEMP/$PLATFORM" \
@@ -154,7 +183,7 @@ jobs:
             "--$ARTIFACT" "${files[0]}" --platform "$PLATFORM" \
             --version "$version" --build-number "$BUILD_NUMBER" \
             --group "$GROUP_ID" --wait --timeout 30m \
-            --test-notes "Automatic $PLATFORM build from main, commit $GITHUB_SHA." \
+            --test-notes "$TEST_NOTES" \
             --locale en-US --output json > "$RUNNER_TEMP/$PLATFORM-publish.json"
           build_id=$(jq -er '.buildId' "$RUNNER_TEMP/$PLATFORM-publish.json")
           asc testflight groups list --build-id "$build_id" --output json \
@@ -163,6 +192,12 @@ jobs:
           printf '### %s %s (%s)\n\nCommit: `%s`\n\nProcessed and assigned to the internal group. Build ID: `%s`\n' \
             "$PLATFORM" "$version" "$BUILD_NUMBER" "$GITHUB_SHA" "$build_id" \
             >> "$GITHUB_STEP_SUMMARY"
+          jq -n --arg context "testflight/$PLATFORM" \
+            --arg description "$version ($BUILD_NUMBER)" \
+            --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{state: "success", context: $context, description: $description, target_url: $url}' \
+            | curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" --data @- \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" > /dev/null
       # A failed iOS step does not stop the Mac build.
       - name: Install Mac profiles
         id: mac_profiles

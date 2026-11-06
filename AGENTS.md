@@ -7,14 +7,17 @@ Just a few things to note:
 * If DeviceHub automation times out, quit it and launch its binary directly:
   From `/Applications/Xcode.app/Contents/Applications/DeviceHub.app`, run
   `Contents/MacOS/DeviceHub`.
-* Bump the app version for every new PR with `scripts/bump_version.sh`;
-  use `patch` for bug fixes and `minor` for features.
+* Don't change the app version in PRs; CI sets it. docs/releasing.md
+  covers versions, beta builds and App Store releases. Promote a build to
+  beta or publish a release only when the user asks.
 * Ensure the start of the PR description is easy to understand for an end-user.
   It should use easy english that explains if the change uses a new feature,
-  fixes a bug, etc. Think of it as the release notes that could arrive on
-  the App Store. In a later section you can go into more technical details.
-  But always make sure it still easy to understand and to quickly skim over.
-  Simple, concise language is the goal.
+  fixes a bug, etc. Its first paragraph is added to the draft release notes
+  for the App Store. In a later section you can go into more technical
+  details. But always make sure it still easy to understand and to quickly
+  skim over. Simple, concise language is the goal.
+* Label PRs that users won't notice (CI, tests, docs, refactors) with
+  `no-release-note`.
 * For visible UI changes, include concise before/after screenshots in the PR.
   Default to iPhone; add other platforms only for meaningful differences.
   Use matching content and state, fictional data, and actual app captures.

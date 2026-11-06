@@ -163,8 +163,8 @@ def expand(selectors, entries):
 def version_only(diff):
     """True when every change replaces a version setting's value in place.
 
-    That is what scripts/bump_version.sh produces: each removed setting
-    line is followed by an added line for the same setting.
+    That is what raising the version in the project produces: each removed
+    setting line is followed by an added line for the same setting.
     """
     removed, added, pairs = [], [], 0
     for line in diff.splitlines() + ["@@"]:

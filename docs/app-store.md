@@ -21,12 +21,16 @@ text file per field:
 | `support_url.txt` | Support URL | |
 | `marketing_url.txt` | Marketing URL | Optional. |
 | `promotional_text.txt` | Promotional text | Optional, 170 characters. |
-| `whats_new.txt` | What's New | Optional. |
+| `whats_new.txt` | What's New | Not committed, see below. |
 
 A field without a file stays as it is in App Store Connect. Keywords should
 not repeat words from the name or subtitle, since Apple already searches
 those, and must not name other apps. See Apple's
 [search guidance](https://developer.apple.com/app-store/search/).
+
+What's New comes from the GitHub release instead: the release workflow
+writes `whats_new.txt` from it before it publishes the text. See
+[Releasing](releasing.md#release-notes).
 
 PRs that touch the text run `publish.sh --check` in CI, which checks the
 character limits and URLs offline.
@@ -38,20 +42,23 @@ Tools/AppStore/render.sh                      # screenshots into out/
 Tools/AppStore/publish.sh                     # dry run, shows what changes
 Tools/AppStore/publish.sh --confirm           # writes it
 Tools/AppStore/publish.sh --skip-screenshots  # text only
+Tools/AppStore/publish.sh --platform IOS      # one platform
 ```
 
 The script works on the App Store version that is being prepared for iOS
 and for macOS. Apple allows only one per platform. With `--confirm` it gives
-that version the app's `MARKETING_VERSION`, or the one passed with
-`--version`, so it matches the build you submit. If there is none, it
-creates one. It then writes the text and replaces the screenshots: iPhone
+that version the version `main` builds (`scripts/app_version.sh`), or the
+one passed with `--version`, so it matches the build you submit. If there
+is none, it creates one, set to go live as soon as Apple approves it. It
+then writes the text and replaces the screenshots: iPhone
 6.9" and iPad 13" for iOS, and the Mac set for macOS. All languages use the
 same English screenshots for now.
 
 Apple only accepts changes to a version that's still being prepared. Once a
-version is live, most text changes go with the next version. Choosing the
-build, answering review questions, and submitting for review still happen in
-App Store Connect.
+version is live, most text changes go with the next version. Publishing a
+GitHub release runs this script with `--skip-screenshots`, then picks the
+build and submits it; see [Releasing](releasing.md). Run the script
+yourself for screenshots, or to change the text before a release.
 
 ## Credentials
 
