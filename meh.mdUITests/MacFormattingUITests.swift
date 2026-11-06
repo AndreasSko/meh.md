@@ -166,7 +166,6 @@ final class MacFormattingUITests: XCTestCase {
             element(app, "editor-command-highlight"),
             element(app, "editor-command-inline-code"),
             element(app, "editor-command-code-block"),
-            element(app, "editor-command-toggle-task"),
         ]
     }
 

@@ -278,7 +278,7 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
         app.launchArguments += [
             "-editor.keyboardToolbar.commands",
             "(bold,italic,taskList,insertTable,indent,outdent,heading,link,"
-                + "strikethrough,highlight,inlineCode,codeBlock,toggleTask)",
+                + "strikethrough,highlight,inlineCode,codeBlock)",
         ]
         if let contentSizeCategory {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", contentSizeCategory]

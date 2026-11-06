@@ -312,7 +312,7 @@ final class EditorKeyboardUITests: XCTestCase {
         let expectedCommands = [
             "bold", "italic", "strikethrough", "highlight", "heading",
             "indent", "outdent", "task-list", "link", "inline-code",
-            "code-block", "insert-table", "toggle-task",
+            "code-block", "insert-table",
         ]
         assertToolbarCommandsReachable(expectedCommands, in: app, toolbar: toolbar)
         let table = toolbarCommand("editor-table-menu", in: app)
