@@ -1,6 +1,7 @@
 import Automerge
 import CryptoKit
 import Foundation
+import Synchronization
 
 public enum NotebookItemKind: String, Codable, Sendable {
     case note, folder
@@ -106,13 +107,27 @@ final class NotebookCatalogDocument {
     private var recentCache: RecentCache?
     private(set) var recentStatesDecodeCount = 0
     private let document: Document
-    private let itemsObject: ObjId
+    private var itemsObject: ObjId
     private typealias ItemEntry = (
         item: NotebookItem,
         issues: Set<NotebookPlacementIssue>
     )
-    private var itemsCache: (heads: Set<ChangeHash>, entries: [ItemEntry])?
+    private struct ItemsCache {
+        var heads: Set<ChangeHash>
+        var entries: [ItemEntry]
+        /// Items with several copies or a field with several values. A
+        /// diff leaves out values that lose, but reading an item looks at
+        /// every value, so these are read on every update.
+        var conflictedKeys: Set<String>
+    }
+    private var itemsCache: ItemsCache?
     private(set) var readItemsDecodeCount = 0
+    private(set) var readItemsUpdateCount = 0
+    /// Full item decodes across all catalogs, so tests can bound how often
+    /// one sync step reads the whole catalog.
+    static let itemDecodes = Atomic<Int>(0)
+    /// The part of `itemDecodes` that ran on the main thread.
+    static let mainThreadItemDecodes = Atomic<Int>(0)
     private var linkLocationsCache: (
         heads: Set<ChangeHash>, locations: [UUID: [NotebookLinkLocation]]
     )?
@@ -158,6 +173,29 @@ final class NotebookCatalogDocument {
         if forSync {
             try NotebookSyncFormat.requireSupported(NotebookSyncFormat.version(of: document))
         }
+        let root = try Self.validatedRoot(of: document)
+        self.document = document
+        self.itemsObject = root.items
+        self.notebookID = root.notebookID
+        try validateContents()
+    }
+
+    /// Runs the checks of a full load on this catalog, reading through its
+    /// caches, so a changed branch is checked without reading every item.
+    func validate() throws {
+        let root = try Self.validatedRoot(of: document)
+        guard root.notebookID == notebookID else {
+            throw NotebookCatalogError.invalidDocument
+        }
+        // Read the map a full load would read. Its ID can be encoded
+        // differently after a merge, and replacing it forces a full read.
+        itemsObject = root.items
+        try validateContents()
+    }
+
+    private static func validatedRoot(
+        of document: Document
+    ) throws -> (notebookID: UUID, items: ObjId) {
         guard try document.getAll(obj: .ROOT, key: "schemaVersion") == [.Scalar(.Uint(1))] else {
             throw NotebookCatalogError.unsupportedSchemaVersion
         }
@@ -170,9 +208,10 @@ final class NotebookCatalogDocument {
         else {
             throw NotebookCatalogError.invalidDocument
         }
-        self.document = document
-        self.itemsObject = items
-        self.notebookID = notebookID
+        return (notebookID, items)
+    }
+
+    private func validateContents() throws {
         _ = try readItems()
         _ = try configuredNewNoteParentID()
         _ = try recentStates()
@@ -190,18 +229,20 @@ final class NotebookCatalogDocument {
         self.document = document
         itemsObject = source.itemsObject
         notebookID = source.notebookID
+        reuseCaches(of: source)
+    }
 
-        let sourceHeads = Set(source.document.heads())
-        let forkHeads = Set(document.heads())
-        guard sourceHeads == forkHeads else { return }
-        if let cache = source.itemsCache, cache.heads == sourceHeads {
-            itemsCache = (heads: forkHeads, entries: cache.entries)
+    private func reuseCaches(of source: NotebookCatalogDocument) {
+        let heads = Set(document.heads())
+        guard Set(source.document.heads()) == heads else { return }
+        if let cache = source.itemsCache, cache.heads == heads {
+            itemsCache = cache
         }
-        if let cache = source.recentCache, cache.heads == sourceHeads {
+        if let cache = source.recentCache, cache.heads == heads {
             recentCache = cache
         }
-        if let cache = source.linkLocationsCache, cache.heads == sourceHeads {
-            linkLocationsCache = (heads: forkHeads, locations: cache.locations)
+        if let cache = source.linkLocationsCache, cache.heads == heads {
+            linkLocationsCache = cache
         }
     }
 
@@ -615,8 +656,9 @@ final class NotebookCatalogDocument {
 
     private func advanceUnchangedMetadataCaches(from previousHeads: Set<ChangeHash>) {
         let currentHeads = Set(document.heads())
-        if let cache = itemsCache, cache.heads == previousHeads {
-            itemsCache = (heads: currentHeads, entries: cache.entries)
+        if var cache = itemsCache, cache.heads == previousHeads {
+            cache.heads = currentHeads
+            itemsCache = cache
         }
         if let cache = linkLocationsCache, cache.heads == previousHeads {
             linkLocationsCache = (heads: currentHeads, locations: cache.locations)
@@ -667,14 +709,21 @@ final class NotebookCatalogDocument {
 
     func merge(_ other: NotebookCatalogDocument) throws {
         guard notebookID == other.notebookID else { throw NotebookCatalogError.identityMismatch }
-        guard !historyHashes.isDisjoint(with: other.historyHashes) else {
+        let history = historyHashes
+        guard !history.isDisjoint(with: other.historyHashes) else {
             throw NotebookCatalogError.disconnectedHistory
         }
+        // A change is only applied with all changes before it, so holding
+        // the other's heads means holding all of its history: merging would
+        // change nothing, and this content is already valid.
+        if Set(other.document.heads()).isSubset(of: history) { return }
         // Validate on a branch first: a rejected merge cannot poison live state.
-        let candidate = document.fork()
-        try candidate.merge(other: other.document)
-        _ = try NotebookCatalogDocument(validating: candidate)
+        let candidate = try fork()
+        try candidate.document.merge(other: other.document)
+        try candidate.validate()
         try document.merge(other: other.document)
+        // Same merge, same content: keep what validation read.
+        reuseCaches(of: candidate)
     }
 
     /// First connection copies metadata onto the canonical cloud history.
@@ -1107,7 +1156,7 @@ final class NotebookCatalogDocument {
         let candidate = try fork()
         try candidate.applyBatchMove(
             roots, to: parentID, before: beforeID)
-        _ = try NotebookCatalogDocument(snapshot: candidate.snapshot())
+        try candidate.validate()
 
         var changes: [NotebookBrowserRegisterChange] = []
         var revisions: [UUID: String] = [:]
@@ -1138,6 +1187,7 @@ final class NotebookCatalogDocument {
             }
         }
         try document.merge(other: candidate.document)
+        reuseCaches(of: candidate)
         guard undoable else { return nil }
         return NotebookBrowserUndo(
             action: .move,
@@ -1234,8 +1284,9 @@ final class NotebookCatalogDocument {
                     itemID: id, beforeTrashed: false, afterToken: token)
             )
         }
-        _ = try NotebookCatalogDocument(snapshot: candidate.snapshot())
+        try candidate.validate()
         try document.merge(other: candidate.document)
+        reuseCaches(of: candidate)
         return NotebookBrowserUndo(
             action: .trash,
             itemIDs: roots,
@@ -1299,8 +1350,9 @@ final class NotebookCatalogDocument {
             let token = try candidate.writePlacementRevision(object: object)
             inverseRevisions[id] = token
         }
-        _ = try NotebookCatalogDocument(snapshot: candidate.snapshot())
+        try candidate.validate()
         try document.merge(other: candidate.document)
+        reuseCaches(of: candidate)
         return NotebookBrowserUndo(
             action: receipt.action,
             itemIDs: receipt.itemIDs,
@@ -1452,19 +1504,78 @@ final class NotebookCatalogDocument {
         }
         // This non-Sendable document has one serial owner. All mutations,
         // including writes inside a batch, change the heads used here.
+        if let itemsCache, let updated = try updatedItems(itemsCache, to: currentHeads) {
+            readItemsUpdateCount += 1
+            self.itemsCache = updated
+            return updated.entries
+        }
         readItemsDecodeCount += 1
-        let entries = try decodeItems()
-        itemsCache = (heads: currentHeads, entries: entries)
-        return entries
+        Self.itemDecodes.add(1, ordering: .relaxed)
+        if Thread.isMainThread { Self.mainThreadItemDecodes.add(1, ordering: .relaxed) }
+        var cache = ItemsCache(heads: currentHeads, entries: [], conflictedKeys: [])
+        for key in document.keys(obj: itemsObject).sorted() {
+            let decoded = try decodeItem(at: key)
+            cache.entries.append(decoded.entry)
+            if decoded.conflicted { cache.conflictedKeys.insert(key) }
+        }
+        itemsCache = cache
+        return cache.entries
+    }
+
+    /// Reads only the items that changed since the cached heads, which are
+    /// always part of this document's history. Every item depends only on
+    /// its own entry, so the result matches a full read. Returns nil for a
+    /// change it can't place, which falls back to a full read.
+    private func updatedItems(
+        _ cache: ItemsCache, to heads: Set<ChangeHash>
+    ) throws -> ItemsCache? {
+        var keys = cache.conflictedKeys
+        // Patches are matched by position: one object's ID can be encoded
+        // differently in two copies of the same catalog.
+        let itemsPath = PathElement(obj: .ROOT, prop: .Key("items"))
+        for patch in document.difference(from: cache.heads, to: heads) {
+            if patch.path.count > 1, patch.path[0] == itemsPath {
+                guard case .Key(let key) = patch.path[1].prop else { return nil }
+                keys.insert(key)
+                continue
+            }
+            let prop: Prop?
+            switch patch.action {
+            case .Put(_, let target, _), .Conflict(_, let target), .Increment(_, let target, _):
+                prop = target
+            case .DeleteMap(_, let key): prop = .Key(key)
+            case .Insert, .SpliceText, .Marks, .DeleteSeq: prop = nil
+            }
+            if patch.path.isEmpty {
+                if prop == .Key("items") { return nil }
+            } else if patch.path == [itemsPath] {
+                guard case .Key(let key) = prop else { return nil }
+                keys.insert(key)
+            }
+        }
+        var byKey = Dictionary(
+            uniqueKeysWithValues: cache.entries.map { ($0.item.id.uuidString, $0) })
+        var conflictedKeys = cache.conflictedKeys.subtracting(keys)
+        for key in keys {
+            byKey[key] = nil
+            guard try !document.getAll(obj: itemsObject, key: key).isEmpty else { continue }
+            let decoded = try decodeItem(at: key)
+            byKey[key] = decoded.entry
+            if decoded.conflicted { conflictedKeys.insert(key) }
+        }
+        return ItemsCache(
+            heads: heads, entries: byKey.keys.sorted().compactMap { byKey[$0] },
+            conflictedKeys: conflictedKeys)
     }
 
     /// Two devices that combine the same notebook at once each copy its
     /// items under the same IDs. Copies with the same kind and name are that
     /// one item, and every device picks the same winner. Anything else under
     /// one ID stays a conflict.
-    private func isSingleItem(at key: String) throws -> Bool {
+    /// Returns how many copies the item has, or nil when they differ.
+    private func itemCopies(at key: String) throws -> Int? {
         let values = try document.getAll(obj: itemsObject, key: key)
-        guard values.count > 1 else { return values.count == 1 }
+        guard values.count > 1 else { return values.count == 1 ? 1 : nil }
         let copies = try values.map { value -> [String] in
             guard case .Object(let object, .Map) = value,
                   case .Scalar(.String(let kind)) = try document.get(obj: object, key: "kind"),
@@ -1472,90 +1583,91 @@ final class NotebookCatalogDocument {
             else { throw NotebookCatalogError.duplicateIdentity }
             return [kind, name]
         }
-        return Set(copies).count == 1
+        return Set(copies).count == 1 ? values.count : nil
     }
 
-    private func decodeItems() throws -> [ItemEntry] {
-        try document.keys(obj: itemsObject).sorted().map { key in
-            guard let id = UUID(uuidString: key), key == id.uuidString,
-                try isSingleItem(at: key)
-            else {
-                throw NotebookCatalogError.duplicateIdentity
-            }
-            let object = try object(for: id)
-            guard case .Scalar(.String(let kindValue)) = try document.get(obj: object, key: "kind"),
-                let kind = NotebookItemKind(rawValue: kindValue),
-                try document.getAll(obj: object, key: "kind").count == 1
-            else {
-                throw NotebookCatalogError.invalidDocument
-            }
-            let names = try document.getAll(obj: object, key: "name")
-            for value in names {
-                guard case .Scalar(.String(let name)) = value else {
-                    throw NotebookCatalogError.invalidDocument
-                }
-                do { try NotebookName.validate(name) } catch {
-                    throw NotebookCatalogError.invalidDocument
-                }
-            }
-            guard case .Scalar(.String(let name)) = try document.get(obj: object, key: "name")
-            else {
-                throw NotebookCatalogError.invalidDocument
-            }
-            let parentValues = try document.getAll(obj: object, key: "parent")
-            for value in parentValues { _ = try decodeParent(value) }
-            guard let parentValue = try document.get(obj: object, key: "parent") else {
-                throw NotebookCatalogError.invalidDocument
-            }
-            let parentID = try decodeParent(parentValue)
-            let order = try readOrder(object: object, parentID: parentID)
-            let visibility = try document.getAll(obj: object, key: "visibility")
-            guard !visibility.isEmpty else { throw NotebookCatalogError.invalidDocument }
-            var trashed = false
-            for value in visibility {
-                guard case .Scalar(.String(let token)) = value else {
-                    throw NotebookCatalogError.invalidDocument
-                }
-                let parts = token.split(separator: ":")
-                guard parts.count == 2, ["active", "trash"].contains(parts[0]),
-                    UUID(uuidString: String(parts[1])) != nil
-                else {
-                    throw NotebookCatalogError.invalidDocument
-                }
-                if parts[0] == "trash" { trashed = true }
-            }
-            let deleted = try document.getAll(obj: object, key: "permanentlyDeleted")
-            guard deleted.allSatisfy({ $0 == .Scalar(.Boolean(true)) }) else {
-                throw NotebookCatalogError.invalidDocument
-            }
-            for value in try document.getAll(
-                obj: object, key: "placementRevision"
-            ) {
-                guard case .Scalar(.String(let token)) = value,
-                      let revision = UUID(uuidString: token),
-                      revision.uuidString == token else {
-                    throw NotebookCatalogError.invalidDocument
-                }
-            }
-            var issues = Set<NotebookPlacementIssue>()
-            if names.count > 1 { issues.insert(.concurrentRename) }
-            if parentValues.count > 1 { issues.insert(.concurrentMove) }
-            if order.hasExplicitConflict {
-                issues.insert(.concurrentReorder)
-            }
-            return (
-                NotebookItem(
-                    id: id, kind: kind, name: name,
-                    parentID: parentID, orderKey: order.key, isTrashed: trashed,
-                    isPermanentlyDeleted: !deleted.isEmpty,
-                    importRootID: try readImportRootID(object)), issues
-            )
+    private func decodeItem(at key: String) throws -> (entry: ItemEntry, conflicted: Bool) {
+        guard let id = UUID(uuidString: key), key == id.uuidString,
+            let copies = try itemCopies(at: key)
+        else {
+            throw NotebookCatalogError.duplicateIdentity
         }
+        var conflicted = copies > 1
+        let object = try object(for: id)
+        guard case .Scalar(.String(let kindValue)) = try document.get(obj: object, key: "kind"),
+            let kind = NotebookItemKind(rawValue: kindValue),
+            try document.getAll(obj: object, key: "kind").count == 1
+        else {
+            throw NotebookCatalogError.invalidDocument
+        }
+        let names = try document.getAll(obj: object, key: "name")
+        for value in names {
+            guard case .Scalar(.String(let name)) = value else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            do { try NotebookName.validate(name) } catch {
+                throw NotebookCatalogError.invalidDocument
+            }
+        }
+        guard case .Scalar(.String(let name)) = try document.get(obj: object, key: "name")
+        else {
+            throw NotebookCatalogError.invalidDocument
+        }
+        let parentValues = try document.getAll(obj: object, key: "parent")
+        for value in parentValues { _ = try decodeParent(value) }
+        guard let parentValue = try document.get(obj: object, key: "parent") else {
+            throw NotebookCatalogError.invalidDocument
+        }
+        let parentID = try decodeParent(parentValue)
+        let order = try readOrder(object: object, parentID: parentID, conflicted: &conflicted)
+        let visibility = try document.getAll(obj: object, key: "visibility")
+        guard !visibility.isEmpty else { throw NotebookCatalogError.invalidDocument }
+        var trashed = false
+        for value in visibility {
+            guard case .Scalar(.String(let token)) = value else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            let parts = token.split(separator: ":")
+            guard parts.count == 2, ["active", "trash"].contains(parts[0]),
+                UUID(uuidString: String(parts[1])) != nil
+            else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            if parts[0] == "trash" { trashed = true }
+        }
+        let deleted = try document.getAll(obj: object, key: "permanentlyDeleted")
+        guard deleted.allSatisfy({ $0 == .Scalar(.Boolean(true)) }) else {
+            throw NotebookCatalogError.invalidDocument
+        }
+        let revisions = try document.getAll(obj: object, key: "placementRevision")
+        for value in revisions {
+            guard case .Scalar(.String(let token)) = value,
+                  let revision = UUID(uuidString: token),
+                  revision.uuidString == token else {
+                throw NotebookCatalogError.invalidDocument
+            }
+        }
+        if [names, parentValues, visibility, deleted, revisions].contains(where: { $0.count > 1 }) {
+            conflicted = true
+        }
+        var issues = Set<NotebookPlacementIssue>()
+        if names.count > 1 { issues.insert(.concurrentRename) }
+        if parentValues.count > 1 { issues.insert(.concurrentMove) }
+        if order.hasExplicitConflict {
+            issues.insert(.concurrentReorder)
+        }
+        let item = NotebookItem(
+            id: id, kind: kind, name: name,
+            parentID: parentID, orderKey: order.key, isTrashed: trashed,
+            isPermanentlyDeleted: !deleted.isEmpty,
+            importRootID: try readImportRootID(object, conflicted: &conflicted))
+        return ((item, issues), conflicted)
     }
 
-    private func readImportRootID(_ object: ObjId) throws -> UUID? {
+    private func readImportRootID(_ object: ObjId, conflicted: inout Bool) throws -> UUID? {
         let values = try document.getAll(obj: object, key: "importRootID")
         guard !values.isEmpty else { return nil }
+        if values.count > 1 { conflicted = true }
         for value in values {
             switch value {
             case .Scalar(.Null): break
@@ -1619,14 +1731,17 @@ final class NotebookCatalogDocument {
 
     private func readOrder(
         object: ObjId,
-        parentID: UUID?
+        parentID: UUID?,
+        conflicted: inout Bool
     ) throws -> (key: NotebookOrderKey?, hasExplicitConflict: Bool) {
         for key in document.keys(obj: object)
         where key.hasPrefix("order:") || key.hasPrefix("orderSeed:") {
             guard Self.decodeOrderParent(key) != nil else {
                 throw NotebookCatalogError.invalidDocument
             }
-            for value in try document.getAll(obj: object, key: key) {
+            let values = try document.getAll(obj: object, key: key)
+            if values.count > 1 { conflicted = true }
+            for value in values {
                 guard case .Scalar(.String(let rawValue)) = value,
                       NotebookOrderKey(rawValue: rawValue) != nil else {
                     throw NotebookCatalogError.invalidDocument

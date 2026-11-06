@@ -411,9 +411,11 @@ struct CloudKitTransportState: Codable, Equatable {
         try validate(expectedProtocolVersion: expectedProtocolVersion, reusing: nil)
     }
 
-    /// Only the store's last successfully persisted state may supply trust.
-    /// Exact record equality includes bytes, heads, and identity; IDs alone
-    /// cannot establish that a record has already passed validation.
+    /// Here, only the store's last successfully persisted state may supply
+    /// trust; `SyncRecord.validate()` also reuses exact records it validated
+    /// earlier in this process. Exact record equality includes bytes, heads,
+    /// and identity; IDs alone cannot establish that a record has already
+    /// passed validation.
     fileprivate func validate(
         expectedProtocolVersion: Int,
         reusing previous: CloudKitTransportState?,

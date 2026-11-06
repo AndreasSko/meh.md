@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 
 public enum SyncDocumentKind: String, Codable, Sendable {
     case note, catalog
@@ -46,7 +47,35 @@ public struct SyncRecord: Codable, Equatable, Sendable {
             data: snapshot.data, heads: snapshot.heads, notebookID: notebookID)
     }
 
+    /// Records that passed validation. A record moves from the transport's
+    /// inbox to the replica and is validated at each step, and reading a
+    /// large catalog is slow. A hit needs the exact record, bytes and heads
+    /// included, because the ID doesn't cover the heads or the protocol
+    /// version. Only successes are kept, and only in memory, so a restart
+    /// or app update validates again.
+    private static let validated = Mutex(CloudKitRecordEvidenceCache<Void>(
+        maximumEntries: 1_024, maximumPayloadBytes: 32 * 1_024 * 1_024))
+
     public func validate() throws {
+        if Self.validated.withLock({ $0.cachedValue(for: self) }) != nil { return }
+        _ = try validatedContents()
+        Self.validated.withLock { $0.store((), for: self) }
+    }
+
+    /// Validates a catalog record and returns the catalog it read, so the
+    /// caller doesn't read it again. The caller owns the returned catalog.
+    func validatedCatalog() throws -> NotebookCatalogDocument {
+        guard kind == .catalog, let catalogSnapshot else { throw SyncError.invalidRecord }
+        if Self.validated.withLock({ $0.cachedValue(for: self) }) != nil {
+            return try NotebookCatalogDocument(snapshot: catalogSnapshot)
+        }
+        guard let catalog = try validatedContents() else { throw SyncError.invalidRecord }
+        Self.validated.withLock { $0.store((), for: self) }
+        return catalog
+    }
+
+    /// Returns the catalog read while validating a catalog record.
+    private func validatedContents() throws -> NotebookCatalogDocument? {
         guard id == Self.digest(snapshot: snapshot, kind: kind, notebookID: notebookID) else {
             throw SyncError.invalidRecord
         }
@@ -54,16 +83,18 @@ public struct SyncRecord: Codable, Equatable, Sendable {
         case 1:
             guard kind == .note, notebookID == nil else { throw SyncError.invalidRecord }
             _ = try NoteDocument(snapshot: snapshot)
+            return nil
         case 2:
             guard let notebookID else { throw SyncError.invalidRecord }
             switch kind {
             case .note:
                 _ = try NoteDocument(snapshot: snapshot)
+                return nil
             case .catalog:
                 guard snapshot.noteID == notebookID, let catalogSnapshot else {
                     throw SyncError.invalidRecord
                 }
-                _ = try NotebookCatalogDocument(snapshot: catalogSnapshot, forSync: true)
+                return try NotebookCatalogDocument(snapshot: catalogSnapshot, forSync: true)
             }
         default:
             throw SyncError.invalidRecord

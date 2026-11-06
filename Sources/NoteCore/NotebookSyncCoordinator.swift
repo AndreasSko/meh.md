@@ -347,7 +347,9 @@ public final class NotebookSyncCoordinator {
                 state.deletedIDs = try replica.deletedIDs
             }
         } else {
+            let before = replica.catalogSnapshot?.heads
             try await replica.acceptSeed(seed)
+            recordCatalogAcceptance(seed, before: before)
         }
         state.notebookID = notebookID
         try save(state)
@@ -408,7 +410,9 @@ public final class NotebookSyncCoordinator {
                     phase: .receiving,
                     activeNoteIDs: record.kind == .note ? [record.snapshot.noteID] : []
                 )
+                let before = replica.catalogSnapshot?.heads
                 try await replica.apply(record)
+                if record.kind == .catalog { recordCatalogAcceptance(record, before: before) }
                 applied += 1
                 updateProgress(
                     phase: .receiving,
@@ -559,8 +563,7 @@ public final class NotebookSyncCoordinator {
                 == publishedCatalog.snapshot.heads,
             let snapshot = publishedCatalog.catalogSnapshot
         {
-            let deleted = Set(try NotebookCatalogDocument(snapshot: snapshot)
-                .items().filter(\.isPermanentlyDeleted).map(\.id))
+            let deleted = try await replica.permanentlyDeletedIDs(in: snapshot)
             if !deleted.isEmpty {
                 updateProgress(phase: .cleaningUp, cleanupItemCount: deleted.count)
                 diagnosticLog?.record("deletion_cleanup_start", counts: ["items": deleted.count])
@@ -658,6 +661,16 @@ public final class NotebookSyncCoordinator {
         guard result.acknowledgedIDs == expectedIDs else {
             throw SyncError.unavailable("The sync service did not acknowledge every record.")
         }
+    }
+
+    /// `known`: this device already had exactly this catalog version, so
+    /// accepting it could have been skipped. `changed`: accepting it changed
+    /// the installed catalog.
+    private func recordCatalogAcceptance(_ record: SyncRecord, before: Set<String>?) {
+        diagnosticLog?.record("catalog_accepted", counts: [
+            "known": record.snapshot.heads == before ? 1 : 0,
+            "changed": replica.catalogSnapshot?.heads == before ? 0 : 1,
+        ])
     }
 
     private func updateProgress(

@@ -6,17 +6,22 @@ import XCTest
 @testable import NoteCore
 
 final class NotebookCatalogCacheTests: XCTestCase {
+    /// Full reads plus updates that read only changed items.
+    private func itemReads(_ catalog: NotebookCatalogDocument) -> Int {
+        catalog.readItemsDecodeCount + catalog.readItemsUpdateCount
+    }
+
     func testUnchangedReadsReuseDerivedItems() throws {
         let catalog = try NotebookCatalogDocument()
         let id = try catalog.add(kind: .note, name: "Read me.md")
-        let before = catalog.readItemsDecodeCount
+        let before = itemReads(catalog)
 
         XCTAssertEqual(try catalog.items().map(\.id), [id])
-        XCTAssertEqual(catalog.readItemsDecodeCount, before + 1)
+        XCTAssertEqual(itemReads(catalog), before + 1)
 
         _ = try catalog.items()
         _ = try catalog.placements()
-        XCTAssertEqual(catalog.readItemsDecodeCount, before + 1)
+        XCTAssertEqual(itemReads(catalog), before + 1)
     }
 
     func testLocalMutationInvalidatesDerivedItemsByHeads() throws {
@@ -25,10 +30,14 @@ final class NotebookCatalogCacheTests: XCTestCase {
         _ = try catalog.items()
         let before = catalog.readItemsDecodeCount
 
+        let updates = catalog.readItemsUpdateCount
+
         let second = try catalog.add(kind: .note, name: "Second.md")
 
         XCTAssertEqual(Set(try catalog.items().map(\.id)), [first, second])
-        XCTAssertEqual(catalog.readItemsDecodeCount, before + 1)
+        // Only the changed item is read again.
+        XCTAssertEqual(catalog.readItemsDecodeCount, before)
+        XCTAssertEqual(catalog.readItemsUpdateCount, updates + 1)
     }
 
     func testNestedCreationDecodesOnlyCompleteItemAndInheritsImportScope() throws {
@@ -42,11 +51,14 @@ final class NotebookCatalogCacheTests: XCTestCase {
         _ = try catalog.items()
         let before = catalog.readItemsDecodeCount
 
+        let updates = catalog.readItemsUpdateCount
+
         let note = try catalog.add(kind: .note, name: "New.md", parentID: parent)
 
-        XCTAssertEqual(catalog.readItemsDecodeCount, before)
+        XCTAssertEqual(catalog.readItemsUpdateCount, updates)
         let items = try catalog.items()
-        XCTAssertEqual(catalog.readItemsDecodeCount, before + 1)
+        XCTAssertEqual(catalog.readItemsDecodeCount, before)
+        XCTAssertEqual(catalog.readItemsUpdateCount, updates + 1)
         XCTAssertEqual(items.first(where: { $0.id == parent })?.importRootID, root)
         XCTAssertEqual(items.first(where: { $0.id == note })?.importRootID, root)
         let reopened = try NotebookCatalogDocument(snapshot: catalog.snapshot())
@@ -76,7 +88,8 @@ final class NotebookCatalogCacheTests: XCTestCase {
 
         let added = try fork.add(kind: .note, name: "Added.md")
         XCTAssertEqual(Set(try fork.items().map(\.id)), [note, added])
-        XCTAssertEqual(fork.readItemsDecodeCount, 1)
+        XCTAssertEqual(fork.readItemsDecodeCount, 0)
+        XCTAssertEqual(fork.readItemsUpdateCount, 1)
         XCTAssertEqual(
             try fork.historicalLinkLocations()[note]?.map(\.name), ["Former.md"]
         )
@@ -95,7 +108,8 @@ final class NotebookCatalogCacheTests: XCTestCase {
         try local.merge(remote)
 
         XCTAssertEqual(Set(try local.items().map(\.id)), [first, second])
-        XCTAssertEqual(local.readItemsDecodeCount, before + 1)
+        // The merge's own check read the merged items; they are reused.
+        XCTAssertEqual(local.readItemsDecodeCount, before)
     }
 
     func testRejectedMergeKeepsCachedLiveItems() throws {
@@ -158,7 +172,8 @@ final class NotebookCatalogCacheTests: XCTestCase {
         try local.merge(remote)
         let locations = try XCTUnwrap(local.historicalLinkLocations()[id])
         XCTAssertEqual(Set(locations.map(\.name)), ["First.md", "Second.md"])
-        XCTAssertEqual(local.historicalLinkLocationsDecodeCount, before + 1)
+        // The merge's own check read the merged history; it is reused.
+        XCTAssertEqual(local.historicalLinkLocationsDecodeCount, before)
     }
 
     func testVerifiedHistoryCacheCannotHideMalformedReloadOrConflict() throws {
@@ -287,7 +302,8 @@ final class NotebookCatalogCacheTests: XCTestCase {
         try remote.recordRecentActivity(for: id)
         try catalog.merge(remote)
         try assertRecentMatchesReopened(catalog)
-        XCTAssertEqual(catalog.recentStatesDecodeCount, before + 2)
+        // The merge's own check read the merged recents; they are reused.
+        XCTAssertEqual(catalog.recentStatesDecodeCount, before + 1)
         XCTAssertEqual(try catalog.recentStates()[id]?.activityOrder, 2)
         XCTAssertTrue(try XCTUnwrap(catalog.recentStates()[id]).pinned)
     }
