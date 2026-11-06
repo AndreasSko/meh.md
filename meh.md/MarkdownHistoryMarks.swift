@@ -142,36 +142,8 @@ enum MarkdownHistoryMarks {
         return nil
     }
 
-    #if os(macOS)
-    /// AppKit draws the background in one pass, so walk only the fragments
-    /// in the dirty area.
-    static func draw(in textView: MarkdownTextView, dirtyRect: CGRect) {
-        let changes = textView.markdownHistoryChanges
-        guard !changes.isEmpty,
-              let layoutManager = textView.textLayoutManager,
-              let context = NSGraphicsContext.current?.cgContext else { return }
-        let origin = textView.textContainerOrigin
-        let length = textView.textStorage?.length ?? 0
-        guard let first = layoutManager.textLayoutFragment(for: CGPoint(
-            x: 0, y: max(0, dirtyRect.minY - origin.y - ringDiameter)
-        )) else { return }
-        layoutManager.enumerateTextLayoutFragments(
-            from: first.rangeInElement.location, options: [.ensuresLayout]
-        ) { fragment in
-            if fragment.layoutFragmentFrame.minY + origin.y
-                > dirtyRect.maxY + ringDiameter { return false }
-            guard let range = nsRange(of: fragment, in: layoutManager) else { return true }
-            let marks = marks(
-                for: changes, fragmentRange: range,
-                lineBounds: lineBounds(of: fragment), textLength: length
-            )
-            if !marks.isEmpty { draw(marks, offset: origin, context: context) }
-            return true
-        }
-    }
-    #else
-    /// UIKit draws each fragment on its own; its surface already reaches the
-    /// margin while changes are shown.
+    /// Each fragment draws its own marks; its surface reaches the margin
+    /// while changes are shown.
     static func draw(
         in fragment: NSTextLayoutFragment,
         textView: MarkdownTextView,
@@ -185,7 +157,7 @@ enum MarkdownHistoryMarks {
         let marks = marks(
             for: changes, fragmentRange: range,
             lineBounds: lineBounds(of: fragment),
-            textLength: textView.textStorage.length
+            textLength: (textView.textStorage as NSTextStorage?)?.length ?? 0
         )
         guard !marks.isEmpty else { return }
         let frame = fragment.layoutFragmentFrame
@@ -193,7 +165,6 @@ enum MarkdownHistoryMarks {
             x: point.x - frame.minX, y: point.y - frame.minY
         ), context: context)
     }
-    #endif
 
     static func nsRange(
         of fragment: NSTextLayoutFragment,

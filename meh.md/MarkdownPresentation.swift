@@ -101,6 +101,9 @@ enum MarkdownPresentation {
             assertionFailure("Markdown editor requires TextKit 2")
             return
         }
+        (textView as? MarkdownTextView)?.installMarkdownLayoutManagerDelegate(
+            on: layoutManager
+        )
 
         MarkdownLivePreview.update(
             textView,
@@ -250,106 +253,6 @@ enum MarkdownPresentation {
         attributes[.foregroundColor] = primaryTextColor
         attributes[.paragraphStyle] = bodyParagraphStyle(for: bodyFont)
         textView.typingAttributes = attributes
-    }
-
-    static func drawBlockBackgrounds(
-        in textView: NSTextView,
-        dirtyRect: CGRect
-    ) {
-        guard let layoutManager = textView.textLayoutManager,
-              let textContainer = textView.textContainer,
-              let context = NSGraphicsContext.current?.cgContext else {
-            return
-        }
-        guard let visibleRange = visibleRange(in: layoutManager) else { return }
-        let text = textView.string
-        let syntaxCache = syntaxCache(for: textView)
-        guard let presentation = syntaxCache.currentPresentation else {
-            return
-        }
-        drawBlockBackgrounds(
-            text: text,
-            syntaxCache: syntaxCache,
-            result: presentation.result,
-            layoutManager: layoutManager,
-            containerWidth: textContainer.size.width,
-            lineFragmentPadding: textContainer.lineFragmentPadding,
-            containerOrigin: textView.textContainerOrigin,
-            visibleRange: visibleRange,
-            dirtyRect: dirtyRect,
-            context: context
-        )
-        if let tableLayout = syntaxCache.tableLayout,
-           let manager = layoutManager.textContentManager,
-           let start = manager.location(manager.documentRange.location,
-                                        offsetBy: visibleRange.location) {
-            layoutManager.enumerateTextLayoutFragments(from: start) { fragment in
-                let frame = fragment.layoutFragmentFrame.offsetBy(
-                    dx: textView.textContainerOrigin.x,
-                    dy: textView.textContainerOrigin.y
-                )
-                if frame.minY > dirtyRect.maxY { return false }
-                if frame.intersects(dirtyRect) {
-                    tableLayout.draw(
-                        fragment: fragment, layoutManager: layoutManager,
-                        origin: textView.textContainerOrigin,
-                        lineFragmentPadding: textContainer.lineFragmentPadding,
-                        context: context,
-                        horizontalOffsets: (textView as? MarkdownTextView)?.markdownTableDrawingOffsets
-                            ?? syntaxCache.tableHorizontalOffsets,
-                        activeCell: (textView as? MarkdownTextView)?.markdownCellController.target
-                    )
-                }
-                return true
-            }
-        }
-        drawListBullets(
-            listBulletDecorations(
-                text: text,
-                result: presentation.result,
-                layoutManager: layoutManager,
-                snapshot: MarkdownLivePreview.snapshot(for: textView),
-                visibleRange: visibleRange,
-                spanIndices: presentation.spanCandidateIndices(
-                    intersecting: visibleRange
-                )
-            ),
-            offset: textView.textContainerOrigin,
-            dirtyRect: dirtyRect,
-            context: context
-        )
-        drawRules(
-            ruleDecorations(
-                text: text,
-                result: presentation.result,
-                layoutManager: layoutManager,
-                snapshot: MarkdownLivePreview.snapshot(for: textView),
-                containerWidth: textContainer.size.width,
-                lineFragmentPadding: textContainer.lineFragmentPadding,
-                visibleRange: visibleRange,
-                spanIndices: presentation.spanCandidateIndices(
-                    intersecting: visibleRange
-                )
-            ),
-            offset: textView.textContainerOrigin,
-            dirtyRect: dirtyRect,
-            context: context
-        )
-        drawTaskCheckboxes(
-            taskCheckboxDecorations(
-                text: text,
-                result: presentation.result,
-                layoutManager: layoutManager,
-                snapshot: MarkdownLivePreview.snapshot(for: textView),
-                visibleRange: visibleRange,
-                spanIndices: presentation.spanCandidateIndices(
-                    intersecting: visibleRange
-                )
-            ),
-            offset: textView.textContainerOrigin,
-            dirtyRect: dirtyRect,
-            context: context
-        )
     }
 #else
     static func configure(
@@ -552,16 +455,25 @@ enum MarkdownPresentation {
         attributes[.paragraphStyle] = style
         textView.typingAttributes = attributes
     }
+#endif
 
+    /// Draws the decorations beside one line, before the line's text.
     static func drawBlockBackgrounds(
         in fragment: NSTextLayoutFragment,
-        textView: UITextView,
+        textView: MarkdownTextView,
         at point: CGPoint,
         context: CGContext
     ) {
-        guard let textView = textView as? MarkdownTextView,
-              let layoutManager = fragment.textLayoutManager,
-              let contentManager = layoutManager.textContentManager else {
+#if os(macOS)
+        guard let textStorage = textView.textStorage else { return }
+        let text = textView.string
+#else
+        let textStorage = textView.textStorage
+        let text = textView.text ?? ""
+#endif
+        guard let layoutManager = fragment.textLayoutManager,
+              let contentManager = layoutManager.textContentManager,
+              let textContainer = layoutManager.textContainer else {
             return
         }
         let fragmentRange = nsRange(
@@ -569,12 +481,11 @@ enum MarkdownPresentation {
             documentStart: contentManager.documentRange.location,
             contentManager: contentManager
         )
-        let text = textView.text ?? ""
         let syntaxCache = syntaxCache(for: textView)
         // An edit invalidates the presentation before the coordinator's
         // deferred refresh. Keep decorations visible during that interval.
         let presentation = presentationForDrawing(
-            in: textView.textStorage,
+            in: textStorage,
             syntaxCache: syntaxCache,
             snapshot: MarkdownLivePreview.snapshot(for: textView)
         )
@@ -582,12 +493,12 @@ enum MarkdownPresentation {
         let decorations = fragmentBlockDecorations(
             fragmentRange: fragmentRange,
             fragmentFrame: fragment.layoutFragmentFrame,
-            text: textView.text ?? "",
+            text: text,
             plan: syntaxCache.decorationPlan(for: text, result: result),
             syntaxCache: syntaxCache,
             layoutManager: layoutManager,
-            containerWidth: textView.textContainer.size.width,
-            lineFragmentPadding: textView.textContainer.lineFragmentPadding
+            containerWidth: textContainer.size.width,
+            lineFragmentPadding: textContainer.lineFragmentPadding
         )
         let fragmentFrame = fragment.layoutFragmentFrame
         let drawingOffset = CGPoint(
@@ -605,7 +516,7 @@ enum MarkdownPresentation {
         syntaxCache.tableLayout?.draw(
             fragment: fragment, layoutManager: layoutManager,
             origin: drawingOffset,
-            lineFragmentPadding: textView.textContainer.lineFragmentPadding,
+            lineFragmentPadding: textContainer.lineFragmentPadding,
             context: context,
             horizontalOffsets: textView.markdownTableDrawingOffsets,
             activeCell: textView.markdownCellController.target
@@ -638,8 +549,8 @@ enum MarkdownPresentation {
                 result: result,
                 layoutManager: layoutManager,
                 snapshot: MarkdownLivePreview.snapshot(for: textView),
-                containerWidth: textView.textContainer.size.width,
-                lineFragmentPadding: textView.textContainer.lineFragmentPadding,
+                containerWidth: textContainer.size.width,
+                lineFragmentPadding: textContainer.lineFragmentPadding,
                 visibleRange: fragmentRange,
                 spanIndices: presentation.spanCandidateIndices(
                     intersecting: fragmentRange
@@ -769,40 +680,6 @@ enum MarkdownPresentation {
             at: location,
             effectiveRange: nil
         ) as? PlatformFont)?.pointSize ?? defaultFontSize
-    }
-#endif
-
-    static func drawBlockBackgrounds(
-        text: String,
-        syntaxCache: MarkdownSyntaxCache,
-        result suppliedResult: MarkdownSyntaxResult? = nil,
-        layoutManager: NSTextLayoutManager,
-        containerWidth: CGFloat,
-        lineFragmentPadding: CGFloat,
-        containerOrigin: CGPoint,
-        visibleRange: NSRange?,
-        dirtyRect: CGRect,
-        context: CGContext
-    ) {
-        let decorations = blockDecorations(
-            text: text,
-            result: suppliedResult ?? syntaxCache.result(for: text),
-            layoutManager: layoutManager,
-            containerWidth: containerWidth,
-            lineFragmentPadding: lineFragmentPadding,
-            visibleRange: visibleRange
-        )
-        context.saveGState()
-        defer { context.restoreGState() }
-        context.clip(to: dirtyRect)
-        for decoration in decorations {
-            let rect = decoration.rect.offsetBy(
-                dx: containerOrigin.x,
-                dy: containerOrigin.y
-            )
-            guard rect.intersects(dirtyRect) else { continue }
-            draw(decoration, in: rect, context: context)
-        }
     }
 
     private static func draw(

@@ -25,6 +25,10 @@ struct EditorRenderingCheck {
         self.harness = harness
         self.fixture = fixture
         image = harness.render(scale: scale)
+        if harness.plainLines > 0 {
+            fail("\(harness.plainLines) lines drew without the editor's line fragment",
+                 harness.visibleRect)
+        }
         checkLists()
         checkPanels()
         checkRules()

@@ -76,12 +76,8 @@ extension MarkdownTextView {
            let textRange = NSTextRange(location: start, end: end) {
             manager.invalidateRenderingAttributes(for: textRange)
             manager.textViewportLayoutController.layoutViewport()
+            redrawMarkdownDecorations(for: textRange)
         }
-#if os(macOS)
-        needsDisplay = true
-#else
-        setNeedsDisplay()
-#endif
     }
 }
 

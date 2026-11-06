@@ -652,26 +652,22 @@ final class MarkdownPresentationTests: XCTestCase {
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
             )
         )
-        let visibleRange = NSRange(
-            location: 0,
-            length: (source as NSString).length
-        )
         XCTAssertEqual(textView.markdownSyntaxCache.parseCount, 1)
 
+        var editorLines = 0
         for _ in 0..<2 {
-            MarkdownPresentation.drawBlockBackgrounds(
-                text: source,
-                syntaxCache: textView.markdownSyntaxCache,
-                layoutManager: layoutManager,
-                containerWidth: textContainer.size.width,
-                lineFragmentPadding: textContainer.lineFragmentPadding,
-                containerOrigin: .zero,
-                visibleRange: visibleRange,
-                dirtyRect: textView.bounds,
-                context: context
-            )
+            layoutManager.enumerateTextLayoutFragments(
+                from: layoutManager.documentRange.location
+            ) { fragment in
+                if String(describing: Swift.type(of: fragment)) == "MarkdownTextLayoutFragment" {
+                    editorLines += 1
+                }
+                fragment.draw(at: fragment.layoutFragmentFrame.origin, in: context)
+                return true
+            }
         }
 
+        XCTAssertGreaterThan(editorLines, 0, "The editor's own lines did not draw")
         XCTAssertEqual(textView.markdownSyntaxCache.parseCount, 1)
     }
 

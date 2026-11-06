@@ -22,6 +22,7 @@ final class EditorRenderingHarness {
         var mode = MarkdownEditorMode.livePreview
         var historyChanges = NoteHistoryChanges.none
         var timeCalculator = false
+        var palette = MehPalette()
     }
 
     private final class Storage {
@@ -85,6 +86,7 @@ final class EditorRenderingHarness {
             text: Binding(get: { storage.text }, set: { storage.text = $0 }),
             fontFamily: options.fontFamily,
             mode: options.mode,
+            palette: options.palette,
             historyChanges: options.historyChanges,
             timeCalculator: options.timeCalculator
         )
@@ -95,6 +97,73 @@ final class EditorRenderingHarness {
         change(&options)
         host.rootView = Self.editor(storage, options)
         settle()
+    }
+
+    /// The lines the screen drew while `body` ran. Each line keeps its last
+    /// drawing until the screen asks it to draw anew.
+    func linesDrawn(during body: () -> Void) -> Set<ObjectIdentifier> {
+        settle()
+        var someLine: NSTextLayoutFragment?
+        layoutManager.enumerateTextLayoutFragments(
+            from: layoutManager.documentRange.location
+        ) { someLine = $0; return false }
+        guard let someLine, let method = class_getInstanceMethod(
+            Swift.type(of: someLine), #selector(NSTextLayoutFragment.draw(at:in:))
+        ) else { return [] }
+        typealias Draw = @convention(c) (NSTextLayoutFragment, Selector, CGPoint, CGContext) -> Void
+        let original = method_getImplementation(method)
+        let drawOriginal = unsafeBitCast(original, to: Draw.self)
+        let drawn = DrawnLines()
+        let counting: @convention(block) (NSTextLayoutFragment, CGPoint, CGContext) -> Void = {
+            drawn.lines.insert(ObjectIdentifier($0))
+            drawOriginal($0, #selector(NSTextLayoutFragment.draw(at:in:)), $1, $2)
+        }
+        method_setImplementation(method, imp_implementationWithBlock(counting))
+        defer { method_setImplementation(method, original) }
+        body()
+        settle()
+        return drawn.lines
+    }
+
+    /// The lines on screen.
+    var visibleLines: Set<ObjectIdentifier> {
+        var lines = Set<ObjectIdentifier>()
+        let origin = containerOrigin
+        layoutManager.enumerateTextLayoutFragments(
+            from: layoutManager.textViewportLayoutController.viewportRange?.location
+                ?? layoutManager.documentRange.location
+        ) { fragment in
+            let frame = fragment.layoutFragmentFrame.offsetBy(dx: origin.x, dy: origin.y)
+            if frame.minY > visibleRect.maxY { return false }
+            if frame.maxY > visibleRect.minY { lines.insert(ObjectIdentifier(fragment)) }
+            return true
+        }
+        return lines
+    }
+
+    /// The line that holds `location`.
+    func line(at location: Int) -> ObjectIdentifier? {
+        guard let manager = layoutManager.textContentManager,
+              let position = manager.location(manager.documentRange.location, offsetBy: location),
+              let fragment = layoutManager.textLayoutFragment(for: position)
+        else { return nil }
+        return ObjectIdentifier(fragment)
+    }
+
+    /// Replaces source text, as typing over a selection would.
+    func replace(_ range: NSRange, with replacement: String) {
+#if os(macOS)
+        textView.setSelectedRange(range)
+        textView.insertText(replacement, replacementRange: range)
+#else
+        textView.selectedRange = range
+        textView.insertText(replacement)
+#endif
+        settle()
+    }
+
+    private final class DrawnLines: @unchecked Sendable {
+        var lines = Set<ObjectIdentifier>()
     }
 
     // MARK: Geometry, in the text view's coordinates
@@ -264,7 +333,12 @@ final class EditorRenderingHarness {
         )
     }
 
+    /// Lines in the last render that drew without the editor's own line
+    /// fragment, and so without their decorations.
+    private(set) var plainLines = 0
+
     private func drawFragments(in visible: CGRect, context: CGContext) {
+        plainLines = 0
         guard let manager = layoutManager.textContentManager else { return }
         let origin = containerOrigin
         let start = layoutManager.textViewportLayoutController.viewportRange?.location
@@ -272,6 +346,9 @@ final class EditorRenderingHarness {
         layoutManager.enumerateTextLayoutFragments(from: start) { fragment in
             let frame = fragment.layoutFragmentFrame.offsetBy(dx: origin.x, dy: origin.y)
             if frame.minY > visible.maxY { return false }
+            if String(describing: Swift.type(of: fragment)) != "MarkdownTextLayoutFragment" {
+                plainLines += 1
+            }
             // Each line may only draw inside the surface it reports, as on
             // screen, so a surface too small for its marks shows up here.
             context.saveGState()

@@ -105,4 +105,100 @@ final class EditorRenderingTests: XCTestCase {
         defer { harness.tearDown() }
         XCTAssertGreaterThanOrEqual(check(harness, fixture, "history marks"), 4)
     }
+
+    func testPaletteChangesRedrawEveryVisibleLine() throws {
+        let fixture = EditorRenderingFixture.showcase
+        let harness = try EditorRenderingHarness(
+            source: fixture.source,
+            options: .init(size: CGSize(width: 420, height: 900), timeCalculator: true)
+        )
+        defer {
+            harness.tearDown()
+            MehStyle.palette = MehPalette()
+        }
+        // A new palette changes no text, so nothing else redraws these lines.
+        let drawn = harness.linesDrawn {
+            harness.update { $0.palette = MehPalette(ink: .blue, highlighter: .pink) }
+        }
+        XCTAssertGreaterThanOrEqual(harness.visibleLines.count, 9)
+        XCTAssertEqual(
+            harness.visibleLines.subtracting(drawn).count, 0, "Lines kept the old palette's colors"
+        )
+        XCTAssertGreaterThanOrEqual(check(harness, fixture, "after a palette change"), 9)
+    }
+
+    func testPaletteChangesReachLinesOutOfView() throws {
+        let fixture = EditorRenderingFixture.long(sections: 40)
+        let harness = try EditorRenderingHarness(
+            source: fixture.source, options: .init(size: CGSize(width: 420, height: 640))
+        )
+        defer {
+            harness.tearDown()
+            MehStyle.palette = MehPalette()
+        }
+        harness.scroll(toY: harness.visibleRect.height * 3)
+        let drawn = harness.linesDrawn {
+            harness.update { $0.palette = MehPalette(ink: .green, highlighter: .blue) }
+            harness.scroll(toY: 0)
+        }
+        XCTAssertGreaterThanOrEqual(harness.visibleLines.count, 9)
+        XCTAssertEqual(
+            harness.visibleLines.subtracting(drawn).count, 0, "Lines kept the old palette's colors"
+        )
+    }
+
+    func testSumRedrawsWhenATimeAboveChanges() throws {
+        let source = "Ferry 1h 20m\nWalk 45m\nTotal =\n\nThe end.\n"
+        let harness = try EditorRenderingHarness(
+            source: source, options: .init(timeCalculator: true)
+        )
+        defer { harness.tearDown() }
+        let total = (source as NSString).range(of: "Total =").location
+        let minutes = (source as NSString).range(of: "45m")
+        // Only the walk's line changes text; the total's line shows the new sum.
+        let drawn = harness.linesDrawn { harness.replace(minutes, with: "55m") }
+        XCTAssertTrue(
+            try drawn.contains(XCTUnwrap(harness.line(at: total))), "The total kept the old sum"
+        )
+    }
+
+    func testTableScrolledSidewaysRedrawsItsRows() throws {
+        let header = (1...12).map { "Column \($0)" }
+        let source = "Before.\n\n| " + header.joined(separator: " | ") + " |\n|"
+            + String(repeating: " --- |", count: 12) + "\n| "
+            + (1...12).map { "Cell \($0)" }.joined(separator: " | ") + " |\n\nAfter.\n"
+        let harness = try EditorRenderingHarness(source: source)
+        defer { harness.tearDown() }
+        let textView = harness.textView
+        let table = try XCTUnwrap(textView.markdownSyntaxCache.tableLayout?.rows.first?.tableRange)
+        let drawn = harness.linesDrawn {
+            XCTAssertTrue(textView.setMarkdownTableHorizontalOffset(200, for: table))
+        }
+        let rows = (source as NSString).substring(with: table).components(separatedBy: "\n")
+        var location = table.location
+        for row in rows where !row.isEmpty {
+            XCTAssertTrue(
+                try drawn.contains(XCTUnwrap(harness.line(at: location))),
+                "A row kept its old columns: \(row.prefix(20))"
+            )
+            location += (row as NSString).length + 1
+        }
+    }
+
+    func testHistoryMarksRedrawWhenTheComparedVersionChanges() throws {
+        let fixture = EditorRenderingFixture.history
+        let harness = try EditorRenderingHarness(
+            source: fixture.source, options: .init(size: CGSize(width: 420, height: 900))
+        )
+        defer { harness.tearDown() }
+        let drawn = harness.linesDrawn {
+            harness.update {
+                $0.historyChanges = NoteHistoryChanges(
+                    from: fixture.historicalSource, to: fixture.source
+                )
+            }
+        }
+        XCTAssertEqual(harness.visibleLines.subtracting(drawn).count, 0, "Lines kept no marks")
+        XCTAssertGreaterThanOrEqual(check(harness, fixture, "history marks after a change"), 4)
+    }
 }
