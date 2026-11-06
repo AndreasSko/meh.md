@@ -1685,8 +1685,16 @@ public final class NotebookReplica {
             if try await self.canReuseAcceptedCatalog(record) { return }
             // Failed validation or persistence cannot establish reusable trust.
             self.acceptedCatalog = nil
-            let incoming = try record.validatedCatalog()
-            if let catalog = self.catalog {
+            if let catalog = self.catalog, let installed = self.catalogSnapshot,
+                record.catalogSnapshot == installed, catalog.heads == installed.heads
+            {
+                // Often this device's own catalog coming back. There is
+                // nothing to read or merge, but persisting still applies
+                // deletions from the ledger and saves the catalog.
+                try record.validate()
+                try await self.persistCatalog(try catalog.fork())
+            } else if let catalog = self.catalog {
+                let incoming = try record.validatedCatalog()
                 let next = try catalog.fork()
                 try next.merge(incoming)
                 let mergedLocations = Dictionary(uniqueKeysWithValues:
@@ -1711,7 +1719,7 @@ public final class NotebookReplica {
                 try next.clearRecents(for: former.subtracting(now))
                 try await self.persistCatalog(next)
             } else {
-                try await self.persistCatalog(incoming)
+                try await self.persistCatalog(record.validatedCatalog())
             }
             if let installed = self.catalogSnapshot,
                 record.snapshot.data.count + installed.data.count <= 16 * 1_024 * 1_024

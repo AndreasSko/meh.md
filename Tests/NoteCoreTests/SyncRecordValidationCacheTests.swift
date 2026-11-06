@@ -51,3 +51,9 @@ func countingCatalogDecodes(_ body: () async throws -> Void) async throws -> Int
     return NotebookCatalogDocument.itemDecodes.load(ordering: .relaxed) - before
 }
 
+@MainActor
+func countingCatalogDecodes(_ body: () throws -> Void) throws -> Int {
+    let before = NotebookCatalogDocument.itemDecodes.load(ordering: .relaxed)
+    try body()
+    return NotebookCatalogDocument.itemDecodes.load(ordering: .relaxed) - before
+}

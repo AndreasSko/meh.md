@@ -43,9 +43,42 @@ final class NotebookCatalogDecodeBudgetTests: XCTestCase {
             try await local.apply(record)
         }
 
-        // The incoming catalog and the merge check.
-        XCTAssertEqual(decodes, 2)
+        XCTAssertEqual(decodes, 0)
         XCTAssertEqual(local.catalogSnapshot, record.catalogSnapshot)
+    }
+
+    func testAcceptingTheStartingCatalogAgainReadsOnlyThatCatalog() async throws {
+        let local = NotebookReplica(directory: temporaryDirectory())
+        try await local.createLocalNotebook()
+        let seed = SyncRecord(catalog: try XCTUnwrap(local.catalogSnapshot))
+        try await local.acceptSeed(seed)
+        _ = try await local.createNote(name: "Later.md")
+        let heads = try XCTUnwrap(local.catalogSnapshot).heads
+
+        let decodes = try await countingCatalogDecodes {
+            try await local.acceptSeed(seed)
+        }
+
+        // The small starting catalog; the merge adds nothing, so no check.
+        XCTAssertEqual(decodes, 1)
+        XCTAssertEqual(local.catalogSnapshot?.heads, heads)
+        XCTAssertEqual(local.placements.map(\.item.name), ["Later.md"])
+    }
+
+    func testMergingAnOlderVersionChangesAndReadsNothing() throws {
+        let catalog = try NotebookCatalogDocument()
+        _ = try catalog.add(kind: .note, name: "First.md")
+        let older = try catalog.fork()
+        _ = try catalog.add(kind: .note, name: "Second.md")
+        let heads = catalog.heads
+        _ = try catalog.items()
+
+        let decodes = try countingCatalogDecodes { try catalog.merge(older) }
+
+        XCTAssertEqual(decodes, 0)
+        XCTAssertEqual(catalog.heads, heads)
+        XCTAssertEqual(
+            Set(try catalog.items().map(\.name)), ["First.md", "Second.md"])
     }
 
     func testDeletionsMadeAfterPublishingAreNotReportedForThePublishedCatalog()

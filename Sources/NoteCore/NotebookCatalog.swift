@@ -673,9 +673,14 @@ final class NotebookCatalogDocument {
 
     func merge(_ other: NotebookCatalogDocument) throws {
         guard notebookID == other.notebookID else { throw NotebookCatalogError.identityMismatch }
-        guard !historyHashes.isDisjoint(with: other.historyHashes) else {
+        let history = historyHashes
+        guard !history.isDisjoint(with: other.historyHashes) else {
             throw NotebookCatalogError.disconnectedHistory
         }
+        // A change is only applied with all changes before it, so holding
+        // the other's heads means holding all of its history: merging would
+        // change nothing, and this content is already valid.
+        if Set(other.document.heads()).isSubset(of: history) { return }
         // Validate on a branch first: a rejected merge cannot poison live state.
         let candidate = document.fork()
         try candidate.merge(other: other.document)
