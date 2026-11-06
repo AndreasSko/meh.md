@@ -2937,6 +2937,18 @@ final class MarkdownSyntaxCache: NSObject {
         }
     }
 
+    private var noteLinks: (revision: UInt64, links: [NotebookLinkOccurrence])?
+
+    /// AppKit resets cursor rects whenever views in the window move, such as
+    /// on every sidebar scroll step. Parse links again only after an edit.
+    func noteLinks(in textStorage: NSTextStorage) -> [NotebookLinkOccurrence] {
+        let text = textSnapshot(in: textStorage)
+        if let noteLinks, noteLinks.revision == characterRevision { return noteLinks.links }
+        let links = NotebookLinkParser.parse(text)
+        noteLinks = (characterRevision, links)
+        return links
+    }
+
     @discardableResult
     func prepare(in textStorage: NSTextStorage) -> String {
         let text = textSnapshot(in: textStorage)
