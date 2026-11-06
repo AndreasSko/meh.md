@@ -240,6 +240,27 @@ final class MarkdownNoteLinkTests: XCTestCase {
         }
     }
 
+    func testLinkCursorFollowsTextStorageEdits() {
+        let source = "[[planet.md|label]]\nOutside"
+        let fixture = makeTextView(source: source)
+        let view = fixture.view
+        defer { fixture.window.orderOut(nil) }
+        let navigation = MarkdownEditorNavigation()
+        navigation.openLink = { _ in }
+        view.markdownLinkNavigation = navigation
+        view.layoutSubtreeIfNeeded()
+        XCTAssertFalse(view.noteLinkCursorRects(modifiers: .command).isEmpty)
+
+        // Edit the storage in place: the cached parse must not outlive it.
+        view.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 2), with: "")
+        view.layoutSubtreeIfNeeded()
+        XCTAssertTrue(view.noteLinkCursorRects(modifiers: .command).isEmpty)
+
+        view.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 0), with: "[[")
+        view.layoutSubtreeIfNeeded()
+        XCTAssertFalse(view.noteLinkCursorRects(modifiers: .command).isEmpty)
+    }
+
     private func linkLabelPoint(in view: MarkdownTextView, source: String) -> NSPoint {
         let rect = view.firstRect(
             forCharacterRange: (source as NSString).range(of: "label"), actualRange: nil

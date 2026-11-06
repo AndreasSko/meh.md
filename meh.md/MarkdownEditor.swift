@@ -515,6 +515,10 @@ final class MarkdownTextView: NSTextView {
     private var noteLinkTrackingArea: NSTrackingArea?
     private var renderedLinkCursorRects: [NSRect] = []
     private var sourceLinkCursorRects: [NSRect] = []
+    private var noteLinks: [NotebookLinkOccurrence] {
+        guard let textStorage else { return [] }
+        return markdownSyntaxCache.noteLinks(in: textStorage)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -583,7 +587,7 @@ final class MarkdownTextView: NSTextView {
         let source = string as NSString
         let snapshot = MarkdownLivePreview.snapshot(for: self)
         var rects: [NSRect] = []
-        for link in NotebookLinkParser.parse(string) where !link.isEmbed {
+        for link in noteLinks where !link.isEmbed {
             guard flags == .command || MarkdownLivePreview.conceals(
                 link.range, in: source, snapshot: snapshot
             ) else { continue }
@@ -625,7 +629,7 @@ final class MarkdownTextView: NSTextView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event)
         let offset = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
-        if let link = NotebookLinkParser.parse(string).first(where: {
+        if let link = noteLinks.first(where: {
             !$0.isEmbed && NSLocationInRange(offset, $0.range)
         }) {
             let item = NSMenuItem(title: String(localized: "Open Linked Note"),
@@ -732,7 +736,7 @@ final class MarkdownTextView: NSTextView {
         let snapshot = MarkdownLivePreview.snapshot(for: self)
         let source = string as NSString
         let offset = characterIndexForInsertion(at: point)
-        let links = NotebookLinkParser.parse(string)
+        let links = noteLinks
         for candidate in [offset, offset - 1] where candidate >= 0 && candidate < source.length {
             let character = source.rangeOfComposedCharacterSequence(at: candidate)
             let screenRect = firstRect(forCharacterRange: character, actualRange: nil)
