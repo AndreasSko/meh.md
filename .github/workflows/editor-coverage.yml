@@ -1,0 +1,47 @@
+name: Editor performance coverage
+
+# Runs each editor performance step once with code coverage on main every
+# night. PRs then run only the steps that ran a line they change (see
+# select_editor_steps.py).
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editor-coverage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    name: Editor performance coverage
+    runs-on: xcode-27
+    # About the time of a full performance run, slowed down by coverage.
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Run each step once with code coverage
+        run: python3 scripts/run_editor_coverage.py --evidence-root "$RUNNER_TEMP/editor-coverage"
+      # select_editor_steps.py finds this by name; keep it in step with
+      # INDEX_ARTIFACT. Steps that failed have no index and always run.
+      - name: Publish the coverage indexes
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: editor-coverage
+          path: ${{ runner.temp }}/editor-coverage/coverage-*.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve coverage logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: editor-coverage-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/editor-coverage/*.log
+          if-no-files-found: warn
+          retention-days: 14

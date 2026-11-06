@@ -4,6 +4,11 @@ import SwiftUI
 import UIKit
 import os
 
+#if EDITOR_COVERAGE
+@_silgen_name("__llvm_profile_write_file")
+private func writeCoverageProfile() -> Int32
+#endif
+
 /// A disposable real editor/session, with no notebook catalog or CloudKit.
 @MainActor
 enum LargeNotePerformanceProbe {
@@ -270,6 +275,11 @@ enum LargeNotePerformanceProbe {
         if let storageDirectoryForCleanup {
             try? FileManager.default.removeItem(at: storageDirectoryForCleanup)
         }
+        #if EDITOR_COVERAGE
+        // The run ends by terminating the app, which skips the profile
+        // write at exit. The script reads the profile once the report exists.
+        _ = writeCoverageProfile()
+        #endif
         do {
             let data = try JSONSerialization.data(
                 withJSONObject: report, options: [.prettyPrinted, .sortedKeys]

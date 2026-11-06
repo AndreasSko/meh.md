@@ -64,6 +64,15 @@ xcrun simctl bootstatus "$sim_udid" -b
 
 package_root="$work_root/current-package"
 derived="$work_root/current-build"
+# run_editor_coverage.py sets this to record which lines the suite runs.
+# Xcode's own coverage report drops these sources, since the package only
+# links to them, so the test process writes a raw profile for llvm-cov.
+coverage=()
+if [[ "${EDITOR_COVERAGE:-0}" == 1 ]]; then
+  coverage=(-enableCodeCoverage YES)
+  mkdir -p "$evidence_root/profiles"
+  export TEST_RUNNER_LLVM_PROFILE_FILE="$evidence_root/profiles/native-%p.profraw"
+fi
 git -C "$repo_root" -c core.fsmonitor=false diff --quiet HEAD -- \
   Sources Tests meh.md Package.swift Package.resolved || exit 2
 mkdir -p "$package_root"
@@ -86,9 +95,21 @@ fi
   cd "$package_root"
   xcodebuild build-for-testing -scheme MehCore-Package \
     -destination 'generic/platform=iOS Simulator' -derivedDataPath "$derived" \
-    -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO \
+    -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO ${coverage[@]+"${coverage[@]}"} \
     'OTHER_SWIFT_FLAGS=$(inherited) -D ICLOUD_ENABLED -D ICLOUD_DEV'
 ) 2>&1 | tee "$evidence_root/current-build.log"
+if [[ "${#coverage[@]}" != 0 ]]; then
+  find "$derived/Build/Intermediates.noindex" -name '*.SwiftFileList' \
+    -exec cat {} + > "$evidence_root/compiled.txt"
+  # Packages may build as frameworks, each with its own coverage mapping.
+  mkdir -p "$evidence_root/binaries"
+  number=0
+  while IFS= read -r binary; do
+    number=$((number + 1))
+    cp "$binary" "$evidence_root/binaries/$number-${binary##*/}"
+  done < <(find "$derived/Build/Products" -type f -perm -u+x ! -path '*.dSYM/*' \
+    \( -path '*.xctest/*' -o -path '*.framework/*' \))
+fi
 test_run="$(python3 - "$derived/Build/Products" <<'PY'
 from pathlib import Path
 import sys
