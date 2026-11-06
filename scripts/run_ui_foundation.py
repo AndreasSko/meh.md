@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 
+from coverage_selection import archive_lines, coverage_index
 from check_ui_foundation_results import (
     check,
     discovered,
@@ -42,57 +43,6 @@ def selected(expected, only):
             raise ValueError(f"Selected tests outside the plan: {selector}")
         chosen |= matches
     return chosen
-
-
-def archive_lines(archive):
-    """({path: executable lines}, {path: lines that ran}) of an xccov archive."""
-    executable, ran = {}, {}
-    for path, lines in archive.items():
-        executable[path] = [line["line"] for line in lines if line.get("isExecutable")]
-        ran[path] = [
-            line["line"] for line in lines
-            if line.get("isExecutable") and line.get("executionCount")
-        ]
-    return executable, ran
-
-
-def coverage_index(platform, commit, ran, executable, compiled):
-    """Which goal ran which line, keyed by paths relative to the checkout.
-
-    `ran` maps each goal to {path: lines it ran}, `executable` maps each
-    instrumented path to its executable lines, and `compiled` lists the Swift
-    files the lane built. Lines are [first, last] ranges to keep it small.
-    """
-    prefix = str(ROOT) + "/"
-
-    def ranges(lines):
-        spans = []
-        for line in sorted(lines):
-            if spans and spans[-1][1] == line - 1:
-                spans[-1][1] = line
-            else:
-                spans.append([line, line])
-        return spans
-
-    tests = sorted(ran)
-    files = {
-        path[len(prefix):]: {"executable": ranges(lines), "ran": {}}
-        for path, lines in executable.items() if path.startswith(prefix)
-    }
-    for number, test in enumerate(tests):
-        for path, lines in ran[test].items():
-            relative = path[len(prefix):] if path.startswith(prefix) else None
-            if relative in files and lines:
-                files[relative]["ran"][str(number)] = ranges(lines)
-    return {
-        "platform": platform,
-        "commit": commit,
-        "tests": tests,
-        "compiled": sorted(
-            path[len(prefix):] for path in compiled if path.startswith(prefix)
-        ),
-        "files": files,
-    }
 
 
 def in_background(function):
