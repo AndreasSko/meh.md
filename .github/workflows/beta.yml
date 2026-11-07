@@ -58,13 +58,13 @@ jobs:
           COMMIT: ${{ steps.builds.outputs.commit }}
         run: |
           release=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            --jq "[.[] | select(.draft and .tag_name == \"v$VERSION\")][0] // empty")
+            --jq "[.[] | select(.draft and (.tag_name == \"v$VERSION\" or (.name == \"$VERSION\" and (.tag_name | startswith(\"untagged-\")))))] | last // empty")
           if [[ -z $release ]]; then
             echo "::warning::No draft release v$VERSION, so the test notes stay as they are."
             exit 0
           fi
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$(jq -r .id <<< "$release")" \
-            -f target_commitish="$COMMIT" > /dev/null
+            -f tag_name="v$VERSION" -f target_commitish="$COMMIT" > /dev/null
           notes=$(jq -r '.body // ""' <<< "$release" | scripts/release_notes.py plain)
           [[ -n $notes ]] || exit 0
           {
