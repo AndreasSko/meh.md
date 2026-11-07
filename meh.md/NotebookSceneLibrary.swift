@@ -4,6 +4,7 @@ import SwiftUI
 
 #if os(iOS)
     import UIKit
+    import UIKit.UIGestureRecognizerSubclass
 #elseif os(macOS)
     import AppKit
 #endif
@@ -40,7 +41,47 @@ struct NotebookBrowserViewport: Equatable {
 }
 
 final class NotebookBrowserScrollReference {
-    weak var value: UIScrollView?
+    weak var value: UIScrollView? {
+        didSet {
+            guard value !== oldValue else { return }
+            clickRecorder.view?.removeGestureRecognizer(clickRecorder)
+            value?.addGestureRecognizer(clickRecorder)
+        }
+    }
+    /// The latest click on the list, in window coordinates. The list
+    /// reports its selection when the click ends, so an older one belongs
+    /// to a click that selected nothing, such as on a disclosure button.
+    private var click: (kind: NotebookBrowserSelection.Click, location: CGPoint,
+                        endedAt: ContinuousClock.Instant?)?
+    private lazy var clickRecorder = NotebookBrowserClickRecorder(
+        began: { [weak self] modifiers, location in
+            let kind: NotebookBrowserSelection.Click = modifiers.contains(.shift) ? .shift
+                : modifiers.contains(.command) ? .command : .plain
+            self?.click = (kind, location, nil)
+        },
+        ended: { [weak self] cancelled in
+            if cancelled { self?.click = nil } else { self?.click?.endedAt = .now }
+        }
+    )
+
+    /// The current click, or one that ended within the last half second.
+    var pendingClick: (kind: NotebookBrowserSelection.Click, location: CGPoint)? {
+        guard let click else { return nil }
+        if let endedAt = click.endedAt, endedAt.duration(to: .now) > .milliseconds(500) {
+            return nil
+        }
+        return (click.kind, click.location)
+    }
+
+    func takeClick() -> (kind: NotebookBrowserSelection.Click, location: CGPoint)? {
+        defer { click = nil }
+        return pendingClick
+    }
+
+    /// A key press, such as an arrow, changes the selection on its own.
+    func discardClick() {
+        click = nil
+    }
 
     func creationPosition(relativeTo id: UUID) -> NotebookCreationPosition {
         guard let list = value as? UICollectionView,
@@ -55,6 +96,50 @@ final class NotebookBrowserScrollReference {
               attributes.frame.contains(point) else { return .after(id) }
         return point.y < attributes.frame.midY ? .before(id) : .after(id)
     }
+}
+
+/// iPadOS List replaces its selection on Command- and Shift-clicks instead
+/// of extending it. Notes each touch's modifiers without taking part in it.
+private final class NotebookBrowserClickRecorder: UIGestureRecognizer,
+    UIGestureRecognizerDelegate {
+    private let began: (UIKeyModifierFlags, CGPoint) -> Void
+    private let ended: (_ cancelled: Bool) -> Void
+
+    init(began: @escaping (UIKeyModifierFlags, CGPoint) -> Void,
+         ended: @escaping (_ cancelled: Bool) -> Void) {
+        self.began = began
+        self.ended = ended
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+        delegate = self
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        // Only a single touch is a click; a second finger makes it a gesture.
+        guard event.allTouches?.count == 1, let touch = touches.first else {
+            ended(true)
+            state = .failed
+            return
+        }
+        began(event.modifierFlags, touch.location(in: nil))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        ended(false)
+        state = .failed
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        ended(true)
+        state = .failed
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool { true }
 }
 #endif
 
@@ -192,13 +277,35 @@ extension NotebookSceneState {
     }
 
     func setNativeBrowserSelection(_ ids: Set<UUID>) {
+        #if os(iOS)
+        if let click = browserScrollView.takeClick(), !selectingItems,
+           let id = visibleActiveRows.first(where: { row in
+               guard let frame = browserDrag.rowFrame(for: row.id) else { return false }
+               return (frame.minY..<frame.maxY).contains(click.location.y)
+           })?.id,
+           browserSelection.click(id, click.kind, proposed: ids,
+                                  in: visibleActiveRows.map(\.id)) {
+            return
+        }
+        #endif
         let hidden = browserSelection.selectedIDs.subtracting(visibleActiveRows.map(\.id))
         browserSelection.selectAll(Array(ids.union(hidden)))
     }
 
     func activateSidebarRow(_ placement: NotebookPlacement) {
-        guard !busy, !showsSelectionControls,
-              editingID != placement.item.id else { return }
+        guard !busy, !selectingItems, editingID != placement.item.id else { return }
+        #if os(iOS)
+        // With nothing selected, iPadOS List also opens a Shift-clicked row.
+        // The selection callback that follows applies the click instead.
+        if let click = browserScrollView.pendingClick, click.kind != .plain { return }
+        #endif
+        // A plain click leaves a Command or Shift selection, as on the Mac,
+        // and starts the range of a later Shift-click.
+        if browserSelection.count > 1 {
+            browserSelection.selectOnly(placement.item.id)
+        } else {
+            browserSelection.anchorID = placement.item.id
+        }
         if placement.item.kind == .folder, editingID == nil {
             toggleFolder(placement.item.id)
             return

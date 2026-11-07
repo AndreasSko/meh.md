@@ -218,6 +218,11 @@ struct NotebookSidebar: View {
         Button("Done") {
             scene.endSelectingItems()
         }
+        #if os(iOS)
+        // Command-clicks on iPad don't move keyboard focus into the list,
+        // so Escape can't rely on the browser's key handler there.
+        .keyboardShortcut(.cancelAction)
+        #endif
         .accessibilityIdentifier("notebook-selection-done")
         .disabled(scene.busy)
     }
@@ -800,6 +805,9 @@ private struct NotebookLibraryBrowser: View {
     }
 
     private func handleKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        #if os(iOS)
+        scene.browserScrollView.discardClick()
+        #endif
         guard focus.browser.wrappedValue, scene.editingID == nil, scene.detailEditingID == nil,
               !scene.search.isPresented, !scene.busy else { return .ignored }
         let selection = scene.browserSelection
@@ -815,6 +823,10 @@ private struct NotebookLibraryBrowser: View {
         if press.key == .delete, press.modifiers.contains(.command),
            !selection.isEmpty {
             scene.trashItems(scene.selectedBrowserIDs)
+            return .handled
+        }
+        if press.key == .escape, scene.showsSelectionControls {
+            scene.endSelectingItems()
             return .handled
         }
         if press.key == .return, selection.count == 1,
