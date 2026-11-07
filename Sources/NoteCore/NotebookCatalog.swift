@@ -57,6 +57,17 @@ public struct NotebookPlacement: Equatable, Sendable {
     public let displayName: String
     public let isInTrash: Bool
     public let issues: Set<NotebookPlacementIssue>
+    /// What the item's conflicts hold besides what it shows.
+    public var alternatives = NotebookItemAlternatives()
+}
+
+/// Names and folders an item holds when edits on two devices disagree, so
+/// someone can choose one. Empty unless the item has that conflict.
+public struct NotebookItemAlternatives: Equatable, Sendable {
+    /// Every name, sorted, when there is more than one.
+    public var names: [String] = []
+    /// Every stored parent, top level first, when there is more than one.
+    public var parentIDs: [UUID?] = []
 }
 
 enum NotebookLegacyMigration: Equatable {
@@ -110,7 +121,8 @@ final class NotebookCatalogDocument {
     private var itemsObject: ObjId
     private typealias ItemEntry = (
         item: NotebookItem,
-        issues: Set<NotebookPlacementIssue>
+        issues: Set<NotebookPlacementIssue>,
+        alternatives: NotebookItemAlternatives
     )
     private struct ItemsCache {
         var heads: Set<ChangeHash>
@@ -1445,7 +1457,7 @@ final class NotebookCatalogDocument {
             NotebookPlacement(
                 item: $0.item, parentID: parents[$0.item.id],
                 displayName: names[$0.item.id]!, isInTrash: trash[$0.item.id]!,
-                issues: issues[$0.item.id]!)
+                issues: issues[$0.item.id]!, alternatives: $0.alternatives)
         }
     }
 
@@ -1645,7 +1657,14 @@ final class NotebookCatalogDocument {
             parentID: shown.item.parentID, orderKey: shown.item.orderKey,
             isTrashed: trashed, isPermanentlyDeleted: deleted,
             importRootID: shown.item.importRootID)
-        return ((item, issues), conflicted)
+        var alternatives = NotebookItemAlternatives()
+        if names.count > 1 { alternatives.names = names.sorted() }
+        if parents.count > 1 {
+            alternatives.parentIDs = parents.sorted {
+                ($0?.uuidString ?? "") < ($1?.uuidString ?? "")
+            }
+        }
+        return ((item, issues, alternatives), conflicted)
     }
 
     private func explicitOrders(_ object: ObjId, parentID: UUID?) throws -> Set<String> {
