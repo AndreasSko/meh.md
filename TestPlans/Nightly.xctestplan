@@ -48,6 +48,7 @@
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
         "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",
         "NotebookDragUITests/testSelectedNotesDragTogetherAndKeepTheirSource",
+        "NotebookOpenNoteUITests",
         "NotebookReleaseMenuUITests/testFileMenuPickersAndNewWindowPreserveWriting",
         "NotebookReleaseMenuUITests/testSelectionCommandsRespectEditorAndTitleFocus",
         "NotebookStorageUITests/testCaptureSettingsBeforeStorage",

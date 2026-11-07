@@ -600,8 +600,10 @@ private struct NotebookLibraryBrowser: View {
                 .tag(row.id)
                 .id(row.id)
                 .listRowSeparator(.hidden)
-                // A custom clear background also hides the native selected fill.
-                .listRowBackground(scene.browserSelection.contains(row.id) ? nil : Color.clear)
+                // A custom background also hides the native selected fill.
+                .listRowBackground(scene.browserSelection.contains(row.id) ? nil
+                    : row.id == scene.selectedID ? NotebookSidebarPalette.openNote
+                    : Color.clear)
                 .listRowInsets(sidebarSectionInsets)
         }
     }
@@ -636,6 +638,15 @@ private struct NotebookLibraryBrowser: View {
                     NotebookLibraryFooter(noteCount: scene.activeNoteCount)
                         .opacity(hidesCompactRows ? 0 : 1)
                         .accessibilityHidden(hidesCompactRows)
+                        .onGeometryChange(for: CGRect.self) {
+                            $0.frame(in: .global)
+                        } action: { scene.browserDrag.footerFrame = $0 }
+                        .onDisappear { scene.browserDrag.footerFrame = .zero }
+                        .contextMenu {
+                            if scene.editingID == nil {
+                                NotebookEmptySpaceActions(scene: scene)
+                            }
+                        }
                 }
             } header: {
                 NotebookSectionToggle(
@@ -659,7 +670,8 @@ private struct NotebookLibraryBrowser: View {
                 #if os(iOS)
                 .background(NotebookBrowserScrollReader(reference: scene.browserScrollView))
                 .background(NotebookBrowserUIKitDropReader(
-                    interaction: scene.browserDropInteraction()
+                    interaction: scene.browserDropInteraction(),
+                    tapEmptySpace: scene.clickBrowserEmptySpace(at:)
                 ))
                 #else
                 .background(NotebookBrowserAppKitScrollReader(state: scene.browserDrag))
@@ -674,7 +686,14 @@ private struct NotebookLibraryBrowser: View {
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
                 .selectionDisabled()
-                .allowsHitTesting(false)
+                // The List offers no menu on a row without a tag, and on
+                // the Mac this row is the empty space below the footer.
+                .contentShape(Rectangle())
+                .contextMenu {
+                    if scene.editingID == nil {
+                        NotebookEmptySpaceActions(scene: scene)
+                    }
+                }
                 .accessibilityHidden(true)
             #endif
         }
@@ -699,7 +718,8 @@ private struct NotebookLibraryBrowser: View {
                 if !scene.browserSelection.contains(id) { scene.browserSelection.selectOnly(id) }
                 focus.browser.wrappedValue = true
             },
-            begin: scene.beginBrowserDrag
+            begin: scene.beginBrowserDrag,
+            clickEmptySpace: scene.clickBrowserEmptySpace(at:)
         ))
         .overlay(NotebookBrowserAppKitDropSurface(interaction: scene.browserDropInteraction()))
         #endif
@@ -743,6 +763,8 @@ private struct NotebookLibraryBrowser: View {
                     Button("Trash Selected", role: .destructive) {
                         scene.trashItems(scene.selectedBrowserIDs)
                     }
+                } else {
+                    NotebookEmptySpaceActions(scene: scene)
                 }
             }
         } primaryAction: { ids in
@@ -1118,7 +1140,10 @@ private struct NotebookFileRow: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityValue(
-                scene.highlightedFileID == row.id ? "Revealed in Files" : ""
+                [scene.selectedID == row.id ? String(localized: "Current note") : nil,
+                 scene.highlightedFileID == row.id
+                    ? String(localized: "Revealed in Files") : nil]
+                    .compactMap { $0 }.joined(separator: ", ")
             )
             .accessibilityIdentifier(
                 (placement.item.kind == .note
@@ -1346,6 +1371,21 @@ private struct NotebookTemplateCreationButton: View {
         }
         .disabled(scene.busy || scene.replica.templates.isEmpty)
         .accessibilityIdentifier("notebook-new-from-template")
+    }
+}
+
+/// The menu for empty Files space, creating where the New Note button does.
+private struct NotebookEmptySpaceActions: View {
+    let scene: NotebookSceneState
+
+    var body: some View {
+        Button("New Note") { scene.createDefaultNote() }
+            .disabled(scene.busy)
+        NotebookTemplateCreationButton(scene: scene)
+        Button("New Folder") {
+            scene.createItem(kind: .folder, parentID: nil)
+        }
+            .disabled(scene.busy)
     }
 }
 

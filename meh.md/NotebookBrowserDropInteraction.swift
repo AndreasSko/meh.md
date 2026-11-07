@@ -16,6 +16,7 @@ final class NotebookBrowserDragState {
     var target: NotebookBrowserDropTarget?
     @ObservationIgnored var rowFrames: [UUID: CGRect] = [:]
     @ObservationIgnored var filesHeaderFrame: CGRect = .zero
+    @ObservationIgnored var footerFrame: CGRect = .zero
     #if os(macOS)
     @ObservationIgnored weak var scrollView: NSScrollView?
     @ObservationIgnored weak var dropSurface: NSView?

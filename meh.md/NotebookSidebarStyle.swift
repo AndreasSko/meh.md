@@ -12,6 +12,17 @@ enum NotebookSidebarPalette {
         Color(uiColor: .secondarySystemGroupedBackground)
         #endif
     }
+
+    /// The open note's Files row. It matches the List's unfocused selection,
+    /// so a note opened from Recents, search or links looks the same as one
+    /// opened from its row.
+    static var openNote: Color {
+        #if os(macOS)
+        Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
+        #else
+        Color(uiColor: .systemGray4)
+        #endif
+    }
 }
 
 #if os(iOS)
