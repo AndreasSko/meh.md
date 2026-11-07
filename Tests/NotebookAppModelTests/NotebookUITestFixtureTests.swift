@@ -39,12 +39,29 @@ final class NotebookUITestFixtureTests: XCTestCase {
             case .readme:
                 expected = ["Inbox", "Projects", "Areas", "Resources", "Archive"]
             case .snippets: expected = ["Snippets", "Training log.md"]
+            case .conflicts:
+                expected = ["Inbox", "Projects", "Archive", "Rome 2023.md"]
             case .dragLongList:
                 expected = (1 ... 48).map {
                     String(format: "%02d Field observation.md", $0)
                 } + ["Journeys"]
             }
             XCTAssertEqual(children.map(\.name), expected)
+            if fixture == .conflicts {
+                let notices = Dictionary(uniqueKeysWithValues: replica.placements.compactMap {
+                    placement in NotebookPlacementNotice(placement).map { (placement.item.name, $0.kind) }
+                })
+                XCTAssertEqual(notices.count, 4)
+                XCTAssertEqual(
+                    notices.first { $0.key.hasSuffix("ideas.md") }?.value,
+                    .names(["Lisbon ideas.md", "Porto ideas.md"]))
+                guard case .folders(let parents)? = notices["Track-It roadmap.md"] else {
+                    return XCTFail("Expected two folders")
+                }
+                XCTAssertEqual(parents.count, 2)
+                XCTAssertEqual(notices["Rome 2023.md"], .folderGone)
+                XCTAssertEqual(notices["Packing list.md"], .sameName)
+            }
             if fixture == .storageLarge {
                 let activeNotes = replica.placements.filter {
                     $0.item.kind == .note && !$0.isInTrash

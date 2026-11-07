@@ -21,6 +21,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case snippets
     case markdownTour = "markdown-tour"
     case rendering
+    case conflicts
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
@@ -263,6 +264,10 @@ enum NotebookUITestFixture: String, CaseIterable {
             #if !NOTEBOOK_PERFORMANCE_HOST
             try await seedReadme(replica)
             #endif
+        case .conflicts:
+            #if !NOTEBOOK_PERFORMANCE_HOST
+            try await seedConflicts(replica)
+            #endif
         case .snippets:
             // One registered folder flattens its root, leaving Training as
             // the folder the snippet menu expands.
@@ -444,6 +449,45 @@ enum NotebookUITestFixture: String, CaseIterable {
     /// The sample notebook behind the README screenshots, sorted the PARA
     /// way. The Lisbon note leads Recents, and its previous version has the
     /// overplanned trip. The weekly review comes from a template.
+    /// Every flag the Files list explains, as two devices editing at the
+    /// same time leave them.
+    private func seedConflicts(_ replica: NotebookReplica) async throws {
+        let inbox = try await replica.createFolder(name: "Inbox")
+        let projects = try await replica.createFolder(name: "Projects")
+        let archive = try await replica.createFolder(name: "Archive")
+        let oldTrips = try await replica.createFolder(name: "Old trips")
+        let ideas = try await replica.createNote(
+            name: "Trip ideas.md", text: "Three slow days somewhere by the sea.\n",
+            parentID: inbox)
+        let roadmap = try await replica.createNote(
+            name: "Track-It roadmap.md", text: "Widgets first, then sharing.\n",
+            parentID: projects)
+        _ = try await replica.createNote(
+            name: "Packing list.md", text: "Passport, chargers, good camera.\n",
+            parentID: inbox)
+        let packing = try await replica.createNote(
+            name: "Packing list 2.md", text: "Sunscreen and comfortable shoes.\n",
+            parentID: inbox)
+        let rome = try await replica.createNote(
+            name: "Rome 2023.md", text: "Cacio e pepe at the corner place.\n")
+        _ = try await replica.createNote(
+            name: "Groceries.md", text: "For Saturday: oat milk, lemons, coffee.\n",
+            parentID: inbox)
+        try await replica.applyConcurrentEdits([
+            [
+                .rename(ideas, "Lisbon ideas.md"),
+                .move(roadmap, to: archive),
+                .rename(packing, "Packing list.md"),
+                .permanentlyDelete(oldTrips),
+            ],
+            [
+                .rename(ideas, "Porto ideas.md"),
+                .move(roadmap, to: inbox),
+                .move(rome, to: oldTrips),
+            ],
+        ])
+    }
+
     private func seedReadme(_ replica: NotebookReplica) async throws {
         let inbox = try await replica.createFolder(name: "Inbox")
         let projects = try await replica.createFolder(name: "Projects")
