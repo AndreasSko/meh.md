@@ -60,8 +60,10 @@ jobs:
 
           version=$(scripts/app_version.sh)
           entry="- $note (#$number)"
+          # Also matches an untagged-… draft by name: older runs
+          # edited drafts without tag_name, which gave them that tag.
           release=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            --jq "[.[] | select(.draft and .tag_name == \"v$version\")][0] // empty")
+            --jq "[.[] | select(.draft and (.tag_name == \"v$version\" or (.name == \"$version\" and (.tag_name | startswith(\"untagged-\")))))] | last // empty")
           if [[ -z $release ]]; then
             # Fails when v$version was just published; the PR then
             # belongs to the next draft, which a rerun picks.
@@ -78,6 +80,7 @@ jobs:
             echo "#$number is already in the draft release v$version."
             exit 0
           fi
+          # Without tag_name, GitHub replaces a draft's tag with untagged-….
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$(jq -r .id <<< "$release")" \
-            -f body="$body"$'\n'"$entry" > /dev/null
+            -f tag_name="v$version" -f body="$body"$'\n'"$entry" > /dev/null
           echo "Added #$number to the draft release v$version." >> "$GITHUB_STEP_SUMMARY"
