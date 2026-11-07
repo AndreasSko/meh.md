@@ -373,6 +373,22 @@ struct NotebookDetailTitle: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            title
+            if !isEditing, let notice = NotebookPlacementNotice(placement) {
+                NotebookNoticeMark(scene: scene, placement: placement, notice: notice)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            if abs(scene.detailTitleHeight - height) > 0.5 {
+                scene.detailTitleHeight = height
+            }
+        }
+    }
+
+    private var title: some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
             if isEditing {
                 NotebookTitleField(
@@ -407,13 +423,6 @@ struct NotebookDetailTitle: View {
                 .buttonStyle(.plain)
                 .disabled(!isEnabled)
                 .accessibilityIdentifier("note-title")
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-            if abs(scene.detailTitleHeight - height) > 0.5 {
-                scene.detailTitleHeight = height
             }
         }
     }

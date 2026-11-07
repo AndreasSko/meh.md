@@ -927,6 +927,33 @@ extension NotebookSceneState {
         movingIDs = []
     }
 
+    // MARK: Settling conflicts
+
+    /// Writes the chosen name once, which replaces the names that two
+    /// devices gave it at the same time.
+    func keepName(_ name: String, for id: UUID) {
+        perform { [self] in
+            try await flushEditor()
+            try await replica.rename(id, to: name)
+        }
+    }
+
+    /// Places the item in the chosen folder. A flagged item never counts as
+    /// already there, so this always writes and settles the conflict.
+    func keepParent(_ parentID: UUID?, for id: UUID) {
+        perform { [self] in
+            try await flushEditor()
+            let previousHeads = replica.catalogSnapshot?.heads
+            let receipt = try await replica.moveItems([id], to: parentID)
+            if replica.catalogSnapshot?.heads != previousHeads {
+                browserUndo = receipt
+                browserRedo = nil
+            }
+            if let parentID { expandedIDs.insert(parentID) }
+            reveal(id)
+        }
+    }
+
     private func effectiveSelectionRoots(_ ids: [UUID]) -> [NotebookPlacement] {
         let selected = Set(ids)
         return replica.placements.filter { placement in

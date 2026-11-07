@@ -290,6 +290,8 @@ private struct NotebookLibraryBrowser: View {
     let isCompact: Bool
     @Environment(\.openWindow) private var openWindow
     @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
+    @State private var notice: NotebookNoticeRequest?
+    @State private var frame: CGRect = .zero
 
     private var showsCurrentNote: Bool { !isCompact }
 
@@ -352,6 +354,19 @@ private struct NotebookLibraryBrowser: View {
                 }
             )
             #endif
+        }
+        // Presented from here, outside the List: inside a row on macOS, the
+        // popover's buttons don't receive clicks. Rows are hosted apart on
+        // macOS, so the mark's frame comes in window coordinates.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+        .popover(
+            item: $notice,
+            attachmentAnchor: .rect(.rect(notice?.rect ?? .zero))
+        ) { request in
+            NotebookNoticePopover(
+                scene: scene, itemID: request.id,
+                picked: Binding(get: { notice?.picked }, set: { notice?.picked = $0 }),
+                dismiss: { notice = nil })
         }
         #if os(macOS)
         .onChange(of: scene.recentCommands.browseAllRequest) { _, _ in
@@ -594,17 +609,33 @@ private struct NotebookLibraryBrowser: View {
         let target = scene.browserDrag.target
         let targetDepth = rows.first { $0.id == target?.rowID }?.depth ?? 0
         let afterEndID = scene.browserAfterEndID(in: rows)
-        return ForEach(rows) { row in
-            NotebookFileRow(scene: scene, row: row, afterEndID: afterEndID,
-                            targetDepth: targetDepth, focusedNameID: focus.name)
-                .tag(row.id)
-                .id(row.id)
-                .listRowSeparator(.hidden)
-                // A custom background also hides the native selected fill.
-                .listRowBackground(scene.browserSelection.contains(row.id) ? nil
-                    : row.id == scene.selectedID ? NotebookSidebarPalette.openNote
-                    : Color.clear)
-                .listRowInsets(sidebarSectionInsets)
+        return ForEach(NotebookSidebarEntry.entries(
+            rows: rows, placements: scene.replica.placements, expandedIDs: scene.expandedIDs
+        )) { entry in
+            switch entry {
+            case .row(let row):
+                NotebookFileRow(scene: scene, row: row, afterEndID: afterEndID,
+                                targetDepth: targetDepth, focusedNameID: focus.name,
+                                openNotice: { markFrame in
+                                    notice = NotebookNoticeRequest(
+                                        id: row.id,
+                                        rect: markFrame.offsetBy(dx: -frame.minX, dy: -frame.minY))
+                                })
+                    .tag(row.id)
+                    .id(row.id)
+                    .listRowSeparator(.hidden)
+                    // A custom background also hides the native selected fill.
+                    .listRowBackground(scene.browserSelection.contains(row.id) ? nil
+                        : row.id == scene.selectedID ? NotebookSidebarPalette.openNote
+                        : Color.clear)
+                    .listRowInsets(sidebarSectionInsets)
+            case .ghost(let placement, let parentID, let depth):
+                NotebookGhostRow(scene: scene, placement: placement, parentID: parentID, depth: depth)
+                    .selectionDisabled()
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(sidebarSectionInsets)
+            }
         }
     }
 
@@ -960,6 +991,7 @@ private struct NotebookFileRow: View {
     let afterEndID: UUID?
     let targetDepth: Int
     var focusedNameID: FocusState<UUID?>.Binding
+    let openNotice: (CGRect) -> Void
 
     static var sectionInsets: EdgeInsets {
         #if os(macOS)
@@ -1101,10 +1133,9 @@ private struct NotebookFileRow: View {
                         .accessibilityAddTraits(
                             scene.browserSelection.contains(row.id) ? .isSelected : []
                         )
-                    if !placement.issues.isEmpty {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                            .accessibilityLabel("Recovered placement or metadata conflict")
+                    if let notice = NotebookPlacementNotice(placement) {
+                        // Keeps the room; the mark itself lies over the row.
+                        NotebookNoticeMarkLabel(notice: notice).hidden()
                     }
                 }
             }
@@ -1125,6 +1156,14 @@ private struct NotebookFileRow: View {
                 scene.activateSidebarRow(placement)
             })
             #endif
+            // Outside the row's click gesture, so clicking the mark or its
+            // popover doesn't also open the note and redraw the row.
+            .overlay(alignment: .trailing) {
+                if scene.editingID != row.id, let notice = NotebookPlacementNotice(placement) {
+                    NotebookNoticeMark(
+                        scene: scene, placement: placement, notice: notice, onOpen: openNotice)
+                }
+            }
             .background {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Color.accentColor.opacity(
