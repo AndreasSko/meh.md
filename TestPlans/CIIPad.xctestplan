@@ -42,7 +42,8 @@
         "FlairUITests/testSettingsEndWithTheVersion",
         "FlairUITests/testLibraryEndsWithTheNoteCount",
         "FlairUITests/testAppearanceSwitchesTheInk",
-        "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce"
+        "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
+        "NotebookOpenNoteUITests"
       ]
     }
   ],

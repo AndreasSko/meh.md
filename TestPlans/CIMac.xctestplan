@@ -27,6 +27,7 @@
         "EditorRenderingUITests",
         "MacFormattingUITests",
         "MacSidebarClickUITests",
+        "NotebookOpenNoteUITests",
         "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
