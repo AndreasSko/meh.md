@@ -43,7 +43,7 @@ final class NotebookCatalogItemUpdateTests: XCTestCase {
         try assertMatchesFullRead(left, "trashed copy")
     }
 
-    func testRenamingEitherCopyIsRejectedLikeAFullRead() throws {
+    func testRenamingOneCopyBeforeSeeingTheOtherMergesAsAConflict() throws {
         // Which copy wins depends on random actor IDs; repeat to see both.
         for attempt in 0..<40 {
             let renamed = attempt % 2
@@ -57,9 +57,85 @@ final class NotebookCatalogItemUpdateTests: XCTestCase {
             // Only this side's own copy exists here, so it is the one renamed.
             try sides[renamed].rename(id, to: "Renamed.md")
 
-            XCTAssertThrowsError(try NotebookCatalogDocument(
+            try receiving.merge(sides[renamed])
+            try assertMatchesFullRead(receiving, "attempt \(attempt)")
+            try sides[renamed].merge(receiving)
+            let shown = try receiving.placements().first { $0.item.id == id }
+            XCTAssertEqual(
+                shown?.item.name,
+                try sides[renamed].placements().first { $0.item.id == id }?.item.name,
+                "attempt \(attempt)")
+            XCTAssertTrue(shown?.issues.contains(.concurrentRename) == true, "attempt \(attempt)")
+            XCTAssertNoThrow(try NotebookCatalogDocument(
                 serializedData: merged(receiving, sides[renamed])))
-            XCTAssertThrowsError(try receiving.merge(sides[renamed]), "attempt \(attempt)")
+        }
+    }
+
+    func testRenamingAMergedWelcomeNoteRenamesEveryCopy() throws {
+        // Every new notebook adds the welcome note under the same ID, so
+        // devices that each started a notebook hold one copy apiece.
+        let base = try NotebookCatalogDocument()
+        let devices = [try base.fork(), try base.fork(), try base.fork()]
+        for device in devices {
+            _ = try device.add(
+                id: NotebookWelcomeNote.id, kind: .note, name: NotebookWelcomeNote.name)
+        }
+        let catalog = devices[0]
+        try catalog.merge(devices[1])
+        try catalog.merge(devices[2])
+        _ = try catalog.items()
+
+        try catalog.rename(NotebookWelcomeNote.id, to: "Renamed.md")
+
+        try catalog.validate()
+        try assertMatchesFullRead(catalog, "renamed copies")
+        let reloaded = try NotebookCatalogDocument(snapshot: catalog.snapshot())
+        XCTAssertEqual(
+            try reloaded.items().first { $0.id == NotebookWelcomeNote.id }?.name,
+            "Renamed.md")
+        // A device that already holds every copy accepts the rename.
+        try devices[1].merge(devices[2])
+        try devices[1].merge(devices[0])
+        XCTAssertEqual(
+            try devices[1].items().first { $0.id == NotebookWelcomeNote.id }?.name,
+            "Renamed.md")
+    }
+
+    /// Every new notebook adds the welcome note under one ID, so devices
+    /// that started their own notebooks each hold a copy of it.
+    func testRandomEditsOnCopiesConvergeAndMatchAFullRead() throws {
+        let id = NotebookWelcomeNote.id
+        for seed in 1...8 {
+            var random = SeededRandom(seed: UInt64(seed))
+            let base = try NotebookCatalogDocument()
+            let folder = try base.add(kind: .folder, name: "Folder")
+            var devices = [try base.fork(), try base.fork(), try base.fork()]
+            for device in devices {
+                try device.add(id: id, kind: .note, name: NotebookWelcomeNote.name)
+            }
+            for step in 0..<40 {
+                let index = Int(random.next() % UInt64(devices.count))
+                let device = devices[index]
+                switch random.next() % 5 {
+                case 0: try device.rename(id, to: "Name \(step).md")
+                case 1: try? device.move(id, to: random.next() % 2 == 0 ? nil : folder)
+                case 2: try device.setTrashed(id, random.next() % 2 == 0)
+                case 3: try device.recordRecentActivity(for: id)
+                default:
+                    let other = devices[(index + 1) % devices.count]
+                    try device.merge(other)
+                }
+                try assertMatchesFullRead(device, "seed \(seed) step \(step)")
+                if random.next() % 6 == 0 { devices[index] = try device.fork() }
+            }
+            for device in devices.dropFirst() { try devices[0].merge(device) }
+            for device in devices.dropFirst() { try device.merge(devices[0]) }
+            let shown = try devices.map { device in
+                try XCTUnwrap(try device.placements().first { $0.item.id == id })
+            }
+            XCTAssertEqual(Set(shown.map(\.item.name)).count, 1, "seed \(seed)")
+            XCTAssertEqual(Set(shown.map(\.parentID)).count, 1, "seed \(seed)")
+            XCTAssertEqual(Set(shown.map(\.isInTrash)).count, 1, "seed \(seed)")
         }
     }
 
