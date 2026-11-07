@@ -61,13 +61,16 @@ struct NotebookFeedbackSection: View {
     let log: NotebookSyncEventLog
     @Environment(\.openURL) private var openURL
     #if os(iOS)
-    @State private var composingMail = false
+    @State private var anchor = NotebookMailAnchor()
     #endif
 
     var body: some View {
         Section {
             Button("Send Feedback") { sendFeedback() }
                 .accessibilityIdentifier("notebook-send-feedback")
+                #if os(iOS)
+                .background(NotebookMailAnchorView(anchor: anchor))
+                #endif
             Link("About meh.md", destination: NotebookFeedback.aboutURL)
             Link("Privacy Policy", destination: NotebookFeedback.privacyURL)
             NavigationLink("Open Source Licenses") { NotebookLicensesView() }
@@ -75,11 +78,6 @@ struct NotebookFeedbackSection: View {
         } footer: {
             Text("If your mail app allows it, feedback includes the sync event log. It contains no note contents or names.")
         }
-        #if os(iOS)
-        .sheet(isPresented: $composingMail) {
-            NotebookMailComposer(log: log).ignoresSafeArea()
-        }
-        #endif
     }
 
     private func sendFeedback() {
@@ -95,23 +93,58 @@ struct NotebookFeedbackSection: View {
             }
         }
         #else
-        if MFMailComposeViewController.canSendMail() {
-            composingMail = true
-            return
-        }
+        if NotebookMailComposer.present(log: log, from: anchor.view) { return }
         #endif
         openURL(NotebookFeedback.mailtoURL)
     }
 }
 
 #if os(iOS)
-private struct NotebookMailComposer: UIViewControllerRepresentable {
-    let log: NotebookSyncEventLog
-    @Environment(\.dismiss) private var dismiss
+/// Remembers a view in the Settings window, so the mail sheet opens in that
+/// window when an iPad shows several.
+@MainActor
+private final class NotebookMailAnchor {
+    weak var view: UIView?
+}
 
-    func makeUIViewController(context: Context) -> MFMailComposeViewController {
+private struct NotebookMailAnchorView: UIViewRepresentable {
+    let anchor: NotebookMailAnchor
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        anchor.view = view
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        anchor.view = view
+    }
+}
+
+/// Presents Apple's mail sheet from UIKit instead of a SwiftUI sheet inside
+/// the Settings form, where it closed again right away on an iPhone.
+@MainActor
+private final class NotebookMailComposer: NSObject, MFMailComposeViewControllerDelegate {
+    // The controller holds its delegate weakly, so each open composer's
+    // delegate is kept here until it finishes.
+    private static var open: [NotebookMailComposer] = []
+    private weak var composer: MFMailComposeViewController?
+
+    static func present(log: NotebookSyncEventLog, from view: UIView?) -> Bool {
+        guard MFMailComposeViewController.canSendMail(),
+              var presenter = view?.window?.rootViewController else { return false }
+        while let presented = presenter.presentedViewController {
+            presenter = presented
+        }
+        // Mid-transition, such as a double tap: ignore the tap rather than
+        // also opening the mailto fallback.
+        guard !presenter.isBeingDismissed, !presenter.isBeingPresented else { return true }
         let controller = MFMailComposeViewController()
-        controller.mailComposeDelegate = context.coordinator
+        let delegate = NotebookMailComposer()
+        delegate.composer = controller
+        open.append(delegate)
+        controller.mailComposeDelegate = delegate
         controller.setToRecipients([NotebookFeedback.address])
         controller.setSubject(NotebookFeedback.subject)
         controller.setMessageBody(NotebookFeedback.body, isHTML: false)
@@ -119,23 +152,17 @@ private struct NotebookMailComposer: UIViewControllerRepresentable {
             Data(NotebookFeedback.logText(log).utf8),
             mimeType: "text/plain", fileName: "meh.md Sync Log.txt"
         )
-        return controller
+        presenter.present(controller, animated: true)
+        return true
     }
 
-    func updateUIViewController(_ controller: MFMailComposeViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(dismiss: dismiss) }
-
-    final class Coordinator: NSObject, MFMailComposeViewControllerDelegate {
-        let dismiss: DismissAction
-
-        init(dismiss: DismissAction) { self.dismiss = dismiss }
-
-        nonisolated func mailComposeController(
-            _ controller: MFMailComposeViewController,
-            didFinishWith result: MFMailComposeResult, error: (any Error)?
-        ) {
-            Task { @MainActor in self.dismiss() }
+    nonisolated func mailComposeController(
+        _ controller: MFMailComposeViewController,
+        didFinishWith result: MFMailComposeResult, error: (any Error)?
+    ) {
+        Task { @MainActor in
+            self.composer?.dismiss(animated: true)
+            Self.open.removeAll { $0 === self }
         }
     }
 }
