@@ -595,8 +595,10 @@ private struct NotebookLibraryBrowser: View {
                 .tag(row.id)
                 .id(row.id)
                 .listRowSeparator(.hidden)
-                // A custom clear background also hides the native selected fill.
-                .listRowBackground(scene.browserSelection.contains(row.id) ? nil : Color.clear)
+                // A custom background also hides the native selected fill.
+                .listRowBackground(scene.browserSelection.contains(row.id) ? nil
+                    : row.id == scene.selectedID ? NotebookSidebarPalette.openNote
+                    : Color.clear)
                 .listRowInsets(sidebarSectionInsets)
         }
     }
@@ -1106,7 +1108,10 @@ private struct NotebookFileRow: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityValue(
-                scene.highlightedFileID == row.id ? "Revealed in Files" : ""
+                [scene.selectedID == row.id ? String(localized: "Current note") : nil,
+                 scene.highlightedFileID == row.id
+                    ? String(localized: "Revealed in Files") : nil]
+                    .compactMap { $0 }.joined(separator: ", ")
             )
             .accessibilityIdentifier(
                 (placement.item.kind == .note

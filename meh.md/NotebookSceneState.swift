@@ -653,6 +653,7 @@ final class NotebookSceneState {
             if navigationState.installSelection(id, session: openedSession, recordActivity: true) {
                 editorNavigation.invalidate()
                 editorNavigation = MarkdownEditorNavigation()
+                dropStaleBrowserSelection(openingNote: id, linkVisit: linkVisit)
             }
         } else {
             if editingID != nil || detailEditingID != nil { try await flushEditor() }
@@ -671,6 +672,19 @@ final class NotebookSceneState {
         if revealDetail, preferredCompactColumn != .detail {
             preferredCompactColumn = .detail
         }
+    }
+
+    /// A single Files row left selected from the previous note would keep
+    /// looking current, and arrow keys would start from it.
+    private func dropStaleBrowserSelection(openingNote id: UUID, linkVisit: Bool) {
+        guard !selectingItems, browserSelection.count == 1,
+              !browserSelection.contains(id) else { return }
+        #if os(iOS)
+        // Changing the sidebar List selection resets the note column's link
+        // stack. Compact Files clears its selection on return anyway.
+        guard !linkVisit, !isCompact else { return }
+        #endif
+        browserSelection.clear()
     }
 
     func perform(

@@ -112,7 +112,8 @@ final class RecentNotesUITests: XCTestCase {
         app.buttons["Show in Files"].tap()
         // The highlight fades after about three seconds, so check it first.
         let highlighted = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "Revealed in Files"),
+            // The revealed note is also the open one, so its value names both.
+            predicate: NSPredicate(format: "value CONTAINS %@", "Revealed in Files"),
             object: note
         )
         XCTAssertEqual(XCTWaiter.wait(for: [highlighted], timeout: 5), .completed)
