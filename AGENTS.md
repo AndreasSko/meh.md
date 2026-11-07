@@ -9,7 +9,8 @@ Just a few things to note:
   `Contents/MacOS/DeviceHub`.
 * Don't change the app version in PRs; CI sets it. docs/releasing.md
   covers versions, beta builds and App Store releases. Promote a build to
-  beta or publish a release only when the user asks.
+  beta or publish a release only when the user asks. For an App Store
+  release, follow `.agents/skills/app-store-release/SKILL.md`.
 * Ensure the start of the PR description is easy to understand for an end-user.
   It should use easy english that explains if the change uses a new feature,
   fixes a bug, etc. Its first paragraph is added to the draft release notes
