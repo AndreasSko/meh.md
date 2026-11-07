@@ -99,6 +99,41 @@ final class NativeEditorIntegrationTests: XCTestCase {
         XCTAssertEqual(try boundary.note.text, source)
     }
 
+#if os(macOS)
+    func testOpenedNoteStartsWithCaretAtTop() throws {
+        let boundary = try DocumentBinding(note: TextDocument(text: "Moon\nMap"))
+        let mounted = mount(MarkdownEditor(
+            text: Binding(get: { boundary.text }, set: { boundary.text = $0 })
+        ))
+        let textView = try XCTUnwrap(mounted.textView)
+        defer { mounted.tearDown() }
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func testTaskToggleKeepsScrollPositionAwayFromCaret() throws {
+        let source = (["- [ ] Pack a map"] + (1...200).map { "Line \($0)" })
+            .joined(separator: "\n")
+        let boundary = try DocumentBinding(note: TextDocument(text: source))
+        let mounted = mount(MarkdownEditor(
+            text: Binding(get: { boundary.text }, set: { boundary.text = $0 }),
+            mode: .livePreview
+        ))
+        let textView = try XCTUnwrap(mounted.textView as? MarkdownTextView)
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        defer { mounted.tearDown() }
+        let end = NSRange(location: (source as NSString).length, length: 0)
+        textView.setSelectedRange(end)
+        textView.scroll(.zero)
+        let origin = scrollView.contentView.bounds.origin
+
+        textView.toggleMarkdownTask(at: 3)
+
+        XCTAssertTrue(try boundary.note.text.hasPrefix("- [x] Pack a map"))
+        XCTAssertEqual(scrollView.contentView.bounds.origin, origin)
+        XCTAssertEqual(textView.selectedRange(), end)
+    }
+#endif
+
     func testNativeReturnContinuesListAndEmptyItemExits() throws {
         let source = "* Moon 🪐"
         let boundary = try DocumentBinding(note: TextDocument(text: source))
