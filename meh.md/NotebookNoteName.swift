@@ -18,7 +18,9 @@ enum NotebookNoteName {
         else {
             return title
         }
-        if title == originalFilename, title == markdownExtension(in: title) {
+        // An untouched title keeps its name, even one without ".md", so
+        // submitting it does not rename the note.
+        if title == self.title(from: originalFilename) {
             return originalFilename
         }
         let titleWithoutExtension: String
