@@ -12,6 +12,8 @@ struct NotebookBrowserAppKitDragReader: NSViewRepresentable {
     let sourceAt: (CGPoint) -> UUID?
     let selectSource: (UUID) -> Void
     let begin: (UUID) -> NSItemProvider
+    /// Sees plain clicks before the List deselects on its own.
+    let clickEmptySpace: (CGPoint) -> Void
 
     func makeNSView(context: Context) -> ReaderView {
         let view = ReaderView()
@@ -110,16 +112,19 @@ struct NotebookBrowserAppKitDragReader: NSViewRepresentable {
             _ gestureRecognizer: NSGestureRecognizer,
             shouldAttemptToRecognizeWith event: NSEvent
         ) -> Bool {
-            source(for: event) != nil
+            // Controls include a revealed swipe action, whose button sits
+            // where the row's content was.
+            if event.type == .leftMouseDown, event.clickCount == 1,
+               event.modifierFlags.intersection([.command, .shift, .control]).isEmpty,
+               !hitsControl(event),
+               let configuration, let content = window?.contentView {
+                configuration.clickEmptySpace(contentPoint(event, in: content))
+            }
+            return source(for: event) != nil
         }
 
-        fileprivate func source(for event: NSEvent) -> UUID? {
-            guard event.type == .leftMouseDown,
-                  !event.modifierFlags.contains(.control),
-                  let configuration, configuration.canBegin(),
-                  !configuration.state.isSessionActive,
-                  let installedView, let window,
-                  let content = window.contentView else { return nil }
+        private func hitsControl(_ event: NSEvent) -> Bool {
+            guard let installedView else { return false }
             // AppKit hit testing takes coordinates in the view's parent.
             let parentPoint = installedView.superview?.convert(
                 event.locationInWindow, from: nil
@@ -133,14 +138,29 @@ struct NotebookBrowserAppKitDragReader: NSViewRepresentable {
                     hit = view.superview
                     continue
                 }
-                if view is NSControl { return nil }
+                if view is NSControl { return true }
                 hit = view.superview
             }
+            return false
+        }
+
+        private func contentPoint(_ event: NSEvent, in content: NSView) -> CGPoint {
             let point = content.convert(event.locationInWindow, from: nil)
-            return configuration.sourceAt(CGPoint(
+            return CGPoint(
                 x: point.x,
                 y: content.isFlipped ? point.y : content.bounds.height - point.y
-            ))
+            )
+        }
+
+        fileprivate func source(for event: NSEvent) -> UUID? {
+            guard event.type == .leftMouseDown,
+                  !event.modifierFlags.contains(.control),
+                  let configuration, configuration.canBegin(),
+                  !configuration.state.isSessionActive,
+                  let installedView, let window,
+                  let content = window.contentView else { return nil }
+            if hitsControl(event) { return nil }
+            return configuration.sourceAt(contentPoint(event, in: content))
         }
 
         @objc private func startDrag(_ recognizer: SourceRecognizer) {

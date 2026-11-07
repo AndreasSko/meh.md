@@ -633,6 +633,10 @@ private struct NotebookLibraryBrowser: View {
                     NotebookLibraryFooter(noteCount: scene.activeNoteCount)
                         .opacity(hidesCompactRows ? 0 : 1)
                         .accessibilityHidden(hidesCompactRows)
+                        .onGeometryChange(for: CGRect.self) {
+                            $0.frame(in: .global)
+                        } action: { scene.browserDrag.footerFrame = $0 }
+                        .onDisappear { scene.browserDrag.footerFrame = .zero }
                 }
             } header: {
                 NotebookSectionToggle(
@@ -656,7 +660,8 @@ private struct NotebookLibraryBrowser: View {
                 #if os(iOS)
                 .background(NotebookBrowserScrollReader(reference: scene.browserScrollView))
                 .background(NotebookBrowserUIKitDropReader(
-                    interaction: scene.browserDropInteraction()
+                    interaction: scene.browserDropInteraction(),
+                    tapEmptySpace: scene.clickBrowserEmptySpace(at:)
                 ))
                 #else
                 .background(NotebookBrowserAppKitScrollReader(state: scene.browserDrag))
@@ -696,7 +701,8 @@ private struct NotebookLibraryBrowser: View {
                 if !scene.browserSelection.contains(id) { scene.browserSelection.selectOnly(id) }
                 focus.browser.wrappedValue = true
             },
-            begin: scene.beginBrowserDrag
+            begin: scene.beginBrowserDrag,
+            clickEmptySpace: scene.clickBrowserEmptySpace(at:)
         ))
         .overlay(NotebookBrowserAppKitDropSurface(interaction: scene.browserDropInteraction()))
         #endif

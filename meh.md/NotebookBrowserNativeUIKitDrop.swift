@@ -5,11 +5,13 @@ import UniformTypeIdentifiers
 
 /// The collection view owns the destination while SwiftUI keeps its rows,
 /// selection, menus, and drag source. One delegate handles the whole tree.
+/// It also reports taps, since SwiftUI rows don't cover the empty space.
 struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
     let interaction: NotebookBrowserDropInteraction
+    let tapEmptySpace: (CGPoint) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(interaction: interaction)
+        Coordinator(interaction: interaction, tapEmptySpace: tapEmptySpace)
     }
 
     func makeUIView(context: Context) -> ReaderView {
@@ -23,6 +25,7 @@ struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
 
     func updateUIView(_ view: ReaderView, context: Context) {
         context.coordinator.interaction = interaction
+        context.coordinator.tapEmptySpace = tapEmptySpace
         context.coordinator.attach(from: view)
         view.setNeedsLayout()
     }
@@ -51,15 +54,45 @@ struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, UICollectionViewDropDelegate {
+    final class Coordinator: NSObject, UICollectionViewDropDelegate,
+                             UIGestureRecognizerDelegate {
         var interaction: NotebookBrowserDropInteraction
+        var tapEmptySpace: (CGPoint) -> Void
         private weak var collectionView: UICollectionView?
         private weak var originalDelegate: (any UICollectionViewDropDelegate)?
         private var acceptedToken: UUID?
+        private lazy var tap: UITapGestureRecognizer = {
+            let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+            tap.cancelsTouchesInView = false
+            tap.delegate = self
+            return tap
+        }()
 
-        init(interaction: NotebookBrowserDropInteraction) {
+        init(interaction: NotebookBrowserDropInteraction,
+             tapEmptySpace: @escaping (CGPoint) -> Void) {
             self.interaction = interaction
+            self.tapEmptySpace = tapEmptySpace
         }
+
+        @objc private func tapped(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended,
+                  let window = collectionView?.window else { return }
+            tapEmptySpace(recognizer.location(in: window))
+        }
+
+        /// Only touches on the bare collection view count. Rows, the footer
+        /// and revealed swipe actions are subviews; a swiped row slides its
+        /// whole cell aside, so its Trash button lies outside every cell.
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch
+        ) -> Bool {
+            touch.view === collectionView
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool { true }
 
         func attach(from view: UIView) {
             var ancestor = view.superview
@@ -70,6 +103,7 @@ struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
             if collectionView !== enclosing {
                 detach()
                 collectionView = enclosing
+                enclosing.addGestureRecognizer(tap)
             }
             if enclosing.dropDelegate !== self {
                 originalDelegate = enclosing.dropDelegate
@@ -81,6 +115,7 @@ struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
             if let collectionView, collectionView.dropDelegate === self {
                 collectionView.dropDelegate = originalDelegate
             }
+            collectionView?.removeGestureRecognizer(tap)
             collectionView = nil
             originalDelegate = nil
             interaction.state.hover(nil, expand: interaction.expand)

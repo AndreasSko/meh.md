@@ -196,6 +196,38 @@ extension NotebookSceneState {
         browserSelection.selectAll(Array(ids.union(hidden)))
     }
 
+    /// Whether a window point falls in Files below its header, but not on a
+    /// row or the footer face.
+    func isBrowserEmptySpace(_ point: CGPoint) -> Bool {
+        let header = browserDrag.filesHeaderFrame
+        guard browserDropViewportFrame.contains(point), !header.isEmpty,
+              point.y > header.maxY, !browserDrag.footerFrame.contains(point)
+        else { return false }
+        return !visibleActiveRows.contains {
+            browserDrag.rowFrame(for: $0.id)?.contains(point) == true
+        }
+    }
+
+    /// Works like Finder: a click on empty space first drops a selection of
+    /// other rows, and once only the open note is left, closes that note.
+    /// The platform readers call this before the List deselects natively.
+    func clickBrowserEmptySpace(at point: CGPoint) {
+        guard !busy, !isCompact, !selectingItems, editingID == nil,
+              !search.isPresented, !browserDrag.isSessionActive,
+              isBrowserEmptySpace(point) else { return }
+        let openNote: Set<UUID> = selectedID.map { [$0] } ?? []
+        if !browserSelection.isEmpty, browserSelection.selectedIDs != openNote {
+            browserSelection.clear()
+            return
+        }
+        browserSelection.clear()
+        guard selectedID != nil else { return }
+        perform { [self] in
+            try await flushEditor()
+            closeSelectedNote()
+        }
+    }
+
     func activateSidebarRow(_ placement: NotebookPlacement) {
         guard !busy, !showsSelectionControls,
               editingID != placement.item.id else { return }
