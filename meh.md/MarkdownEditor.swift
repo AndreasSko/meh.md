@@ -547,7 +547,7 @@ final class MarkdownTextView: NSTextView {
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        if !updateNoteLinkCursor(at: convert(event.locationInWindow, from: nil),
+        if !updatePointer(at: convert(event.locationInWindow, from: nil),
             modifiers: event.modifierFlags) {
             super.cursorUpdate(with: event)
         }
@@ -555,20 +555,22 @@ final class MarkdownTextView: NSTextView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        updateNoteLinkCursor(at: convert(event.locationInWindow, from: nil),
+        updatePointer(at: convert(event.locationInWindow, from: nil),
             modifiers: event.modifierFlags)
     }
 
     @discardableResult
-    private func updateNoteLinkCursor(at point: NSPoint, modifiers: NSEvent.ModifierFlags) -> Bool {
+    private func updatePointer(at point: NSPoint, modifiers: NSEvent.ModifierFlags) -> Bool {
         // Title buttons and table overlays own their own native pointer.
         guard visibleRect.contains(point),
               hitTest(convert(point, to: superview)) === self else { return false }
         let flags = modifiers.intersection([.command, .shift, .option, .control])
         let rects = flags.isEmpty ? renderedLinkCursorRects
             : (flags == .command ? sourceLinkCursorRects : [])
-        if markdownLinkNavigation?.openLink != nil, !hasMarkedText(),
-           rects.contains(where: { $0.contains(point) }) {
+        if !hasMarkedText(),
+           MarkdownPresentation.taskCheckbox(at: point, in: self) != nil
+            || (markdownLinkNavigation?.openLink != nil
+                && rects.contains(where: { $0.contains(point) })) {
             NSCursor.pointingHand.set()
         } else { NSCursor.iBeam.set() }
         return true
@@ -579,7 +581,7 @@ final class MarkdownTextView: NSTextView {
         window?.invalidateCursorRects(for: self)
         if let window {
             let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-            updateNoteLinkCursor(at: point, modifiers: event.modifierFlags)
+            updatePointer(at: point, modifiers: event.modifierFlags)
         }
     }
 
@@ -694,8 +696,13 @@ final class MarkdownTextView: NSTextView {
             text: string, at: location, syntaxResult: syntaxResult
         ) else { return }
         let selection = selectedRange()
+        // A checkbox is a button, not a caret placement: insertText would
+        // scroll to the caret, wherever it is.
         breakUndoCoalescing()
-        insertText(change.replacement, replacementRange: change.range)
+        guard shouldChangeText(in: change.range,
+                               replacementString: change.replacement) else { return }
+        textStorage?.replaceCharacters(in: change.range, with: change.replacement)
+        didChangeText()
         breakUndoCoalescing()
         setSelectedRange(string.clampedSelection(selection))
     }
@@ -920,6 +927,10 @@ struct MarkdownEditor: NSViewRepresentable {
 
         textView.delegate = context.coordinator
         textView.string = text
+        // AppKit leaves the caret after the last character. A note opens at
+        // its top, so the caret belongs there until a saved position or the
+        // user moves it; otherwise edits elsewhere scroll to the end.
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.isRichText = false
         textView.isEditable = !isReadOnly
         textView.isSelectable = true
