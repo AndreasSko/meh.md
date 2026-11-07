@@ -39,6 +39,7 @@
         "LargeNoteHistoryUITests/testLargeHistoryCanCloseWhileIndexingAndBrowseWithoutChangingNote",
         "LocalSyncUITests",
         "MacFormattingUITests",
+        "MacSidebarClickUITests",
         "NoteHistoryTourUITests",
         "NoteHistoryUITests/testRestoreAsNewNoteKeepsOriginalCurrentText",
         "NoteLinkTourUITests",

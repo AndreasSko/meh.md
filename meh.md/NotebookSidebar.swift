@@ -1064,18 +1064,6 @@ private struct NotebookFileRow: View {
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
-                        #if os(macOS)
-                        .simultaneousGesture(TapGesture().onEnded {
-                            guard placement.item.kind == .note,
-                                  !scene.selectingItems, !scene.busy,
-                                  NSEvent.modifierFlags.intersection([.command, .shift]).isEmpty
-                            else { return }
-                            // List owns range/toggle selection. A plain click also
-                            // opens the note, including an already selected row.
-                            scene.browserSelection.selectOnly(row.id)
-                            scene.activateSidebarRow(placement)
-                        })
-                        #endif
                         .accessibilityAddTraits(
                             scene.browserSelection.contains(row.id) ? .isSelected : []
                         )
@@ -1089,6 +1077,20 @@ private struct NotebookFileRow: View {
             .padding(.leading, CGFloat(row.depth) * 16)
             .frame(minHeight: rowHeight)
             .contentShape(Rectangle())
+            #if os(macOS)
+            // Covers the whole row, as the List selects it from anywhere.
+            // On the label alone, a click near the row's edge only selected.
+            .simultaneousGesture(TapGesture().onEnded {
+                guard placement.item.kind == .note, scene.editingID != row.id,
+                      !scene.selectingItems, !scene.busy,
+                      NSEvent.modifierFlags.intersection([.command, .shift]).isEmpty
+                else { return }
+                // List owns range/toggle selection. A plain click also
+                // opens the note, including an already selected row.
+                scene.browserSelection.selectOnly(row.id)
+                scene.activateSidebarRow(placement)
+            })
+            #endif
             .background {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Color.accentColor.opacity(
