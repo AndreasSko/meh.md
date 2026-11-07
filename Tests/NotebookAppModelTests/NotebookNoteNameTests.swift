@@ -35,6 +35,27 @@ final class NotebookNoteNameTests: XCTestCase {
         )
     }
 
+    func testUntouchedTitleKeepsANameWithoutMarkdownExtension() {
+        for filename in ["Hi •_•", "Reference.txt", "Note.md"] {
+            XCTAssertEqual(
+                NotebookNoteName.filename(
+                    for: NotebookNoteName.title(from: filename),
+                    preservingExtensionFrom: filename
+                ),
+                filename
+            )
+        }
+        XCTAssertEqual(
+            NotebookNoteName.filename(for: "Hello", preservingExtensionFrom: "Hi •_•"),
+            "Hello.md"
+        )
+        XCTAssertEqual(
+            NotebookNoteName.filename(
+                for: "Reference.txt.md", preservingExtensionFrom: "Reference.txt"),
+            "Reference.txt.md"
+        )
+    }
+
     func testRenameDoesNotTurnAnEmptyTitleIntoAnExtension() {
         XCTAssertEqual(
             NotebookNoteName.filename(for: "", preservingExtensionFrom: "Old.md"),

@@ -118,7 +118,7 @@ final class NotebookCatalogCacheTests: XCTestCase {
         let right = try base.fork()
         let duplicate = UUID()
         try left.add(id: duplicate, kind: .note, name: "Left.md")
-        try right.add(id: duplicate, kind: .note, name: "Right.md")
+        try right.add(id: duplicate, kind: .folder, name: "Right")
         let expectedItems = try left.items()
         let before = left.readItemsDecodeCount
 
