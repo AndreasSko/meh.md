@@ -1,4 +1,5 @@
 import NoteCore
+import StoreKit
 import SwiftUI
 #if os(macOS)
 import AppKit
@@ -15,29 +16,77 @@ enum NotebookFeedback {
     static let subject = "meh.md Feedback"
 
     /// The app version, build and OS, as shown in Settings and sent with logs.
-    static var versionLine: String {
+    static var versionLine: String { appVersion + "; " + osVersion }
+
+    static var appVersion: String {
         let info = Bundle.main.infoDictionary
         let version = info?["CFBundleShortVersionString"] as? String ?? "unknown"
         let build = info?["CFBundleVersion"] as? String ?? "unknown"
+        return "meh.md \(version) (\(build))"
+    }
+
+    static var osVersion: String {
         #if os(macOS)
         let platform = "macOS"
         #else
         let platform = "iOS"
         #endif
         let os = ProcessInfo.processInfo.operatingSystemVersion
-        return "meh.md \(version) (\(build)); "
-            + "\(platform) \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
+        return "\(platform) \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
+    }
+
+    /// The hardware model, such as "iPhone13,4".
+    static var deviceModel: String {
+        #if targetEnvironment(simulator)
+        return ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? "Simulator"
+        #else
+        #if os(macOS)
+        let key = "hw.model"
+        #else
+        let key = "hw.machine"
+        #endif
+        var size = 0
+        sysctlbyname(key, nil, &size, nil, 0)
+        var model = [CChar](repeating: 0, count: size)
+        sysctlbyname(key, &model, &size, nil, 0)
+        return String(decoding: model.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        #endif
+    }
+
+    /// Where this copy of the app came from, or nil when StoreKit can't tell.
+    static func installSource() async -> String? {
+        #if DEBUG
+        return "Development"
+        #else
+        guard let result = try? await AppTransaction.shared else { return nil }
+        let transaction: AppTransaction
+        switch result {
+        case .verified(let value), .unverified(let value, _): transaction = value
+        }
+        switch transaction.environment {
+        case .production: return "App Store"
+        case .sandbox: return "TestFlight"
+        default: return nil
+        }
+        #endif
     }
 
     static func logText(_ log: NotebookSyncEventLog) -> String {
         versionLine + "\n" + log.exportText
     }
 
-    static var body: String { "\n\n\n" + versionLine }
+    /// Kept readable in the mail body, so people see what they send.
+    static func body(storage: NotebookSyncStorage, source: String?) -> String {
+        "\n\n\n" + [
+            ([appVersion] + [source].compactMap { $0 }).joined(separator: " · "),
+            osVersion + " · " + deviceModel,
+            "Sync: " + storage.title,
+        ].joined(separator: "\n")
+    }
 
     /// Opens the default mail app. Links can't carry attachments, so the log
     /// is left out.
-    static var mailtoURL: URL {
+    static func mailtoURL(body: String) -> URL {
         var components = URLComponents()
         components.scheme = "mailto"
         components.path = address
@@ -59,7 +108,9 @@ enum NotebookFeedback {
 /// Feedback and links at the end of Settings.
 struct NotebookFeedbackSection: View {
     let log: NotebookSyncEventLog
+    let storage: NotebookSyncStorage
     @Environment(\.openURL) private var openURL
+    @State private var source: String?
     #if os(iOS)
     @State private var anchor = NotebookMailAnchor()
     #endif
@@ -78,24 +129,26 @@ struct NotebookFeedbackSection: View {
         } footer: {
             Text("If your mail app allows it, feedback includes the sync event log. It contains no note contents or names.")
         }
+        .task { source = await NotebookFeedback.installSource() }
     }
 
     private func sendFeedback() {
+        let body = NotebookFeedback.body(storage: storage, source: source)
         #if os(macOS)
         if let service = NSSharingService(named: .composeEmail),
            let file = try? NotebookFeedback.logFile(log) {
             service.recipients = [NotebookFeedback.address]
             service.subject = NotebookFeedback.subject
-            let items: [Any] = [NotebookFeedback.body, file]
+            let items: [Any] = [body, file]
             if service.canPerform(withItems: items) {
                 service.perform(withItems: items)
                 return
             }
         }
         #else
-        if NotebookMailComposer.present(log: log, from: anchor.view) { return }
+        if NotebookMailComposer.present(log: log, body: body, from: anchor.view) { return }
         #endif
-        openURL(NotebookFeedback.mailtoURL)
+        openURL(NotebookFeedback.mailtoURL(body: body))
     }
 }
 
@@ -131,7 +184,7 @@ private final class NotebookMailComposer: NSObject, MFMailComposeViewControllerD
     private static var open: [NotebookMailComposer] = []
     private weak var composer: MFMailComposeViewController?
 
-    static func present(log: NotebookSyncEventLog, from view: UIView?) -> Bool {
+    static func present(log: NotebookSyncEventLog, body: String, from view: UIView?) -> Bool {
         guard MFMailComposeViewController.canSendMail(),
               var presenter = view?.window?.rootViewController else { return false }
         while let presented = presenter.presentedViewController {
@@ -147,7 +200,7 @@ private final class NotebookMailComposer: NSObject, MFMailComposeViewControllerD
         controller.mailComposeDelegate = delegate
         controller.setToRecipients([NotebookFeedback.address])
         controller.setSubject(NotebookFeedback.subject)
-        controller.setMessageBody(NotebookFeedback.body, isHTML: false)
+        controller.setMessageBody(body, isHTML: false)
         controller.addAttachmentData(
             Data(NotebookFeedback.logText(log).utf8),
             mimeType: "text/plain", fileName: "meh.md Sync Log.txt"

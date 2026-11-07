@@ -38,7 +38,9 @@ struct NotebookSettingsView: View {
                 }
                 NotebookWritingSection(replica: replica, onOpenNote: onOpenNote)
                 NotebookAppearanceSection()
-                NotebookFeedbackSection(log: workspace.syncEventLog)
+                NotebookFeedbackSection(
+                    log: workspace.syncEventLog, storage: workspace.syncStorage
+                )
                 Section {
                     NavigationLink {
                         NotebookLabsView()
@@ -135,7 +137,9 @@ struct NotebookMacSettingsView: View {
                             .accessibilityIdentifier("notebook-sync-backups-settings")
                         }
                         NotebookWritingSection(replica: replica, onOpenNote: openNote)
-                        NotebookFeedbackSection(log: workspace.syncEventLog)
+                        NotebookFeedbackSection(
+                            log: workspace.syncEventLog, storage: workspace.syncStorage
+                        )
                         Section {
                             NotebookSettingsSignature()
                                 .listRowBackground(Color.clear)
