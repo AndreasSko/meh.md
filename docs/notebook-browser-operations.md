@@ -23,12 +23,14 @@ Select All includes the currently expanded Files outline, even off-screen
 rows, but not collapsed descendants, Recents, or search results. Collapsing a
 folder does not discard selected descendants.
 
-On Mac and on iPad with a keyboard, ordinary clicks open notes;
-Command-click adds or removes a row and Shift-click adds the rows from the
+On Mac and on iPad with a keyboard, ordinary clicks open notes.
+Command-click adds or removes a row, and Shift-click adds the rows from the
 last clicked one, without entering Select mode or changing the editor.
 iPadOS List replaces its selection on these clicks, so the app notes the
-modifiers of each click on the list and builds the selection itself. With the
-browser focused, Command-A selects the expanded outline,
+modifiers of each click on the list and builds the selection itself. A
+plain click while several rows are selected selects only that row and opens
+it. Escape clears the selection and leaves Select mode. With the browser
+focused, Command-A selects the expanded outline,
 Command-Shift-M opens Move, and Command-Delete trashes selected items. These
 commands do not replace text-field or editor commands. Browser selection and
 the open editor note remain separate. Context actions on a selected row use

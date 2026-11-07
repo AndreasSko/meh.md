@@ -293,8 +293,19 @@ extension NotebookSceneState {
     }
 
     func activateSidebarRow(_ placement: NotebookPlacement) {
-        guard !busy, !showsSelectionControls,
-              editingID != placement.item.id else { return }
+        guard !busy, !selectingItems, editingID != placement.item.id else { return }
+        #if os(iOS)
+        // With nothing selected, iPadOS List also opens a Shift-clicked row.
+        // The selection callback that follows applies the click instead.
+        if let click = browserScrollView.pendingClick, click.kind != .plain { return }
+        #endif
+        // A plain click leaves a Command or Shift selection, as on the Mac,
+        // and starts the range of a later Shift-click.
+        if browserSelection.count > 1 {
+            browserSelection.selectOnly(placement.item.id)
+        } else {
+            browserSelection.anchorID = placement.item.id
+        }
         if placement.item.kind == .folder, editingID == nil {
             toggleFolder(placement.item.id)
             return
