@@ -26,6 +26,7 @@
       "selectedTests": [
         "EditorRenderingUITests",
         "MacFormattingUITests",
+        "MacSidebarClickUITests",
         "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
