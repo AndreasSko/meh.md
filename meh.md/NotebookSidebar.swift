@@ -637,6 +637,11 @@ private struct NotebookLibraryBrowser: View {
                             $0.frame(in: .global)
                         } action: { scene.browserDrag.footerFrame = $0 }
                         .onDisappear { scene.browserDrag.footerFrame = .zero }
+                        .contextMenu {
+                            if scene.editingID == nil {
+                                NotebookEmptySpaceActions(scene: scene)
+                            }
+                        }
                 }
             } header: {
                 NotebookSectionToggle(
@@ -676,7 +681,14 @@ private struct NotebookLibraryBrowser: View {
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
                 .selectionDisabled()
-                .allowsHitTesting(false)
+                // The List offers no menu on a row without a tag, and on
+                // the Mac this row is the empty space below the footer.
+                .contentShape(Rectangle())
+                .contextMenu {
+                    if scene.editingID == nil {
+                        NotebookEmptySpaceActions(scene: scene)
+                    }
+                }
                 .accessibilityHidden(true)
             #endif
         }
@@ -746,6 +758,8 @@ private struct NotebookLibraryBrowser: View {
                     Button("Trash Selected", role: .destructive) {
                         scene.trashItems(scene.selectedBrowserIDs)
                     }
+                } else {
+                    NotebookEmptySpaceActions(scene: scene)
                 }
             }
         } primaryAction: { ids in
@@ -1345,6 +1359,21 @@ private struct NotebookTemplateCreationButton: View {
         }
         .disabled(scene.busy || scene.replica.templates.isEmpty)
         .accessibilityIdentifier("notebook-new-from-template")
+    }
+}
+
+/// The menu for empty Files space, creating where the New Note button does.
+private struct NotebookEmptySpaceActions: View {
+    let scene: NotebookSceneState
+
+    var body: some View {
+        Button("New Note") { scene.createDefaultNote() }
+            .disabled(scene.busy)
+        NotebookTemplateCreationButton(scene: scene)
+        Button("New Folder") {
+            scene.createItem(kind: .folder, parentID: nil)
+        }
+            .disabled(scene.busy)
     }
 }
 
