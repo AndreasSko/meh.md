@@ -800,6 +800,9 @@ private struct NotebookLibraryBrowser: View {
     }
 
     private func handleKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        #if os(iOS)
+        scene.browserScrollView.discardClick()
+        #endif
         guard focus.browser.wrappedValue, scene.editingID == nil, scene.detailEditingID == nil,
               !scene.search.isPresented, !scene.busy else { return .ignored }
         let selection = scene.browserSelection

@@ -51,6 +51,97 @@ final class NotebookBrowserSelectionTests: XCTestCase {
         XCTAssertEqual(selection.selectedIDs, [first, third])
     }
 
+    func testExtendAddsTheRangeFromTheAnchorInEitherDirection() {
+        let fourth = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
+        let order = [first, second, third, fourth]
+        var selection = NotebookBrowserSelection()
+        selection.toggle(fourth)
+        selection.toggle(second)
+
+        selection.extend(to: first, in: order)
+        XCTAssertEqual(selection.selectedIDs, [first, second, fourth])
+
+        selection.extend(to: third, in: order)
+        XCTAssertEqual(selection.selectedIDs, [first, second, third, fourth])
+        XCTAssertEqual(selection.anchorID, second)
+    }
+
+    func testExtendWithoutAVisibleAnchorSelectsOnlyTheClickedRow() {
+        var selection = NotebookBrowserSelection()
+        selection.extend(to: second, in: [first, second, third])
+        XCTAssertEqual(selection.selectedIDs, [second])
+        XCTAssertEqual(selection.anchorID, second)
+
+        selection.toggle(first)
+        selection.extend(to: third, in: [second, third])
+        XCTAssertEqual(selection.selectedIDs, [third])
+    }
+
+    func testClicksFollowTheMacRulesWhateverTheListProposes() {
+        let fourth = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
+        let order = [first, second, third, fourth]
+        var selection = NotebookBrowserSelection()
+
+        // A plain click opens the row; the list reports no selection.
+        selection.click(first, .plain, proposed: [], in: order)
+        XCTAssertTrue(selection.isEmpty)
+        selection.click(third, .shift, proposed: [third], in: order)
+        XCTAssertEqual(selection.selectedIDs, [first, second, third])
+
+        selection.click(fourth, .command, proposed: [fourth], in: order)
+        XCTAssertEqual(selection.selectedIDs, [first, second, third, fourth])
+        selection.click(second, .command, proposed: [second], in: order)
+        XCTAssertEqual(selection.selectedIDs, [first, third, fourth])
+
+        selection.click(fourth, .plain, proposed: [], in: order)
+        XCTAssertTrue(selection.isEmpty)
+        XCTAssertEqual(selection.anchorID, fourth)
+    }
+
+    func testClickIgnoresProposalsFromOtherInput() {
+        let order = [first, second, third]
+        var selection = NotebookBrowserSelection()
+        selection.click(first, .command, proposed: [first], in: order)
+        selection.click(second, .command, proposed: [second], in: order)
+
+        // An arrow key moved to the third row after a click on the first
+        // row's disclosure button selected nothing.
+        XCTAssertFalse(selection.click(first, .command, proposed: [third], in: order))
+        XCTAssertEqual(selection.selectedIDs, [first, second])
+
+        // Command-clicking a selected row may report it alone or without it.
+        XCTAssertTrue(selection.click(first, .command, proposed: [second], in: order))
+        XCTAssertEqual(selection.selectedIDs, [second])
+    }
+
+    func testShiftClickAcceptsTheListsPartialRange() {
+        let order = [first, second, third]
+        var selection = NotebookBrowserSelection()
+        selection.click(first, .command, proposed: [first], in: order)
+
+        XCTAssertTrue(selection.click(third, .shift, proposed: [second], in: order))
+        XCTAssertEqual(selection.selectedIDs, [first, second, third])
+
+        selection.click(second, .plain, proposed: [], in: order)
+        XCTAssertFalse(selection.click(first, .shift, proposed: [third], in: order))
+        XCTAssertTrue(selection.isEmpty)
+    }
+
+    func testAnchorClearsWithTheSelectionOrItsRow() {
+        var selection = NotebookBrowserSelection()
+        selection.toggle(first)
+        selection.prune(to: [second])
+        XCTAssertNil(selection.anchorID)
+
+        selection.toggle(second)
+        selection.selectAll([first, second])
+        XCTAssertNil(selection.anchorID)
+
+        selection.selectOnly(third)
+        selection.clear()
+        XCTAssertNil(selection.anchorID)
+    }
+
     func testOrderedIDsFollowCurrentSuppliedDisplayOrder() {
         var selection = NotebookBrowserSelection()
         selection.toggle(third)
