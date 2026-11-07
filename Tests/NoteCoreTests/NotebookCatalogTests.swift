@@ -215,7 +215,7 @@ final class NotebookCatalogTests: XCTestCase {
         let left = try base.fork()
         let right = try base.fork()
         try left.add(id: low, kind: .note, name: "left.md")
-        try right.add(id: low, kind: .note, name: "right.md")
+        try right.add(id: low, kind: .folder, name: "right")
         let before = left.snapshot()
         XCTAssertThrowsError(try left.merge(right)) {
             XCTAssertEqual($0 as? NotebookCatalogError, .duplicateIdentity)
