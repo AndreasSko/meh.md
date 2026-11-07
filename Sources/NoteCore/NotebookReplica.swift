@@ -841,6 +841,35 @@ public final class NotebookReplica {
         }
     }
 
+    /// A catalog edit another device made, for fixtures.
+    public enum FixtureCatalogEdit: Sendable {
+        case rename(UUID, String)
+        case move(UUID, to: UUID?)
+        case permanentlyDelete(UUID)
+    }
+
+    /// Fixtures need conflicts, which only devices editing at the same time
+    /// create. Each list of edits runs on its own copy of the catalog, as if
+    /// on its own device, and the copies are then merged.
+    public func applyConcurrentEdits(_ devices: [[FixtureCatalogEdit]]) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let merged = try catalog.fork()
+            for edits in devices {
+                let device = try catalog.fork()
+                for edit in edits {
+                    switch edit {
+                    case .rename(let id, let name): try device.rename(id, to: name)
+                    case .move(let id, let parentID): try device.move(id, to: parentID)
+                    case .permanentlyDelete(let id): try device.markPermanentlyDeleted([id])
+                    }
+                }
+                try merged.merge(device)
+            }
+            try await self.persistCatalog(merged)
+        }
+    }
+
     private static func fixtureDocument(_ history: [FixtureEdit]) throws -> NoteDocument {
         let first = history[0]
         let note = try NoteDocument(
