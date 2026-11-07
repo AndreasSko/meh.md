@@ -35,6 +35,7 @@ final class NotebookUITestFixtureTests: XCTestCase {
             case .flair: expected = ["Home", "Pancakes.md"]
             case .longNote: expected = ["Island journal.md"]
             case .markdownTour: expected = ["Lisbon in May.md"]
+            case .rendering: expected = ["Field journal.md", "Harbor log.md"]
             case .readme:
                 expected = ["Inbox", "Projects", "Areas", "Resources", "Archive"]
             case .snippets: expected = ["Snippets", "Training log.md"]

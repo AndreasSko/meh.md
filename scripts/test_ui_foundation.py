@@ -219,6 +219,12 @@ class FoundationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             check({c: "Passed" for c in self.expected}, self.expected, {})
 
+    def test_rendering_checks_fail_on_the_first_run(self):
+        first = {"EditorRenderingUITests/testA": "Failed", "Case/testB": "Passed"}
+        expected = {"EditorRenderingUITests/testA", "Case/testB"}
+        with self.assertRaisesRegex(ValueError, "first run"):
+            check(first, expected, {"EditorRenderingUITests/testA": "Passed"})
+
     def test_background_work_returns_and_reraises(self):
         self.assertEqual(in_background(lambda: 3)(), 3)
 

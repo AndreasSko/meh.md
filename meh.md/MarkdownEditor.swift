@@ -329,9 +329,14 @@ final class MarkdownTextView: NSTextView {
     /// History's preview marks the lines this version changed.
     var markdownHistoryChanges = NoteHistoryChanges.none {
         didSet {
-            if markdownHistoryChanges != oldValue { needsDisplay = true }
+            guard markdownHistoryChanges != oldValue,
+                  let layoutManager = textLayoutManager else { return }
+            // Marks widen each fragment's drawing surface, not only its pixels.
+            layoutManager.invalidateLayout(for: layoutManager.documentRange)
+            redrawMarkdownDecorations()
         }
     }
+    fileprivate var markdownLayoutDelegate: MarkdownLayoutManagerDelegate?
     /// Whether this note shows time calculator results.
     var markdownTimeCalculator = false {
         didSet {
@@ -820,13 +825,6 @@ final class MarkdownTextView: NSTextView {
         return children
     }
 
-    override func drawBackground(in rect: NSRect) {
-        super.drawBackground(in: rect)
-        MarkdownPresentation.drawBlockBackgrounds(in: self, dirtyRect: rect)
-        MarkdownHistoryMarks.draw(in: self, dirtyRect: rect)
-        MarkdownTimeCalculator.draw(in: self, dirtyRect: rect)
-    }
-
     func historyRemoval(at point: CGPoint) -> MarkdownHistoryMarks.Ring? {
         guard let layoutManager = textLayoutManager else { return nil }
         let origin = textContainerOrigin
@@ -1166,12 +1164,18 @@ struct MarkdownEditor: NSViewRepresentable {
                 || displayedFontFamily != parent.fontFamily
                 || displayedPalette != parent.palette
                 || displayedMode != parent.mode {
+                // A new palette changes no text, so no line would redraw
+                // its decorations in the new colors on its own.
+                let paletteChanged = displayedPalette != parent.palette
                 displayedMode = parent.mode
                 displayedFontSize = fontSize
                 displayedFontFamily = parent.fontFamily
                 displayedPalette = parent.palette
                 MehStyle.palette = parent.palette
                 schedulePresentationRefresh(for: textView)
+                if paletteChanged {
+                    (textView as? MarkdownTextView)?.redrawMarkdownDecorations()
+                }
             }
             guard !hasUncommittedText else { return }
 
@@ -2160,6 +2164,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             if let layoutManager = textLayoutManager {
                 layoutManager.invalidateLayout(for: layoutManager.documentRange)
             }
+            redrawMarkdownDecorations()
         }
     }
 
@@ -2497,26 +2502,6 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         _ = performMarkdownCommand(.toggleTask)
     }
 
-    func installMarkdownLayoutManagerDelegate(
-        on layoutManager: NSTextLayoutManager
-    ) {
-        if layoutManager.delegate === markdownState.layoutDelegate { return }
-        let fragmentSelector = NSSelectorFromString(
-            "textLayoutManager:textLayoutFragmentForLocation:inTextElement:"
-        )
-        if layoutManager.delegate?.responds(to: fragmentSelector) == true {
-            assertionFailure(
-                "Cannot replace an existing TextKit 2 fragment factory"
-            )
-            return
-        }
-        let delegate = MarkdownLayoutManagerDelegate(
-            textView: self,
-            forwardingTo: layoutManager.delegate
-        )
-        markdownState.layoutDelegate = delegate
-        layoutManager.delegate = delegate
-    }
     override func gestureRecognizerShouldBegin(
         _ gestureRecognizer: UIGestureRecognizer
     ) -> Bool {
@@ -2569,127 +2554,6 @@ private final class MarkdownTextViewState: NSObject {
     var titleHeight: CGFloat = 0
     var maxTextWidth: CGFloat?
     var managesHorizontalInsets = false
-}
-
-private final class MarkdownLayoutManagerDelegate:
-    NSObject, NSTextLayoutManagerDelegate {
-    private weak var textView: MarkdownTextView?
-    nonisolated(unsafe) private weak var forwardedDelegate:
-        (any NSTextLayoutManagerDelegate)?
-
-    init(
-        textView: MarkdownTextView,
-        forwardingTo delegate: (any NSTextLayoutManagerDelegate)?
-    ) {
-        self.textView = textView
-        forwardedDelegate = delegate
-    }
-
-    nonisolated override func responds(to selector: Selector!) -> Bool {
-        super.responds(to: selector)
-            || forwardedDelegate?.responds(to: selector) == true
-    }
-
-    nonisolated override func forwardingTarget(
-        for selector: Selector!
-    ) -> Any? {
-        if forwardedDelegate?.responds(to: selector) == true {
-            return forwardedDelegate
-        }
-        return super.forwardingTarget(for: selector)
-    }
-
-    func textLayoutManager(
-        _ textLayoutManager: NSTextLayoutManager,
-        textLayoutFragmentFor location: any NSTextLocation,
-        in textElement: NSTextElement
-    ) -> NSTextLayoutFragment {
-        guard let textView else {
-            return NSTextLayoutFragment(
-                textElement: textElement,
-                range: nil
-            )
-        }
-        return MarkdownTextLayoutFragment(
-            textElement: textElement,
-            range: nil,
-            textView: textView
-        )
-    }
-}
-
-nonisolated private final class MarkdownTextLayoutFragment:
-    NSTextLayoutFragment {
-    private struct UnsafeTransfer<Value>: @unchecked Sendable {
-        let value: Value
-    }
-
-    nonisolated(unsafe) private weak var textView: MarkdownTextView?
-
-    nonisolated init(
-        textElement: NSTextElement,
-        range: NSTextRange?,
-        textView: MarkdownTextView
-    ) {
-        self.textView = textView
-        super.init(textElement: textElement, range: range)
-    }
-
-    nonisolated required init?(coder: NSCoder) {
-        super.init(coder: coder)
-    }
-
-    nonisolated override var renderingSurfaceBounds: CGRect {
-        let defaultBounds = super.renderingSurfaceBounds
-        let fragment = UnsafeTransfer(value: self)
-        return MainActor.assumeIsolated {
-            guard let textView = fragment.value.textView else {
-                return defaultBounds
-            }
-            let fragmentFrame = fragment.value.layoutFragmentFrame
-            let verticalPadding = max(
-                textView.font?.lineHeight ?? 0,
-                MarkdownPresentation.editorBodyFont.lineHeight
-            ) * 0.3
-            let marksExtension = textView.markdownHistoryChanges.isEmpty
-                ? 0 : MarkdownHistoryMarks.surfaceExtension
-            let panelBounds = CGRect(
-                x: -fragmentFrame.minX - 3 - marksExtension,
-                y: -verticalPadding,
-                width: textView.textContainer.size.width + 3 + marksExtension,
-                height: fragmentFrame.height + 2 * verticalPadding
-            )
-            return defaultBounds.union(panelBounds)
-        }
-    }
-
-    nonisolated override func draw(at point: CGPoint, in context: CGContext) {
-        let fragment = UnsafeTransfer(value: self)
-        let drawingContext = UnsafeTransfer(value: context)
-        MainActor.assumeIsolated {
-            if let textView = fragment.value.textView {
-                MarkdownPresentation.drawBlockBackgrounds(
-                    in: fragment.value,
-                    textView: textView,
-                    at: point,
-                    context: drawingContext.value
-                )
-                MarkdownHistoryMarks.draw(
-                    in: fragment.value,
-                    textView: textView,
-                    at: point,
-                    context: drawingContext.value
-                )
-                MarkdownTimeCalculator.draw(
-                    in: fragment.value,
-                    textView: textView,
-                    at: point,
-                    context: drawingContext.value
-                )
-            }
-        }
-        super.draw(at: point, in: context)
-    }
 }
 
 struct MarkdownEditor: UIViewRepresentable {
@@ -3075,12 +2939,18 @@ struct MarkdownEditor: UIViewRepresentable {
                 || displayedFontFamily != parent.fontFamily
                 || displayedPalette != parent.palette
                 || displayedMode != parent.mode {
+                // A new palette changes no text, so no line would redraw
+                // its decorations in the new colors on its own.
+                let paletteChanged = displayedPalette != parent.palette
                 displayedMode = parent.mode
                 displayedFontSize = fontSize
                 displayedFontFamily = parent.fontFamily
                 displayedPalette = parent.palette
                 MehStyle.palette = parent.palette
                 schedulePresentationRefresh(for: textView)
+                if paletteChanged {
+                    (textView as? MarkdownTextView)?.redrawMarkdownDecorations()
+                }
             }
             guard !hasUncommittedText else { return }
 
@@ -3699,3 +3569,207 @@ struct MarkdownEditor: UIViewRepresentable {
     }
 }
 #endif
+
+/// Live Preview draws its decorations line by line: each line's fragment
+/// paints the bullets, checkboxes, rules, panels and marks beside its own
+/// text, so they move with the text when TextKit moves the line.
+extension MarkdownTextView {
+#if os(iOS)
+    fileprivate var markdownLayoutDelegate: MarkdownLayoutManagerDelegate? {
+        get { markdownState.layoutDelegate }
+        set { markdownState.layoutDelegate = newValue }
+    }
+#endif
+
+    func installMarkdownLayoutManagerDelegate(
+        on layoutManager: NSTextLayoutManager
+    ) {
+        if let installed = markdownLayoutDelegate, layoutManager.delegate === installed {
+            return
+        }
+        let fragmentSelector = NSSelectorFromString(
+            "textLayoutManager:textLayoutFragmentForLocation:inTextElement:"
+        )
+        if layoutManager.delegate?.responds(to: fragmentSelector) == true {
+            assertionFailure(
+                "Cannot replace an existing TextKit 2 fragment factory"
+            )
+            return
+        }
+        let delegate = MarkdownLayoutManagerDelegate(
+            textView: self,
+            forwardingTo: layoutManager.delegate
+        )
+        markdownLayoutDelegate = delegate
+        layoutManager.delegate = delegate
+        // Lines laid out before this draw without their decorations.
+        layoutManager.invalidateLayout(for: layoutManager.documentRange)
+    }
+
+    /// Redraws the decorations of the lines in `range`, or of every line,
+    /// after a change that moves no text, such as a new palette or sum.
+    /// On the Mac each visible line keeps its drawing in a view of its own,
+    /// which laying the line out again does not redraw.
+    func redrawMarkdownDecorations(for range: NSTextRange? = nil) {
+        guard let range, let layoutManager = textLayoutManager else {
+            redraw(self, in: nil)
+            return
+        }
+        var lines = CGRect.null
+        layoutManager.enumerateTextLayoutFragments(from: range.location) { line in
+            guard lines.isNull
+                || line.rangeInElement.location.compare(range.endLocation) == .orderedAscending
+            else { return false }
+            lines = lines.union(line.layoutFragmentFrame)
+            return true
+        }
+#if os(macOS)
+        let origin = textContainerOrigin
+#else
+        let origin = CGPoint(x: textContainerInset.left, y: textContainerInset.top)
+#endif
+        redraw(self, in: lines.offsetBy(dx: origin.x, dy: origin.y))
+    }
+
+#if os(macOS)
+    private func redraw(_ view: NSView, in rect: CGRect?) {
+        if let rect, !convert(view.bounds, from: view).intersects(rect) { return }
+        view.needsDisplay = true
+        view.subviews.forEach { redraw($0, in: rect) }
+    }
+#else
+    private func redraw(_ view: UIView, in rect: CGRect?) {
+        if let rect, !convert(view.bounds, from: view).intersects(rect) { return }
+        view.setNeedsDisplay()
+        view.subviews.forEach { redraw($0, in: rect) }
+    }
+#endif
+}
+
+private final class MarkdownLayoutManagerDelegate:
+    NSObject, NSTextLayoutManagerDelegate {
+    private weak var textView: MarkdownTextView?
+    nonisolated(unsafe) private weak var forwardedDelegate:
+        (any NSTextLayoutManagerDelegate)?
+
+    init(
+        textView: MarkdownTextView,
+        forwardingTo delegate: (any NSTextLayoutManagerDelegate)?
+    ) {
+        self.textView = textView
+        forwardedDelegate = delegate
+    }
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        super.responds(to: selector)
+            || forwardedDelegate?.responds(to: selector) == true
+    }
+
+    nonisolated override func forwardingTarget(
+        for selector: Selector!
+    ) -> Any? {
+        if forwardedDelegate?.responds(to: selector) == true {
+            return forwardedDelegate
+        }
+        return super.forwardingTarget(for: selector)
+    }
+
+    func textLayoutManager(
+        _ textLayoutManager: NSTextLayoutManager,
+        textLayoutFragmentFor location: any NSTextLocation,
+        in textElement: NSTextElement
+    ) -> NSTextLayoutFragment {
+        guard let textView else {
+            return NSTextLayoutFragment(
+                textElement: textElement,
+                range: nil
+            )
+        }
+        return MarkdownTextLayoutFragment(
+            textElement: textElement,
+            range: nil,
+            textView: textView
+        )
+    }
+}
+
+nonisolated private final class MarkdownTextLayoutFragment:
+    NSTextLayoutFragment {
+    private struct UnsafeTransfer<Value>: @unchecked Sendable {
+        let value: Value
+    }
+
+    nonisolated(unsafe) private weak var textView: MarkdownTextView?
+
+    nonisolated init(
+        textElement: NSTextElement,
+        range: NSTextRange?,
+        textView: MarkdownTextView
+    ) {
+        self.textView = textView
+        super.init(textElement: textElement, range: range)
+    }
+
+    nonisolated required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    nonisolated override var renderingSurfaceBounds: CGRect {
+        let defaultBounds = super.renderingSurfaceBounds
+        let fragment = UnsafeTransfer(value: self)
+        return MainActor.assumeIsolated {
+            guard let textView = fragment.value.textView else {
+                return defaultBounds
+            }
+            let fragmentFrame = fragment.value.layoutFragmentFrame
+            let fonts = [textView.font, MarkdownPresentation.editorBodyFont].compactMap { $0 }
+#if os(macOS)
+            let lineHeight = fonts.map { $0.ascender - $0.descender + $0.leading }.max() ?? 0
+#else
+            let lineHeight = fonts.map(\.lineHeight).max() ?? 0
+#endif
+            let verticalPadding = lineHeight * 0.3
+            let marksExtension = textView.markdownHistoryChanges.isEmpty
+                ? 0 : MarkdownHistoryMarks.surfaceExtension
+            let panelBounds = CGRect(
+                x: -fragmentFrame.minX - 3 - marksExtension,
+                y: -verticalPadding,
+                width: (fragment.value.textLayoutManager?.textContainer?.size.width ?? 0)
+                    + 3 + marksExtension,
+                height: fragmentFrame.height + 2 * verticalPadding
+            )
+            let sumBounds = MarkdownTimeCalculator.surfaceBounds(
+                of: fragment.value, textView: textView
+            ) ?? .null
+            return defaultBounds.union(panelBounds).union(sumBounds)
+        }
+    }
+
+    nonisolated override func draw(at point: CGPoint, in context: CGContext) {
+        let fragment = UnsafeTransfer(value: self)
+        let drawingContext = UnsafeTransfer(value: context)
+        MainActor.assumeIsolated {
+            if let textView = fragment.value.textView {
+                MarkdownPresentation.drawBlockBackgrounds(
+                    in: fragment.value,
+                    textView: textView,
+                    at: point,
+                    context: drawingContext.value
+                )
+                MarkdownHistoryMarks.draw(
+                    in: fragment.value,
+                    textView: textView,
+                    at: point,
+                    context: drawingContext.value
+                )
+                MarkdownTimeCalculator.draw(
+                    in: fragment.value,
+                    textView: textView,
+                    at: point,
+                    context: drawingContext.value
+                )
+            }
+        }
+        super.draw(at: point, in: context)
+    }
+}

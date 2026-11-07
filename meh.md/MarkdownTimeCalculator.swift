@@ -260,13 +260,14 @@ enum MarkdownTimeCalculator {
         let previous = textView.markdownTimeSums
         guard sums != previous else { return }
         textView.markdownTimeSums = sums
-        #if os(macOS)
-        textView.needsDisplay = true
-        #else
         // Each fragment draws its own result, so only changed lines redraw.
         guard let layoutManager = textView.textLayoutManager,
               let contentManager = layoutManager.textContentManager else { return }
+        #if os(macOS)
+        let source = textView.string as NSString
+        #else
         let source = textView.text as NSString
+        #endif
         let changed = Set(previous).symmetricDifference(sums).map(\.location)
         for location in Set(changed) where location < source.length {
             let line = source.lineRange(for: NSRange(location: location, length: 0))
@@ -275,9 +276,9 @@ enum MarkdownTimeCalculator {
                 contentManager: contentManager
             ) {
                 layoutManager.invalidateLayout(for: range)
+                textView.redrawMarkdownDecorations(for: range)
             }
         }
-        #endif
     }
 
     private struct Result {
@@ -352,19 +353,33 @@ enum MarkdownTimeCalculator {
         }
     }
 
-    #if os(macOS)
-    /// AppKit draws the background in one pass over the dirty area.
-    static func draw(in textView: MarkdownTextView, dirtyRect: CGRect) {
+    /// Where a fragment draws its results, relative to the fragment. A result
+    /// follows its `=`, so near the right edge it reaches past the text.
+    static func surfaceBounds(
+        of fragment: NSTextLayoutFragment, textView: MarkdownTextView
+    ) -> CGRect? {
         guard !textView.markdownTimeSums.isEmpty,
-              let layoutManager = textView.textLayoutManager,
-              let visible = MarkdownPresentation.visibleRange(in: layoutManager),
-              let context = NSGraphicsContext.current?.cgContext else { return }
-        let sums = textView.markdownTimeSums.filter { NSLocationInRange($0.location, visible) }
-        draw(results(for: sums, in: textView, layoutManager: layoutManager),
-             offset: textView.textContainerOrigin, context: context)
+              let layoutManager = fragment.textLayoutManager,
+              let range = MarkdownHistoryMarks.nsRange(of: fragment, in: layoutManager)
+        else { return nil }
+        let sums = textView.markdownTimeSums.filter { NSLocationInRange($0.location, range) }
+        guard !sums.isEmpty else { return nil }
+        let frame = fragment.layoutFragmentFrame
+        return results(for: sums, in: textView, layoutManager: layoutManager)
+            .map { result -> CGRect in
+                let width = (result.text as NSString)
+                    .size(withAttributes: [.font: result.font]).width
+                return CGRect(
+                    x: result.origin.x - frame.minX,
+                    y: result.origin.y - frame.minY - result.font.ascender,
+                    width: width,
+                    height: result.font.ascender - result.font.descender
+                )
+            }
+            .reduce(CGRect.null) { $0.union($1) }
     }
-    #else
-    /// UIKit draws each fragment on its own.
+
+    /// Each fragment draws the results on its own lines.
     static func draw(
         in fragment: NSTextLayoutFragment,
         textView: MarkdownTextView,
@@ -382,5 +397,4 @@ enum MarkdownTimeCalculator {
              offset: CGPoint(x: point.x - frame.minX, y: point.y - frame.minY),
              context: context)
     }
-    #endif
 }

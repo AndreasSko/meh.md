@@ -20,6 +20,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case longNote = "long-note"
     case snippets
     case markdownTour = "markdown-tour"
+    case rendering
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
@@ -49,6 +50,40 @@ enum NotebookUITestFixture: String, CaseIterable {
         Pastéis at four.
 
         """
+
+    /// Many screens of lists between prose, quotes, code and rules, so
+    /// TextKit only estimates most lines. Every item's first word names its
+    /// kind and its number is unique, for screenshots to find each one.
+    static let renderingJournal: String = {
+        let prose = "The fictional Cedar Observatory team measured the clouds "
+            + "above Lake Amber, with sentences long enough to wrap across "
+            + "the width of the editor."
+        let sections = (1...18).map { section in
+            var blocks = [
+                "# Field journal \(section)",
+                String(repeating: prose + " ", count: 1 + section % 3)
+                    .trimmingCharacters(in: .whitespaces),
+            ]
+            if section.isMultiple(of: 2) {
+                blocks.append("Items for section \(section):\n"
+                    + "- Amber lantern \(section)\n- Cedar basket \(section)")
+            } else {
+                blocks.append("- Amber lantern \(section)\n"
+                    + "- Blue compass \(section) with a long description that "
+                    + "wraps across several lines of the editor\n"
+                    + "- Cedar basket \(section)")
+            }
+            blocks.append(section.isMultiple(of: 3)
+                ? "> Patient observation \(section)\n> continues here."
+                : "```\nlet section = \(section)\n```")
+            blocks.append("---")
+            if section % 4 == 1 {
+                blocks.append("- [ ] Map \(section)\n- [x] Route \(section)")
+            }
+            return blocks.joined(separator: "\n\n")
+        }
+        return (sections + ["End of the journal."]).joined(separator: "\n\n") + "\n"
+    }()
 
     static let literalSource =
         "# Fictional voyage\n\nLiteral **Markdown** stays intact."
@@ -205,6 +240,13 @@ enum NotebookUITestFixture: String, CaseIterable {
         case .markdownTour:
             _ = try await replica.createNote(
                 name: "Lisbon in May.md", text: Self.markdownTourSource)
+        case .rendering:
+            _ = try await replica.createNote(
+                name: "Field journal.md", text: Self.renderingJournal)
+            _ = try await replica.createNote(
+                name: "Harbor log.md",
+                text: "# Harbor log\n\nThe ferry left on time.\n\n"
+                    + "- Amber lantern 90\n- Cedar basket 90\n")
         case .longNote:
             let paragraphs = (1...60).map {
                 "Paragraph \($0) of a fictional journal. The morning was quiet, "
