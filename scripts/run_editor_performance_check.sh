@@ -131,6 +131,14 @@ app_cache="${EDITOR_PERFORMANCE_APP_CACHE:-}"
 cache_helper="$repo_root/scripts/editor_performance_app_cache.py"
 compiler_flags=(-O -g -parse-as-library -swift-version 6
   -default-isolation MainActor -D ICLOUD_ENABLED -D ICLOUD_DEV)
+# Set by run_editor_coverage.py: build with coverage and keep the profiles,
+# the binary and the list of compiled files in this folder.
+coverage_root="${EDITOR_PERFORMANCE_COVERAGE:-}"
+package_flags=()
+if [[ -n "$coverage_root" ]]; then
+  compiler_flags+=(-profile-generate -profile-coverage-mapping -D EDITOR_COVERAGE)
+  package_flags=(-Xswiftc -profile-generate -Xswiftc -profile-coverage-mapping)
+fi
 if [[ "$scenario" == large-note ]]; then
   compiler_flags+=(-D LARGE_NOTE_PERFORMANCE)
   if [[ "$performance_host" == notebook ]]; then
@@ -163,7 +171,7 @@ if [[ "$cache_hit" == 0 ]]; then
   extra_arguments=("$repo_root/Tools/EditorQuoteCheck/EditorQuoteCheck.swift")
   if [[ "$scenario" == large-note ]] || rg -q "import NoteCore" "$check_root/sources"; then
     build_args=(--package-path "$repo_root" -c release --product NoteCore
-                --triple "$target" --sdk "$sdk")
+                --triple "$target" --sdk "$sdk" ${package_flags[@]+"${package_flags[@]}"})
     # SwiftPM compiles its manifest for macOS before targeting iOS.
     # Keep inherited simulator SDKROOT out of that host compilation.
     env -u SDKROOT swift build "${build_args[@]}"
@@ -175,7 +183,7 @@ if [[ "$cache_hit" == 0 ]]; then
   fi
   if grep -rqs "import MehWidgetData" "$check_root/sources"; then
     build_args=(--package-path "$repo_root" -c release --product MehWidgetData
-                --triple "$target" --sdk "$sdk")
+                --triple "$target" --sdk "$sdk" ${package_flags[@]+"${package_flags[@]}"})
     env -u SDKROOT swift build "${build_args[@]}"
     products="$(env -u SDKROOT swift build "${build_args[@]}" --show-bin-path)"
     extra_arguments+=(-I "$products" "$products/MehWidgetData.o")
@@ -187,6 +195,20 @@ if [[ "$cache_hit" == 0 ]]; then
     if [[ "$performance_host" != notebook ]]; then
       extra_arguments+=("$repo_root/meh.md/NotebookNoteEditor.swift")
     fi
+  fi
+  if [[ -n "$coverage_root" ]]; then
+    {
+      for source in "$check_root"/sources/*.swift; do
+        printf 'meh.md/%s\n' "${source##*/}"
+      done
+      for argument in "${extra_arguments[@]}"; do
+        case "$argument" in
+          "$repo_root"/*.swift) printf '%s\n' "${argument#"$repo_root"/}" ;;
+          */NoteCore.o) (cd "$repo_root" && find Sources/NoteCore -name '*.swift') ;;
+          */MehWidgetData.o) (cd "$repo_root" && find Sources/MehWidgetData -name '*.swift') ;;
+        esac
+      done
+    } > "$coverage_root/compiled.txt"
   fi
   CLANG_MODULE_CACHE_PATH="$check_root/module-cache" \
   SWIFT_MODULE_CACHE_PATH="$check_root/module-cache" \
@@ -221,6 +243,9 @@ echo "Resolving performance probe container"
 container="$(xcrun simctl get_app_container "$device" "$bundle_id" data)"
 report="$container/Documents/performance.json"
 rm -f "$report"
+if [[ -n "$coverage_root" ]]; then
+  export SIMCTL_CHILD_LLVM_PROFILE_FILE="$container/Documents/coverage-%p.profraw"
+fi
 echo "Launching performance probe: host=$performance_host, size=$blocks, mode=$mode"
 launch_output="$(
 SIMCTL_CHILD_EDITOR_PERFORMANCE_START_DELAY_SECONDS="${EDITOR_PERFORMANCE_START_DELAY_SECONDS:-0}" \
@@ -285,6 +310,12 @@ for name, samples in report["measurements"].items():
           f"max {max(samples):.2f} ms, n={len(samples)}")
 PY
     printf '%s\n' "$output"
+    if [[ -n "$coverage_root" ]]; then
+      # The probe writes its profile before the report.
+      mkdir -p "$coverage_root/profiles"
+      cp "$container"/Documents/coverage-*.profraw "$coverage_root/profiles/"
+      cp "$check_app/EditorQuoteCheck" "$coverage_root/EditorQuoteCheck"
+    fi
     # Diagnostic-only process lifetime, after every measurement and export.
     if ((keep_alive > 0)); then
       sleep "$keep_alive" & keep_alive_pid=$!

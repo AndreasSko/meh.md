@@ -2,6 +2,10 @@ name: Editor regressions and performance
 
 on:
   pull_request:
+  # A full timed run of every step on main, in case a PR skipped one it
+  # should not have.
+  schedule:
+    - cron: "17 5 * * *"
   workflow_dispatch:
     inputs:
       diagnostic_only:
@@ -18,12 +22,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  select:
+    name: Select editor performance steps
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostic_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Reads the nightly coverage index from editor-coverage.yml's artifact.
+      actions: read
+    outputs:
+      steps: ${{ steps.select.outputs.steps }}
+      any: ${{ steps.select.outputs.any }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          # The diff starts at the coverage index's commit or the merge base.
+          fetch-depth: 0
+      - name: Check the selection
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s scripts -p 'test_select_editor_steps.py'
+      - name: Pick steps from the diff and coverage
+        id: select
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$BASE" ]; then
+            python3 scripts/select_editor_steps.py --github-output --base "$BASE"
+          else
+            python3 scripts/select_editor_steps.py --github-output --all
+          fi
+
   # Regressions and performance share one runner, which keeps a macOS
   # runner free for the UI lanes. Together they still finish before the
   # iPhone UI lane.
   editor:
     name: Editor regressions and performance
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostic_only }}
+    needs: select
+    if: needs.select.outputs.any == 'true'
     runs-on: xcode-27
     timeout-minutes: 150
     steps:
@@ -35,6 +74,7 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_*native_editor_baseline_parity.py'
       - name: Check Mac formatting wheel input and editor drawing
         id: mac_editor
+        if: fromJSON(needs.select.outputs.steps).formatting
         env:
           EDITOR_RENDERING_ARTIFACTS: ${{ runner.temp }}/editor-rendering
         run: |
@@ -50,6 +90,7 @@ jobs:
           retention-days: 14
       - name: Run full native suite against recorded inventory
         id: native_parity
+        if: fromJSON(needs.select.outputs.steps).native
         # Allow broad runner variance
         # and cleanup while retaining a finite watchdog and all result gates.
         timeout-minutes: 45
@@ -66,7 +107,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 -m unittest discover -s scripts -p 'test_*performance*.py'
       - name: Guard large-document History in Swift
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && fromJSON(needs.select.outputs.steps).history }}
         env:
           MEH_HISTORY_BENCHMARK_EDITS: "600"
           MEH_HISTORY_BENCHMARK_LINES: "1800"
@@ -81,7 +122,7 @@ jobs:
             --filter 'NoteHistory(Tests|ReaderTests|PerformanceTests)' \
             2>&1 | tee "$RUNNER_TEMP/history-performance.log"
       - name: Guard 500 KB History in Swift
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && fromJSON(needs.select.outputs.steps).history }}
         env:
           MEH_HISTORY_BENCHMARK_EDITS: "600"
           MEH_HISTORY_BENCHMARK_LINES: "7460"
@@ -95,7 +136,7 @@ jobs:
           swift test -c release --filter NoteHistoryPerformanceTests \
             2>&1 | tee "$RUNNER_TEMP/history-performance-500kb.log"
       - name: Guard catalog responsiveness
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && fromJSON(needs.select.outputs.steps).catalog }}
         shell: bash
         run: |
           set -euo pipefail
@@ -105,13 +146,13 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/catalog-performance.log"
           python3 scripts/check_catalog_performance.py "$RUNNER_TEMP/catalog-performance.json"
       - name: Guard Unicode initial parsing
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && fromJSON(needs.select.outputs.steps).parser }}
         shell: bash
         run: |
           set -euo pipefail
           scripts/run_parser_performance_ci.sh
       - name: Run native editor probes
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && fromJSON(needs.select.outputs.steps).probes }}
         id: probe
         run: scripts/run_editor_performance_ci.sh
       - name: Preserve performance evidence

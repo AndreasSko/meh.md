@@ -62,10 +62,18 @@ run_case() {
     printf '%s runner failed with status %s\n' "$label" "$run_status" >&2
     return "$run_status"
   fi
+  [[ -z "$coverage" ]] || return 0
   python3 "$repo_root/scripts/check_editor_performance.py" "$report" \
     --size-kb "$size" --mode "$mode" --context "$context" \
     --host notebook --shape "$shape" 2>&1 | tee -a "$log" || return "$?"
 }
+
+# run_editor_coverage.py sets this to record which lines each workload runs.
+# Coverage slows the app down, so each workload runs once and no timing is
+# checked.
+coverage="${EDITOR_PERFORMANCE_COVERAGE:-}"
+runs=(1 2 3)
+[[ -z "$coverage" ]] || runs=(1)
 
 # Compile the current source once; all workloads reuse this binary.
 EDITOR_PERFORMANCE_APP_CACHE="$app_cache_root" \
@@ -85,12 +93,12 @@ record_case() {
   fi
 }
 current_arguments=()
-for run in 1 2 3; do
+for run in "${runs[@]}"; do
   label="standard-500kb-$run"
   current_arguments+=(--current-report "$evidence_root/$label.json")
   record_case "$label" 500 livePreview standard standard
 done
-if ! python3 "$repo_root/scripts/check_editor_performance.py" \
+if [[ -z "$coverage" ]] && ! python3 "$repo_root/scripts/check_editor_performance.py" \
   "$evidence_root/standard-500kb-1.json" --size-kb 500 --host notebook \
   --context standard --recorded-reference "${current_arguments[@]}" \
   2>&1 | tee "$evidence_root/recorded-comparison.log"; then

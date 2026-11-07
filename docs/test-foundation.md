@@ -149,6 +149,10 @@ and changes to lines with no line data, such as a `static let` table or
 a file of only declarations. A new file runs through the changed lines
 that use it, unless it declares one of those things itself.
 
+`scripts/coverage_selection.py` holds these line rules. The editor
+performance workflow uses them too, to skip benchmark steps (see
+[editor-performance.md](editor-performance.md#skipping-steps-a-pr-cannot-affect)).
+
 Most app changes still touch code that nearly every goal runs, such as
 startup and the root view, so they still run most goals. The savings are
 in narrower changes: a single screen, sync status, a widget-only change

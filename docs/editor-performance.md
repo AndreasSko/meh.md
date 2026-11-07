@@ -41,6 +41,45 @@ The current-only workflow needs fresh hosted timing before claiming a speedup.
 Probe-level timeouts and owned
 resource cleanup still bound individual operations and preserve evidence.
 
+## Skipping steps a PR cannot affect
+
+A full run takes about 80 minutes, but most PRs cannot slow down most
+steps: a benchmark only gets slower through code it runs. So a PR runs
+only the steps it can affect. The steps are the Mac formatting and
+drawing tests, the native suite, the two History benchmarks (one step),
+the catalog and parser benchmarks, and the native editor probes. Each runs whole or not
+at all; the native suite in particular is checked against its full
+inventory.
+
+Every night `editor-coverage.yml` runs each step once on `main` with code
+coverage, using the step's own build settings and workloads but no time
+budget. It saves which source lines each step ran as the
+`editor-coverage` artifact. A PR then runs a step when it changes a line
+that step ran. Changes to a step's own scripts, checks or fixtures run
+that step. The selection itself, the workflows, `Package.swift` and
+`Package.resolved` run every step. Docs, the Xcode project, UI tests and
+the widget extension run none, since no step builds them. A Swift change
+needs no step that compiles the same code from it as before, such as a
+comment edit or a Mac-only change for an iPhone step.
+
+The line rules are the same as for UI goals (see
+[test-foundation.md](test-foundation.md#picking-goals-from-coverage)):
+code that can run without a changed caller, such as a new initializer or
+conformance, runs the step. A step with no usable index runs on any Swift
+change. That covers a failed nightly coverage run, an old index format
+and an index that misses the step's anchor file.
+
+Line coverage is a good guide, not a proof: a change can also slow code
+down through optimization or layout without changing a line a step runs.
+So the whole workflow also runs every night on `main` with all budgets,
+to catch anything a PR skipped. Manual runs always run every step.
+
+`scripts/select_editor_steps.py` decides; a small job on Linux runs it
+and lists the reason for each file in the run summary. Locally,
+`scripts/select_editor_steps.py` prints the steps the working tree needs
+against the latest index from `main`. `scripts/run_editor_coverage.py`
+records the index.
+
 ## Measured bottlenecks and changes
 
 The parser previously searched every code range for each source position,
