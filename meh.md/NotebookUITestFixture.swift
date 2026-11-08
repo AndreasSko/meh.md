@@ -22,6 +22,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case markdownTour = "markdown-tour"
     case rendering
     case conflicts
+    case trees
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
@@ -264,6 +265,11 @@ enum NotebookUITestFixture: String, CaseIterable {
             #if !NOTEBOOK_PERFORMANCE_HOST
             try await seedReadme(replica)
             #endif
+        case .trees:
+            for name in ["Alder", "Birch", "Cedar", "Dogwood", "Elm", "Fir"] {
+                _ = try await replica.createNote(
+                    name: "\(name).md", text: "# \(name)\n\nNotes on the \(name.lowercased()).\n")
+            }
         case .conflicts:
             #if !NOTEBOOK_PERFORMANCE_HOST
             try await seedConflicts(replica)
