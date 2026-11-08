@@ -18,6 +18,12 @@ public final class NotebookSyncEventLog {
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored private var scheduledWrite: Task<Void, Never>?
 
+    /// While false, events stay in memory, for a process that doesn't own
+    /// the notebook folder. Turning it on writes the pending events.
+    public var isPersistent = true {
+        didSet { if isPersistent && !oldValue { scheduleWrite() } }
+    }
+
     private static let writeDelay: Duration = .milliseconds(500)
 
     public init(directory: URL) {
@@ -88,6 +94,7 @@ public final class NotebookSyncEventLog {
     public func flush() async {
         scheduledWrite?.cancel()
         scheduledWrite = nil
+        guard isPersistent else { return }
         while true {
             let currentGeneration = generation
             let data: Data
@@ -154,6 +161,7 @@ public final class NotebookSyncEventLog {
     private func scheduleWrite() {
         generation &+= 1
         scheduledWrite?.cancel()
+        guard isPersistent else { return }
         scheduledWrite = Task { [weak self] in
             do {
                 try await Task.sleep(for: Self.writeDelay)
