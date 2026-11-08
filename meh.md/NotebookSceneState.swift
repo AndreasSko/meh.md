@@ -674,17 +674,14 @@ final class NotebookSceneState {
         }
     }
 
-    /// A single Files row left selected from the previous note would keep
-    /// looking current, and arrow keys would start from it.
     private func dropStaleBrowserSelection(openingNote id: UUID, linkVisit: Bool) {
-        guard !selectingItems, browserSelection.count == 1,
-              !browserSelection.contains(id) else { return }
+        guard !selectingItems else { return }
         #if os(iOS)
         // Changing the sidebar List selection resets the note column's link
         // stack. Compact Files clears its selection on return anyway.
         guard !linkVisit, !isCompact else { return }
         #endif
-        browserSelection.clear()
+        browserSelection.noteOpened(id)
     }
 
     func perform(

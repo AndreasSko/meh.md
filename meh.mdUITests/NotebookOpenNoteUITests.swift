@@ -19,8 +19,6 @@ final class NotebookOpenNoteUITests: XCTestCase {
         XCTAssertTrue(waitForValue(of: journal, notContaining: "Current note"))
     }
 
-    // On iPad, Command-tap replaces the selection until #312 lands.
-    #if os(macOS)
     func testEmptySpaceFirstClearsOtherSelectedRows() throws {
         let app = launch()
         let journal = row(titled: "Field journal", in: app)
@@ -43,7 +41,84 @@ final class NotebookOpenNoteUITests: XCTestCase {
         clickEmptySpace(in: app)
         XCTAssertTrue(app.staticTexts["Select a note"].waitForExistence(timeout: 5))
     }
+
+    #if os(iOS)
+    /// The steps of a screen recording from an iPad with a keyboard. The
+    /// first Command-clicked row used to start a new selection without the
+    /// open note, and after Done the note's row stayed gray for good.
+    func testDoneLeavesOnlyTheOpenNoteMarked() throws {
+        let app = launch(fixture: "trees")
+        let alder = row(titled: "Alder", in: app)
+        let birch = row(titled: "Birch", in: app)
+        let cedar = row(titled: "Cedar", in: app)
+        let dogwood = row(titled: "Dogwood", in: app)
+        let elm = row(titled: "Elm", in: app)
+        for row in [alder, birch, cedar] { title(of: row, in: app).click() }
+        XCTAssertTrue(waitForEditor(in: app, prefix: "# Cedar"))
+
+        let alderTitle = title(of: alder, in: app)
+        XCUIElement.perform(withKeyModifiers: .command) { alderTitle.click() }
+        XCTAssertTrue(app.buttons["2 selected"].waitForExistence(timeout: 5),
+                      "Command-click left out the open note")
+        let birchTitle = title(of: birch, in: app)
+        XCUIElement.perform(withKeyModifiers: .command) { birchTitle.click() }
+        XCTAssertTrue(app.buttons["3 selected"].waitForExistence(timeout: 5))
+        capture(app, name: "Open note and two rows selected")
+        app.buttons["notebook-selection-done"].tap()
+        XCTAssertTrue(app.buttons["3 selected"].waitForNonExistence(timeout: 5))
+
+        for (row, prefix) in [(dogwood, "# Dogwood"), (elm, "# Elm")] {
+            title(of: row, in: app).click()
+            XCTAssertTrue(waitForEditor(in: app, prefix: prefix))
+            XCTAssertTrue(waitForValue(of: row, containing: "Current note"))
+            let plain = fill(of: alder)
+            XCTAssertEqual(fill(of: cedar), plain, "The earlier note's row stayed gray")
+            XCTAssertNotEqual(fill(of: row), plain, "The open note's row isn't marked")
+        }
+        capture(app, name: "Only the open note marked")
+    }
     #endif
+
+    // On iPad the test runner delivers this Command-click above the row.
+    #if os(macOS)
+    func testCommandClickAddsToANoteOpenedElsewhere() throws {
+        let app = launch()
+        activate(app.newNoteButton)
+        let field = app.textFields["title-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        #if os(macOS)
+        field.typeKey("a", modifierFlags: .command)
+        #endif
+        field.typeText("Tide table\n")
+        let tide = row(titled: "Tide table", in: app)
+        XCTAssertTrue(waitForValue(of: tide, containing: "Current note"))
+
+        let harborTitle = title(of: row(titled: "Harbor log", in: app), in: app)
+        XCUIElement.perform(withKeyModifiers: .command) { harborTitle.click() }
+        XCTAssertTrue(app.buttons["2 selected"].waitForExistence(timeout: 5),
+                      "Command-click left out the open note")
+        XCTAssertTrue(title(of: tide, in: app).isSelected)
+    }
+    #endif
+
+    func testClickBesideTheFooterFaceClosesTheNote() throws {
+        let app = launch()
+        let journal = row(titled: "Field journal", in: app)
+        activate(journal)
+        XCTAssertTrue(waitForEditor(in: app, prefix: "# Field journal"))
+
+        let footer = app.descendants(matching: .any)["notebook-library-footer"]
+        XCTAssertTrue(footer.waitForExistence(timeout: 5))
+        #if os(macOS)
+        // The Mac footer's accessibility frame hugs the face and the count.
+        footer.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+            .withOffset(CGVector(dx: -12, dy: 0)).click()
+        #else
+        footer.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
+        #endif
+        XCTAssertTrue(app.staticTexts["Select a note"].waitForExistence(timeout: 5),
+                      "A click on the footer kept the note open")
+    }
 
     func testNewNoteBecomesTheCurrentFilesRow() throws {
         let app = launch()
@@ -104,7 +179,7 @@ final class NotebookOpenNoteUITests: XCTestCase {
     }
     #endif
 
-    private func launch() -> XCUIApplication {
+    private func launch(fixture: String = "rendering") -> XCUIApplication {
         continueAfterFailure = false
         #if os(iOS)
         // The note and Files stay side by side only in landscape. Other
@@ -116,7 +191,7 @@ final class NotebookOpenNoteUITests: XCTestCase {
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] =
             "open-note-\(UUID().uuidString)"
-        app.launchEnvironment["MEH_NOTEBOOK_TEST_FIXTURE"] = "rendering"
+        app.launchEnvironment["MEH_NOTEBOOK_TEST_FIXTURE"] = fixture
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "source"]
         app.launch()
@@ -138,6 +213,27 @@ final class NotebookOpenNoteUITests: XCTestCase {
         emptySpace(in: app).tap()
         #endif
     }
+
+    #if os(iOS)
+    /// The color of a row's background at its trailing end, past its title.
+    private func fill(of row: XCUIElement) -> [UInt8] {
+        let screenshot = row.screenshot()
+        guard let image = screenshot.image.cgImage else { return [] }
+        let x = CGFloat(image.width) - 4 * screenshot.image.scale
+        let y = CGFloat(image.height) / 2
+        var pixel = [UInt8](repeating: 0, count: 4)
+        pixel.withUnsafeMutableBytes { bytes in
+            let context = CGContext(
+                data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            context?.draw(image, in: CGRect(
+                x: -x, y: y - CGFloat(image.height),
+                width: CGFloat(image.width), height: CGFloat(image.height)))
+        }
+        return Array(pixel.prefix(3))
+    }
+    #endif
 
     private func capture(_ app: XCUIApplication, name: String) {
         #if os(macOS)

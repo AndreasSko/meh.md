@@ -127,6 +127,103 @@ final class NotebookBrowserSelectionTests: XCTestCase {
         XCTAssertTrue(selection.isEmpty)
     }
 
+    func testCommandAndShiftClicksStartFromTheOpenNote() {
+        let fourth = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
+        let order = [first, second, third, fourth]
+        var selection = NotebookBrowserSelection()
+
+        // The note was opened from Recents or with a plain click on iPad,
+        // so nothing is selected yet.
+        selection.click(first, .command, proposed: [first], in: order, openNoteID: third)
+        XCTAssertEqual(selection.selectedIDs, [first, third])
+
+        selection.clear()
+        selection.click(first, .shift, proposed: [first], in: order, openNoteID: third)
+        XCTAssertEqual(selection.selectedIDs, [first, second, third])
+        XCTAssertEqual(selection.anchorID, third)
+
+        // Command-clicking the open note itself leaves nothing selected.
+        selection.clear()
+        selection.click(third, .command, proposed: [third], in: order, openNoteID: third)
+        XCTAssertTrue(selection.isEmpty)
+
+        // An existing selection, or a plain click, doesn't add the note.
+        selection.click(fourth, .command, proposed: [fourth], in: order)
+        selection.click(first, .command, proposed: [first], in: order, openNoteID: third)
+        XCTAssertEqual(selection.selectedIDs, [first, fourth])
+        selection.clear()
+        selection.click(first, .plain, proposed: [first], in: order, openNoteID: third)
+        XCTAssertEqual(selection.selectedIDs, [first])
+    }
+
+    func testOpenNoteOutsideTheVisibleRowsIsNotAdded() {
+        let order = [first, second]
+        var selection = NotebookBrowserSelection()
+        selection.click(first, .command, proposed: [first], in: order, openNoteID: third)
+        XCTAssertEqual(selection.selectedIDs, [first])
+    }
+
+    func testRejectedClickLeavesTheSelectionAndAnchorAlone() {
+        let order = [first, second, third]
+        var selection = NotebookBrowserSelection()
+        selection.activate(second)
+
+        XCTAssertFalse(selection.click(first, .command, proposed: [second],
+                                       in: order, openNoteID: third))
+        XCTAssertTrue(selection.isEmpty)
+        XCTAssertEqual(selection.anchorID, second)
+    }
+
+    func testPlainActivationLeavesABatchButKeepsASingleRow() {
+        var selection = NotebookBrowserSelection()
+        selection.selectAll([first, second])
+        selection.activate(third)
+        XCTAssertEqual(selection.selectedIDs, [third])
+        XCTAssertEqual(selection.anchorID, third)
+
+        selection.activate(first)
+        XCTAssertEqual(selection.selectedIDs, [third])
+        XCTAssertEqual(selection.anchorID, first)
+    }
+
+    func testOpeningANoteDropsOnlyAStaleSingleRow() {
+        var selection = NotebookBrowserSelection()
+        selection.selectOnly(first)
+        selection.noteOpened(first)
+        XCTAssertEqual(selection.selectedIDs, [first])
+        selection.noteOpened(second)
+        XCTAssertTrue(selection.isEmpty)
+
+        selection.selectAll([first, second])
+        selection.noteOpened(third)
+        XCTAssertEqual(selection.selectedIDs, [first, second])
+    }
+
+    func testEmptySpaceClearsOtherRowsBeforeClosingTheNote() {
+        var selection = NotebookBrowserSelection()
+        selection.selectAll([first, second])
+        XCTAssertFalse(selection.clickEmptySpace(openNoteID: first))
+        XCTAssertTrue(selection.isEmpty)
+        XCTAssertTrue(selection.clickEmptySpace(openNoteID: first))
+
+        selection.selectOnly(first)
+        XCTAssertTrue(selection.clickEmptySpace(openNoteID: first))
+        XCTAssertTrue(selection.isEmpty)
+
+        XCTAssertFalse(selection.clickEmptySpace(openNoteID: nil))
+    }
+
+    func testHighlightShowsTheOpenNoteUnlessItIsSelected() {
+        var selection = NotebookBrowserSelection()
+        XCTAssertEqual(selection.highlight(of: first, openNoteID: first), .open)
+        XCTAssertEqual(selection.highlight(of: second, openNoteID: first), .none)
+
+        selection.selectAll([first, second])
+        XCTAssertEqual(selection.highlight(of: first, openNoteID: first), .selected)
+        XCTAssertEqual(selection.highlight(of: second, openNoteID: first), .selected)
+        XCTAssertEqual(selection.highlight(of: third, openNoteID: nil), .none)
+    }
+
     func testAnchorClearsWithTheSelectionOrItsRow() {
         var selection = NotebookBrowserSelection()
         selection.toggle(first)

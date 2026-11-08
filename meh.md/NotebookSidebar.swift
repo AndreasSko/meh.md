@@ -290,6 +290,7 @@ private struct NotebookLibraryBrowser: View {
     let isCompact: Bool
     @Environment(\.openWindow) private var openWindow
     @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
+    @Environment(\.mehPalette) private var palette
     @State private var notice: NotebookNoticeRequest?
     @State private var frame: CGRect = .zero
 
@@ -624,10 +625,7 @@ private struct NotebookLibraryBrowser: View {
                     .tag(row.id)
                     .id(row.id)
                     .listRowSeparator(.hidden)
-                    // A custom background also hides the native selected fill.
-                    .listRowBackground(scene.browserSelection.contains(row.id) ? nil
-                        : row.id == scene.selectedID ? NotebookSidebarPalette.openNote
-                        : Color.clear)
+                    .listRowBackground(rowBackground(for: row.id))
                     .listRowInsets(sidebarSectionInsets)
             case .ghost(let placement, let parentID, let depth):
                 NotebookGhostRow(scene: scene, placement: placement, parentID: parentID, depth: depth)
@@ -636,6 +634,23 @@ private struct NotebookLibraryBrowser: View {
                     .listRowBackground(Color.clear)
                     .listRowInsets(sidebarSectionInsets)
             }
+        }
+    }
+
+    /// A custom background also hides the native selected fill.
+    private func rowBackground(for id: UUID) -> Color? {
+        switch scene.browserSelection.highlight(of: id, openNoteID: scene.selectedID) {
+        case .selected:
+            #if os(iOS)
+            // On iPad a row that drops its custom background for the native
+            // fill keeps showing the first custom background it gets back,
+            // such as the open note's gray. The sidebar's native fill is the
+            // tint, so paint that; compact width shows no open note.
+            if !isCompact { return palette.accentColor ?? .accentColor }
+            #endif
+            return nil
+        case .open: return NotebookSidebarPalette.openNote
+        case .none: return .clear
         }
     }
 
@@ -666,18 +681,30 @@ private struct NotebookLibraryBrowser: View {
                     activeTree
                         .opacity(hidesCompactRows ? 0 : 1)
                         .accessibilityHidden(hidesCompactRows)
-                    NotebookLibraryFooter(noteCount: scene.activeNoteCount)
+                    NotebookLibraryFooter(noteCount: scene.activeNoteCount) {
+                        scene.browserDrag.faceFrame = $0
+                    }
                         .opacity(hidesCompactRows ? 0 : 1)
                         .accessibilityHidden(hidesCompactRows)
-                        .onGeometryChange(for: CGRect.self) {
-                            $0.frame(in: .global)
-                        } action: { scene.browserDrag.footerFrame = $0 }
-                        .onDisappear { scene.browserDrag.footerFrame = .zero }
+                        .onDisappear { scene.browserDrag.faceFrame = .zero }
+                        #if os(iOS)
+                        // The empty-space tap only sees touches between
+                        // rows, and the footer is a row. The face keeps its
+                        // own tap.
+                        .contentShape(Rectangle())
+                        .onTapGesture { scene.clickBrowserEmptySpace() }
+                        #endif
                         .contextMenu {
                             if scene.editingID == nil {
                                 NotebookEmptySpaceActions(scene: scene)
                             }
                         }
+                        // Row modifiers inside the wrappers above don't
+                        // reach the List, which then draws a separator.
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .selectionDisabled()
                 }
             } header: {
                 NotebookSectionToggle(

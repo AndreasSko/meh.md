@@ -4,6 +4,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
+typealias NotebookRowAnchorView = NSView
+#else
+import UIKit
+typealias NotebookRowAnchorView = UIView
 #endif
 
 extension UTType {
@@ -16,27 +20,27 @@ final class NotebookBrowserDragState {
     var target: NotebookBrowserDropTarget?
     @ObservationIgnored var rowFrames: [UUID: CGRect] = [:]
     @ObservationIgnored var filesHeaderFrame: CGRect = .zero
-    @ObservationIgnored var footerFrame: CGRect = .zero
+    @ObservationIgnored var faceFrame: CGRect = .zero
     #if os(macOS)
     @ObservationIgnored weak var scrollView: NSScrollView?
     @ObservationIgnored weak var dropSurface: NSView?
+    #endif
     @ObservationIgnored private var rowAnchors: [UUID: WeakRowAnchor] = [:]
 
     private final class WeakRowAnchor {
-        weak var view: NSView?
+        weak var view: NotebookRowAnchorView?
 
-        init(_ view: NSView) { self.view = view }
+        init(_ view: NotebookRowAnchorView) { self.view = view }
     }
 
-    func registerRowAnchor(_ view: NSView, for itemID: UUID) {
+    func registerRowAnchor(_ view: NotebookRowAnchorView, for itemID: UUID) {
         rowAnchors[itemID] = WeakRowAnchor(view)
     }
 
-    func unregisterRowAnchor(_ view: NSView, for itemID: UUID) {
+    func unregisterRowAnchor(_ view: NotebookRowAnchorView, for itemID: UUID) {
         guard rowAnchors[itemID]?.view === view else { return }
         rowAnchors.removeValue(forKey: itemID)
     }
-    #endif
     @ObservationIgnored private var provider: NSItemProvider?
     @ObservationIgnored private(set) var latestToken: UUID?
     @ObservationIgnored var isSessionActive = false
@@ -59,6 +63,12 @@ final class NotebookBrowserDragState {
                       y: content.isFlipped ? frame.minY : content.bounds.height - frame.maxY,
                       width: frame.width, height: frame.height)
         #else
+        // A cell can move without its SwiftUI contents reporting a new
+        // frame, such as when a row above it is added.
+        if let anchor = rowAnchors[itemID]?.view, anchor.window != nil {
+            let frame = anchor.convert(anchor.bounds, to: nil)
+            if !frame.isEmpty { return frame }
+        }
         return rowFrames[itemID]
         #endif
     }
@@ -130,6 +140,7 @@ private struct NotebookBrowserRowGeometry: ViewModifier {
         content.background(NotebookBrowserAppKitRowAnchor(itemID: itemID, state: state))
         #else
         content
+            .background(NotebookBrowserUIKitRowAnchor(itemID: itemID, state: state))
             .onGeometryChange(for: CGRect.self) {
                 $0.frame(in: .global)
             } action: { frame in

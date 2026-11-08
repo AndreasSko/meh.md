@@ -36,6 +36,8 @@ final class NotebookUITestFixtureTests: XCTestCase {
             case .longNote: expected = ["Island journal.md"]
             case .markdownTour: expected = ["Lisbon in May.md"]
             case .rendering: expected = ["Field journal.md", "Harbor log.md"]
+            case .trees:
+                expected = ["Alder", "Birch", "Cedar", "Dogwood", "Elm", "Fir"].map { $0 + ".md" }
             case .readme:
                 expected = ["Inbox", "Projects", "Areas", "Resources", "Archive"]
             case .snippets: expected = ["Snippets", "Training log.md"]

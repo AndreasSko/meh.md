@@ -3,6 +3,61 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+/// Finds a row's current frame from its cell, which UIKit can move without
+/// laying out the row's SwiftUI contents.
+struct NotebookBrowserUIKitRowAnchor: UIViewRepresentable {
+    let itemID: UUID
+    let state: NotebookBrowserDragState
+
+    func makeUIView(context: Context) -> AnchorView {
+        let view = AnchorView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        view.configure(itemID: itemID, state: state)
+        return view
+    }
+
+    func updateUIView(_ view: AnchorView, context: Context) {
+        view.configure(itemID: itemID, state: state)
+    }
+
+    static func dismantleUIView(_ view: AnchorView, coordinator: ()) {
+        view.disconnect()
+    }
+
+    final class AnchorView: UIView {
+        private weak var state: NotebookBrowserDragState?
+        private var itemID: UUID?
+
+        func configure(itemID: UUID, state: NotebookBrowserDragState) {
+            if self.itemID != itemID || self.state !== state { disconnect() }
+            self.itemID = itemID
+            self.state = state
+            connect()
+        }
+
+        func disconnect() {
+            if let itemID { state?.unregisterRowAnchor(self, for: itemID) }
+            itemID = nil
+            state = nil
+        }
+
+        private func connect() {
+            guard let itemID else { return }
+            if window != nil {
+                state?.registerRowAnchor(self, for: itemID)
+            } else {
+                state?.unregisterRowAnchor(self, for: itemID)
+            }
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            connect()
+        }
+    }
+}
+
 /// The collection view owns the destination while SwiftUI keeps its rows,
 /// selection, menus, and drag source. One delegate handles the whole tree.
 /// It also reports taps, since SwiftUI rows don't cover the empty space.
@@ -175,7 +230,7 @@ struct NotebookBrowserUIKitDropReader: UIViewRepresentable {
                 providerCount: providers.count, commit: interaction.commit
             )
             state.reset()
-            let previewPoint = target.rowID.flatMap { state.rowFrames[$0]?.center }
+            let previewPoint = target.rowID.flatMap { state.rowFrame(for: $0)?.center }
                 ?? point
             for item in coordinator.items {
                 coordinator.drop(
