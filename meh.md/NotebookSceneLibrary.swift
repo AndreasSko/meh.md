@@ -297,20 +297,24 @@ extension NotebookSceneState {
     func isBrowserEmptySpace(_ point: CGPoint) -> Bool {
         let header = browserDrag.filesHeaderFrame
         guard browserDropViewportFrame.contains(point), !header.isEmpty,
-              point.y > header.maxY, !browserDrag.footerFrame.contains(point)
+              point.y > header.maxY, !browserDrag.faceFrame.contains(point)
         else { return false }
         return !visibleActiveRows.contains {
             browserDrag.rowFrame(for: $0.id)?.contains(point) == true
         }
     }
 
-    /// Works like Finder: a click on empty space first drops a selection of
-    /// other rows, and once only the open note is left, closes that note.
     /// The platform readers call this before the List deselects natively.
     func clickBrowserEmptySpace(at point: CGPoint) {
+        guard isBrowserEmptySpace(point) else { return }
+        clickBrowserEmptySpace()
+    }
+
+    /// Works like Finder: a click on empty space first drops a selection of
+    /// other rows, and once only the open note is left, closes that note.
+    func clickBrowserEmptySpace() {
         guard !busy, !isCompact, !selectingItems, editingID == nil,
-              !search.isPresented, !browserDrag.isSessionActive,
-              isBrowserEmptySpace(point) else { return }
+              !search.isPresented, !browserDrag.isSessionActive else { return }
         let openNote: Set<UUID> = selectedID.map { [$0] } ?? []
         if !browserSelection.isEmpty, browserSelection.selectedIDs != openNote {
             browserSelection.clear()

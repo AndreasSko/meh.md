@@ -666,18 +666,30 @@ private struct NotebookLibraryBrowser: View {
                     activeTree
                         .opacity(hidesCompactRows ? 0 : 1)
                         .accessibilityHidden(hidesCompactRows)
-                    NotebookLibraryFooter(noteCount: scene.activeNoteCount)
+                    NotebookLibraryFooter(noteCount: scene.activeNoteCount) {
+                        scene.browserDrag.faceFrame = $0
+                    }
                         .opacity(hidesCompactRows ? 0 : 1)
                         .accessibilityHidden(hidesCompactRows)
-                        .onGeometryChange(for: CGRect.self) {
-                            $0.frame(in: .global)
-                        } action: { scene.browserDrag.footerFrame = $0 }
-                        .onDisappear { scene.browserDrag.footerFrame = .zero }
+                        .onDisappear { scene.browserDrag.faceFrame = .zero }
+                        #if os(iOS)
+                        // The empty-space tap only sees touches between
+                        // rows, and the footer is a row. The face keeps its
+                        // own tap.
+                        .contentShape(Rectangle())
+                        .onTapGesture { scene.clickBrowserEmptySpace() }
+                        #endif
                         .contextMenu {
                             if scene.editingID == nil {
                                 NotebookEmptySpaceActions(scene: scene)
                             }
                         }
+                        // Row modifiers inside the wrappers above don't
+                        // reach the List, which then draws a separator.
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .selectionDisabled()
                 }
             } header: {
                 NotebookSectionToggle(

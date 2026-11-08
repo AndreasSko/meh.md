@@ -66,10 +66,14 @@ struct NotebookFolderIcon: View {
 /// one face you see every day that also changes its mood on tap.
 struct NotebookLibraryFooter: View {
     let noteCount: Int
+    var faceFrameChanged: (CGRect) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 2) {
             MehFace(mood: .neutral, size: 17)
+                .onGeometryChange(for: CGRect.self) {
+                    $0.frame(in: .global)
+                } action: { faceFrameChanged($0) }
             Text(noteCount == 1 ? "1 note" : "\(noteCount) notes")
         }
         .font(.footnote)
@@ -78,10 +82,6 @@ struct NotebookLibraryFooter: View {
         .padding(.top, 16)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("notebook-library-footer")
-        .listRowInsets(EdgeInsets())
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
-        .selectionDisabled()
     }
 }
 
