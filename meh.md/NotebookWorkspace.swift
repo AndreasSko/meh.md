@@ -15,6 +15,8 @@ import NoteCoreAWS
 import Observation
 #if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
 #endif
 
 /// Time sources for sync scheduling and retry deadlines, so app-model tests
@@ -245,7 +247,11 @@ final class NotebookWorkspace {
     private(set) var syncRetryNotBefore: Date?
     private(set) var lastSuccessfulSync: Date?
     @ObservationIgnored private var statusSyncRequestInFlight = false
-    @ObservationIgnored lazy var syncEventLog = NotebookSyncEventLog(directory: directory)
+    @ObservationIgnored lazy var syncEventLog: NotebookSyncEventLog = {
+        let log = NotebookSyncEventLog(directory: directory)
+        log.isPersistent = !claimsDirectory || ownsDirectory
+        return log
+    }()
     private var syncMonitor: Task<Void, Never>?
     private var slowSyncIndicator: Task<Void, Never>?
     private(set) var recoveryAction: RecoveryAction?
@@ -277,6 +283,16 @@ final class NotebookWorkspace {
     @ObservationIgnored var storagePollInterval: Duration = .seconds(60)
     @ObservationIgnored private var transportFactory:
         (@MainActor (String?) async throws -> any SyncTransport)?
+    /// Two copies of the Mac app would overwrite each other's sync state,
+    /// so the Mac claims the notebook folder first. iOS runs one process per
+    /// app. App-model tests open many isolated notebooks in one process and
+    /// would only collect lock files.
+    #if os(macOS)
+    @ObservationIgnored private var claimsDirectory = true
+    #else
+    @ObservationIgnored private var claimsDirectory = false
+    #endif
+    @ObservationIgnored private var ownsDirectory = false
 #if DEBUG
     @ObservationIgnored private var didSeedPreviewRetryFixture = false
 #endif
@@ -648,6 +664,7 @@ final class NotebookWorkspace {
         self.mode = mode ?? .development(URL(string: "http://127.0.0.1")!, "model-test")
         notebookTransport = transport
         self.transportFactory = transportFactory
+        claimsDirectory = false
     }
 
     isolated deinit {
@@ -795,6 +812,18 @@ final class NotebookWorkspace {
             // Reject malformed test requests before reset or disk/network work.
             if case .invalid = mode {
                 throw SyncError.unavailable("Set a valid isolated test workspace.")
+            }
+            // Claim the notebook before reset or any other disk work.
+            if claimsDirectory, !ownsDirectory {
+                do { try NotebookDirectoryLock.claim(directory) }
+                catch is NotebookDirectoryLock.InUse {
+                    #if os(macOS)
+                    if Self.handOffToRunningCopy() { return }
+                    #endif
+                    throw NotebookDirectoryLock.InUse()
+                }
+                ownsDirectory = true
+                syncEventLog.isPersistent = true
             }
             // Run before opening documents or starting any sync/save tasks.
             if replica == nil, UserDefaults.standard.bool(forKey: "meh.md.resetLocalStorage") {
@@ -974,6 +1003,25 @@ final class NotebookWorkspace {
             errorMessage = error.localizedDescription
         }
     }
+
+#if os(macOS)
+    /// Brings another running copy of this app to the front and quits this
+    /// one. Returns false when no such copy is running.
+    static func handOffToRunningCopy() -> Bool {
+        let current = NSRunningApplication.current
+        guard let identifier = current.bundleIdentifier,
+              let other = NSRunningApplication.runningApplications(
+                withBundleIdentifier: identifier
+              ).first(where: {
+                  $0.processIdentifier != current.processIdentifier
+                      && !$0.isTerminated
+              })
+        else { return false }
+        other.activate()
+        NSApplication.shared.terminate(nil)
+        return true
+    }
+    #endif
 
     private var syncTime: Duration { syncClock.elapsed() }
 

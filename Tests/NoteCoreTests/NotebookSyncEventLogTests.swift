@@ -53,6 +53,29 @@ final class NotebookSyncEventLogTests: XCTestCase {
         XCTAssertEqual(reopened.entries.last?.counts["index"], 504)
     }
 
+    func testNonPersistentLogWritesOnlyOnceTurnedOn() async throws {
+        let root = directory()
+        let writeCount = LockedCounter()
+        let log = NotebookSyncEventLog(directory: root) { data, url in
+            writeCount.increment()
+            try SyncFileIO.replace(data, at: url)
+        }
+        log.isPersistent = false
+        log.record("before")
+        await log.flush()
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertEqual(writeCount.value, 0)
+        XCTAssertEqual(log.entries.map(\.event), ["before"])
+
+        log.isPersistent = true
+        log.record("after")
+        await log.flush()
+        XCTAssertEqual(
+            NotebookSyncEventLog(directory: root).entries.map(\.event),
+            ["before", "after"]
+        )
+    }
+
     func testClearDuringQueuedWriteCannotBeUndoneByOldSnapshot() async {
         let root = directory()
         let started = expectation(description: "first write started")
