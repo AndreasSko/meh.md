@@ -40,7 +40,14 @@ struct NotebookBrowserViewport: Equatable {
     let size: CGSize
 }
 
-final class NotebookBrowserScrollReference {
+final class NotebookBrowserScrollReference: NSObject {
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(focusUpdated),
+            name: UIFocusSystem.didUpdateNotification, object: nil)
+    }
+
     weak var value: UIScrollView? {
         didSet {
             guard value !== oldValue else { return }
@@ -53,8 +60,20 @@ final class NotebookBrowserScrollReference {
     /// to a click that selected nothing, such as on a disclosure button.
     private var click: (kind: NotebookBrowserSelection.Click, location: CGPoint,
                         endedAt: ContinuousClock.Instant?)?
+    /// The row last clicked or tapped, which shows no focus ring.
+    private var quietCell: (cell: UICollectionViewCell, effect: UIFocusEffect?)?
     private lazy var clickRecorder = NotebookBrowserClickRecorder(
-        began: { [weak self] modifiers, location in
+        began: { [weak self] modifiers, location, cell in
+            // With a keyboard attached, a click or tap focuses the row and
+            // selects it in UIKit before the List passes the selection on.
+            // The row's own background hides that fill, so only the focus
+            // ring would flash. The cell gets its ring back once it loses
+            // focus.
+            if let cell, cell !== self?.quietCell?.cell {
+                self?.quietCell.map { $0.cell.focusEffect = $0.effect }
+                self?.quietCell = (cell, cell.focusEffect)
+                cell.focusEffect = nil
+            }
             let kind: NotebookBrowserSelection.Click = modifiers.contains(.shift) ? .shift
                 : modifiers.contains(.command) ? .command : .plain
             self?.click = (kind, location, nil)
@@ -63,6 +82,12 @@ final class NotebookBrowserScrollReference {
             if cancelled { self?.click = nil } else { self?.click?.endedAt = .now }
         }
     )
+
+    @objc private func focusUpdated() {
+        guard let quietCell, !quietCell.cell.isFocused else { return }
+        quietCell.cell.focusEffect = quietCell.effect
+        self.quietCell = nil
+    }
 
     /// The current click, or one that ended within the last half second.
     var pendingClick: (kind: NotebookBrowserSelection.Click, location: CGPoint)? {
@@ -102,10 +127,10 @@ final class NotebookBrowserScrollReference {
 /// of extending it. Notes each touch's modifiers without taking part in it.
 private final class NotebookBrowserClickRecorder: UIGestureRecognizer,
     UIGestureRecognizerDelegate {
-    private let began: (UIKeyModifierFlags, CGPoint) -> Void
+    private let began: (UIKeyModifierFlags, CGPoint, UICollectionViewCell?) -> Void
     private let ended: (_ cancelled: Bool) -> Void
 
-    init(began: @escaping (UIKeyModifierFlags, CGPoint) -> Void,
+    init(began: @escaping (UIKeyModifierFlags, CGPoint, _ cell: UICollectionViewCell?) -> Void,
          ended: @escaping (_ cancelled: Bool) -> Void) {
         self.began = began
         self.ended = ended
@@ -123,7 +148,9 @@ private final class NotebookBrowserClickRecorder: UIGestureRecognizer,
             state = .failed
             return
         }
-        began(event.modifierFlags, touch.location(in: nil))
+        var cell = touch.view
+        while let view = cell, !(view is UICollectionViewCell) { cell = view.superview }
+        began(event.modifierFlags, touch.location(in: nil), cell as? UICollectionViewCell)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
