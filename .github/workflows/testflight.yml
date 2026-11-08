@@ -5,7 +5,12 @@ on:
   push:
     branches: [main]
     # Every merge that can change the app becomes a build.
-    paths-ignore: ['docs/**', '**/*.md', 'Tools/AppStore/**']
+    # Keep in sync with scripts/app_changed.sh
+    paths-ignore: ['docs/**', '**/*.md', 'Tools/AppStore/**', '.claude/**',
+      '.github/workflows/release.yml', '.github/workflows/beta.yml',
+      '.github/workflows/release-notes.yml', '.github/workflows/app-store.yml',
+      'scripts/release_notes.py', 'scripts/test_release_notes.py',
+      'scripts/testflight_builds.sh']
   workflow_dispatch:
 
 permissions:
@@ -17,16 +22,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    if: github.ref != 'refs/heads/main'
+    name: Release scripts and app changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app: ${{ steps.app.outputs.app }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          # A PR checks out its merge commit, whose first parent is the base.
+          fetch-depth: 2
+      - name: Check release scripts
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -m unittest discover -s scripts -p 'test_release*.py'
+      - name: Find app changes
+        id: app
+        env:
+          PR: ${{ github.event_name == 'pull_request' }}
+        run: |
+          app=true
+          [[ $PR == true ]] && app=$(scripts/app_changed.sh HEAD^1 HEAD)
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+
   build:
     # On main the signed archives in publish compile the same code, so
-    # the unsigned builds only run where nothing is published.
-    if: github.ref != 'refs/heads/main'
+    # the unsigned builds only run where nothing is published. A skipped
+    # job counts as passed, so a PR that can't change the app isn't held up.
+    needs: changes
+    if: >-
+      !cancelled() && github.ref != 'refs/heads/main'
+      && needs.changes.outputs.app != 'false'
     # One runner builds both platforms, which keeps a macOS runner free
     # for the UI lanes.
     name: Release builds
     runs-on: xcode-27
     timeout-minutes: 45
     steps:
+      # Release builds is the required check, so it fails for them.
+      - name: Check release scripts and app changes passed
+        if: needs.changes.result != 'success'
+        run: exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -39,10 +78,6 @@ jobs:
           xcodebuild -version | head -1 | grep -Eq '^Xcode 27([. ]|$)'
           asc --version
           plutil -lint .github/testflight/*.plist
-      - name: Check release scripts
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 -m unittest discover -s scripts -p 'test_release*.py'
       - name: Build iOS Release without signing
         run: |
           xcodebuild -project meh.md.xcodeproj -scheme meh.md \

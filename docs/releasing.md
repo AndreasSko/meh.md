@@ -12,9 +12,11 @@ way, so what ships is the binary people tested.
 | Beta | The public TestFlight group | Running Beta | `beta.yml` |
 | App Store | Everyone | Publish, then submit manually | `release.yml` |
 
-Merges that only touch `docs/`, Markdown files or `Tools/AppStore/` don't
-build. How the internal builds are signed and uploaded is in
-[Internal TestFlight delivery](testflight-ci.md).
+Merges that can't change the app don't build: docs, Markdown files,
+`Tools/AppStore/` and the release tooling, as `scripts/app_changed.sh`
+lists them. A PR touching only those skips the Release builds and the
+notebook sync checks too. How the internal builds are signed and
+uploaded is in [Internal TestFlight delivery](testflight-ci.md).
 
 ## Version numbers
 
