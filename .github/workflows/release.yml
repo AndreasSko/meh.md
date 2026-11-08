@@ -45,7 +45,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          ref: ${{ env.TAG }}
+          # Publishing checks out the tag. A manual run uses the tooling of
+          # its branch, so a fix there applies to a tag that already exists.
+          # The builds still come from the tag.
           fetch-depth: 0
       - uses: rudrankriyam/setup-asc@5358c70a27a3f0d1517604b0f1fdc43e70c1cc4d
         with:

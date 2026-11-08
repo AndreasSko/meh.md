@@ -107,8 +107,11 @@ with `publish.sh`, as [App Store page](app-store.md) describes.
 
 ## When something goes wrong
 
-- **The preparation workflow fails.** Fix the cause and rerun the
-  failed run, or run Actions > App Store release with the tag.
+- **The preparation workflow fails.** If the cause was outside the repo,
+  rerun the failed run. If the workflow or `publish.sh` needed a fix,
+  merge it and run Actions > App Store release on `main` with the tag: a
+  rerun would use the tag's old code, while a manual run uses `main`'s
+  and still ships the tag's builds.
 - **Apple rejects the text or screenshots.** Fix them in `Tools/AppStore/`
   or App Store Connect and resubmit in App Store Connect. The build stays.
 - **Apple rejects the build.** The version isn't approved, so it can be
