@@ -290,6 +290,7 @@ private struct NotebookLibraryBrowser: View {
     let isCompact: Bool
     @Environment(\.openWindow) private var openWindow
     @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
+    @Environment(\.mehPalette) private var palette
     @State private var notice: NotebookNoticeRequest?
     @State private var frame: CGRect = .zero
 
@@ -639,9 +640,17 @@ private struct NotebookLibraryBrowser: View {
     /// A custom background also hides the native selected fill.
     private func rowBackground(for id: UUID) -> Color? {
         switch scene.browserSelection.highlight(of: id, openNoteID: scene.selectedID) {
-        case .selected: nil
-        case .open: NotebookSidebarPalette.openNote
-        case .none: .clear
+        case .selected:
+            #if os(iOS)
+            // On iPad a row that drops its custom background for the native
+            // fill keeps showing the first custom background it gets back,
+            // such as the open note's gray. The sidebar's native fill is the
+            // tint, so paint that; compact width shows no open note.
+            if !isCompact { return palette.accentColor ?? .accentColor }
+            #endif
+            return nil
+        case .open: return NotebookSidebarPalette.openNote
+        case .none: return .clear
         }
     }
 
