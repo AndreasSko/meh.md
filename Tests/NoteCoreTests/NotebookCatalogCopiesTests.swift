@@ -59,6 +59,26 @@ final class NotebookCatalogCopiesTests: XCTestCase {
         XCTAssertEqual(try item(in: right).isPermanentlyDeleted, true)
     }
 
+    func testConflictsListEveryNameAndFolder() throws {
+        let base = try NotebookCatalogDocument()
+        let folder = try base.add(kind: .folder, name: "Folder")
+        let left = try base.fork()
+        let right = try base.fork()
+        for device in [left, right] {
+            try device.add(id: id, kind: .note, name: NotebookWelcomeNote.name)
+        }
+        try right.rename(id, to: "Welcome.md")
+        try right.move(id, to: folder)
+        try left.merge(right)
+        let alternatives = try placement(in: left).alternatives
+        XCTAssertEqual(alternatives.names, ["Hi \u{2022}_\u{2022}", "Welcome.md"].sorted())
+        XCTAssertEqual(Set(alternatives.parentIDs), [nil, folder])
+
+        try left.rename(id, to: "Welcome.md")
+        try left.move(id, to: folder)
+        XCTAssertEqual(try placement(in: left).alternatives, NotebookItemAlternatives())
+    }
+
     func testDifferentKindsUnderOneIDStayRejected() throws {
         let base = try NotebookCatalogDocument()
         let left = try base.fork()
