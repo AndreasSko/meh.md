@@ -624,10 +624,7 @@ private struct NotebookLibraryBrowser: View {
                     .tag(row.id)
                     .id(row.id)
                     .listRowSeparator(.hidden)
-                    // A custom background also hides the native selected fill.
-                    .listRowBackground(scene.browserSelection.contains(row.id) ? nil
-                        : row.id == scene.selectedID ? NotebookSidebarPalette.openNote
-                        : Color.clear)
+                    .listRowBackground(rowBackground(for: row.id))
                     .listRowInsets(sidebarSectionInsets)
             case .ghost(let placement, let parentID, let depth):
                 NotebookGhostRow(scene: scene, placement: placement, parentID: parentID, depth: depth)
@@ -636,6 +633,15 @@ private struct NotebookLibraryBrowser: View {
                     .listRowBackground(Color.clear)
                     .listRowInsets(sidebarSectionInsets)
             }
+        }
+    }
+
+    /// A custom background also hides the native selected fill.
+    private func rowBackground(for id: UUID) -> Color? {
+        switch scene.browserSelection.highlight(of: id, openNoteID: scene.selectedID) {
+        case .selected: nil
+        case .open: NotebookSidebarPalette.openNote
+        case .none: .clear
         }
     }
 

@@ -284,7 +284,19 @@ extension NotebookSceneState {
                return (frame.minY..<frame.maxY).contains(click.location.y)
            })?.id,
            browserSelection.click(id, click.kind, proposed: ids,
-                                  in: visibleActiveRows.map(\.id)) {
+                                  in: visibleActiveRows.map(\.id), openNoteID: selectedID) {
+            return
+        }
+        #elseif os(macOS)
+        // The Mac List extends its own selection, but with nothing selected
+        // it can't know that the open note's row looks selected.
+        if browserSelection.isEmpty, !selectingItems, ids.count == 1, let id = ids.first,
+           let event = NSApp.currentEvent,
+           [.leftMouseDown, .leftMouseUp].contains(event.type),
+           let kind: NotebookBrowserSelection.Click = event.modifierFlags.contains(.shift)
+               ? .shift : event.modifierFlags.contains(.command) ? .command : nil,
+           browserSelection.click(id, kind, proposed: ids, in: visibleActiveRows.map(\.id),
+                                  openNoteID: selectedID) {
             return
         }
         #endif
@@ -315,13 +327,7 @@ extension NotebookSceneState {
     func clickBrowserEmptySpace() {
         guard !busy, !isCompact, !selectingItems, editingID == nil,
               !search.isPresented, !browserDrag.isSessionActive else { return }
-        let openNote: Set<UUID> = selectedID.map { [$0] } ?? []
-        if !browserSelection.isEmpty, browserSelection.selectedIDs != openNote {
-            browserSelection.clear()
-            return
-        }
-        browserSelection.clear()
-        guard selectedID != nil else { return }
+        guard browserSelection.clickEmptySpace(openNoteID: selectedID) else { return }
         perform { [self] in
             try await flushEditor()
             closeSelectedNote()
@@ -335,13 +341,7 @@ extension NotebookSceneState {
         // The selection callback that follows applies the click instead.
         if let click = browserScrollView.pendingClick, click.kind != .plain { return }
         #endif
-        // A plain click leaves a Command or Shift selection, as on the Mac,
-        // and starts the range of a later Shift-click.
-        if browserSelection.count > 1 {
-            browserSelection.selectOnly(placement.item.id)
-        } else {
-            browserSelection.anchorID = placement.item.id
-        }
+        browserSelection.activate(placement.item.id)
         if placement.item.kind == .folder, editingID == nil {
             toggleFolder(placement.item.id)
             return
