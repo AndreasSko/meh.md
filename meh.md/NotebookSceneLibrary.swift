@@ -664,8 +664,7 @@ extension NotebookSceneState {
         let name =
             placement?.item.kind == .note
             ? NotebookNoteName.filename(
-                for: NotebookNoteName.title(from: proposedName),
-                preservingExtensionFrom: originalName
+                for: proposedName, preservingExtensionFrom: originalName
             ) : proposedName
         if placement?.item.name != name {
             try await replica.rename(id, to: name)

@@ -74,6 +74,9 @@ struct NotebookBrowserRegisterState: Equatable, Sendable {
     }
 
     let values: [Atom]
+    /// Copies of the item hold different values, so no single state can be
+    /// restored and no expected state matches.
+    var copiesDiffer = false
 
-    var isRestorable: Bool { values.count <= 1 }
+    var isRestorable: Bool { !copiesDiffer && values.count <= 1 }
 }

@@ -742,12 +742,9 @@ final class NotebookCatalogDocument {
         }
         let candidate = try fork()
         for item in localItems {
-            let source = try local.object(for: item.id)
             let destination = try candidate.document.putObject(
                 obj: candidate.itemsObject, key: item.id.uuidString, ty: .Map)
-            for key in local.document.keys(obj: source) {
-                guard case .Scalar(let value) = try local.document.get(obj: source, key: key)
-                else { throw NotebookCatalogError.invalidDocument }
+            for (key, value) in try local.copiedFields(for: item.id) {
                 try candidate.document.put(obj: destination, key: key, value: value)
             }
         }
@@ -775,7 +772,7 @@ final class NotebookCatalogDocument {
         let lower = try orderedChildren(parentID: nil, inTrash: false).last?.item.orderKey
         let ranks = try NotebookOrderKeyFactory.distribute(itemIDs: roots, lower: lower, upper: nil)
         for id in roots {
-            try candidate.writeOrder(ranks[id]!, parentID: nil, object: candidate.object(for: id))
+            try candidate.writeOrder(ranks[id]!, parentID: nil, id: id)
         }
         _ = try NotebookCatalogDocument(snapshot: candidate.snapshot())
         return candidate
@@ -798,12 +795,9 @@ final class NotebookCatalogDocument {
         let incomingIDs = Set(incoming.map(\.id))
         let candidate = try fork()
         for item in incoming {
-            let source = try other.object(for: item.id)
             let destination = try candidate.document.putObject(
                 obj: candidate.itemsObject, key: item.id.uuidString, ty: .Map)
-            for key in other.document.keys(obj: source) {
-                guard case .Scalar(let value) = try other.document.get(obj: source, key: key)
-                else { throw NotebookCatalogError.invalidDocument }
+            for (key, value) in try other.copiedFields(for: item.id) {
                 try candidate.document.put(obj: destination, key: key, value: value)
             }
         }
@@ -1023,10 +1017,7 @@ final class NotebookCatalogDocument {
             )
             for id in importedIDs {
                 try candidate.writeOrder(
-                    ranks[id]!,
-                    parentID: parentID ?? destinationParentID,
-                    object: candidate.object(for: id)
-                )
+                    ranks[id]!, parentID: parentID ?? destinationParentID, id: id)
             }
         }
         _ = try NotebookCatalogDocument(snapshot: candidate.snapshot())
@@ -1035,11 +1026,10 @@ final class NotebookCatalogDocument {
 
     func rename(_ id: UUID, to name: String) throws {
         try NotebookName.validate(name)
-        try document.put(obj: object(for: id), key: "name", value: .String(name))
+        try put(id, key: "name", value: .String(name))
     }
 
     func move(_ id: UUID, to parentID: UUID?) throws {
-        let object = try object(for: id)
         try validateParent(parentID, for: id)
         try ensureOrder(parentID: parentID, excluding: id)
         let lower = try orderedChildren(parentID: parentID, inTrash: false)
@@ -1048,11 +1038,10 @@ final class NotebookCatalogDocument {
         let order = try NotebookOrderKeyFactory.between(
             lower, nil, itemID: id
         )
-        try document.put(
-            obj: object, key: "parent", value: parentID.map { .String($0.uuidString) } ?? .Null)
+        try put(id, key: "parent", value: parentID.map { .String($0.uuidString) } ?? .Null)
         try refreshImportRoots(for: [id])
-        try writeOrder(order, parentID: parentID, object: object)
-        try writePlacementRevision(object: object)
+        try writeOrder(order, parentID: parentID, id: id)
+        try writePlacementRevision(id: id)
     }
 
     /// Moves the normalized selection as one appended sibling block.
@@ -1143,10 +1132,9 @@ final class NotebookCatalogDocument {
                             NotebookBrowserRegisterState)] = [:]
         var undoable = true
         for id in roots {
-            let object = try object(for: id)
-            let parentState = try registerState(object: object, key: parentKey)
+            let parentState = try registerState(id: id, key: parentKey)
             let orderState = try registerState(
-                object: object, key: destinationOrderKey)
+                id: id, key: destinationOrderKey)
             undoable = undoable
                 && parentState.isRestorable && orderState.isRestorable
                 && hasRestorableAncestry(id, itemsByID: liveByID)
@@ -1162,7 +1150,6 @@ final class NotebookCatalogDocument {
         var revisions: [UUID: String] = [:]
         if undoable {
             for id in roots {
-                let object = try candidate.object(for: id)
                 let prior = before[id]!
                 changes.append(
                     NotebookBrowserRegisterChange(
@@ -1170,7 +1157,7 @@ final class NotebookCatalogDocument {
                         key: parentKey,
                         before: prior.0,
                         after: try candidate.registerState(
-                            object: object, key: parentKey)
+                            id: id, key: parentKey)
                     )
                 )
                 changes.append(
@@ -1179,11 +1166,11 @@ final class NotebookCatalogDocument {
                         key: destinationOrderKey,
                         before: prior.1,
                         after: try candidate.registerState(
-                            object: object, key: destinationOrderKey)
+                            id: id, key: destinationOrderKey)
                     )
                 )
                 revisions[id] = try candidate.singletonString(
-                    object: object, key: "placementRevision")
+                    id: id, key: "placementRevision")
             }
         }
         try document.merge(other: candidate.document)
@@ -1243,10 +1230,8 @@ final class NotebookCatalogDocument {
             itemIDs: ids, lower: lower, upper: upper
         )
         for id in ids {
-            try writeOrder(
-                ranks[id]!, parentID: parentID, object: object(for: id)
-            )
-            try writePlacementRevision(object: object(for: id))
+            try writeOrder(ranks[id]!, parentID: parentID, id: id)
+            try writePlacementRevision(id: id)
         }
     }
 
@@ -1263,7 +1248,7 @@ final class NotebookCatalogDocument {
         // A distinct token records intent even if the visible state was already
         // true/false. getAll lets concurrent trash win over an unseen restore.
         let value = "\(trashed ? "trash" : "active"):\(UUID().uuidString)"
-        try document.put(obj: object(for: id), key: "visibility", value: .String(value))
+        try put(id, key: "visibility", value: .String(value))
     }
 
     /// Trashes only the roots of the normalized selection. Descendants follow
@@ -1274,11 +1259,7 @@ final class NotebookCatalogDocument {
         var changes: [NotebookBrowserVisibilityChange] = []
         for id in roots {
             let token = "trash:\(UUID().uuidString)"
-            try candidate.document.put(
-                obj: candidate.object(for: id),
-                key: "visibility",
-                value: .String(token)
-            )
+            try candidate.put(id, key: "visibility", value: .String(token))
             changes.append(
                 NotebookBrowserVisibilityChange(
                     itemID: id, beforeTrashed: false, afterToken: token)
@@ -1309,16 +1290,15 @@ final class NotebookCatalogDocument {
 
         var inverseExact: [NotebookBrowserRegisterChange] = []
         for change in receipt.exactChanges {
-            let object = try candidate.object(for: change.itemID)
             try candidate.writeRegisterState(
-                change.before, object: object, key: change.key)
+                change.before, id: change.itemID, key: change.key)
             inverseExact.append(
                 NotebookBrowserRegisterChange(
                     itemID: change.itemID,
                     key: change.key,
                     before: change.after,
                     after: try candidate.registerState(
-                        object: object, key: change.key)
+                        id: change.itemID, key: change.key)
                 )
             )
         }
@@ -1326,11 +1306,7 @@ final class NotebookCatalogDocument {
         var inverseVisibility: [NotebookBrowserVisibilityChange] = []
         for change in receipt.visibilityChanges {
             let token = "\(change.beforeTrashed ? "trash" : "active"):\(UUID().uuidString)"
-            try candidate.document.put(
-                obj: candidate.object(for: change.itemID),
-                key: "visibility",
-                value: .String(token)
-            )
+            try candidate.put(change.itemID, key: "visibility", value: .String(token))
             inverseVisibility.append(
                 NotebookBrowserVisibilityChange(
                     itemID: change.itemID,
@@ -1346,8 +1322,7 @@ final class NotebookCatalogDocument {
 
         var inverseRevisions: [UUID: String] = [:]
         for id in receipt.expectedPlacementRevisions.keys {
-            let object = try candidate.object(for: id)
-            let token = try candidate.writePlacementRevision(object: object)
+            let token = try candidate.writePlacementRevision(id: id)
             inverseRevisions[id] = token
         }
         try candidate.validate()
@@ -1366,7 +1341,7 @@ final class NotebookCatalogDocument {
     /// Only the explicitly confirmed identities are marked; unknown children
     /// received later survive in a recovery placement. Cleanup is separate.
     func markPermanentlyDeleted(_ ids: Set<UUID>) throws {
-        let objects = try ids.map { try object(for: $0) }
+        let objects = try ids.flatMap { try copies(for: $0) }
         for object in objects {
             try document.put(obj: object, key: "permanentlyDeleted", value: .Boolean(true))
         }
@@ -1497,6 +1472,56 @@ final class NotebookCatalogDocument {
         return object
     }
 
+    /// Every copy of an item. Edits write to all of them, so a change shows
+    /// whichever copy a device reads and copies keep the same name.
+    private func copies(for id: UUID) throws -> [ObjId] {
+        let copies = try itemCopies(at: id.uuidString)
+        guard !copies.isEmpty else { throw NotebookCatalogError.itemNotFound }
+        return copies
+    }
+
+    /// The fields to copy an item into another catalog with. Each comes
+    /// from the shown copy, or from the first copy that has it, so order
+    /// ranks in other folders survive. Trash and permanent deletion are
+    /// kept when any copy has them, the way reading the item counts them.
+    private func copiedFields(for id: UUID) throws -> [(String, ScalarValue)] {
+        let copies = try copies(for: id)
+        let winner = try object(for: id)
+        let ordered = [winner] + copies.filter { $0 != winner }
+        var keys = Set<String>()
+        for copy in copies { keys.formUnion(document.keys(obj: copy)) }
+        return try keys.sorted().map { key in
+            let values = try copies.flatMap { try document.getAll(obj: $0, key: key) }
+            let scalars = try values.map { value -> ScalarValue in
+                guard case .Scalar(let scalar) = value else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+                return scalar
+            }
+            if key == "visibility", let trash = scalars.compactMap({ scalar -> String? in
+                guard case .String(let token) = scalar, token.hasPrefix("trash:") else { return nil }
+                return token
+            }).min() {
+                return (key, .String(trash))
+            }
+            if key == "permanentlyDeleted", !scalars.isEmpty {
+                return (key, .Boolean(true))
+            }
+            for copy in ordered {
+                if case .Scalar(let value) = try document.get(obj: copy, key: key) {
+                    return (key, value)
+                }
+            }
+            throw NotebookCatalogError.invalidDocument
+        }
+    }
+
+    private func put(_ id: UUID, key: String, value: ScalarValue) throws {
+        for copy in try copies(for: id) {
+            try document.put(obj: copy, key: key, value: value)
+        }
+    }
+
     private func readItems() throws -> [ItemEntry] {
         let currentHeads = document.heads()
         if let itemsCache, itemsCache.heads == currentHeads {
@@ -1568,32 +1593,80 @@ final class NotebookCatalogDocument {
             conflictedKeys: conflictedKeys)
     }
 
-    /// Two devices that combine the same notebook at once each copy its
-    /// items under the same IDs. Copies with the same kind and name are that
-    /// one item, and every device picks the same winner. Anything else under
-    /// one ID stays a conflict.
-    /// Returns how many copies the item has, or nil when they differ.
-    private func itemCopies(at key: String) throws -> Int? {
-        let values = try document.getAll(obj: itemsObject, key: key)
-        guard values.count > 1 else { return values.count == 1 ? 1 : nil }
-        let copies = try values.map { value -> [String] in
-            guard case .Object(let object, .Map) = value,
-                  case .Scalar(.String(let kind)) = try document.get(obj: object, key: "kind"),
-                  case .Scalar(.String(let name)) = try document.get(obj: object, key: "name")
-            else { throw NotebookCatalogError.duplicateIdentity }
-            return [kind, name]
-        }
-        return Set(copies).count == 1 ? values.count : nil
+    /// An item ID can hold several copies: two devices that combine the
+    /// same notebook at once each copy its items, and every new notebook
+    /// adds the welcome note under one fixed ID. Copies of one kind are one
+    /// item. Sorted, so every pass over them writes in the same order.
+    private func itemCopies(at key: String) throws -> [ObjId] {
+        try document.getAll(obj: itemsObject, key: key).map { value in
+            guard case .Object(let object, .Map) = value else {
+                throw NotebookCatalogError.duplicateIdentity
+            }
+            return object
+        }.sorted { $0.debugDescription < $1.debugDescription }
     }
 
+    /// Fields come from the copy Automerge picks, the same one on every
+    /// device. Trash and permanent deletion count when any copy has them,
+    /// as they do for concurrent values of one field. Copies that disagree
+    /// report the issues a field with several values reports.
     private func decodeItem(at key: String) throws -> (entry: ItemEntry, conflicted: Bool) {
-        guard let id = UUID(uuidString: key), key == id.uuidString,
-            let copies = try itemCopies(at: key)
-        else {
+        guard let id = UUID(uuidString: key), key == id.uuidString else {
             throw NotebookCatalogError.duplicateIdentity
         }
-        var conflicted = copies > 1
-        let object = try object(for: id)
+        let copies = try itemCopies(at: key)
+        guard !copies.isEmpty else { throw NotebookCatalogError.duplicateIdentity }
+        let winner = try object(for: id)
+        let shown = try decodeCopy(winner, id: id)
+        var conflicted = shown.conflicted || copies.count > 1
+        var names = shown.names
+        var parents = shown.parents
+        var orders = try explicitOrders(winner, parentID: shown.item.parentID)
+        var trashed = shown.item.isTrashed
+        var deleted = shown.item.isPermanentlyDeleted
+        for copy in copies where copy != winner {
+            let other = try decodeCopy(copy, id: id)
+            guard other.item.kind == shown.item.kind else {
+                throw NotebookCatalogError.duplicateIdentity
+            }
+            conflicted = conflicted || other.conflicted
+            names.formUnion(other.names)
+            parents.formUnion(other.parents)
+            orders.formUnion(try explicitOrders(copy, parentID: shown.item.parentID))
+            trashed = trashed || other.item.isTrashed
+            deleted = deleted || other.item.isPermanentlyDeleted
+        }
+        var issues = Set<NotebookPlacementIssue>()
+        if names.count > 1 { issues.insert(.concurrentRename) }
+        if parents.count > 1 { issues.insert(.concurrentMove) }
+        if orders.count > 1 { issues.insert(.concurrentReorder) }
+        let item = NotebookItem(
+            id: id, kind: shown.item.kind, name: shown.item.name,
+            parentID: shown.item.parentID, orderKey: shown.item.orderKey,
+            isTrashed: trashed, isPermanentlyDeleted: deleted,
+            importRootID: shown.item.importRootID)
+        return ((item, issues), conflicted)
+    }
+
+    private func explicitOrders(_ object: ObjId, parentID: UUID?) throws -> Set<String> {
+        Set(try document.getAll(obj: object, key: Self.orderStorageKey(parentID)).map {
+            guard case .Scalar(.String(let raw)) = $0 else {
+                throw NotebookCatalogError.invalidDocument
+            }
+            return raw
+        })
+    }
+
+    private struct DecodedCopy {
+        let item: NotebookItem
+        let conflicted: Bool
+        let names: Set<String>
+        let parents: Set<UUID?>
+    }
+
+    /// Reads and checks one copy of an item.
+    private func decodeCopy(_ object: ObjId, id: UUID) throws -> DecodedCopy {
+        var conflicted = false
         guard case .Scalar(.String(let kindValue)) = try document.get(obj: object, key: "kind"),
             let kind = NotebookItemKind(rawValue: kindValue),
             try document.getAll(obj: object, key: "kind").count == 1
@@ -1650,18 +1723,20 @@ final class NotebookCatalogDocument {
         if [names, parentValues, visibility, deleted, revisions].contains(where: { $0.count > 1 }) {
             conflicted = true
         }
-        var issues = Set<NotebookPlacementIssue>()
-        if names.count > 1 { issues.insert(.concurrentRename) }
-        if parentValues.count > 1 { issues.insert(.concurrentMove) }
-        if order.hasExplicitConflict {
-            issues.insert(.concurrentReorder)
-        }
         let item = NotebookItem(
             id: id, kind: kind, name: name,
-            parentID: parentID, orderKey: order.key, isTrashed: trashed,
+            parentID: parentID, orderKey: order, isTrashed: trashed,
             isPermanentlyDeleted: !deleted.isEmpty,
             importRootID: try readImportRootID(object, conflicted: &conflicted))
-        return ((item, issues), conflicted)
+        return DecodedCopy(
+            item: item, conflicted: conflicted,
+            names: Set(try names.map {
+                guard case .Scalar(.String(let name)) = $0 else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+                return name
+            }),
+            parents: Set(try parentValues.map(decodeParent)))
     }
 
     private func readImportRootID(_ object: ObjId, conflicted: inout Bool) throws -> UUID? {
@@ -1723,9 +1798,7 @@ final class NotebookCatalogDocument {
             itemIDs: ids, lower: lower, upper: nil
         )
         for id in ids {
-            try writeOrderSeed(
-                ranks[id]!, parentID: parentID, object: object(for: id)
-            )
+            try writeOrderSeed(ranks[id]!, parentID: parentID, id: id)
         }
     }
 
@@ -1733,7 +1806,7 @@ final class NotebookCatalogDocument {
         object: ObjId,
         parentID: UUID?,
         conflicted: inout Bool
-    ) throws -> (key: NotebookOrderKey?, hasExplicitConflict: Bool) {
+    ) throws -> NotebookOrderKey? {
         for key in document.keys(obj: object)
         where key.hasPrefix("order:") || key.hasPrefix("orderSeed:") {
             guard Self.decodeOrderParent(key) != nil else {
@@ -1756,17 +1829,17 @@ final class NotebookCatalogDocument {
             ), let order = NotebookOrderKey(rawValue: rawValue) else {
                 throw NotebookCatalogError.invalidDocument
             }
-            return (order, explicit.count > 1)
+            return order
         }
         let seedKey = Self.orderSeedStorageKey(parentID)
         let seeds = try document.getAll(obj: object, key: seedKey)
-        guard !seeds.isEmpty else { return (nil, false) }
+        guard !seeds.isEmpty else { return nil }
         guard case .Scalar(.String(let rawValue)) = try document.get(
             obj: object, key: seedKey
         ), let order = NotebookOrderKey(rawValue: rawValue) else {
             throw NotebookCatalogError.invalidDocument
         }
-        return (order, false)
+        return order
     }
 
     private func writeOrder(
@@ -1781,26 +1854,19 @@ final class NotebookCatalogDocument {
         )
     }
 
-    private func writeOrderSeed(
-        _ order: NotebookOrderKey,
-        parentID: UUID?,
-        object: ObjId
-    ) throws {
-        try document.put(
-            obj: object,
-            key: Self.orderSeedStorageKey(parentID),
-            value: .String(order.rawValue)
-        )
+    private func writeOrder(_ order: NotebookOrderKey, parentID: UUID?, id: UUID) throws {
+        try put(id, key: Self.orderStorageKey(parentID), value: .String(order.rawValue))
     }
 
+    private func writeOrderSeed(_ order: NotebookOrderKey, parentID: UUID?, id: UUID) throws {
+        try put(id, key: Self.orderSeedStorageKey(parentID), value: .String(order.rawValue))
+    }
+
+    /// One token per change, written to every copy, so undo can check it.
     @discardableResult
-    private func writePlacementRevision(object: ObjId) throws -> String {
+    private func writePlacementRevision(id: UUID) throws -> String {
         let token = UUID().uuidString
-        try document.put(
-            obj: object,
-            key: "placementRevision",
-            value: .String(token)
-        )
+        try put(id, key: "placementRevision", value: .String(token))
         return token
     }
 
@@ -1913,14 +1979,9 @@ final class NotebookCatalogDocument {
                 ? remaining[insertionIndex].item.orderKey : nil
         )
         for id in ids {
-            let object = try object(for: id)
-            try document.put(
-                obj: object,
-                key: "parent",
-                value: parentID.map { .String($0.uuidString) } ?? .Null
-            )
-            try writeOrder(ranks[id]!, parentID: parentID, object: object)
-            try writePlacementRevision(object: object)
+            try put(id, key: "parent", value: parentID.map { .String($0.uuidString) } ?? .Null)
+            try writeOrder(ranks[id]!, parentID: parentID, id: id)
+            try writePlacementRevision(id: id)
         }
         try refreshImportRoots(for: ids)
     }
@@ -1951,9 +2012,20 @@ final class NotebookCatalogDocument {
     }
 
     private func setImportRootID(_ id: UUID?, for itemID: UUID) throws {
-        try document.put(
-            obj: object(for: itemID), key: "importRootID",
-            value: id.map { .String($0.uuidString) } ?? .Null)
+        try put(itemID, key: "importRootID", value: id.map { .String($0.uuidString) } ?? .Null)
+    }
+
+    /// A field's state, when every copy of the item holds the same one. A
+    /// copy without the field differs from one that has it.
+    private func registerState(
+        id: UUID,
+        key: String
+    ) throws -> NotebookBrowserRegisterState {
+        let states = try copies(for: id).map { try registerState(object: $0, key: key) }
+        guard let first = states.first, states.allSatisfy({ $0 == first }) else {
+            return NotebookBrowserRegisterState(values: [], copiesDiffer: true)
+        }
+        return first
     }
 
     private func registerState(
@@ -1983,28 +2055,32 @@ final class NotebookCatalogDocument {
 
     private func writeRegisterState(
         _ state: NotebookBrowserRegisterState,
-        object: ObjId,
+        id: UUID,
         key: String
     ) throws {
         guard state.isRestorable else {
             throw NotebookBrowserChangeError.undoUnavailable
         }
         guard let value = state.values.first else {
-            try document.delete(obj: object, key: key)
+            for copy in try copies(for: id) where try document.get(obj: copy, key: key) != nil {
+                try document.delete(obj: copy, key: key)
+            }
             return
         }
         switch value {
         case .null:
-            try document.put(obj: object, key: key, value: .Null)
+            try put(id, key: key, value: .Null)
         case .string(let text):
-            try document.put(obj: object, key: key, value: .String(text))
+            try put(id, key: key, value: .String(text))
         }
     }
 
-    private func singletonString(object: ObjId, key: String) throws -> String {
-        let values = try document.getAll(obj: object, key: key)
-        guard values.count == 1,
-              case .Scalar(.String(let value)) = values.first else {
+    /// A field with one string value, the same on every copy of the item.
+    private func singletonString(id: UUID, key: String) throws -> String {
+        let values = try copies(for: id).map { try document.getAll(obj: $0, key: key) }
+        guard let first = values.first, first.count == 1,
+              values.allSatisfy({ $0 == first }),
+              case .Scalar(.String(let value)) = first.first else {
             throw NotebookCatalogError.invalidDocument
         }
         return value
@@ -2024,26 +2100,24 @@ final class NotebookCatalogDocument {
         }
         do {
             for change in receipt.exactChanges {
-                let object = try object(for: change.itemID)
                 guard change.before.isRestorable,
-                      try registerState(object: object, key: change.key)
+                      try registerState(id: change.itemID, key: change.key)
                         == change.after else {
                     throw NotebookBrowserChangeError.staleUndo
                 }
             }
             for change in receipt.visibilityChanges {
-                let object = try object(for: change.itemID)
                 let expected = NotebookBrowserRegisterState(
                     values: [.string(change.afterToken)]
                 )
-                guard try registerState(object: object, key: "visibility")
+                guard try registerState(id: change.itemID, key: "visibility")
                     == expected else {
                     throw NotebookBrowserChangeError.staleUndo
                 }
             }
             for (id, revision) in receipt.expectedPlacementRevisions {
                 guard try singletonString(
-                    object: object(for: id), key: "placementRevision"
+                    id: id, key: "placementRevision"
                 ) == revision else {
                     throw NotebookBrowserChangeError.staleUndo
                 }
