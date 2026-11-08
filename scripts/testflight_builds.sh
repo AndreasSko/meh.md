@@ -10,8 +10,6 @@ set -euo pipefail
 
 rev=${1:?usage: $0 <rev>}
 target=$(git rev-parse "$rev^{commit}")
-# Keep in sync with paths-ignore in testflight.yml
-not_app=(':(exclude)docs' ':(exclude,glob)**/*.md' ':(exclude)Tools/AppStore')
 
 for sha in $(git rev-list --first-parent --max-count=50 "$target"); do
   statuses=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/status" \
@@ -21,7 +19,8 @@ for sha in $(git rev-list --first-parent --max-count=50 "$target"); do
   mac=$(jq -r '."testflight/MAC_OS" // empty' <<< "$statuses")
   [[ -n $ios && -n $mac ]] || continue
 
-  if ! git diff --quiet "$sha" "$target" -- . "${not_app[@]}"; then
+  changed=$("$(dirname "$0")/app_changed.sh" "$sha" "$target")
+  if [[ $changed == true ]]; then
     echo "The app changed after ${sha:0:7}, the newest commit with builds." >&2
     echo "Wait for Internal TestFlight to finish on ${target:0:7}, or rerun it." >&2
     exit 1

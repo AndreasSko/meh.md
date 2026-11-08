@@ -67,6 +67,13 @@ else
   apply_mode=(--dry-run) upload_mode=(--dry-run)
   print "Dry run for version $version of app $app"
 fi
+# While a version is live, App Store Connect keeps a second app info for the
+# next one, and only that one takes changes. asc refuses to guess between them.
+app_info_id=$(asc apps info list --app $app --output json | jq -r '[.data[]
+  | select(.attributes.state | IN("READY_FOR_DISTRIBUTION", "REPLACED_WITH_NEW_INFO") | not)]
+  | first | .id // empty')
+app_info_flag=()
+[[ -n $app_info_id ]] && app_info_flag=(--app-info $app_info_id)
 
 failed=()
 typeset -A platform_devices=(IOS "iphone ipad" MAC_OS "mac")
@@ -98,7 +105,7 @@ for platform in $platforms; do
   # Fields without a file in metadata/ stay as they are in App Store Connect
   [[ $target == $version ]] || cp -R $build/version/$version $build/version/$target
   asc metadata apply --app $app --version $target --platform $platform --dir $build \
-    $apply_mode --output table
+    $app_info_flag $apply_mode --output table
 
   (( screenshots )) || continue
   for locale in metadata/*(/:t); do

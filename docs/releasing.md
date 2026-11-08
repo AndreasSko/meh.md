@@ -12,9 +12,11 @@ way, so what ships is the binary people tested.
 | Beta | The public TestFlight group | Running Beta | `beta.yml` |
 | App Store | Everyone | Publish, then submit manually | `release.yml` |
 
-Merges that only touch `docs/`, Markdown files or `Tools/AppStore/` don't
-build. How the internal builds are signed and uploaded is in
-[Internal TestFlight delivery](testflight-ci.md).
+Merges that can't change the app don't build: docs, Markdown files,
+`Tools/AppStore/` and the release tooling, as `scripts/app_changed.sh`
+lists them. A PR touching only those skips the Release builds and the
+notebook sync checks too. How the internal builds are signed and
+uploaded is in [Internal TestFlight delivery](testflight-ci.md).
 
 ## Version numbers
 
@@ -107,8 +109,11 @@ with `publish.sh`, as [App Store page](app-store.md) describes.
 
 ## When something goes wrong
 
-- **The preparation workflow fails.** Fix the cause and rerun the
-  failed run, or run Actions > App Store release with the tag.
+- **The preparation workflow fails.** If the cause was outside the repo,
+  rerun the failed run. If the workflow or `publish.sh` needed a fix,
+  merge it and run Actions > App Store release on `main` with the tag: a
+  rerun would use the tag's old code, while a manual run uses `main`'s
+  and still ships the tag's builds.
 - **Apple rejects the text or screenshots.** Fix them in `Tools/AppStore/`
   or App Store Connect and resubmit in App Store Connect. The build stays.
 - **Apple rejects the build.** The version isn't approved, so it can be
