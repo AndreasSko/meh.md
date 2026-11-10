@@ -487,7 +487,7 @@ private struct NotebookTrashItemRow: View {
                     }
                 }
             } icon: {
-                Image(systemName: placement.item.kind == .folder ? "folder" : "note.text")
+                Image(systemName: placement.item.kind == .folder ? "folder" : "doc.text")
             }
             Spacer(minLength: 0)
         }

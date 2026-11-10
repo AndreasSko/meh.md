@@ -1172,7 +1172,7 @@ private struct NotebookFileRow: View {
                                     ? "tray" : "folder"
                             )
                         } else {
-                            Image(systemName: "note.text")
+                            Image(systemName: "doc.text")
                         }
                     }
                         .lineLimit(1)
