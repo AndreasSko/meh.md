@@ -34,6 +34,7 @@ struct NotebookTrashView: View {
                     NotebookTrashItemRow(
                         placement: row.placement,
                         depth: row.depth,
+                        origin: row.depth == 0 ? origin(of: row.placement) : nil,
                         isExpanded: expandedFolderIDs.contains(row.id),
                         busy: busy,
                         selecting: usesNativeSelection,
@@ -44,8 +45,11 @@ struct NotebookTrashView: View {
                         delete: { preparePermanentDeletion(rootID: row.id) }
                     )
                     .tag(row.id)
+                    .listRowBackground(Color.clear)
+                    .listSectionSeparator(.hidden, edges: .top)
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
                 .disabled(busy)
                 #if os(iOS)
                 .environment(\.editMode, Binding(
@@ -70,6 +74,7 @@ struct NotebookTrashView: View {
                 #endif
             }
         }
+        .background(MehStyle.paperColor.ignoresSafeArea())
         .navigationTitle("Trash")
         .accessibilityIdentifier("notebook-trash-view")
         .interactiveDismissDisabled(busy)
@@ -94,7 +99,7 @@ struct NotebookTrashView: View {
             ToolbarItem(placement: .cancellationAction) {
                 if selectingItems {
                     selectAllButton
-                } else {
+                } else if !trashRows.isEmpty {
                     Button("Empty Trash…", role: .destructive) {
                         preparePermanentDeletion(rootID: nil)
                     }
@@ -103,7 +108,7 @@ struct NotebookTrashView: View {
                 }
             }
             #if os(iOS)
-            if !selectingItems {
+            if !selectingItems, !trashRows.isEmpty {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Select") { selectingItems = true }
                         .disabled(busy || trashRows.isEmpty)
@@ -238,6 +243,14 @@ struct NotebookTrashView: View {
         flattenedRows(parentID: nil, depth: 0)
     }
 
+    /// Where a trashed item came from, so restoring holds no surprise.
+    private func origin(of placement: NotebookPlacement) -> String {
+        guard let parentID = placement.item.parentID,
+              let parent = replica.placements.first(where: { $0.item.id == parentID })
+        else { return String(localized: "From Top Level") }
+        return String(localized: "From \(parent.displayName)")
+    }
+
     private func flattenedRows(parentID: UUID?, depth: Int) -> [NotebookTrashRow] {
         replica.orderedChildren(parentID: parentID, inTrash: true).flatMap { placement in
             var rows = [NotebookTrashRow(placement: placement, depth: depth)]
@@ -362,6 +375,7 @@ struct NotebookTrashView: View {
 private struct NotebookTrashItemRow: View {
     let placement: NotebookPlacement
     let depth: Int
+    let origin: String?
     let isExpanded: Bool
     let busy: Bool
     let selecting: Bool
@@ -434,6 +448,19 @@ private struct NotebookTrashItemRow: View {
             }
         }
         .padding(.leading, CGFloat(depth) * 16)
+        #if os(iOS)
+        .swipeActions(edge: .trailing) {
+            if !selecting {
+                Button("Delete", systemImage: "trash", role: .destructive, action: delete)
+            }
+        }
+        .swipeActions(edge: .leading) {
+            if !selecting, placement.item.isTrashed {
+                Button("Restore", systemImage: "arrow.uturn.backward", action: restore)
+                    .tint(.accentColor)
+            }
+        }
+        #endif
     }
 
     private var showsActions: Bool {
@@ -450,7 +477,18 @@ private struct NotebookTrashItemRow: View {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.caption)
             }
-            Label(title, systemImage: placement.item.kind == .folder ? "folder" : "note.text")
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    if let origin {
+                        Text(origin)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } icon: {
+                Image(systemName: placement.item.kind == .folder ? "folder" : "note.text")
+            }
             Spacer(minLength: 0)
         }
         .frame(minHeight: 44)
