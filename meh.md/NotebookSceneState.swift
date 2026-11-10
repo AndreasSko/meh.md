@@ -101,6 +101,8 @@ final class NotebookSceneState {
     var linkCompletion: NotebookLinkCompletion?
     var linkCompletionText = ""
     var linkCompletionSelection = 0
+    /// The link picker's New Note row was chosen with the arrow keys.
+    var linkNewNoteChosen = false
 
     // MARK: History
 

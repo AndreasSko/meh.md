@@ -147,7 +147,8 @@ struct NotebookDetail: View {
                             let completionText = scene.linkCompletionText
                             NotebookLinkSuggestions(
                                 notes: completion.query.contains("#") ? []
-                                    : scene.links.suggestions(for: completion.query),
+                                    : scene.links.suggestions(for: completion.query,
+                                                              excluding: selectedID),
                                 isLoading: scene.links.isLoading,
                                 selection: scene.linkCompletionSelection,
                                 headings: scene.completionHeadings,
@@ -162,6 +163,16 @@ struct NotebookDetail: View {
                                 select: { scene.insertCompletedLink(to: $0,
                                     completionSnapshot: completion, textSnapshot: completionText,
                                     sourceID: selectedID) },
+                                newNoteTitle: completion.query.contains("#") ? nil
+                                    : scene.linkedNoteTitle(for: completion.query),
+                                isNewNoteSelected: scene.linkNewNoteChosen,
+                                createNote: {
+                                    if let title = scene.linkedNoteTitle(for: completion.query) {
+                                        scene.createLinkedNote(named: title,
+                                            completionSnapshot: completion,
+                                            textSnapshot: completionText, sourceID: selectedID)
+                                    }
+                                },
                                 dismiss: {
                                     scene.dismissEditorCompletion()
                                     scene.editorNavigation.hasLinkCompletion = false

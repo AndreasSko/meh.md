@@ -159,11 +159,16 @@ struct NotebookLinkSuggestions: View {
     let headings: [String]
     let selectHeading: (String) -> Void
     let select: (NotebookLinkNote) -> Void
+    /// A note to create when the query names one that doesn't exist yet.
+    var newNoteTitle: String? = nil
+    var isNewNoteSelected = false
+    var createNote: () -> Void = {}
     let dismiss: () -> Void
     @ScaledMetric(relativeTo: .body) private var rowHeight: CGFloat = 56
 
     private var selectedNoteID: UUID? {
-        notes.isEmpty ? nil : notes[min(max(0, selection), notes.count - 1)].id
+        guard !notes.isEmpty, !isNewNoteSelected else { return nil }
+        return notes[min(max(0, selection), notes.count - 1)].id
     }
 
     private var selectedHeading: String? {
@@ -195,29 +200,40 @@ struct NotebookLinkSuggestions: View {
                         if let heading { scroll.scrollTo(heading, anchor: .center) }
                     }
                 }
-            } else if notes.isEmpty {
+            } else if notes.isEmpty, newNoteTitle == nil {
                 Text("No matching notes").font(.callout)
                     .foregroundStyle(.secondary).padding(16)
             } else {
-                ScrollViewReader { scroll in
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(notes, id: \.id) { note in
-                                NotebookLinkSuggestionRow(
-                                    title: NotebookNoteName.title(from: note.name),
-                                    subtitle: note.path.isEmpty ? nil : note.path,
-                                    systemImage: "doc.text", isSelected: selectedNoteID == note.id,
-                                    height: rowHeight
-                                ) { select(note) }
-                                .id(note.id)
-                                .accessibilityIdentifier("link-suggestion-\(note.id)")
+                if !notes.isEmpty {
+                    ScrollViewReader { scroll in
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(notes, id: \.id) { note in
+                                    NotebookLinkSuggestionRow(
+                                        title: NotebookNoteName.title(from: note.name),
+                                        subtitle: note.path.isEmpty ? nil : note.path,
+                                        systemImage: "doc.text", isSelected: selectedNoteID == note.id,
+                                        height: rowHeight
+                                    ) { select(note) }
+                                    .id(note.id)
+                                    .accessibilityIdentifier("link-suggestion-\(note.id)")
+                                }
                             }
                         }
+                        .frame(height: rowHeight * CGFloat(min(newNoteTitle == nil ? 3 : 2, notes.count)))
+                        .onChange(of: selectedNoteID, initial: true) { _, id in
+                            if let id { scroll.scrollTo(id, anchor: .center) }
+                        }
                     }
-                    .frame(height: rowHeight * CGFloat(min(3, notes.count)))
-                    .onChange(of: selectedNoteID, initial: true) { _, id in
-                        if let id { scroll.scrollTo(id, anchor: .center) }
-                    }
+                }
+                if let newNoteTitle {
+                    NotebookLinkSuggestionRow(
+                        title: String(localized: "New Note “\(newNoteTitle)”"),
+                        subtitle: nil, systemImage: "plus",
+                        isSelected: isNewNoteSelected, height: rowHeight,
+                        action: createNote
+                    )
+                    .accessibilityIdentifier("link-suggestion-new-note")
                 }
             }
         }
