@@ -498,6 +498,19 @@ public final class NotebookSyncCoordinator {
             }
         }
 
+        if let stored = try await transport.storedDocumentIDs(notebookID: notebookID) {
+            // The storage lost every copy of these documents. Forgetting
+            // their acknowledgement uploads them again below.
+            let lost = state.acknowledgedHeads.keys.filter { key in
+                key.split(separator: ":").last.flatMap { UUID(uuidString: String($0)) }
+                    .map { !stored.contains($0) } ?? false
+            }
+            if !lost.isEmpty {
+                diagnosticLog?.record("storage_missing_documents", counts: ["documents": lost.count])
+                for key in lost { state.acknowledgedHeads[key] = nil }
+                try save(state)
+            }
+        }
         updateProgress(phase: .comparing)
         diagnosticLog?.record("outgoing_scan_start")
         let outgoing = try await replica.records(progress: { [weak self] completed, total in

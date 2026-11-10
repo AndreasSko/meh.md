@@ -515,6 +515,324 @@ final class S3SyncTransportTests: XCTestCase {
         }
     }
 
+    func testWipedStorageIsUploadedAgain() async throws {
+        let server = FakeS3Server()
+        let root = temporaryDirectory()
+        let replica = NotebookReplica(directory: root.appending(path: "left"))
+        var coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport(server, device: "left", root: root)
+        )
+        await coordinator.synchronize()
+        let id = try await replica.createNote(name: "Kept.md", text: "still here")
+        await coordinator.synchronize()
+        XCTAssertTrue(coordinator.status.isExchanged)
+
+        for key in server.keys(bucket: "notes") {
+            server.setObject(nil, bucket: "notes", key: key)
+        }
+        // After a relaunch the device finds the folder empty.
+        coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport(server, device: "left", root: root)
+        )
+        await coordinator.synchronize()
+        XCTAssertTrue(coordinator.status.isExchanged)
+
+        let fresh = NotebookReplica(directory: root.appending(path: "fresh"))
+        let joining = NotebookSyncCoordinator(
+            replica: fresh, transport: transport(server, device: "fresh", root: root)
+        )
+        await joining.synchronize()
+        XCTAssertTrue(joining.status.isExchanged)
+        let received = try await fresh.openNote(id)
+        XCTAssertEqual(received.text, "still here")
+    }
+
+    func testDocumentsThatLostEveryCopyAreUploadedAgainWithinADay() async throws {
+        let server = FakeS3Server()
+        let root = temporaryDirectory()
+        let replica = NotebookReplica(directory: root.appending(path: "left"))
+        var coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport(server, device: "left", root: root)
+        )
+        await coordinator.synchronize()
+        let id = try await replica.createNote(name: "Expired.md", text: "expired")
+        await coordinator.synchronize()
+        let prefix = "meh/meh-notebook/records/" + id.uuidString.lowercased()
+        // For example a lifecycle rule that expires old objects.
+        for key in server.keys(bucket: "notes", prefix: prefix) {
+            server.setObject(nil, bucket: "notes", key: key)
+        }
+
+        // Checked recently: one listing a day is enough.
+        await coordinator.synchronize()
+        XCTAssertEqual(server.keys(bucket: "notes", prefix: prefix), [])
+
+        let stateURL = root.appending(path: "s3-left/s3-device.json")
+        var state = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: stateURL)) as? [String: Any])
+        let checked = try XCTUnwrap(state["lastVerified"] as? Double)
+        state["lastVerified"] = checked - 25 * 60 * 60
+        try JSONSerialization.data(withJSONObject: state).write(to: stateURL)
+        coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport(server, device: "left", root: root)
+        )
+        await coordinator.synchronize()
+        XCTAssertTrue(coordinator.status.isExchanged)
+        XCTAssertEqual(server.keys(bucket: "notes", prefix: prefix).count, 1)
+    }
+
+    func testLostDocumentIsUploadedAgainWithoutARelaunch() async throws {
+        let server = FakeS3Server()
+        let root = temporaryDirectory()
+        let configuration = S3SyncConfiguration(
+            endpoint: server.endpoint, region: "us-east-1", bucket: "notes", prefix: "meh"
+        )
+        let replica = NotebookReplica(directory: root.appending(path: "left"))
+        // Checks on every exchange, so the same transport that uploaded
+        // the note is the one that finds it missing.
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: S3SyncTransport(
+            configuration: configuration,
+            client: AWSS3Client(
+                configuration: configuration, credentials: credentials,
+                session: server.session, timeout: 30,
+                maxAttempts: AWSS3Client.maxAttempts, retryBackoff: NoBackoff()
+            ),
+            stateDirectory: root.appending(path: "s3-left"), verificationInterval: 0
+        ))
+        await coordinator.synchronize()
+        let id = try await replica.createNote(name: "Lost.md", text: "lost")
+        await coordinator.synchronize()
+        let prefix = "meh/meh-notebook/records/" + id.uuidString.lowercased()
+        for key in server.keys(bucket: "notes", prefix: prefix) {
+            server.setObject(nil, bucket: "notes", key: key)
+        }
+
+        await coordinator.synchronize()
+        XCTAssertTrue(coordinator.status.isExchanged)
+        XCTAssertEqual(server.keys(bucket: "notes", prefix: prefix).count, 1)
+    }
+
+    func testStorageWipedWhileTheAppStaysOpenKeepsItsNotebook() async throws {
+        let server = FakeS3Server()
+        let root = temporaryDirectory()
+        let configuration = S3SyncConfiguration(
+            endpoint: server.endpoint, region: "us-east-1", bucket: "notes", prefix: "meh"
+        )
+        let replica = NotebookReplica(directory: root.appending(path: "left"))
+        let coordinator = NotebookSyncCoordinator(replica: replica, transport: S3SyncTransport(
+            configuration: configuration,
+            client: AWSS3Client(
+                configuration: configuration, credentials: credentials,
+                session: server.session, timeout: 30,
+                maxAttempts: AWSS3Client.maxAttempts, retryBackoff: NoBackoff()
+            ),
+            stateDirectory: root.appending(path: "s3-left"), verificationInterval: 0
+        ))
+        await coordinator.synchronize()
+        let id = try await replica.createNote(name: "Kept.md", text: "still here")
+        await coordinator.synchronize()
+        let notebookID = try XCTUnwrap(replica.catalogSnapshot?.notebookID)
+
+        for key in server.keys(bucket: "notes") {
+            server.setObject(nil, bucket: "notes", key: key)
+        }
+        await coordinator.synchronize()
+        XCTAssertTrue(coordinator.status.isExchanged)
+        XCTAssertNotNil(server.object(bucket: "notes", key: "meh/meh-notebook/seed.json"))
+        XCTAssertNotNil(server.object(bucket: "notes", key: "meh/meh-notebook/format.json"))
+
+        let fresh = NotebookReplica(directory: root.appending(path: "fresh"))
+        let joining = NotebookSyncCoordinator(
+            replica: fresh, transport: transport(server, device: "fresh", root: root)
+        )
+        await joining.synchronize()
+        XCTAssertTrue(joining.status.isExchanged)
+        XCTAssertEqual(fresh.catalogSnapshot?.notebookID, notebookID)
+        let received = try await fresh.openNote(id)
+        XCTAssertEqual(received.text, "still here")
+    }
+
+    func testUnreadableRecordIsSkippedAndReadAgainAfterARelaunch() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let root = temporaryDirectory()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publishBatch(fixture.notes).error.map { throw $0 }
+        let damaged = fixture.notes[0]
+        let key = "meh/meh-notebook/records/"
+            + damaged.snapshot.noteID.uuidString.lowercased() + "/\(damaged.id).json"
+        let intact = try XCTUnwrap(server.object(bucket: "notes", key: key))
+        server.setObject(Data("damaged".utf8), bucket: "notes", key: key)
+
+        let reader = transport(server, device: "reader", root: root)
+        let page = try await reader.fetch(after: nil)
+        XCTAssertEqual(Set(page.records.map(\.id)), [fixture.catalog.id, fixture.notes[1].id])
+        XCTAssertFalse(page.hasMore)
+
+        // Readable now, as a record from a newer app is after an update.
+        server.setObject(intact, bucket: "notes", key: key)
+        let relaunched = transport(server, device: "reader", root: root)
+        let next = try await relaunched.fetch(after: page.cursor)
+        XCTAssertEqual(next.records, [damaged])
+        // Applying that page failed, so the coordinator asks again with the
+        // cursor it had, on this launch or the next.
+        let again = try await relaunched.fetch(after: page.cursor)
+        XCTAssertEqual(again.records, [damaged])
+        let afterCrash = try await transport(server, device: "reader", root: root)
+            .fetch(after: page.cursor)
+        XCTAssertEqual(afterCrash.records, [damaged])
+        let last = try await transport(server, device: "reader", root: root)
+            .fetch(after: afterCrash.cursor)
+        XCTAssertEqual(last.records, [])
+        let afterRelaunch = try await transport(server, device: "reader", root: root)
+            .fetch(after: last.cursor)
+        XCTAssertEqual(afterRelaunch.records, [])
+    }
+
+    func testFailedRetryOfAnUnreadableRecordIsTriedAgainWithoutARelaunch() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let root = temporaryDirectory()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publishBatch(fixture.notes).error.map { throw $0 }
+        let damaged = fixture.notes[0]
+        let key = "meh/meh-notebook/records/"
+            + damaged.snapshot.noteID.uuidString.lowercased() + "/\(damaged.id).json"
+        let intact = try XCTUnwrap(server.object(bucket: "notes", key: key))
+        server.setObject(Data("damaged".utf8), bucket: "notes", key: key)
+        let page = try await transport(server, device: "reader", root: root).fetch(after: nil)
+        server.setObject(intact, bucket: "notes", key: key)
+
+        let relaunched = transport(server, device: "reader", root: root)
+        server.failNextGets(
+            1, with: .init(status: 403, code: "AccessDenied"), prefix: key)
+        do {
+            _ = try await relaunched.fetch(after: page.cursor)
+            XCTFail("The download should fail")
+        } catch {}
+        let next = try await relaunched.fetch(after: page.cursor)
+        XCTAssertEqual(next.records, [damaged])
+    }
+
+    func testAnotherNotebookSetUpInAWipedFolderStopsTheOpenDevice() async throws {
+        let server = FakeS3Server()
+        let root = temporaryDirectory()
+        let replica = NotebookReplica(directory: root.appending(path: "left"))
+        let coordinator = NotebookSyncCoordinator(
+            replica: replica, transport: transport(server, device: "left", root: root)
+        )
+        await coordinator.synchronize()
+        _ = try await replica.createNote(name: "Kept.md", text: "still here")
+        await coordinator.synchronize()
+        XCTAssertTrue(coordinator.status.isExchanged)
+        for key in server.keys(bucket: "notes") {
+            server.setObject(nil, bucket: "notes", key: key)
+        }
+
+        // A device with its own notes sets up sync before this one notices.
+        let other = NotebookReplica(directory: root.appending(path: "other"))
+        let otherCoordinator = NotebookSyncCoordinator(
+            replica: other, transport: transport(server, device: "other", root: root)
+        )
+        await otherCoordinator.synchronize()
+        _ = try await other.createNote(name: "Other.md", text: "another notebook")
+        await otherCoordinator.synchronize()
+        XCTAssertTrue(otherCoordinator.status.isExchanged)
+        XCTAssertNotEqual(other.catalogSnapshot?.notebookID, replica.catalogSnapshot?.notebookID)
+        let stored = server.keys(bucket: "notes")
+
+        _ = try await replica.createNote(name: "Later.md", text: "written after the wipe")
+        await coordinator.synchronize()
+        XCTAssertEqual(coordinator.lastError as? SyncError, .identityConflict)
+        XCTAssertEqual(server.keys(bucket: "notes"), stored, "nothing of this notebook is written")
+        await coordinator.synchronize()
+        XCTAssertEqual(coordinator.lastError as? SyncError, .identityConflict)
+        XCTAssertEqual(server.keys(bucket: "notes"), stored)
+    }
+
+    func testSeedStoredByAnotherDeviceDuringRestoreStopsThisOne() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let device = transport(server, device: "left")
+        _ = try await device.bootstrap(proposing: fixture.catalog)
+        for key in server.keys(bucket: "notes") {
+            server.setObject(nil, bucket: "notes", key: key)
+        }
+        let other = try Fixture()
+        server.storeBeforeNextPut(
+            try JSONEncoder().encode(other.catalog),
+            bucket: "notes", key: "meh/meh-notebook/seed.json")
+
+        do {
+            try await device.beginExchange()
+            XCTFail("Restored the seed over another notebook")
+        } catch {
+            XCTAssertEqual(error as? SyncError, .identityConflict)
+        }
+        do {
+            try await device.publish(fixture.notes[0])
+            XCTFail("Published into another notebook")
+        } catch {}
+        XCTAssertEqual(server.keys(bucket: "notes", prefix: "meh/meh-notebook/log/"), [])
+        let seed = try JSONDecoder().decode(SyncRecord.self, from: XCTUnwrap(
+            server.object(bucket: "notes", key: "meh/meh-notebook/seed.json")))
+        XCTAssertEqual(seed.notebookID, other.catalog.notebookID)
+    }
+
+    func testUnreadableLogEntryDoesNotHideLaterOnes() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let writer = transport(server, device: "writer")
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publish(fixture.notes[0])
+        try await writer.publish(fixture.notes[1])
+        let first = try XCTUnwrap(
+            server.keys(bucket: "notes", prefix: "meh/meh-notebook/log/").sorted().first)
+        server.setObject(Data("damaged".utf8), bucket: "notes", key: first)
+
+        let received = try await transport(server, device: "reader").fetch(after: nil).records
+        XCTAssertEqual(Set(received.map(\.id)), [fixture.catalog.id, fixture.notes[1].id])
+    }
+
+    func testDamagedDeviceStateStartsANewLog() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let root = temporaryDirectory()
+        let writer = transport(server, device: "writer", root: root)
+        _ = try await writer.bootstrap(proposing: fixture.catalog)
+        try await writer.publish(fixture.notes[0])
+        try Data("{".utf8).write(to: root.appending(path: "s3-writer/s3-device.json"))
+
+        let reopened = transport(server, device: "writer", root: root)
+        try await reopened.publish(fixture.notes[1])
+        let logs = Set(server.keys(bucket: "notes", prefix: "meh/meh-notebook/log/")
+            .map { $0.split(separator: "/")[3] })
+        XCTAssertEqual(logs.count, 2, "the new log leaves the old entries in place")
+        let received = try await transport(server, device: "reader").fetch(after: nil).records
+        XCTAssertTrue(Set(received.map(\.id)).isSuperset(of: fixture.notes.map(\.id)))
+    }
+
+    func testFormatRecordOfAnotherShapeNeedsAnUpdate() async throws {
+        let cases: [(String, SyncError)] = [
+            (#"{"format":{"reader":3}}"#, .updateRequired(
+                requiredVersion: NotebookSyncFormat.supportedVersion + 1)),
+            ("damaged", .invalidRecord),
+        ]
+        for (body, expected) in cases {
+            let server = FakeS3Server()
+            server.setObject(
+                Data(body.utf8), bucket: "notes", key: "meh/meh-notebook/format.json")
+            do {
+                _ = try await transport(server, device: "old").fetch(after: nil)
+                XCTFail("Fetched despite an unknown format record")
+            } catch {
+                XCTAssertEqual(error as? SyncError, expected, body)
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     private func transport(
