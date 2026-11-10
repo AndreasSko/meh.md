@@ -602,7 +602,12 @@ private struct NotebookScenePresentation: ViewModifier {
             placements: scene.replica.placements,
             sourceIDs: scene.movingIDs,
             initialParentID: scene.destination,
+            newNoteFolderID: scene.replica.defaultNewNoteParentID,
             isDestinationAllowed: { scene.canMoveSelection(into: $0) },
+            isCurrentLocation: {
+                !scene.movingFromTrash
+                    && scene.selectionAlreadyAtDestination(scene.movingIDs, parentID: $0)
+            },
             onSubmit: { parentID in
                 #if DEBUG
                 // Make the in-flight layout observable in isolated UI tests.

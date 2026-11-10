@@ -4,7 +4,11 @@ import SwiftUI
 struct NotebookMoveSheet: View {
     let placements: [NotebookPlacement]
     let sourceIDs: [UUID]
+    /// The folder new notes go to, shown with the same tray icon as in Files.
+    let newNoteFolderID: UUID?
     let isDestinationAllowed: (UUID?) -> Bool
+    /// True when moving there would change nothing, as `commitMove` decides.
+    let isCurrentLocation: (UUID?) -> Bool
     let onSubmit: (UUID?) async throws -> Void
     let onSuccess: () -> Void
 
@@ -15,14 +19,17 @@ struct NotebookMoveSheet: View {
 
     init(
         placements: [NotebookPlacement], sourceIDs: [UUID],
-        initialParentID: UUID?,
+        initialParentID: UUID?, newNoteFolderID: UUID? = nil,
         isDestinationAllowed: @escaping (UUID?) -> Bool,
+        isCurrentLocation: @escaping (UUID?) -> Bool = { _ in false },
         onSubmit: @escaping (UUID?) async throws -> Void,
         onSuccess: @escaping () -> Void
     ) {
         self.placements = placements
         self.sourceIDs = sourceIDs
+        self.newNoteFolderID = newNoteFolderID
         self.isDestinationAllowed = isDestinationAllowed
+        self.isCurrentLocation = isCurrentLocation
         self.onSubmit = onSubmit
         self.onSuccess = onSuccess
         _path = State(
@@ -62,7 +69,8 @@ struct NotebookMoveSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Move Here", action: submit)
-                        .disabled(isSubmitting || !isDestinationAllowed(path.last))
+                        .disabled(isSubmitting || !isDestinationAllowed(path.last)
+                            || isCurrentLocation(path.last))
                         .accessibilityIdentifier("notebook-confirm-move")
                 }
             }
@@ -78,25 +86,21 @@ struct NotebookMoveSheet: View {
         guard sourceIDs.count == 1, let sourceID = sourceIDs.first,
               let placement = placements.first(where: { $0.item.id == sourceID })
         else { return "\(sourceIDs.count) items" }
-        return placement.displayName
+        return placement.item.kind == .note
+            ? NotebookNoteName.title(from: placement.displayName) : placement.displayName
     }
 
+    /// Folders in the same order as Files.
     private func childFolders(of parentID: UUID?) -> [NotebookMoveFolder] {
-        placements.compactMap { placement in
-            guard placement.parentID == parentID,
-                  placement.item.kind == .folder,
-                  !placement.isInTrash,
+        NotebookOrdering.orderedChildren(placements, parentID: parentID, inTrash: false).compactMap { placement in
+            guard placement.item.kind == .folder,
                   isDestinationAllowed(placement.item.id)
             else { return nil }
             return NotebookMoveFolder(
                 id: placement.item.id,
-                name: placement.displayName
+                name: placement.displayName,
+                systemImage: placement.item.id == newNoteFolderID ? "tray" : "folder"
             )
-        }.sorted {
-            let order = $0.name.localizedStandardCompare($1.name)
-            return order == .orderedSame
-                ? $0.id.uuidString < $1.id.uuidString
-                : order == .orderedAscending
         }
     }
 
@@ -161,6 +165,7 @@ struct NotebookMoveSheet: View {
 private struct NotebookMoveFolder: Identifiable {
     let id: UUID
     let name: String
+    let systemImage: String
 }
 
 private struct NotebookMoveDestinationLevel: View {
@@ -211,7 +216,7 @@ private struct NotebookMoveDestinationLevel: View {
                                     Text(folder.name)
                                         .foregroundStyle(.primary)
                                 } icon: {
-                                    Image(systemName: "folder")
+                                    Image(systemName: folder.systemImage)
                                         .foregroundStyle(.tint)
                                 }
                                 Spacer()

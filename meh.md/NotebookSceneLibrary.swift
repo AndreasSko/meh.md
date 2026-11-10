@@ -999,7 +999,7 @@ extension NotebookSceneState {
         }
     }
 
-    private func selectionAlreadyAtDestination(_ ids: [UUID], parentID: UUID?) -> Bool {
+    func selectionAlreadyAtDestination(_ ids: [UUID], parentID: UUID?) -> Bool {
         let roots = effectiveSelectionRoots(ids)
         return !roots.isEmpty && roots.allSatisfy {
             $0.parentID == parentID && $0.item.parentID == parentID && $0.issues.isEmpty
