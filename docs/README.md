@@ -26,6 +26,8 @@ and the evidence collected along the way.
 - [Local sync service](local-sync-service.md): account-free replication tests.
 - [Notebook sync validation](notebook-sync-validation.md): local checks, CI,
   and recorded scale measurements.
+- [Sync when something is damaged](sync-damage-recovery.md): what is
+  skipped, repaired, or rebuilt, and what still pauses sync.
 - [Sync performance](sync-performance.md): synthetic history benchmarks and
   measured device-side improvements.
 - [Automatic sync](notebook-sync-scheduling.md): scheduling behavior and a

@@ -29,7 +29,10 @@ A backend implements `SyncTransport` (`Sources/NoteCore/SyncTransport.swift`):
   deletion. The default implementation reports that the backend cannot.
 
 Snapshot cleanup, maintenance status, progress handlers, and retry deadlines
-have defaults and are optional.
+have defaults and are optional. So is `storedDocumentIDs(notebookID:)`, for
+a backend whose stored snapshots can be removed behind its back: it lists
+the documents that still have a copy, and the coordinator uploads the
+others again.
 
 ## Optional capabilities
 

@@ -129,9 +129,10 @@ only the cooldown and its duplicate deadline, records recovery in the sync
 event log, and retries immediately. Missing cooldown metadata is recovered
 the same way when transport state still contains a retry deadline. Notes,
 pending uploads, account binding, and other sync state remain intact. A new
-server retry delay is persisted and respected normally. Unreadable files,
-failed recovery writes, and corruption elsewhere in transport state still
-stop setup.
+server retry delay is persisted and respected normally. Unreadable files
+and failed recovery writes still stop setup. Damaged transport state is set
+aside and rebuilt; see [sync when something is
+damaged](sync-damage-recovery.md).
 If Apple reports throttling or service unavailability without a usable delay,
 the adapter waits 30 seconds. A failed cooldown write stops further requests
 until the adapter is recreated from durable state.

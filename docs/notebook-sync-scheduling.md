@@ -34,8 +34,9 @@ APNs entitlements and the iOS remote-notification background mode.
   expiration releases that allowance and durable pending work remains.
 - Network restoration requests a foreground retry. Transient app/setup errors
   back off from 5 seconds to a maximum of 5 minutes, never earlier than a known
-  server cooldown. Successful exchanges reset the backoff. Identity and corrupt
-  data errors remain visible instead of triggering automatic retry loops.
+  server cooldown. Successful exchanges reset the backoff. Identity errors
+  remain visible instead of triggering automatic retry loops. A halted
+  transport without a known cause is rebuilt with the same backoff.
 - Failed engine events update status without starting another exchange,
   avoiding feedback loops for errors that need intervention.
 - App retry timers stop on leaving the foreground. CloudKit owns background
