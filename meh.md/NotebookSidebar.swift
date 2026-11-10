@@ -668,7 +668,8 @@ private struct NotebookLibraryBrowser: View {
             if !isCompact { return palette.accentColor ?? .accentColor }
             #endif
             return nil
-        case .open: return NotebookSidebarPalette.openNote
+        // While picking items, gray would read as a selection the circle denies.
+        case .open: return scene.selectingItems ? .clear : NotebookSidebarPalette.openNote
         case .none: return .clear
         }
     }
