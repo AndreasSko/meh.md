@@ -71,7 +71,7 @@ final class CloudKitStateDiskStorageTests: XCTestCase {
                        try old.page(after: nil, limit: 100).cursor)
     }
 
-    func testMissingCorruptAndTraversingPayloadReferencesFailClosed() async throws {
+    func testDamagedPayloadsAreRebuiltButNewerOrLinkedStateIsRefused() async throws {
         for mode in ["missing", "corrupt", "traversal", "future", "symlink"] {
             let root = temporaryDirectory()
             let store = try open(root)
@@ -91,10 +91,54 @@ final class CloudKitStateDiskStorageTests: XCTestCase {
                 else { json["inbox"] = [["digest": "../outside", "recordID": record.id]] }
                 try SyncFileIO.replace(JSONSerialization.data(withJSONObject: json), at: stateURL(root))
             }
-            XCTAssertThrowsError(try open(root)) {
-                XCTAssertEqual($0 as? CloudKitSyncTransportError, .corruptState)
+            guard ["missing", "corrupt", "traversal"].contains(mode) else {
+                // Written by a newer app, or not a plain file: not damage.
+                XCTAssertThrowsError(try open(root), mode) {
+                    XCTAssertEqual($0 as? CloudKitSyncTransportError, .corruptState)
+                }
+                XCTAssertTrue(FileManager.default.fileExists(atPath: stateURL(root).path))
+                continue
             }
+            let rebuilt = try open(root)
+            XCTAssertTrue(rebuilt.rebuiltDamagedState, mode)
+            let state = await rebuilt.snapshot()
+            XCTAssertEqual(state.inbox, [], mode)
+            // The manifest or the saved records show this device had
+            // joined, so it must never re-create the zone.
+            XCTAssertTrue(state.rebuiltAfterJoining, mode)
+            XCTAssertFalse(FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("cloudkit-sync-payloads").path), mode)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path)
+                .filter { $0.hasPrefix("cloudkit-sync-state.json.damaged-") }.count, 1, mode)
+            // The replacement accepts the record again and opens normally.
+            try await rebuilt.update { try $0.appendToInbox(record) }
+            let reopened = try open(root)
+            XCTAssertFalse(reopened.rebuiltDamagedState, mode)
+            let reloaded = await reopened.snapshot()
+            XCTAssertEqual(reloaded.inbox, [record], mode)
         }
+    }
+
+    func testInterruptedRebuildStillKnowsTheDeviceJoined() async throws {
+        let root = temporaryDirectory()
+        let store = try open(root)
+        let record = SyncRecord(snapshot: try NoteDocument(text: "fictional history").snapshot())
+        try await store.update { try $0.appendToInbox(record) }
+        try Data("bad bytes".utf8).write(to: try XCTUnwrap(payloadFiles(root).first))
+
+        // For example a full disk, which may also have caused the damage.
+        XCTAssertThrowsError(try CloudKitTransportStateStore(
+            directory: root, accountRecordName: "account", zoneName: "zone",
+            writeState: { _, _ in throw POSIXError(.ENOSPC) }
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stateURL(root).path))
+
+        let rebuilt = try open(root)
+        XCTAssertTrue(rebuilt.rebuiltDamagedState)
+        let state = await rebuilt.snapshot()
+        XCTAssertTrue(state.rebuiltAfterJoining)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("cloudkit-sync-payloads") }, [])
     }
 
     func testFailedManifestCommitLeavesPreviousStateAndReplay() async throws {

@@ -24,6 +24,9 @@ final class CloudKitStateDiskStorage {
     /// here has passed. Nil never matches, so such stores always revalidate.
     let recordValidationStamp: String?
     private var cached: [String: (record: SyncRecord, reference: Reference)] = [:]
+    /// Saved state from a newer app, or a payload path that is a link. Neither
+    /// is damage, so such state is refused and never replaced.
+    private(set) var refusedState = false
 
     init(directory: URL, recordValidationStamp: String? = nil) {
         self.directory = directory.appendingPathComponent("cloudkit-sync-payloads")
@@ -41,6 +44,7 @@ final class CloudKitStateDiskStorage {
         let version = header.diskFormatVersion
         if let version {
             guard version == Self.formatVersion else {
+                refusedState = true
                 throw CloudKitSyncTransportError.corruptState
             }
             decoder.userInfo[Self.contextKey] = self
@@ -101,6 +105,38 @@ final class CloudKitStateDiskStorage {
         return record
     }
 
+    /// Includes payloads set aside by a rebuild that did not finish.
+    var hasPayloads: Bool {
+        ([directory] + setAsideDirectories).contains {
+            !((try? FileManager.default.contentsOfDirectory(atPath: $0.path)) ?? []).isEmpty
+        }
+    }
+
+    /// Only for replacing damaged state: every payload is a copy of a cloud
+    /// record or of a note this device still holds. The folder is renamed,
+    /// so the damaged manifest can stay until its replacement is saved.
+    func setAsidePayloads() throws {
+        cached = [:]
+        guard FileManager.default.fileExists(atPath: directory.path) else { return }
+        try FileManager.default.moveItem(
+            at: directory,
+            to: directory.deletingLastPathComponent().appendingPathComponent(
+                directory.lastPathComponent + ".damaged-\(UUID().uuidString)")
+        )
+    }
+
+    /// Only once a manifest that doesn't use them is saved.
+    func removeSetAsidePayloads() {
+        for url in setAsideDirectories { try? FileManager.default.removeItem(at: url) }
+    }
+
+    private var setAsideDirectories: [URL] {
+        let parent = directory.deletingLastPathComponent()
+        return ((try? FileManager.default.contentsOfDirectory(atPath: parent.path)) ?? [])
+            .filter { $0.hasPrefix(directory.lastPathComponent + ".damaged-") }
+            .map { parent.appendingPathComponent($0) }
+    }
+
     /// Release in-memory evidence for retired records. Disk payloads remain
     /// available to the old manifest and any interrupted/local replay.
     func didCommit(_ state: CloudKitTransportState) {
@@ -117,6 +153,7 @@ final class CloudKitStateDiskStorage {
             if (try? candidate.resourceValues(
                 forKeys: [.isSymbolicLinkKey]
             ).isSymbolicLink) == true {
+                refusedState = true
                 throw CloudKitSyncTransportError.corruptState
             }
         }

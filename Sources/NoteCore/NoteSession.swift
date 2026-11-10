@@ -70,6 +70,13 @@ public final class NoteSession {
         }
     }
 
+    var canAttemptRecovery: Bool {
+        switch status {
+        case .recoveryRequired, .blocked: true
+        default: false
+        }
+    }
+
     @ObservationIgnored private let storage: any NoteStorage
     @ObservationIgnored private let saveScheduling: NoteSaveSchedulingPolicy
     @ObservationIgnored private var document: NoteDocument?
@@ -108,6 +115,37 @@ public final class NoteSession {
     }
 
     public func load() async {
+        await load(afterRepair: false)
+    }
+
+    /// Repairs a note that could not be loaded from a received version.
+    /// A recovery the user started finishes first. If it installed a
+    /// document, the version is merged into that instead of the file, so
+    /// the editor never falls behind what is saved.
+    func repair(
+        from remote: NoteSnapshot, writing repairFile: () async throws -> Bool
+    ) async throws -> Bool {
+        while loadInFlight || recoveryInFlight {
+            await withCheckedContinuation { operationWaiters.append($0) }
+        }
+        if isEditingEnabled {
+            try mergeRemote(remote)
+            try await flush()
+            return true
+        }
+        guard canAttemptRecovery else { return false }
+        // Holds off a recovery the user starts until the file is reloaded.
+        recoveryInFlight = true
+        defer {
+            recoveryInFlight = false
+            resumeOperationWaiters()
+        }
+        guard try await repairFile() else { return false }
+        await load(afterRepair: true)
+        return true
+    }
+
+    private func load(afterRepair: Bool) async {
         guard !loadInFlight,
             document == nil,
             saveTask == nil,
@@ -115,6 +153,8 @@ public final class NoteSession {
         else { return }
         switch status {
         case .loading where !loadStarted, .blocked, .loadFailed:
+            break
+        case .recoveryRequired where afterRepair:
             break
         case .loading, .saved, .saving, .saveFailed, .recoveryRequired:
             return

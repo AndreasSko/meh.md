@@ -9,6 +9,9 @@ struct NotebookSyncState: Codable {
     var appliedHeads: [String: Set<String>] = [:]
     var acknowledgedHeads: [String: Set<String>] = [:]
     var deletedIDs: Set<UUID> = []
+    /// Notes whose received versions could not be applied because the copy
+    /// on this device was unreadable. Once readable, they are received again.
+    var skippedNotes: Set<UUID>?
 }
 
 extension NotebookSyncState {
@@ -43,6 +46,27 @@ public struct NotebookStorageMismatch: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         "This storage already holds a different notebook. Choose in Settings › Sync what to do with it."
+    }
+}
+
+/// Notes whose files on this device are damaged. Everything else synced.
+public struct NotebookUnreadableNotes: Error, Equatable, LocalizedError {
+    public let noteIDs: Set<UUID>
+    /// Sorted names, where the catalog still lists the notes.
+    public let names: [String]
+
+    public init(noteIDs: Set<UUID>, names: [String]) {
+        self.noteIDs = noteIDs
+        self.names = names
+    }
+
+    public var errorDescription: String? {
+        switch names.count {
+        case 0: "A note on this device can’t be read and was not synced."
+        case 1: "“\(names[0])” can’t be read on this device and was not synced."
+        default:
+            "“\(names[0])” and \(names.count - 1) more can’t be read on this device and were not synced."
+        }
     }
 }
 
@@ -373,7 +397,14 @@ public final class NotebookSyncCoordinator {
             }
         )
         diagnosticLog?.record("history_check_end", counts: ["matched": hasHistory ? 1 : 0])
-        if !hasHistory {
+        // A note that was unreadable when its newer versions arrived is
+        // readable again, for example after the user restored it.
+        let readableAgain = (state.skippedNotes ?? []).subtracting(replica.unreadableNoteIDs)
+        if !readableAgain.isEmpty {
+            diagnosticLog?.record("replay_recovered_notes", counts: ["notes": readableAgain.count])
+            state.skippedNotes?.subtract(readableAgain)
+        }
+        if !hasHistory || !readableAgain.isEmpty {
             diagnosticLog?.record("replay_missing_history")
             state.cursor = nil
             state.appliedHeads = [:]
@@ -411,7 +442,15 @@ public final class NotebookSyncCoordinator {
                     activeNoteIDs: record.kind == .note ? [record.snapshot.noteID] : []
                 )
                 let before = replica.catalogSnapshot?.heads
-                try await replica.apply(record)
+                do {
+                    try await replica.apply(record)
+                } catch NotebookReplicaError.noteUnavailable(let id)
+                    where record.kind == .note && id == record.snapshot.noteID {
+                    // One damaged note must not stop the others. Saved with
+                    // this page's cursor, so the version is received again.
+                    state.skippedNotes = (state.skippedNotes ?? []).union([id])
+                    diagnosticLog?.record("note_unreadable_skipped")
+                }
                 if record.kind == .catalog { recordCatalogAcceptance(record, before: before) }
                 applied += 1
                 updateProgress(
@@ -594,6 +633,17 @@ public final class NotebookSyncCoordinator {
             )
         })
         diagnosticLog?.record("final_scan_end", counts: ["records": current.count])
+        let unreadable = replica.unreadableNoteIDs
+        if !unreadable.isEmpty {
+            diagnosticLog?.record("notes_unreadable", counts: ["notes": unreadable.count])
+            let items = (try? replica.catalogSnapshot.map {
+                try NotebookCatalogDocument(snapshot: $0).items()
+            }) ?? []
+            throw NotebookUnreadableNotes(
+                noteIDs: unreadable,
+                names: items.filter { unreadable.contains($0.id) }.map(\.name).sorted()
+            )
+        }
         status =
             current.allSatisfy { state.acknowledgedHeads[$0.documentKey] == $0.snapshot.heads }
             ? .exchanged(Date()) : .pending
@@ -842,7 +892,17 @@ public final class NotebookSyncCoordinator {
         do {
             state = try JSONDecoder().decode(
                 NotebookSyncState.self, from: Data(contentsOf: stateURL))
-        } catch CocoaError.fileReadNoSuchFile { return NotebookSyncState(scope: transport.scope) }
+        } catch CocoaError.fileReadNoSuchFile {
+            return NotebookSyncState(scope: transport.scope)
+        } catch is DecodingError {
+            // Only sync progress lives here, and all of it can be worked
+            // out again: the next exchange receives everything once more
+            // and uploads what the storage does not hold.
+            try FileManager.default.moveItem(at: stateURL, to: stateURL.deletingLastPathComponent()
+                .appending(path: stateURL.lastPathComponent + ".damaged-\(UUID().uuidString)"))
+            diagnosticLog?.record("sync_state_rebuilt")
+            return NotebookSyncState(scope: transport.scope)
+        }
         guard state.version == 2 else { throw SyncError.invalidRecord }
         guard state.scope == transport.scope else { throw SyncError.scopeChanged }
         if let current = replica.catalogSnapshot, let expected = state.notebookID,

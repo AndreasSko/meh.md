@@ -196,4 +196,6 @@ struct CloudKitSyncActivityTracker {
 struct CloudKitFetchedCommit: Equatable, Sendable {
     var recordCount = 0
     var deletionCount = 0
+    /// Records newly skipped because this device cannot understand them.
+    var unreadableCount = 0
 }

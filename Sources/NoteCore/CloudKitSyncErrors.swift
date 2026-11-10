@@ -22,6 +22,8 @@ enum CloudKitSyncErrors: SyncBackendErrors {
             return "CloudKitSyncTransportError.unrecoverableRetryDelay"
         case .invalidRemoteRecord:
             return "CloudKitSyncTransportError.invalidRemoteRecord"
+        case .assetUnavailable:
+            return "CloudKitSyncTransportError.assetUnavailable"
         case .unexpectedDeletion:
             return "CloudKitSyncTransportError.unexpectedDeletion"
         case .uploadFailed(let code):
@@ -37,7 +39,7 @@ enum CloudKitSyncErrors: SyncBackendErrors {
     static func isTransient(_ error: any Error) -> Bool? {
         if let error = error as? CloudKitSyncTransportError {
             switch error {
-            case .uploadNotAcknowledged: return true
+            case .uploadNotAcknowledged, .assetUnavailable: return true
             case .uploadFailed(let code): return isTransientCloudCode(code)
             default: return false
             }
@@ -131,7 +133,7 @@ enum CloudKitSyncErrors: SyncBackendErrors {
                 actionHint: "Review the sync status before trying again.",
                 disposition: .unavailable
             )
-        case .uploadNotAcknowledged:
+        case .uploadNotAcknowledged, .assetUnavailable:
             return SyncFailurePresentation.transientFailure
         case let .snapshotTooLarge(documentID, kind, displayName):
             if kind == .catalog {

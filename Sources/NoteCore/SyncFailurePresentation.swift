@@ -113,6 +113,18 @@ public struct SyncFailurePresentation: Equatable, Sendable {
             )
         }
 
+        if let error = error as? NotebookUnreadableNotes {
+            let message: LocalizedStringResource = switch error.names.count {
+            case 0: "A note on this device is damaged and was not synced. Your other notes are synced."
+            case 1: "“\(error.names[0])” is damaged on this device and was not synced. Your other notes are synced."
+            default: "“\(error.names[0])” and \(error.names.count - 1) more are damaged on this device and were not synced. Your other notes are synced."
+            }
+            return Failure(
+                "A note can't be read", message,
+                actionHint: "Open the note to restore its last saved version, or delete it."
+            )
+        }
+
         if error is CancellationError {
             return Failure(
                 "Sync stopped",

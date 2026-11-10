@@ -7,6 +7,9 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
     case corruptState
     case unrecoverableRetryDelay
     case invalidRemoteRecord
+    /// A record arrived, but its downloaded file could not be read on this
+    /// device. Fetching it again can succeed.
+    case assetUnavailable
     case unexpectedDeletion
     case uploadFailed(code: Int)
     case uploadNotAcknowledged
@@ -23,6 +26,7 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
             "The saved CloudKit retry delay cannot be recovered safely. "
                 + "Sync is paused to avoid bypassing server throttling."
         case .invalidRemoteRecord: "CloudKit returned an invalid snapshot."
+        case .assetUnavailable: "A downloaded snapshot could not be read."
         case .unexpectedDeletion:
             "A remote snapshot was deleted. Sync is paused to preserve history."
         case let .uploadFailed(code):
@@ -56,6 +60,12 @@ struct CloudKitTransportState: Codable, Equatable {
     var scannedDeletedNoteIDs: Set<UUID>
     var unresolvedRemoteDeletionRecordIDs: Set<String>
     var remoteDeletedSnapshotIDs: Set<String>
+    /// Cloud records this device could not understand. They are skipped
+    /// and read again after a relaunch, when an update may understand them.
+    var unreadableRecordIDs: Set<String> = []
+    /// Set when damaged state was replaced. The inbox then starts empty
+    /// although this device has joined, and must not re-create the zone.
+    var rebuiltAfterJoining = false
     var hasUnexpectedDeletion: Bool
     var remoteDeletionHaltReason: CloudKitRemoteDeletionHaltReason?
     var completedSyncStateMigrations: Set<String>
@@ -102,6 +112,7 @@ struct CloudKitTransportState: Codable, Equatable {
         case remoteDeletedSnapshotIDs
         case hasUnexpectedDeletion, retryNotBefore
         case remoteDeletionHaltReason, completedSyncStateMigrations
+        case unreadableRecordIDs, rebuiltAfterJoining
     }
 
     init(from decoder: any Decoder) throws {
@@ -169,6 +180,12 @@ struct CloudKitTransportState: Codable, Equatable {
         remoteDeletedSnapshotIDs = try values.decodeIfPresent(
             Set<String>.self, forKey: .remoteDeletedSnapshotIDs
         ) ?? []
+        unreadableRecordIDs = try values.decodeIfPresent(
+            Set<String>.self, forKey: .unreadableRecordIDs
+        ) ?? []
+        rebuiltAfterJoining = try values.decodeIfPresent(
+            Bool.self, forKey: .rebuiltAfterJoining
+        ) ?? false
         do {
             retryNotBefore = try values.decodeIfPresent(
                 Date.self, forKey: .retryNotBefore
@@ -229,6 +246,12 @@ struct CloudKitTransportState: Codable, Equatable {
         try values.encodeIfPresent(remoteDeletionHaltReason, forKey: .remoteDeletionHaltReason)
         try values.encode(completedSyncStateMigrations, forKey: .completedSyncStateMigrations)
         try values.encode(remoteDeletedSnapshotIDs, forKey: .remoteDeletedSnapshotIDs)
+        if !unreadableRecordIDs.isEmpty {
+            try values.encode(unreadableRecordIDs, forKey: .unreadableRecordIDs)
+        }
+        if rebuiltAfterJoining {
+            try values.encode(rebuiltAfterJoining, forKey: .rebuiltAfterJoining)
+        }
         try values.encodeIfPresent(retryNotBefore, forKey: .retryNotBefore)
     }
 
@@ -268,6 +291,7 @@ struct CloudKitTransportState: Codable, Equatable {
         try CloudKitSnapshotSizeLimit.validate(record)
         unresolvedRemoteDeletionRecordIDs.remove(record.id)
         remoteDeletedSnapshotIDs.remove(record.id)
+        unreadableRecordIDs.remove(record.id)
         if purgedRecordIDs.contains(record.id) {
             if record.protocolVersion == 2, record.kind == .note,
                deletedNoteIDs.contains(record.snapshot.noteID) {
@@ -351,6 +375,7 @@ struct CloudKitTransportState: Codable, Equatable {
         let priorUnresolved = unresolvedRemoteDeletionRecordIDs
         let previouslyUnexpected = hasUnexpectedDeletion
         pendingRemoteDeletionIDs.subtract(recordNames)
+        unreadableRecordIDs.subtract(recordNames)
         if protocolVersion == 1 {
             hasUnexpectedDeletion = hasUnexpectedDeletion
                 || !recordNames.isEmpty
@@ -537,6 +562,8 @@ actor CloudKitTransportStateStore {
         maximumEntries: 256, maximumPayloadBytes: 64 * 1_024 * 1_024
     )
     nonisolated let writeHealth = CloudKitWriteHealth()
+    /// Damaged saved state was set aside and replaced when opening.
+    nonisolated let rebuiltDamagedState: Bool
     private let writeState: @Sendable (Data, URL) throws -> Void
 
     /// Decoding and validating the durable inbox can be substantial. Leave
@@ -578,48 +605,89 @@ actor CloudKitTransportStateStore {
             directory: directory, recordValidationStamp: recordValidationStamp
         )
         fileURL = directory.appendingPathComponent("cloudkit-sync-state.json")
+        var rebuilt = false
+        var loaded: CloudKitTransportState?
         if FileManager.default.fileExists(atPath: fileURL.path) {
-            let decoded: (
-                state: CloudKitTransportState, legacy: Bool, validatedByThisBuild: Bool
-            )
+            let data: Data
             do {
-                decoded = try diskStorage.decode(Data(contentsOf: fileURL))
+                data = try Data(contentsOf: fileURL)
             } catch {
+                // Unreadable is not damaged: the device may be locked.
                 throw CloudKitSyncTransportError.corruptState
             }
-            state = decoded.state
             do {
+                let decoded = try diskStorage.decode(data)
                 // Every record this build writes passes full validation first,
                 // and loading checked each payload against its digest. Only
                 // the record decoding is skipped; every state invariant runs.
                 // Only the slow full check reports progress.
                 if decoded.validatedByThisBuild {
-                    try state.validate(
-                        expectedProtocolVersion: protocolVersion, reusing: state
+                    try decoded.state.validate(
+                        expectedProtocolVersion: protocolVersion, reusing: decoded.state
                     )
                 } else {
-                    try state.validate(
+                    try decoded.state.validate(
                         expectedProtocolVersion: protocolVersion, reusing: nil,
                         progress: validationProgress
                     )
                 }
+                guard decoded.state.accountRecordName == accountRecordName,
+                      decoded.state.zoneName == zoneName else {
+                    throw SyncError.scopeChanged
+                }
+                loaded = decoded.state
+                // Keep a recovered retry deadline on disk until initialize()
+                // records that recovery.
+                if !decoded.legacy, !decoded.validatedByThisBuild,
+                   !decoded.state.recoveredInvalidRetryDeadline,
+                   recordValidationStamp != nil {
+                    // Records were already validated above, so a failed stamp
+                    // write only means the next launch validates them again.
+                    try? self.writeState(diskStorage.encode(decoded.state), fileURL)
+                }
             } catch {
                 if error as? SyncError == .scopeChanged { throw error }
-                throw CloudKitSyncTransportError.corruptState
+                guard Self.isDamage(error), !diskStorage.refusedState else {
+                    throw CloudKitSyncTransportError.corruptState
+                }
+                // Everything here can be fetched or worked out again: the
+                // inbox from iCloud, the outbox and deletions from the
+                // notebook. Keep the damaged manifest for diagnosis.
+                // A manifest that is still JSON names what was received.
+                let manifest = (try? JSONSerialization.jsonObject(with: data))
+                    as? [String: Any]
+                let joined = diskStorage.hasPayloads
+                    || (manifest?["inbox"] as? [Any])?.isEmpty == false
+                    || manifest?["canonicalSnapshotID"] != nil
+                    || manifest?["rebuiltAfterJoining"] as? Bool == true
+                for name in (try? FileManager.default.contentsOfDirectory(
+                    atPath: directory.path)) ?? []
+                where name.hasPrefix("cloudkit-sync-state.json.damaged-") {
+                    try? FileManager.default.removeItem(
+                        at: directory.appendingPathComponent(name))
+                }
+                try? FileManager.default.copyItem(
+                    at: fileURL,
+                    to: directory.appendingPathComponent(
+                        "cloudkit-sync-state.json.damaged-\(UUID().uuidString)")
+                )
+                // The damaged manifest is replaced in one step, so a rebuild
+                // that stops early runs again with the same evidence.
+                try diskStorage.setAsidePayloads()
+                var fresh = CloudKitTransportState(
+                    accountRecordName: accountRecordName,
+                    zoneName: zoneName,
+                    protocolVersion: protocolVersion
+                )
+                fresh.rebuiltAfterJoining = joined
+                try self.writeState(diskStorage.encode(fresh), fileURL)
+                loaded = fresh
+                rebuilt = true
             }
-            guard state.accountRecordName == accountRecordName,
-                  state.zoneName == zoneName else {
-                throw SyncError.scopeChanged
-            }
-            // Keep a recovered retry deadline on disk until initialize()
-            // records that recovery.
-            if !decoded.legacy, !decoded.validatedByThisBuild,
-               !state.recoveredInvalidRetryDeadline,
-               recordValidationStamp != nil {
-                // Records were already validated above, so a failed stamp
-                // write only means the next launch validates them again.
-                try? self.writeState(diskStorage.encode(state), fileURL)
-            }
+        }
+        diskStorage.removeSetAsidePayloads()
+        if let loaded {
+            state = loaded
         } else {
             state = CloudKitTransportState(
                 accountRecordName: accountRecordName,
@@ -628,6 +696,22 @@ actor CloudKitTransportStateStore {
             )
             try self.writeState(diskStorage.encode(state), fileURL)
         }
+        rebuiltDamagedState = rebuilt
+    }
+
+    /// A file that is present but could not be read, as on a locked device,
+    /// says nothing about its content.
+    private static func isDamage(_ error: any Error) -> Bool {
+        if error is DecodingError { return true }
+        let error = error as NSError
+        if error.domain == NSPOSIXErrorDomain { return false }
+        if error.domain == NSCocoaErrorDomain {
+            return ![
+                CocoaError.fileReadNoPermission.rawValue,
+                CocoaError.fileReadUnknown.rawValue,
+            ].contains(error.code)
+        }
+        return true
     }
 
     func snapshot() -> CloudKitTransportState { state }
@@ -765,11 +849,12 @@ actor CloudKitEventCommitter {
     func commitFetched(
         _ records: [SyncRecord],
         deleting recordNames: Set<String> = [],
+        unreadable: Set<String> = [],
         bootstrapRecordName: String = "",
         zoneChangeToken: Data? = nil
     ) async throws -> CloudKitFetchedCommit {
         guard failure == nil else { throw failure! }
-        guard !records.isEmpty || !recordNames.isEmpty
+        guard !records.isEmpty || !recordNames.isEmpty || !unreadable.isEmpty
             || zoneChangeToken != nil else {
             return CloudKitFetchedCommit()
         }
@@ -795,6 +880,13 @@ actor CloudKitEventCommitter {
                     recordNames,
                     bootstrapRecordName: bootstrapRecordName
                 )
+                if !unreadable.isEmpty {
+                    let known = Set(state.inbox.map(\.id)).union(state.purgedRecordIDs)
+                    let skipped = unreadable.subtracting(known)
+                    result.unreadableCount = skipped
+                        .subtracting(state.unreadableRecordIDs).count
+                    state.unreadableRecordIDs.formUnion(skipped)
+                }
                 for record in records {
                     if try state.appendToInboxIfChanged(record) {
                         result.recordCount += 1
@@ -1181,6 +1273,8 @@ struct CloudKitRecordCodec: @unchecked Sendable {
     func decode(_ record: CKRecord) throws -> SyncRecord {
         do {
             return try decodeRemoteRecord(record)
+        } catch CloudKitSyncTransportError.assetUnavailable {
+            throw CloudKitSyncTransportError.assetUnavailable
         } catch let error as SyncError {
             if case .updateRequired = error { throw error }
             throw CloudKitSyncTransportError.invalidRemoteRecord
@@ -1201,6 +1295,8 @@ struct CloudKitRecordCodec: @unchecked Sendable {
                 record, validateSnapshot: false
             )
             return try cache.validate(value, mode: mode)
+        } catch CloudKitSyncTransportError.assetUnavailable {
+            throw CloudKitSyncTransportError.assetUnavailable
         } catch let error as SyncError {
             if case .updateRequired = error { throw error }
             throw CloudKitSyncTransportError.invalidRemoteRecord
@@ -1217,9 +1313,12 @@ struct CloudKitRecordCodec: @unchecked Sendable {
               record.recordID.zoneID == zoneID,
               let id: String = record["snapshotID"],
               let headsData: Data = record["heads"],
-              let asset: CKAsset = record["document"],
-              let source = asset.fileURL else {
+              let asset: CKAsset = record["document"] else {
             throw CloudKitSyncTransportError.invalidRemoteRecord
+        }
+        // The record is complete, but its file did not reach this device.
+        guard let source = asset.fileURL else {
+            throw CloudKitSyncTransportError.assetUnavailable
         }
         try CloudKitRemoteRecordValidator.validateSnapshotID(id)
         guard record.recordID.recordName == id
@@ -1261,15 +1360,22 @@ struct CloudKitRecordCodec: @unchecked Sendable {
             kind = decodedKind
             notebookID = decodedNotebookID
         }
-        let attributes = try FileManager.default.attributesOfItem(
-            atPath: source.path
-        )
-        guard let size = attributes[.size] as? NSNumber
-        else { throw CloudKitSyncTransportError.invalidRemoteRecord }
-        try CloudKitSnapshotSizeLimit.validateAssetSize(
-            size.uint64Value, protocolVersion: version
-        )
-        let data = try Data(contentsOf: source)
+        let data: Data
+        do {
+            let attributes = try FileManager.default.attributesOfItem(
+                atPath: source.path
+            )
+            guard let size = attributes[.size] as? NSNumber
+            else { throw CloudKitSyncTransportError.assetUnavailable }
+            try CloudKitSnapshotSizeLimit.validateAssetSize(
+                size.uint64Value, protocolVersion: version
+            )
+            data = try Data(contentsOf: source)
+        } catch let error as CloudKitSyncTransportError {
+            throw error
+        } catch {
+            throw CloudKitSyncTransportError.assetUnavailable
+        }
         try CloudKitSnapshotSizeLimit.validateAssetSize(
             UInt64(data.count), protocolVersion: version
         )
@@ -1847,6 +1953,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
         (recoveredRetryMetadata ? ["cloud retry metadata recovered"] : [])
             + (recoveredLegacySnapshotDeletionHalt
                 ? ["legacy snapshot deletion halt recovered"] : [])
+            + (rebuiltDamagedState ? ["damaged cloud sync state rebuilt"] : [])
+            + (rebuiltEngineState ? ["damaged cloud engine state rebuilt"] : [])
     }
 
     private static let pageSize = 100
@@ -1885,6 +1993,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
     /// CKSyncEngine only fetches after a push told it about changes, and
     /// pushes can be lost. A new transport, as at app launch, checks too.
     private var serverCheckRequested = true
+    private var retriedUnreadableRecords = false
+    public private(set) var rebuiltDamagedState = false
+    public private(set) var rebuiltEngineState = false
     private var retryThrottle = CloudKitRetryThrottle()
     private var cleanupProgressHandler:
         (@Sendable (SyncCleanupProgress) async -> Void)?
@@ -2369,9 +2480,19 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
                 $0.recoveredInvalidRetryDeadline = false
             }
         }
-        engine = try engineFactory(
-            saved.engineState, self, automaticallySync
-        )
+        rebuiltDamagedState = store.rebuiltDamagedState
+        do {
+            engine = try engineFactory(
+                saved.engineState, self, automaticallySync
+            )
+        } catch where saved.engineState != nil {
+            // The engine state only holds its position and queue. A new
+            // engine fetches the zone again, and the uploads still owed
+            // are queued from the outbox below.
+            try await store.update { $0.engineState = nil }
+            engine = try engineFactory(nil, self, automaticallySync)
+            rebuiltEngineState = true
+        }
         let oversizedOutbox = try CloudKitSnapshotSizeLimit.partition(
             Array(saved.outbox.values)
         ).rejected
@@ -2720,11 +2841,42 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
                 throw error
             }
         }
+        if !retriedUnreadableRecords {
+            try await retryUnreadableRecords()
+            retriedUnreadableRecords = true
+        }
         try await resolveRemoteSnapshotDeletions()
         let state = await store.snapshot()
         try assertActive()
         try state.validateRemoteDeletions()
         return try state.page(after: cursor, limit: Self.pageSize)
+    }
+
+    /// Reads skipped records again, once per launch: an app update may have
+    /// taught this device to understand them.
+    private func retryUnreadableRecords() async throws {
+        let ids = await store.snapshot().unreadableRecordIDs
+        guard !ids.isEmpty else { return }
+        var modifications: [CKRecord] = []
+        var deleted: [CKRecord.ID] = []
+        for name in ids.sorted() {
+            let id = CKRecord.ID(recordName: name, zoneID: zoneID)
+            do {
+                modifications.append(try await cloudRequest(
+                    labLabel: "fetch.unreadableRecord"
+                ) { try await database.record(for: id) })
+            } catch let error as CKError where error.code == .unknownItem {
+                deleted.append(id)
+            }
+        }
+        // Never known to this device, so their removal needs no proof.
+        let gone = Set(deleted.map(\.recordName))
+        if !gone.isEmpty {
+            try await store.update { $0.unreadableRecordIDs.subtract(gone) }
+        }
+        _ = try await commitFetchedChanges(
+            modifications, deletions: [], event: "unreadable_records_retried"
+        )
     }
 
     /// Makes the next fetch also read the zone directly from iCloud, so it
@@ -2777,6 +2929,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
         let state = await store.snapshot()
         let known = Set(state.inbox.map(\.id))
             .union(state.purgedRecordIDs)
+            .union(state.unreadableRecordIDs)
             .union([mode.bootstrapName])
         var records: [CKRecord] = []
         for id in ids where !known.contains(id.recordName) {
@@ -2809,9 +2962,20 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
         let recordNames = Set(deletions.filter {
             $0.zoneID == zoneID
         }.map(\.recordName))
-        let records = try modifications
-            .filter { $0.recordID.zoneID == zoneID }
-            .map(decode)
+        var records: [SyncRecord] = []
+        var unreadable = Set<String>()
+        for modification in modifications where modification.recordID.zoneID == zoneID {
+            do {
+                records.append(try decode(modification))
+            } catch CloudKitSyncTransportError.invalidRemoteRecord
+                where modification.recordID.recordName != mode.bootstrapName {
+                // One record this device cannot understand must not stop
+                // the rest. Each exchange checks the notebook's format
+                // first, so "Update required" still takes precedence when
+                // a newer app wrote it.
+                unreadable.insert(modification.recordID.recordName)
+            }
+        }
         if zoneChangeToken != nil, mode == .notebook,
            let notebookID = await store.snapshot().inbox.first(where: {
                $0.kind == .catalog
@@ -2828,9 +2992,15 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
         let committed = try await eventCommitter.commitFetched(
             records,
             deleting: recordNames,
+            unreadable: unreadable,
             bootstrapRecordName: mode.bootstrapName,
             zoneChangeToken: zoneChangeToken
         )
+        if committed.unreadableCount > 0 {
+            await diagnose("unreadable_records_skipped", counts: [
+                "records": committed.unreadableCount
+            ])
+        }
         // The newest server timestamp shows how current a delivery
         // is, which counts alone cannot tell.
         let newest = modifications.compactMap(\.modificationDate).max()
@@ -3559,7 +3729,8 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
         // Only a first join may create the zone. Once this device has joined,
         // a missing zone means the cloud data was deleted; re-creating it
         // would silently re-seed iCloud before anyone decided to.
-        guard await store.snapshot().inbox.isEmpty else {
+        let joined = await store.snapshot()
+        guard joined.inbox.isEmpty, !joined.rebuiltAfterJoining else {
             try await haltForDeletedZone()
             throw CloudKitSyncTransportError.unexpectedDeletion
         }
@@ -3913,7 +4084,9 @@ extension CloudKitSyncTransport {
                     event: "engine_fetched"
                 )
                 activityTracker.recordFetch(
-                    recordCount: committed.recordCount,
+                    // A skipped record still starts an exchange, which
+                    // checks whether an update is required.
+                    recordCount: committed.recordCount + committed.unreadableCount,
                     deletionCount: committed.deletionCount
                 )
             case let .sentRecordZoneChanges(savedCloudRecords, failedSaves):
