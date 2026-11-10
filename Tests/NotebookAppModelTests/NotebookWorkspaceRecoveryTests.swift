@@ -172,6 +172,49 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
         XCTAssertNil(workspace.syncSetupError)
     }
 
+    func testHaltWithoutAKnownCauseIsRebuiltWithoutARelaunch() async throws {
+        let factory = RecoveryTransportFactory()
+        let original = HaltableRecordingTransport(
+            scope: "temporary", remoteStore: factory.remoteStore
+        )
+        let workspace = makeWorkspace(transport: original, factory: factory)
+        await workspace.start()
+        // For example an iCloud account that could not be checked while
+        // the engine prepared an upload.
+        await original.setHalt(
+            .other, underlyingError: CloudKitSyncTransportError.accountUnavailable,
+            recoverable: false
+        )
+        // While halted, the status offers Try Again instead of a relaunch.
+        await workspace.receiveCloudActivity(.failed("iCloud account unavailable"))
+        XCTAssertEqual(workspace.syncHalt?.reason, .other)
+        XCTAssertTrue(workspace.canRetrySync)
+
+        await workspace.refresh(manual: false)
+
+        XCTAssertEqual(factory.creationCount, 1)
+        XCTAssertEqual(factory.expectedScopes, ["temporary"])
+        let isRetired = await original.isRetired
+        XCTAssertTrue(isRetired)
+        XCTAssertNil(workspace.syncHalt)
+        XCTAssertNil(workspace.syncFailure)
+    }
+
+    func testRetriesOfAnUnknownFailureEndWhenItIsNotTemporary() {
+        var policy = NotebookSyncRetryPolicy()
+        // For example missing iCloud permission, which no rebuild fixes.
+        let error = CloudKitSyncTransportError.accountUnavailable
+        let now = Date()
+        XCTAssertNil(policy.retryDate(for: error, now: now))
+        for _ in 0..<7 {
+            XCTAssertNotNil(policy.retryDate(for: error, now: now, always: true))
+        }
+        XCTAssertFalse(policy.mayRetryUnknownFailure)
+        XCTAssertNil(policy.retryDate(for: error, now: now, always: true))
+        policy.reset()
+        XCTAssertNotNil(policy.retryDate(for: error, now: now, always: true))
+    }
+
     func testAccountAvailabilityAutomaticallyRejoinsTheSameAccount() async throws {
         let factory = RecoveryTransportFactory()
         let original = HaltableRecordingTransport(scope: "same-account", remoteStore: factory.remoteStore)

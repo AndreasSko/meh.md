@@ -382,12 +382,6 @@ private struct NotebookSyncFailureView: View {
                         if hint != "Try syncing again.",
                            hint != "Sync will retry automatically." {
                             Text(hint).foregroundStyle(.secondary)
-                        } else if !workspace.canRetrySync,
-                                  workspace.syncHalt?.reason == .other {
-                            // A relaunch rebuilds the transport; other halts
-                            // would stop again or have their own explanation.
-                            Text("Close and reopen the app to try again.")
-                                .foregroundStyle(.secondary)
                         }
                     }
                     if workspace.canRetrySync {
