@@ -91,6 +91,7 @@ struct NotebookSearchResults: View {
 
 struct NotebookSearchRow: View {
     let result: NotebookSearchResult
+    @Environment(\.mehPalette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -98,11 +99,7 @@ struct NotebookSearchRow: View {
             if !result.path.isEmpty {
                 Text(result.path).font(.caption).foregroundStyle(.secondary)
             }
-            Text(highlight(
-                result.bodyMatchRange == nil
-                    ? NotebookRecentPreview.text(from: result.excerpt) : result.excerpt,
-                range: result.excerptMatchRange
-            ))
+            Text(highlight(result.excerpt, range: result.excerptMatchRange))
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -113,8 +110,8 @@ struct NotebookSearchRow: View {
         if let range, let stringRange = Range(range, in: text),
            let lower = AttributedString.Index(stringRange.lowerBound, within: result),
            let upper = AttributedString.Index(stringRange.upperBound, within: result) {
-            result[lower..<upper].font = .body.bold()
-            result[lower..<upper].underlineStyle = .single
+            result[lower..<upper].backgroundColor = palette.markColor
+            result[lower..<upper].foregroundColor = .primary
         }
         return result
     }

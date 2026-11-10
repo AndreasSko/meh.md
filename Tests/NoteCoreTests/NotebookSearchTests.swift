@@ -65,6 +65,27 @@ final class NotebookSearchTests: XCTestCase {
         XCTAssertEqual((result.excerpt as NSString).substring(with: range), "needle")
     }
 
+    func testExcerptsShowPlainTextWithoutMarkdown() throws {
+        let corpus = NotebookSearchCorpus(
+            notebookID: UUID(),
+            entries: [.init(
+                id: UUID(),
+                title: "Lisbon",
+                path: "",
+                text: "## To do\n- [ ] Reserve dinner in ==Bairro Alto==\n- [x] Read [[Packing list|the list]]"
+            )],
+            unavailableCount: 0
+        )
+
+        let body = try XCTUnwrap(corpus.search("bairro").first)
+        XCTAssertEqual(body.excerpt, "To do Reserve dinner in Bairro Alto Read the list")
+        let range = try XCTUnwrap(body.excerptMatchRange)
+        XCTAssertEqual((body.excerpt as NSString).substring(with: range), "Bairro")
+
+        let title = try XCTUnwrap(corpus.search("lisbon").first)
+        XCTAssertEqual(title.excerpt, "To do Reserve dinner in Bairro Alto Read the list")
+    }
+
     func testRepresentativeCorpusFindsBodyPhraseWithTitleFirstOrdering() {
         let exact = UUID()
         let prefix = UUID()
