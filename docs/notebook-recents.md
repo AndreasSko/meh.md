@@ -1,7 +1,9 @@
 # Expanded Recents
 
-On iPhone and iPad, Recents keeps its compact list of five notes. When more
-notes are available, a small grabber appears below the rows. Tap it or pull
+On iPhone and iPad, Recents keeps a compact list of five notes. Settings ›
+Appearance › Recent Notes changes that to anything from 3 to 15; every
+pinned note shows either way. When more notes are available, a small
+grabber appears below the rows. Tap it or pull
 it down to expand the card. A short pull settles back; a deliberate pull or
 flick commits on release. The grabber stays at the bottom when expanded.
 Tap it or pull it up to close and restore Files and its browser position.
@@ -11,7 +13,7 @@ a note returns Recents to its compact state. In a regular sidebar, selecting
 a note leaves expanded Recents available beside the editor. Search, Show in
 Files, selection mode, and notebook switches end expanded browsing.
 
-On Mac, a small More button beneath the five notes unfolds Recents into a
+On Mac, a small More button beneath the compact notes unfolds Recents into a
 scrollable card inside the sidebar. The editor stays visible. The fixed
 Less button in the fixed bottom footer or Escape returns to Files at its
 previous position. Only the notes scroll, so the footer stays visible. The
@@ -43,8 +45,9 @@ shorter settling animation.
 
 The catalog already records the latest activity for each eligible note. The
 full projection exposes all of these notes, with pins first. It is a list of
-recent notes, not a separate event for every visit. The compact five-item
-projection and local five-pin limit retain their existing behavior, including
+recent notes, not a separate event for every visit. Each window cuts the
+compact list from it at the chosen length. The local five-pin limit keeps its
+existing behavior, including
 concurrent-pin conflict handling. Trash and permanently deleted notes remain
 excluded. Hidden notes are also excluded from both projections.
 

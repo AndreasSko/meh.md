@@ -412,8 +412,33 @@ private struct NotebookAppearanceSection: View {
     private var ink = MehPalette.Ink.black
     @AppStorage(MehPalette.highlighterKey, store: NotebookEditorPreferences.store)
     private var highlighter = MehPalette.Highlighter.yellow
+    @AppStorage(NotebookNavigationState.recentCountKey, store: NotebookEditorPreferences.store)
+    private var recentCount = NotebookNavigationState.defaultRecentCount
 
     var body: some View {
+        pens
+    }
+
+    private var recents: some View {
+        let range = NotebookNavigationState.recentCountRange
+        let count = min(max(recentCount, range.lowerBound), range.upperBound)
+        return Stepper(
+            value: Binding(get: { count }, set: { recentCount = $0 }),
+            in: range
+        ) {
+            HStack {
+                Text("Recent Notes")
+                Spacer()
+                Text(count, format: .number)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityValue(Text(count, format: .number))
+        .accessibilityIdentifier("notebook-appearance-recent-count")
+    }
+
+    private var pens: some View {
         Section {
             NotebookAppearancePreview(
                 palette: MehPalette(ink: ink, highlighter: highlighter)
@@ -428,10 +453,11 @@ private struct NotebookAppearanceSection: View {
                 color: { Color(uiPlatformColor: $0.platformColor) }, name: \.name
             )
             .accessibilityIdentifier("notebook-appearance-highlighter")
+            recents
         } header: {
             Text("Appearance")
         } footer: {
-            Text("Ink colors checkboxes, links and buttons. The highlighter marks highlights, folders and the New Note button.")
+            Text("Ink colors checkboxes, links and buttons. The highlighter marks highlights, folders and the New Note button. Recent Notes is how many notes Recents shows; pinned notes always show.")
         }
     }
 }

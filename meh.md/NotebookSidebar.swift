@@ -341,6 +341,7 @@ private struct NotebookLibraryBrowser: View {
             #else
             NotebookMacRecentsExpansionHost(
                 items: scene.allRecentPlacements,
+                compactCount: scene.navigationState.recentNoteIDs.count,
                 selectedNoteID: scene.selectedID,
                 isExpanded: Bindable(scene).browsingAllRecents,
                 onSelect: { id in
