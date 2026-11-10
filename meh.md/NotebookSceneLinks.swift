@@ -185,6 +185,22 @@ extension NotebookSceneState {
         dismissEditorCompletion()
     }
 
+    /// Every note's name, including names it had before a move or rename,
+    /// in the form the editor compares `[[links]]` with.
+    var knownLinkNames: Set<String> {
+        let heads = replica.searchRevision.catalogHeads
+        if let cached = cachedLinkNames, cached.heads == heads { return cached.names }
+        var names = Set<String>()
+        for note in replica.linkNotes {
+            names.insert(MarkdownPresentation.linkName(note.name))
+            for former in note.formerLocations {
+                names.insert(MarkdownPresentation.linkName(former.name))
+            }
+        }
+        cachedLinkNames = (heads, names)
+        return names
+    }
+
     /// The title for a new note when `[[` names one that doesn't exist yet.
     func linkedNoteTitle(for query: String) -> String? {
         let title = query.trimmingCharacters(in: .whitespaces)

@@ -122,6 +122,7 @@ final class NotebookSceneState {
     @ObservationIgnored var nameFocus: FocusState<UUID?>.Binding?
     var movingIDs: [UUID] = []
     var movingFromTrash = false
+    @ObservationIgnored var cachedLinkNames: (heads: Set<String>, names: Set<String>)?
     var movingNotebookID: UUID?
     var destination: UUID?
     var browserSelection = NotebookBrowserSelection()

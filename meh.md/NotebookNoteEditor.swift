@@ -17,6 +17,7 @@ struct NotebookNoteEditor: View {
     var fontFamily: EditorFontFamily = .system
     var mode: MarkdownEditorMode = .source
     var timeCalculator = false
+    var knownLinkNames: Set<String>? = nil
     @State private var editError: String?
     @State private var unrecordedText: String?
     @Environment(\.scenePhase) private var scenePhase
@@ -62,6 +63,7 @@ struct NotebookNoteEditor: View {
                     focusRequest: focusRequest,
                     fontSize: fontSize,
                     fontFamily: fontFamily, mode: mode, palette: palette,
+                    knownLinkNames: knownLinkNames,
                     timeCalculator: timeCalculator
                 )
                 .overlay {

@@ -102,7 +102,8 @@ struct NotebookDetail: View {
                             fontFamily: editorFontFamily,
                             mode: editorMode,
                             timeCalculator: timeCalculatorLabs
-                                && scene.replica.timeCalculatorNoteIDs.contains(selectedID)
+                                && scene.replica.timeCalculatorNoteIDs.contains(selectedID),
+                            knownLinkNames: scene.knownLinkNames
                         )
                         }
                         if let placement = scene.selectedPlacement, placement.isInTrash,

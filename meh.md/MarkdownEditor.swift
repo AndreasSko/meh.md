@@ -866,6 +866,9 @@ struct MarkdownEditor: NSViewRepresentable {
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
     var palette: MehPalette
+    /// Lowercased names of every note, so links to a missing note can look
+    /// different. Nil leaves all links alike.
+    var knownLinkNames: Set<String>?
     var historyChanges: NoteHistoryChanges
     var timeCalculator: Bool
     @AppStorage(EditorLineWidth.key, store: NotebookEditorPreferences.store)
@@ -891,6 +894,7 @@ struct MarkdownEditor: NSViewRepresentable {
         fontFamily: EditorFontFamily = .system,
         mode: MarkdownEditorMode = .source,
         palette: MehPalette = MehStyle.palette,
+        knownLinkNames: Set<String>? = nil,
         historyChanges: NoteHistoryChanges = .none,
         timeCalculator: Bool = false
     ) {
@@ -909,6 +913,7 @@ struct MarkdownEditor: NSViewRepresentable {
         self.fontFamily = fontFamily
         self.mode = mode
         self.palette = palette
+        self.knownLinkNames = knownLinkNames
         self.historyChanges = historyChanges
         self.timeCalculator = timeCalculator
     }
@@ -953,6 +958,7 @@ struct MarkdownEditor: NSViewRepresentable {
             isReadOnly ? "note-history-preview" : "markdown-editor"
         )
         MehStyle.palette = palette
+        MarkdownPresentation.knownLinkNames = knownLinkNames
         // The first parse must already know whether underlines make headings.
         textView.markdownSyntaxCache.timeSums = timeCalculator
         MarkdownPresentation.configure(
@@ -996,6 +1002,7 @@ struct MarkdownEditor: NSViewRepresentable {
         private var displayedFontSize: CGFloat
         private var displayedFontFamily: EditorFontFamily
         private var displayedPalette: MehPalette
+        private var displayedLinkNames: Set<String>?
         private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
         private var pendingPosition: MarkdownEditorPosition?
@@ -1014,6 +1021,7 @@ struct MarkdownEditor: NSViewRepresentable {
             displayedMode = parent.mode
             displayedFontFamily = parent.fontFamily
             displayedPalette = parent.palette
+            displayedLinkNames = parent.knownLinkNames
             displayedRevision = parent.editRevision
             displayedFontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
@@ -1187,6 +1195,12 @@ struct MarkdownEditor: NSViewRepresentable {
                 if paletteChanged {
                     (textView as? MarkdownTextView)?.redrawMarkdownDecorations()
                 }
+            }
+            if displayedLinkNames != parent.knownLinkNames {
+                // Links change look without any text changing.
+                displayedLinkNames = parent.knownLinkNames
+                MarkdownPresentation.knownLinkNames = parent.knownLinkNames
+                schedulePresentationRefresh(for: textView)
             }
             guard !hasUncommittedText else { return }
 
@@ -2589,6 +2603,9 @@ struct MarkdownEditor: UIViewRepresentable {
     var fontFamily: EditorFontFamily
     var mode: MarkdownEditorMode
     var palette: MehPalette
+    /// Lowercased names of every note, so links to a missing note can look
+    /// different. Nil leaves all links alike.
+    var knownLinkNames: Set<String>?
     var historyChanges: NoteHistoryChanges
     var timeCalculator: Bool
     var initialPreviewPosition: MarkdownEditorPosition?
@@ -2617,6 +2634,7 @@ struct MarkdownEditor: UIViewRepresentable {
         fontFamily: EditorFontFamily = .system,
         mode: MarkdownEditorMode = .source,
         palette: MehPalette = MehStyle.palette,
+        knownLinkNames: Set<String>? = nil,
         historyChanges: NoteHistoryChanges = .none,
         timeCalculator: Bool = false,
         initialPreviewPosition: MarkdownEditorPosition? = nil,
@@ -2638,6 +2656,7 @@ struct MarkdownEditor: UIViewRepresentable {
         self.fontFamily = fontFamily
         self.mode = mode
         self.palette = palette
+        self.knownLinkNames = knownLinkNames
         self.historyChanges = historyChanges
         self.timeCalculator = timeCalculator
         self.initialPreviewPosition = initialPreviewPosition
@@ -2684,6 +2703,7 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.accessibilityIdentifier = isReadOnly
             ? "note-history-preview" : "markdown-editor"
         MehStyle.palette = palette
+        MarkdownPresentation.knownLinkNames = knownLinkNames
         // The first parse must already know whether underlines make headings.
         textView.markdownSyntaxCache.timeSums = timeCalculator
         MarkdownPresentation.configure(
@@ -2736,6 +2756,7 @@ struct MarkdownEditor: UIViewRepresentable {
         private var handledFocusRequest: Int
         private var displayedFontFamily: EditorFontFamily
         private var displayedPalette: MehPalette
+        private var displayedLinkNames: Set<String>?
         private var displayedMode: MarkdownEditorMode
         private var presentationRefreshScheduled = false
         private var pendingPosition: MarkdownEditorPosition?
@@ -2790,6 +2811,7 @@ struct MarkdownEditor: UIViewRepresentable {
             displayedMode = parent.mode
             displayedFontFamily = parent.fontFamily
             displayedPalette = parent.palette
+            displayedLinkNames = parent.knownLinkNames
             displayedRevision = parent.editRevision
             displayedFontSize = MarkdownPresentation.normalizedFontSize(
                 parent.fontSize
@@ -2962,6 +2984,12 @@ struct MarkdownEditor: UIViewRepresentable {
                 if paletteChanged {
                     (textView as? MarkdownTextView)?.redrawMarkdownDecorations()
                 }
+            }
+            if displayedLinkNames != parent.knownLinkNames {
+                // Links change look without any text changing.
+                displayedLinkNames = parent.knownLinkNames
+                MarkdownPresentation.knownLinkNames = parent.knownLinkNames
+                schedulePresentationRefresh(for: textView)
             }
             guard !hasUncommittedText else { return }
 
