@@ -387,10 +387,13 @@ private struct NotebookTrashItemRow: View {
             .accessibilityIdentifier(itemIdentifier)
             .contextMenu {
                 if !selecting {
-                    if placement.item.isTrashed { Button("Restore", action: restore) }
-                    Button("Move…", action: move)
+                    if placement.item.isTrashed {
+                        Button("Restore", systemImage: "arrow.uturn.backward", action: restore)
+                    }
+                    Button("Move…", systemImage: "folder", action: move)
                     Divider()
-                    Button("Delete Permanently…", role: .destructive, action: delete)
+                    Button("Delete Permanently…", systemImage: "trash",
+                           role: .destructive, action: delete)
                 }
             }
             if selecting {
@@ -408,16 +411,17 @@ private struct NotebookTrashItemRow: View {
             if showsActions {
                 Menu {
                     if placement.item.isTrashed {
-                        Button("Restore", action: restore)
+                        Button("Restore", systemImage: "arrow.uturn.backward", action: restore)
                             .accessibilityIdentifier(
                                 "notebook-trash-restore-" + placement.item.id.uuidString
                             )
                     } else {
                         Text("Restore the parent folder, or move this item out.")
                     }
-                    Button("Move…", action: move)
+                    Button("Move…", systemImage: "folder", action: move)
                     Divider()
-                    Button("Delete Permanently…", role: .destructive, action: delete)
+                    Button("Delete Permanently…", systemImage: "trash",
+                           role: .destructive, action: delete)
                 } label: {
                     Label("Trash Actions", systemImage: "ellipsis")
                         .labelStyle(.iconOnly)

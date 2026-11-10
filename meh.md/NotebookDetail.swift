@@ -281,7 +281,7 @@ struct NotebookDetail: View {
                     }
                     .disabled(!session.isEditingEnabled || scene.busy)
                     .accessibilityIdentifier("notebook-backlinks")
-                    Button("Find in Note…") { scene.showFind() }
+                    Button("Find in Note…", systemImage: "magnifyingglass") { scene.showFind() }
                         .disabled(!session.isEditingEnabled)
                         .accessibilityIdentifier("notebook-find")
                     Button {
