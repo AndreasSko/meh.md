@@ -112,7 +112,7 @@ struct NotebookMoveSheet: View {
             names.append(placement.displayName)
             nextID = placement.parentID
         }
-        return (["Notebook"] + Array(names.reversed())).joined(separator: " / ")
+        return (["Top Level"] + Array(names.reversed())).joined(separator: " / ")
     }
 
     private func submit() {

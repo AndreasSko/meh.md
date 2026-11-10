@@ -53,7 +53,7 @@ struct NotebookSharedImportView: View {
         .disabled(importing)
         .navigationTitle(parentID.flatMap { id in
             replica.placements.first { $0.item.id == id }?.displayName
-        } ?? "Notebook")
+        } ?? "Top Level")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }

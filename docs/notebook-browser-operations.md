@@ -1,10 +1,10 @@
 # Notebook organization
 
 The notebook stores a manual order for each folder and the root. Move opens a
-folder browser; choose a location, then confirm with Move Here. The Sort Files
-Once / Sort Folder Once actions apply name, creation-date, or modification-date
-ordering once. Use them again to re-sort after later changes. Native dragging
-remains deferred in
+folder browser; choose a location, then confirm with Move Here. Sort, in
+the library menu and in a folder's menu, applies name, creation-date, or
+modification-date ordering once. Use it again to re-sort after later
+changes. Native dragging remains deferred in
 [issue #49](https://github.com/AndreasSko/meh.md/issues/49).
 Move Up and Move Down are deliberately absent from note actions.
 

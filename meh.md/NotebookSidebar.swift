@@ -262,7 +262,7 @@ struct NotebookSidebar: View {
                 scene.beginSelectingItems()
             }
             .accessibilityIdentifier("notebook-select-items")
-            NotebookSortMenu(scene: scene, parentID: nil, label: "Sort Files Once")
+            NotebookSortMenu(scene: scene, parentID: nil)
                 .accessibilityIdentifier("notebook-sort-root")
             Button { scene.requestImport() } label: {
                 Label("Import Markdown…", systemImage: "square.and.arrow.down")
@@ -1321,11 +1321,7 @@ struct NotebookItemActions: View {
                 .accessibilityIdentifier("notebook-show-in-files")
             }
             if isFolder {
-                NotebookSortMenu(
-                    scene: scene,
-                    parentID: placement.item.id,
-                    label: "Sort Folder Once"
-                )
+                NotebookSortMenu(scene: scene, parentID: placement.item.id)
                 let isDefault = replica.defaultNewNoteParentID == placement.item.id
                 Button {
                     scene.setDefaultNewNoteParentID(isDefault ? nil : placement.item.id)
@@ -1422,30 +1418,33 @@ struct NotebookItemActions: View {
     }
 }
 
+/// Sorts a folder's items once; the manual order stays editable after.
 private struct NotebookSortMenu: View {
     let scene: NotebookSceneState
     let parentID: UUID?
-    let label: LocalizedStringResource
 
     var body: some View {
         Menu {
-            Button("Name, A–Z") { scene.sort(parentID, by: .nameAscending) }
-            Button("Name, Z–A") { scene.sort(parentID, by: .nameDescending) }
-            Divider()
-            Button("Created, Newest First") {
-                scene.sort(parentID, by: .createdNewest)
+            Section("Sorts once. You can still drag to reorder.") {
+                Button("Name, A–Z") { scene.sort(parentID, by: .nameAscending) }
+                Button("Name, Z–A") { scene.sort(parentID, by: .nameDescending) }
             }
-            Button("Created, Oldest First") {
-                scene.sort(parentID, by: .createdOldest)
-            }
-            Button("Modified, Newest First") {
-                scene.sort(parentID, by: .modifiedNewest)
-            }
-            Button("Modified, Oldest First") {
-                scene.sort(parentID, by: .modifiedOldest)
+            Section {
+                Button("Created, Newest First") {
+                    scene.sort(parentID, by: .createdNewest)
+                }
+                Button("Created, Oldest First") {
+                    scene.sort(parentID, by: .createdOldest)
+                }
+                Button("Modified, Newest First") {
+                    scene.sort(parentID, by: .modifiedNewest)
+                }
+                Button("Modified, Oldest First") {
+                    scene.sort(parentID, by: .modifiedOldest)
+                }
             }
         } label: {
-            Label(label, systemImage: "arrow.up.arrow.down")
+            Label("Sort", systemImage: "arrow.up.arrow.down")
         }
         .disabled(scene.busy)
     }

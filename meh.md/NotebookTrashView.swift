@@ -502,7 +502,7 @@ private struct NotebookTrashMoveView: View {
         NavigationStack {
             Form {
                 Picker("Destination", selection: $destination) {
-                    Text("Notebook root").tag(nil as UUID?)
+                    Text("Top Level").tag(nil as UUID?)
                     ForEach(destinations) { destination in
                         Text(destination.path).tag(destination.id as UUID?)
                     }
