@@ -56,9 +56,10 @@ struct NotebookTrashUndoBar: View {
 
     var body: some View {
         ZStack {
-            if scene.undoableTrashedNote != nil {
+            if let trashed = scene.undoableTrashedNote {
                 HStack(spacing: 12) {
-                    Text("Moved to Trash")
+                    message(for: trashed.noteID)
+                        .lineLimit(1)
                     Spacer(minLength: 0)
                     Button("Undo", action: scene.undoTrashingOpenNote)
                         .buttonStyle(.borderedProminent)
@@ -87,5 +88,13 @@ struct NotebookTrashUndoBar: View {
         }
         .animation(reduceMotion ? .easeInOut : .bouncy,
                    value: scene.undoableTrashedNote?.id)
+    }
+
+    /// Names the note, so it's clear which one Undo brings back.
+    private func message(for noteID: UUID) -> Text {
+        guard let placement = scene.replica.placements.first(where: { $0.item.id == noteID })
+        else { return Text("Moved to Trash") }
+        let title = NotebookNoteName.title(from: placement.displayName)
+        return Text("“\(title)” moved to Trash")
     }
 }
