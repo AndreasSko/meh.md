@@ -12,7 +12,7 @@ final class MarkdownEditingCommandsTests: XCTestCase {
                 .continueLine, .indent, .outdent, .bold, .italic,
                 .strikethrough, .highlight, .heading, .body,
                 .heading1, .heading2, .heading3, .heading4, .heading5, .heading6, .link,
-                .inlineCode, .codeBlock, .taskList, .toggleTask, .insertTable,
+                .inlineCode, .codeBlock, .taskList, .quote, .toggleTask, .insertTable,
                 .tableRowAbove, .tableRowBelow,
                 .tableColumnBefore, .tableColumnAfter,
                 .tableDeleteRow, .tableDeleteColumn,
@@ -54,6 +54,43 @@ final class MarkdownEditingCommandsTests: XCTestCase {
             equals: "- [ ] Done", selected: caret
         )
         XCTAssertNil(MarkdownEditingRules.toggleTask(text: "`- [x]`", at: 4))
+    }
+
+    func testQuoteTogglesSelectedLines() throws {
+        try assertChange(
+            .quote,
+            text: "Slow down",
+            selection: NSRange(location: 4, length: 0),
+            equals: "> Slow down",
+            selected: NSRange(location: 6, length: 0)
+        )
+        try assertChange(
+            .quote,
+            text: "> Slow down",
+            selection: NSRange(location: 6, length: 0),
+            equals: "Slow down",
+            selected: NSRange(location: 4, length: 0)
+        )
+        // Mixed lines get quoted; blank lines between them stay blank.
+        let text = "One\n\n> Two"
+        try assertChange(
+            .quote,
+            text: text,
+            selection: NSRange(location: 0, length: (text as NSString).length),
+            equals: "> One\n\n> Two",
+            selected: NSRange(location: 2, length: 10)
+        )
+        let quoted = "> One\n\n> Two"
+        try assertChange(
+            .quote,
+            text: quoted,
+            selection: NSRange(location: 0, length: (quoted as NSString).length),
+            equals: "One\n\nTwo",
+            selected: NSRange(location: 0, length: 8)
+        )
+        XCTAssertNil(MarkdownEditingRules.change(
+            for: .quote, text: "```\ncode\n```", selection: NSRange(location: 5, length: 0)
+        ))
     }
 
     func testOpenTasksIgnoreCheckedTasksAndCode() {

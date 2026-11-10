@@ -178,6 +178,9 @@ struct EditorWritingControls: View {
                 "Task List", systemImage: "checklist", command: .taskList
             )
             commandButton(
+                "Quote", systemImage: "text.quote", command: .quote
+            )
+            commandButton(
                 "Toggle Task", systemImage: "checkmark.square",
                 command: .toggleTask
             )
@@ -506,6 +509,7 @@ private extension MarkdownEditingCommand {
         case .inlineCode: "editor-command-inline-code"
         case .codeBlock: "editor-command-code-block"
         case .taskList: "editor-command-task-list"
+        case .quote: "editor-command-quote"
         case .toggleTask: "editor-command-toggle-task"
         case .insertTable: "editor-command-insert-table"
         case .tableRowAbove: "editor-command-table-row-above"
@@ -1044,28 +1048,30 @@ private struct KeyboardCommandDefinition: Identifiable {
     let image: String
     let command: MarkdownEditingCommand?
 
-    // Text formatting comes first, then structure, then inserted content.
+    // The everyday commands fill the first screen: emphasis, headings,
+    // tasks and list indentation. People can drag them into another order.
     static let all: [Self] = [
         .init(id: "bold", title: "Bold", image: "bold", command: .bold),
         .init(id: "italic", title: "Italic", image: "italic", command: .italic),
-        .init(id: "strikethrough", title: "Strikethrough",
-              image: "strikethrough", command: .strikethrough),
         .init(id: "highlight", title: "Highlight", image: "highlighter",
               command: .highlight),
         .init(id: "heading", title: "Heading", image: "h.square",
               command: .heading),
+        .init(id: "taskList", title: "Task List", image: "checklist",
+              command: .taskList),
         .init(id: "indent", title: "Indent", image: "increase.indent",
               command: .indent),
         .init(id: "outdent", title: "Outdent", image: "decrease.indent",
               command: .outdent),
-        .init(id: "taskList", title: "Task List", image: "checklist",
-              command: .taskList),
+        .init(id: "strikethrough", title: "Strikethrough",
+              image: "strikethrough", command: .strikethrough),
         .init(id: "link", title: "Link", image: "link", command: .link),
         .init(id: "inlineCode", title: "Inline Code",
               image: "chevron.left.forwardslash.chevron.right",
               command: .inlineCode),
         .init(id: "codeBlock", title: "Code Block",
               image: "curlybraces.square", command: .codeBlock),
+        .init(id: "quote", title: "Quote", image: "text.quote", command: .quote),
         .init(id: "insertTable", title: "Insert Table", image: "tablecells",
               command: .insertTable),
         .init(id: "snippets", title: "Insert Snippet", image: "text.badge.plus",

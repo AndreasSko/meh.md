@@ -20,6 +20,7 @@ enum MarkdownEditingCommand: CaseIterable, Hashable {
     case inlineCode
     case codeBlock
     case taskList
+    case quote
     case toggleTask
     case insertTable
     case tableRowAbove
@@ -135,6 +136,8 @@ enum MarkdownEditingRules {
                 "- [ ] ",
                 replacing: NSRange(location: line.location, length: 0)
             )
+        case .quote:
+            return quoteChange(in: source, selection: selection, syntaxResult: syntaxResult)
         case .toggleTask:
             guard let change = toggleTask(
                 text: text,
@@ -650,6 +653,48 @@ private extension MarkdownEditingRules {
     struct SourceEdit {
         let range: NSRange
         let replacement: String
+    }
+
+    /// Quotes the selected lines, or unquotes them when all are quoted.
+    static func quoteChange(
+        in source: NSString,
+        selection: NSRange,
+        syntaxResult: MarkdownSyntaxResult?
+    ) -> MarkdownEditingChange? {
+        guard !isInCode(selection, source: source, syntaxResult: syntaxResult)
+        else { return nil }
+        let affected = affectedLines(for: selection, in: source)
+        let contents = lines(in: affected, source: source).map {
+            contentLine(containing: $0.location, in: source)
+        }
+        let markers = contents.map { quoteMarker(in: $0, source: source) }
+        // Blank lines between quoted paragraphs carry no marker.
+        let written = zip(contents, markers).filter { $0.0.length > 0 }
+        let removing = !written.isEmpty && written.allSatisfy { $0.1 != nil }
+        var edits: [SourceEdit] = []
+        for (line, marker) in zip(contents, markers) {
+            if removing, let marker {
+                edits.append(SourceEdit(range: marker, replacement: ""))
+            } else if !removing, marker == nil, line.length > 0 || contents.count == 1 {
+                edits.append(SourceEdit(
+                    range: NSRange(location: line.location, length: 0), replacement: "> "
+                ))
+            }
+        }
+        guard !edits.isEmpty else { return nil }
+        return applying(edits, to: affected, selection: selection, source: source)
+    }
+
+    /// The `>` and its space at the start of a line, after up to three spaces.
+    static func quoteMarker(in line: NSRange, source: NSString) -> NSRange? {
+        var index = line.location
+        let end = NSMaxRange(line)
+        while index < end, index - line.location < 3, source.character(at: index) == 32 {
+            index += 1
+        }
+        guard index < end, source.character(at: index) == 62 else { return nil }
+        let length = index + 1 < end && source.character(at: index + 1) == 32 ? 2 : 1
+        return NSRange(location: index, length: length)
     }
 
     struct Container {
