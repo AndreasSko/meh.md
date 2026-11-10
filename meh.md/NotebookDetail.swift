@@ -219,6 +219,42 @@ struct NotebookDetail: View {
             .background(MehStyle.paperColor.ignoresSafeArea())
     }
 
+    private func shareButton(session: NoteSession) -> some View {
+        Button {
+            scene.shareMarkdown()
+        } label: {
+            Label("Share", systemImage: "square.and.arrow.up")
+        }
+        .disabled(!session.isEditingEnabled || scene.busy || scene.sharedFile != nil)
+        .accessibilityIdentifier("notebook-share-markdown")
+    }
+
+    private func backlinksButton(session: NoteSession) -> some View {
+        Button {
+            scene.showBacklinks()
+        } label: {
+            Label("Linked from…", systemImage: "link")
+        }
+        .disabled(!session.isEditingEnabled || scene.busy)
+        .accessibilityIdentifier("notebook-backlinks")
+    }
+
+    private func findButton(session: NoteSession, title: LocalizedStringKey) -> some View {
+        Button(title, systemImage: "magnifyingglass") { scene.showFind() }
+            .disabled(!session.isEditingEnabled)
+            .accessibilityIdentifier("notebook-find")
+    }
+
+    private func historyButton(session: NoteSession, title: LocalizedStringKey) -> some View {
+        Button {
+            scene.openHistory()
+        } label: {
+            Label(title, systemImage: "clock.arrow.circlepath")
+        }
+        .disabled(!session.isEditingEnabled || scene.busy)
+        .accessibilityIdentifier("notebook-version-history")
+    }
+
     @ToolbarContentBuilder
     private func toolbar(session: NoteSession, selectedID: UUID) -> some ToolbarContent {
         #if os(macOS)
@@ -255,15 +291,19 @@ struct NotebookDetail: View {
             #endif
             ToolbarItem {
                 Menu {
-                    Button {
-                        scene.shareMarkdown()
-                    } label: {
-                        Label("Share", systemImage: "square.and.arrow.up")
+                    #if os(iOS)
+                    // A row of icons, as in Notes, keeps Move to Trash in
+                    // view without scrolling the menu on iPhone.
+                    ControlGroup {
+                        shareButton(session: session)
+                        findButton(session: session, title: "Find")
+                        historyButton(session: session, title: "History")
                     }
-                    .disabled(!session.isEditingEnabled || scene.busy || scene.sharedFile != nil)
-                    .accessibilityIdentifier("notebook-share-markdown")
+                    .controlGroupStyle(.compactMenu)
+                    backlinksButton(session: session)
+                    #else
+                    shareButton(session: session)
                     Divider()
-                    #if os(macOS)
                     if scene.linkHistory.forwardTarget != nil {
                         Button("Go Forward") {
                             scene.navigateLinkHistory(back: false)
@@ -273,24 +313,10 @@ struct NotebookDetail: View {
                         .accessibilityIdentifier("note-link-forward")
                         Divider()
                     }
+                    backlinksButton(session: session)
+                    findButton(session: session, title: "Find in Note…")
+                    historyButton(session: session, title: "Version History")
                     #endif
-                    Button {
-                        scene.showBacklinks()
-                    } label: {
-                        Label("Linked from…", systemImage: "link")
-                    }
-                    .disabled(!session.isEditingEnabled || scene.busy)
-                    .accessibilityIdentifier("notebook-backlinks")
-                    Button("Find in Note…", systemImage: "magnifyingglass") { scene.showFind() }
-                        .disabled(!session.isEditingEnabled)
-                        .accessibilityIdentifier("notebook-find")
-                    Button {
-                        scene.openHistory()
-                    } label: {
-                        Label("Version History", systemImage: "clock.arrow.circlepath")
-                    }
-                    .disabled(!session.isEditingEnabled || scene.busy)
-                    .accessibilityIdentifier("notebook-version-history")
                     Divider()
                     Menu {
                         EditorModeControl(

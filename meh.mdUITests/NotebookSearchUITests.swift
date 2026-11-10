@@ -89,8 +89,7 @@ final class NotebookSearchUITests: XCTestCase {
         #endif
         XCTAssertTrue(actions.waitForExistence(timeout: 10))
         activate(actions)
-        let find = app.descendants(matching: .any)
-            .matching(identifier: "notebook-find").firstMatch
+        let find = app.noteMenuAction("notebook-find", label: "Find")
         XCTAssertTrue(find.waitForExistence(timeout: 10))
         activate(find)
         // The Mac's native Find bar takes focus; the toolbar search field

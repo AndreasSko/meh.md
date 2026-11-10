@@ -37,8 +37,7 @@ final class ReadmeScreenshotUITests: XCTestCase {
         }
 
         app.buttons["notebook-note-actions"].tap()
-        let history = app.descendants(matching: .any)
-            .matching(identifier: "notebook-version-history").firstMatch
+        let history = app.noteMenuAction("notebook-version-history", label: "History")
         XCTAssertTrue(history.waitForExistence(timeout: 5))
         history.tap()
         showHistory(at: "8:50", in: app)
@@ -64,8 +63,7 @@ final class ReadmeScreenshotUITests: XCTestCase {
         shot("mac-note") { window.screenshot() }
 
         app.descendants(matching: .any)["notebook-note-actions"].firstMatch.click()
-        let history = app.descendants(matching: .any)
-            .matching(identifier: "notebook-version-history").firstMatch
+        let history = app.noteMenuAction("notebook-version-history", label: "History")
         XCTAssertTrue(history.waitForExistence(timeout: 5))
         history.click()
         showHistory(at: "8:50", in: app)

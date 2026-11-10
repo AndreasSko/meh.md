@@ -495,3 +495,14 @@ extension XCUIApplication {
         }
     }
 }
+
+extension XCUIApplication {
+    /// A note menu action. On iPhone and iPad, Share, Find and History sit in
+    /// the menu's row of icons, which drops accessibility identifiers.
+    func noteMenuAction(_ identifier: String, label: String) -> XCUIElement {
+        descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == %@ OR (elementType == %d AND label == %@)",
+            identifier, XCUIElement.ElementType.button.rawValue, label
+        )).firstMatch
+    }
+}

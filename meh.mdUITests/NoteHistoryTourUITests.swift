@@ -43,8 +43,7 @@ final class NoteHistoryTourUITests: XCTestCase {
         XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 15))
         pause(1.5)
         activate(app.descendants(matching: .any)["notebook-note-actions"].firstMatch)
-        let history = app.descendants(matching: .any)
-            .matching(identifier: "notebook-version-history").firstMatch
+        let history = app.noteMenuAction("notebook-version-history", label: "History")
         XCTAssertTrue(history.waitForExistence(timeout: 5))
         pause(0.6)
         activate(history)
