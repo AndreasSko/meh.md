@@ -32,6 +32,13 @@ final class NotebookSearchUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 10))
         XCTAssertTrue(result.label.contains(title))
+        // The note was already listed under Recents before typing; its row
+        // must switch to the passage around the match.
+        let showsMatch = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", marker), object: result
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [showsMatch], timeout: 5), .completed,
+                       "The result must show the passage around the match")
         activate(result)
         XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.buttons["note-title"].label, title)

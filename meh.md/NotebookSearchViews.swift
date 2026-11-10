@@ -79,6 +79,9 @@ struct NotebookSearchResults: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                // The button keeps its first label while the same note stays
+                // in the results, so a new excerpt needs a new identity.
+                .id(NotebookSearchRow.Content(result))
                 .overlay(alignment: .bottom) {
                     Divider().padding(.horizontal, 8)
                 }
@@ -90,6 +93,18 @@ struct NotebookSearchResults: View {
 }
 
 struct NotebookSearchRow: View {
+    struct Content: Hashable {
+        let excerpt: String
+        let titleMatch: NSRange?
+        let excerptMatch: NSRange?
+
+        init(_ result: NotebookSearchResult) {
+            excerpt = result.excerpt
+            titleMatch = result.titleMatchRange
+            excerptMatch = result.excerptMatchRange
+        }
+    }
+
     let result: NotebookSearchResult
     @Environment(\.mehPalette) private var palette
 
