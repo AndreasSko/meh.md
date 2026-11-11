@@ -529,36 +529,43 @@ struct NotebookSyncEventLogView: View {
     @State private var copied = false
 
     var body: some View {
+        #if os(iOS)
+        // A sheet like the others on iPhone: title bar, Done, and the
+        // actions in the bottom toolbar.
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    intro
+                    logText
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            }
+            .navigationTitle("Sync Event Log")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .bottomBar) {
+                    copyButton
+                    ShareLink("Share Log", item: diagnosticText)
+                    Spacer()
+                    Button("Clear Log", role: .destructive) { log.clear(); copied = false }
+                }
+            }
+        }
+        #else
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Sync Event Log").font(.headline)
                 Spacer()
                 Button("Done") { dismiss() }
             }
-            Text("Recent events from this device. No note contents, names, paths, or account identifiers are recorded.")
-                .font(.caption).foregroundStyle(.secondary)
-            if log.persistenceError {
-                Text("Some log history could not be loaded or saved. Current events are available below.")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-            ScrollView {
-                Text(diagnosticText)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("notebook-sync-event-log-text")
-            }
+            intro
+            ScrollView { logText }
             HStack {
-                Button(copied ? "Copied" : "Copy Log") {
-                    #if os(macOS)
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(diagnosticText, forType: .string)
-                    #else
-                    UIPasteboard.general.string = diagnosticText
-                    #endif
-                    copied = true
-                }
-                .accessibilityIdentifier("notebook-sync-event-log-copy")
+                copyButton
                 ShareLink("Share Log", item: diagnosticText)
                 Spacer()
                 Button("Clear Log") { log.clear(); copied = false }
@@ -566,6 +573,37 @@ struct NotebookSyncEventLogView: View {
         }
         .padding(20)
         .frame(minWidth: 300, idealWidth: 680, minHeight: 360, idealHeight: 540)
+        #endif
+    }
+
+    @ViewBuilder private var intro: some View {
+        Text("Recent events from this device. No note contents, names, paths, or account identifiers are recorded.")
+            .font(.caption).foregroundStyle(.secondary)
+        if log.persistenceError {
+            Text("Some log history could not be loaded or saved. Current events are available below.")
+                .font(.caption).foregroundStyle(.orange)
+        }
+    }
+
+    private var logText: some View {
+        Text(diagnosticText)
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("notebook-sync-event-log-text")
+    }
+
+    private var copyButton: some View {
+        Button(copied ? "Copied" : "Copy Log") {
+            #if os(macOS)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(diagnosticText, forType: .string)
+            #else
+            UIPasteboard.general.string = diagnosticText
+            #endif
+            copied = true
+        }
+        .accessibilityIdentifier("notebook-sync-event-log-copy")
     }
 
     private var diagnosticText: String { NotebookFeedback.logText(log) }
