@@ -48,8 +48,10 @@ devices with the next upload of that note from the device that wrote it.
   while the note is open on its recovery screen too, which then shows
   the repaired note. If the user restores the previous copy at the same
   moment, the received version is merged into the restored note.
-- While a note can't be read, the history check fails, so every
-  exchange receives everything again until the note is repaired.
+- The first exchange after a note became unreadable fails the history
+  check, so it receives everything again and can repair the note. Later
+  exchanges no longer expect that note's history and receive only what
+  is new.
 - A file that exists but cannot be read at all, or that a newer app
   wrote, is left alone. Neither is known to be damaged.
 - Versions that arrived while the note was unreadable are received again
