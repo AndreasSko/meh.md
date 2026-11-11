@@ -98,7 +98,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertEqual(editor.value as? String, meetingBody)
-        XCTAssertNotEqual(app.buttons["note-title"].label, "Meeting")
+        XCTAssertNotEqual(app.openNoteTitle, "Meeting")
 
         // The editor's ordinary plus tap must stay immediate after adding
         // feedback to its long press.
@@ -158,7 +158,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["template-destination"].exists)
         XCTAssertEqual(editor.value as? String, meetingBody)
-        let copyName = app.buttons["note-title"].label
+        let copyName = app.openNoteTitle
         XCTAssertNotNil(copyName.range(
             of: "^[0-9]{4}-[0-9]{2}-[0-9]{2} — Meeting$",
             options: .regularExpression
@@ -211,7 +211,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         XCTAssertTrue(choice.waitForExistence(timeout: 5))
         choice.tap()
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        let copyName = app.buttons["note-title"].label
+        let copyName = app.openNoteTitle
         let text = editor.value as? String ?? ""
         XCTAssertTrue(text.hasPrefix("# \(copyName)\nDone "), text)
         XCTAssertNotNil(text.range(of: "Done [0-9]{4}-[0-9]{2}-[0-9]{2}$",
@@ -285,7 +285,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["template-destination"].exists)
-        XCTAssertEqual(app.buttons["note-title"].label, "Journal entry")
+        XCTAssertEqual(app.openNoteTitle, "Journal entry")
         XCTAssertEqual(editor.value as? String, "# Journal\n\nToday: ")
         showFiles(app)
         app.buttons["notebook-disclosure-" + folderID].tap()

@@ -31,6 +31,9 @@ final class MarkdownEditorNavigation {
     let headingCommands = MarkdownHeadingCommandState()
     let findPresentation = MarkdownEditorFindPresentation()
     var showFind: (() -> Void)?
+    /// Where the next focus request puts the caret, such as a new note's
+    /// first blank. Nil keeps the current selection.
+    var focusCaretLocation: Int?
     var openLink: ((NotebookLinkOccurrence) -> Void)? {
         didSet { linkActivationChanged?() }
     }
@@ -1033,9 +1036,15 @@ struct MarkdownEditor: NSViewRepresentable {
             guard request != handledFocusRequest else { return }
             handledFocusRequest = request
             // The host has received the nonediting title in this update.
+            let caret = parent.navigation?.focusCaretLocation
+            parent.navigation?.focusCaretLocation = nil
             DispatchQueue.main.async { [weak textView] in
                 guard let textView, textView.isEditable else { return }
                 textView.window?.makeFirstResponder(textView)
+                if let caret, caret <= (textView.string as NSString).length {
+                    textView.setSelectedRange(NSRange(location: caret, length: 0))
+                    textView.scrollRangeToVisible(NSRange(location: caret, length: 0))
+                }
             }
         }
 
@@ -2823,9 +2832,15 @@ struct MarkdownEditor: UIViewRepresentable {
             guard request != handledFocusRequest else { return }
             handledFocusRequest = request
             // Wait for the hosting controller to remove the title text field.
+            let caret = parent.navigation?.focusCaretLocation
+            parent.navigation?.focusCaretLocation = nil
             DispatchQueue.main.async { [weak textView] in
                 guard let textView, textView.isEditable else { return }
+                if let caret, caret <= ((textView.text ?? "") as NSString).length {
+                    textView.selectedRange = NSRange(location: caret, length: 0)
+                }
                 _ = textView.becomeFirstResponder()
+                if caret != nil { textView.scrollRangeToVisible(textView.selectedRange) }
             }
         }
 

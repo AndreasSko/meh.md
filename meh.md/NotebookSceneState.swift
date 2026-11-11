@@ -32,6 +32,8 @@ final class NotebookSceneState {
     var restoredNavigation = false
     var editorNavigation = MarkdownEditorNavigation()
     var bodyFocusRequest = 0
+    /// A note made from a template whose title is being named.
+    @ObservationIgnored var newTemplateNoteID: UUID?
     var unrecordedEdit = false
     /// The open note that just went to Trash, which the Undo bar can bring
     /// back for a few seconds.
@@ -55,6 +57,7 @@ final class NotebookSceneState {
     var showingSyncDetails = false
     var showingTemplates = false
     var pendingPresentedItemID: UUID?
+    var pendingPresentedItemIsNew = false
     var showingTrash = false
     var showingTextSize = false
     var sharedFile: NotebookSharedFile?
@@ -380,6 +383,8 @@ final class NotebookSceneState {
     private func openPendingPresentedItem() {
         guard let id = pendingPresentedItemID else { return }
         pendingPresentedItemID = nil
+        let isNew = pendingPresentedItemIsNew
+        pendingPresentedItemIsNew = false
         perform { [self] in
             guard let placement = replica.placements.first(where: {
                 $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
@@ -395,6 +400,7 @@ final class NotebookSceneState {
             } else {
                 reveal(id)
                 try await selectNote(id)
+                if isNew { nameNewNote(id) }
             }
         }
     }
@@ -738,7 +744,16 @@ final class NotebookSceneState {
         perform { [self] in
             try await commitDetailTitleIfNeeded()
         } onSuccess: { [self] in
-            if focusBody { bodyFocusRequest &+= 1 }
+            guard focusBody else {
+                newTemplateNoteID = nil
+                return
+            }
+            // A note just made from a template continues at its first blank.
+            if let id = newTemplateNoteID, id == selectedID, let text = session?.text {
+                editorNavigation.focusCaretLocation = MarkdownEditingRules.firstBlankOffset(in: text)
+            }
+            newTemplateNoteID = nil
+            bodyFocusRequest &+= 1
         }
     }
 
@@ -778,6 +793,7 @@ final class NotebookSceneState {
     }
 
     func cancelDetailTitle() {
+        newTemplateNoteID = nil
         detailEditingID = nil
         detailTitleFocusRequest = nil
         detailOriginalName = ""
