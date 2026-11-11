@@ -226,6 +226,17 @@ struct NoteHistoryBrowserView: View {
                     NoteHistoryLoadingIndicator()
                 }
             }
+            // Scrolled text fades out under the heading instead of being
+            // cut off right below the date line.
+            .overlay(alignment: .top) {
+                LinearGradient(
+                    colors: [MehStyle.paperColor, MehStyle.paperColor.opacity(0)],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: 18)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
             .popover(item: $removal, attachmentAnchor: .rect(.rect(removal?.rect ?? .zero))) { removal in
                 Text(removal.text)
                     .strikethrough()
