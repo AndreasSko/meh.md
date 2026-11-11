@@ -1903,8 +1903,9 @@ enum MarkdownPresentation {
         let em = bodyFont.pointSize
         switch run.kind {
         case let .heading(level):
-            style.paragraphSpacingBefore = level <= 2 ? em * 0.7 : em * 0.45
-            style.paragraphSpacing = level <= 2 ? em * 0.35 : em * 0.25
+            // More room above than below ties a heading to its section.
+            style.paragraphSpacingBefore = level <= 2 ? em * 0.95 : em * 0.65
+            style.paragraphSpacing = level <= 2 ? em * 0.15 : em * 0.1
             style.lineSpacing = 0
         case .list:
             style.headIndent = isTask

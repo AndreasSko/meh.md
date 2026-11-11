@@ -11,7 +11,7 @@ final class MarkdownParagraphGapTests: XCTestCase {
         let view = editor("Body\n# Heading\n- Item\n- [ ] Task\n> Quote\nTail")
         let styles = try paragraphStyles(in: view)
         // Original previous.after + current.before at each boundary.
-        let gaps: [CGFloat] = [0, 16.8, 5.25, 3, 8.25, 4.5]
+        let gaps: [CGFloat] = [0, 20.55, 2.25, 3, 8.25, 4.5]
         XCTAssertEqual(styles.count, gaps.count)
         for (style, gap) in zip(styles, gaps) {
             XCTAssertEqual(style.paragraphSpacingBefore, gap, accuracy: 0.001)
@@ -49,7 +49,7 @@ final class MarkdownParagraphGapTests: XCTestCase {
         refresh(view)
         let updated = try paragraphStyles(in: view)
         XCTAssertNotEqual(updated[2], original[2])
-        XCTAssertEqual(updated[2].paragraphSpacingBefore, 5.25,
+        XCTAssertEqual(updated[2].paragraphSpacingBefore, 2.25,
                        accuracy: 0.001)
         XCTAssertEqual(updated[3], original[3])
         XCTAssertEqual(updated, try paragraphStyles(in: editor(view.text)))
