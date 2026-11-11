@@ -209,17 +209,20 @@ struct NotebookSyncBackupsView: View {
                 }
             }
             #else
+            // The date is status, not a value to pick, so it sits under the
+            // action as a subtitle.
             Button { backUpNow() } label: {
                 LabeledContent {
                     if workspace.isBackingUp {
                         ProgressView().controlSize(.small)
-                    } else if let lastBackup = workspace.lastBackup {
-                        Text(lastBackup.createdAt.formatted(date: .abbreviated, time: .shortened))
-                            .accessibilityIdentifier("notebook-last-backup")
                     }
                 } label: {
                     Text(workspace.isBackingUp ? "Backing Up…" : "Back Up Now")
                         .foregroundStyle(.tint)
+                    if let lastBackup = workspace.lastBackup {
+                        Text("Last backup \(lastBackup.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                            .accessibilityIdentifier("notebook-last-backup")
+                    }
                 }
             }
             .disabled(workspace.isBackingUp || exporting)
