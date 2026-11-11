@@ -62,10 +62,10 @@ const layouts = {
     // Magnified version scrubber over the device
     history: [
       { img: "ipad/ipad-history", frame: "ipad", w: 1500, css: center },
-      { img: "ipad/ipad-history", crop: [1060, 2440, 540, 270], scale: 2.1, css: "left:50%;bottom:150px;transform:translateX(-50%)" },
+      { img: "ipad/ipad-history", crop: [1060, 2515, 540, 215], scale: 2.1, css: "left:50%;bottom:150px;transform:translateX(-50%)" },
     ],
     // Close-up of the note and the menu, without the keyboard
-    snippets: [{ img: "ipad/ipad-snippets", crop: [545, 170, 1045, 1760], scale: 1.1, plain: true, css: "left:50%;top:60px;transform:translateX(-50%)" }],
+    snippets: [{ img: "ipad/ipad-snippets", crop: [545, 170, 1300, 1760], scale: 1.1, plain: true, css: "left:50%;top:60px;transform:translateX(-50%)" }],
     widgets: [{ img: "ipad/ipad-widgets", frame: "ipad", w: 2010, css: "left:50%;top:70px;transform:translateX(-50%)" }],
   },
   mac: {
@@ -87,7 +87,7 @@ const layouts = {
     // Magnified snippet menu over its spot in the toolbar
     snippets: [
       { img: "mac/mac-snippets", frame: "mac", w: 2080, css: center },
-      { img: "mac/mac-snippets", crop: [1880, 95, 560, 260], scale: 2, css: "right:180px;top:20px" },
+      { img: "mac/mac-snippets", crop: [1930, 95, 560, 265], scale: 2, css: "right:180px;top:20px" },
     ],
   },
 };
