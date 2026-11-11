@@ -453,6 +453,14 @@ private struct NotebookAppearanceSection: View {
                 color: { Color(uiPlatformColor: $0.platformColor) }, name: \.name
             )
             .accessibilityIdentifier("notebook-appearance-highlighter")
+            #if os(iOS)
+            NavigationLink {
+                NotebookTextSizeSettings()
+            } label: {
+                Text("Font & Text Size")
+            }
+            .accessibilityIdentifier("notebook-appearance-text-size")
+            #endif
             recents
         } header: {
             Text("Appearance")
@@ -549,3 +557,59 @@ private extension Color {
         #endif
     }
 }
+
+#if os(iOS)
+/// The editor's font and size, also in each note's menu.
+private struct NotebookTextSizeSettings: View {
+    @AppStorage("editor.fontSize", store: NotebookEditorPreferences.store)
+    private var fontSize = 17.0
+    @AppStorage("editor.fontFamily", store: NotebookEditorPreferences.store)
+    private var fontFamilyRaw = EditorFontFamily.system.rawValue
+
+    private var size: Int { Int(MarkdownPresentation.normalizedFontSize(fontSize)) }
+    private var family: Binding<EditorFontFamily> {
+        Binding(
+            get: { EditorFontFamily(rawValue: fontFamilyRaw) ?? .system },
+            set: { fontFamilyRaw = $0.rawValue }
+        )
+    }
+
+    // The same settings as the note's Aa menu, as plain Settings rows.
+    var body: some View {
+        Form {
+            Section {
+                Picker("Font", selection: family) {
+                    ForEach(EditorFontFamily.allCases) { family in
+                        Text(family.title).tag(family)
+                    }
+                }
+                .accessibilityIdentifier("editor-font-family")
+                LabeledContent("Text Size") {
+                    Text("\(size) pt").monospacedDigit()
+                }
+                Slider(
+                    value: Binding(get: { Double(size) }, set: { fontSize = $0 }),
+                    in: 12...28, step: 1
+                ) {
+                    Text("Text Size")
+                } minimumValueLabel: {
+                    Image(systemName: "textformat.size.smaller")
+                } maximumValueLabel: {
+                    Image(systemName: "textformat.size.larger")
+                }
+                .accessibilityValue("\(size) points")
+                .accessibilityIdentifier("editor-font-size")
+            }
+            Section {
+                Button("Reset to Defaults") {
+                    fontFamilyRaw = EditorFontFamily.system.rawValue
+                    fontSize = 17
+                }
+                .disabled(size == 17 && family.wrappedValue == .system)
+            }
+        }
+        .navigationTitle("Font & Text Size")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+#endif
