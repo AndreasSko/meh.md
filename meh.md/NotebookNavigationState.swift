@@ -93,8 +93,19 @@ final class NotebookNavigationState {
         savePreferences()
     }
 
+    /// The Settings › Appearance key for how many notes Recents shows.
+    static let recentCountKey = "library.recentCount"
+    static let recentCountRange = 3...15
+    static let defaultRecentCount = 5
+
+    /// How many notes Recents shows before More. Every pin always shows.
+    var recentCount = NotebookNavigationState.defaultRecentCount
+
     /// The shared catalog owns recent ordering; this scene only reads it.
-    var recentNoteIDs: [UUID] { replica.recentNotes.map(\.id) }
+    var recentNoteIDs: [UUID] {
+        let count = max(recentCount, replica.pinnedRecentCount)
+        return replica.allRecentNotes.prefix(count).map(\.id)
+    }
     /// Changes whenever the Recents sessions must load again. Switching to
     /// another notebook, for example after combining, clears them even when
     /// the same notes lead Recents.

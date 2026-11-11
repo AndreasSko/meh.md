@@ -189,7 +189,9 @@ private struct NotebookSyncLabView: View {
             }
             report.accountStatus = account.rawValue
             guard account == .available else {
-                throw CloudKitSyncTransportError.accountUnavailable
+                throw account == .noAccount
+                    ? CloudKitSyncTransportError.signedOut
+                    : CloudKitSyncTransportError.accountUnavailable
             }
             if phase == "cleanup" {
                 // Only this fresh run's fictional zone and stores are opened.

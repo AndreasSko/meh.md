@@ -230,11 +230,15 @@ struct NotebookSidebar: View {
     @ViewBuilder
     private var browserUndoActions: some View {
         if scene.browserUndo?.action == .move {
-            Button("Undo Move") { scene.undoBrowserChange(redo: false) }
+            Button("Undo Move", systemImage: "arrow.uturn.backward") {
+                scene.undoBrowserChange(redo: false)
+            }
                 .accessibilityIdentifier("notebook-browser-undo")
         }
         if scene.browserRedo?.action == .move {
-            Button("Redo Move") { scene.undoBrowserChange(redo: true) }
+            Button("Redo Move", systemImage: "arrow.uturn.forward") {
+                scene.undoBrowserChange(redo: true)
+            }
                 .accessibilityIdentifier("notebook-browser-redo")
         }
     }
@@ -242,23 +246,24 @@ struct NotebookSidebar: View {
     private var applicationMenu: some View {
         Menu {
             if supportsMultipleWindows {
-                Button("New Window") {
+                Button("New Window", systemImage: "macwindow.badge.plus") {
                     openWindow(id: "notebook", value: NotebookWindowValue())
                 }
                 Divider()
             }
-            Button("Select Items") {
-                scene.beginSelectingItems()
-            }
-            .accessibilityIdentifier("notebook-select-items")
-            NotebookSortMenu(scene: scene, parentID: nil, label: "Sort Files Once")
-                .accessibilityIdentifier("notebook-sort-root")
-            NotebookTemplateCreationButton(scene: scene)
             Button {
                 scene.createItem(kind: .folder, parentID: nil)
             } label: {
                 Label("New Folder", systemImage: "folder.badge.plus")
             }
+            NotebookTemplateCreationButton(scene: scene)
+            Divider()
+            Button("Select Items", systemImage: "checkmark.circle") {
+                scene.beginSelectingItems()
+            }
+            .accessibilityIdentifier("notebook-select-items")
+            NotebookSortMenu(scene: scene, parentID: nil)
+                .accessibilityIdentifier("notebook-sort-root")
             Button { scene.requestImport() } label: {
                 Label("Import Markdown…", systemImage: "square.and.arrow.down")
             }
@@ -336,6 +341,7 @@ private struct NotebookLibraryBrowser: View {
             #else
             NotebookMacRecentsExpansionHost(
                 items: scene.allRecentPlacements,
+                compactCount: scene.navigationState.recentNoteIDs.count,
                 selectedNoteID: scene.selectedID,
                 isExpanded: Bindable(scene).browsingAllRecents,
                 onSelect: { id in
@@ -413,37 +419,41 @@ private struct NotebookLibraryBrowser: View {
         let replica = scene.replica
         guard let placement = replica.placements.first(where: { $0.item.id == id })
         else { return UIMenu(children: []) }
-        var menuActions: [UIMenuElement] = [
-            UIAction(title: String(localized: "Rename…")) { _ in
-                scene.beginRenaming(placement)
-            },
-            UIAction(title: String(localized: "Move…")) { _ in
-                scene.beginMoving([id], fromTrash: false)
-            },
-            UIAction(title: String(localized: "Show in Files")) { _ in
-                scene.showInFiles(id)
-            }
-        ]
+        var menuActions: [UIMenuElement] = []
         if supportsMultipleWindows {
-            menuActions.insert(UIAction(title: String(localized: "Open in New Window")) { _ in
-                openWindow(id: "notebook", value: NotebookWindowValue(noteID: id))
-            }, at: 0)
+            menuActions.append(UIMenu(options: .displayInline, children: [
+                UIAction(
+                    title: String(localized: "Open in New Window"),
+                    image: UIImage(systemName: "macwindow.badge.plus")
+                ) { _ in
+                    openWindow(id: "notebook", value: NotebookWindowValue(noteID: id))
+                }
+            ]))
         }
         let pinned = replica.isPinnedInRecents(id)
-        let title = pinned ? String(localized: "Unpin from Recents")
-            : String(localized: "Pin in Recents")
         menuActions.append(UIAction(
-            title: title,
+            title: pinned ? String(localized: "Unpin from Recents")
+                : String(localized: "Pin in Recents"),
+            image: UIImage(systemName: pinned ? "pin.slash" : "pin"),
             attributes: !pinned && !replica.canPinInRecents(id) ? .disabled : []
         ) { _ in
             scene.setRecentPinned(!pinned, for: id)
         })
         menuActions.append(UIAction(
-            title: String(localized: "Hide from Recents"),
-            image: UIImage(systemName: "eye.slash"),
-            attributes: scene.busy ? .disabled : []
+            title: String(localized: "Rename…"), image: UIImage(systemName: "pencil")
         ) { _ in
-            scene.setRecentHidden(true, for: id)
+            scene.beginRenaming(placement)
+        })
+        menuActions.append(UIAction(
+            title: String(localized: "Move…"), image: UIImage(systemName: "folder")
+        ) { _ in
+            scene.beginMoving([id], fromTrash: false)
+        })
+        menuActions.append(UIAction(
+            title: String(localized: "Show in Files"),
+            image: UIImage(systemName: "list.bullet.indent")
+        ) { _ in
+            scene.showInFiles(id)
         })
         var reusableActions: [UIMenuElement] = []
         reusableActions.append(UIAction(
@@ -470,11 +480,21 @@ private struct NotebookLibraryBrowser: View {
             children: reusableActions
         ))
         menuActions.append(UIAction(
-            title: String(localized: "Move to Trash"),
-            attributes: .destructive
+            title: String(localized: "Hide from Recents"),
+            image: UIImage(systemName: "eye.slash"),
+            attributes: scene.busy ? .disabled : []
         ) { _ in
-            scene.changeTrash(placement, trashed: true)
+            scene.setRecentHidden(true, for: id)
         })
+        menuActions.append(UIMenu(options: .displayInline, children: [
+            UIAction(
+                title: String(localized: "Move to Trash"),
+                image: UIImage(systemName: "trash"),
+                attributes: .destructive
+            ) { _ in
+                scene.changeTrash(placement, trashed: true)
+            }
+        ]))
         return UIMenu(children: menuActions)
     }
     #endif
@@ -649,7 +669,8 @@ private struct NotebookLibraryBrowser: View {
             if !isCompact { return palette.accentColor ?? .accentColor }
             #endif
             return nil
-        case .open: return NotebookSidebarPalette.openNote
+        // While picking items, gray would read as a selection the circle denies.
+        case .open: return scene.selectingItems ? .clear : NotebookSidebarPalette.openNote
         case .none: return .clear
         }
     }
@@ -1151,7 +1172,7 @@ private struct NotebookFileRow: View {
                                     ? "tray" : "folder"
                             )
                         } else {
-                            Image(systemName: "note.text")
+                            Image(systemName: "doc.text")
                         }
                     }
                         .lineLimit(1)
@@ -1259,95 +1280,50 @@ struct NotebookItemActions: View {
     var body: some View {
         let replica = scene.replica
         let busy = scene.busy
-        if allowsCreation, !placement.isInTrash {
-            let parentID = scene.creationParent(for: placement)
-            let position = scene.contextualCreationPosition(for: placement)
-            Button("New Note") {
-                scene.createItem(kind: .note, parentID: parentID, position: position)
-            }
-                .disabled(busy)
-            NotebookTemplateCreationButton(scene: scene)
-            Button("New Folder") {
-                scene.createItem(kind: .folder, parentID: parentID, position: position)
-            }
-                .disabled(busy)
-            Divider()
-        }
-        if placement.item.kind == .note, !placement.isInTrash,
-           supportsMultipleWindows {
-            Button("Open in New Window") {
-                openWindow(
-                    id: "notebook",
-                    value: NotebookWindowValue(noteID: placement.item.id)
-                )
-            }
-            Divider()
-        }
-        if allowsRename { Button("Rename…") { scene.beginRenaming(placement) } }
-        if !placement.isInTrash {
-            Menu {
-                let registered = replica.isTemplateSource(placement.item.id)
-                let title: LocalizedStringKey = placement.item.kind == .folder
-                    ? (registered ? "Stop Using as Template Folder" : "Use as Template Folder")
-                    : (registered ? "Stop Using as Template" : "Use as Template")
-                Button {
-                    scene.setTemplateSource(placement.item.id, enabled: !registered)
-                } label: {
-                    Label(title, systemImage: "doc.on.doc")
-                }
-                .disabled(busy)
-                .accessibilityIdentifier("notebook-use-as-template-\(placement.item.id)")
-                let snippetRegistered = replica.isSnippetSource(placement.item.id)
-                let snippetTitle: LocalizedStringKey = placement.item.kind == .folder
-                    ? (snippetRegistered ? "Stop Using as Snippet Folder" : "Use as Snippet Folder")
-                    : (snippetRegistered ? "Stop Using as Snippet" : "Use as Snippet")
-                Button {
-                    scene.setSnippetSource(placement.item.id, enabled: !snippetRegistered)
-                } label: {
-                    Label(snippetTitle, systemImage: "text.badge.plus")
-                }
-                .disabled(busy)
-                .accessibilityIdentifier("notebook-use-as-snippet-\(placement.item.id)")
-            } label: {
-                Label("Templates & Snippets", systemImage: "doc.on.doc")
-            }
-        }
-        Button("Move…") {
-            scene.beginMoving([placement.item.id], fromTrash: placement.isInTrash)
-        }
-        if !placement.isInTrash, placement.item.kind == .note {
-            if allowsShowInFiles {
-                Button("Show in Files") { scene.showInFiles(placement.item.id) }
-                    .accessibilityIdentifier("notebook-show-in-files")
-            }
-            if !replica.isHiddenFromRecents(placement.item.id) {
-                NotebookRecentPinButton(scene: scene, id: placement.item.id)
-            }
-            let hidden = replica.isHiddenFromRecents(placement.item.id)
-            let visibilityTitle: LocalizedStringKey = hidden
-                ? "Show in Recents" : "Hide from Recents"
-            Button {
-                scene.setRecentHidden(!hidden, for: placement.item.id)
-            } label: {
-                Label(visibilityTitle,
-                      systemImage: hidden ? "eye" : "eye.slash")
-            }
-            .disabled(busy)
-            .accessibilityIdentifier("notebook-recents-visibility-" + placement.item.id.uuidString)
-        }
+        let isFolder = placement.item.kind == .folder
         if placement.isInTrash {
+            if allowsRename { renameButton }
+            moveButton
             if placement.item.isTrashed {
-                Button("Restore") { scene.changeTrash(placement, trashed: false) }
+                Button { scene.changeTrash(placement, trashed: false) } label: {
+                    Label("Restore", systemImage: "arrow.uturn.backward")
+                }
             } else {
                 Text("Restore the parent folder, or move this item out.")
             }
             Divider()
-            Button("Delete Permanently…", role: .destructive) {
+            Button("Delete Permanently…", systemImage: "trash", role: .destructive) {
                 scene.prepareDeletion(rootID: placement.item.id)
             }
             .disabled(busy)
         } else {
-            if placement.item.kind == .folder {
+            // A folder's menu starts with what goes inside it.
+            if isFolder, allowsCreation {
+                creationButtons
+                Divider()
+            }
+            if !isFolder, supportsMultipleWindows {
+                Button("Open in New Window", systemImage: "macwindow.badge.plus") {
+                    openWindow(
+                        id: "notebook",
+                        value: NotebookWindowValue(noteID: placement.item.id)
+                    )
+                }
+                Divider()
+            }
+            if !isFolder, !replica.isHiddenFromRecents(placement.item.id) {
+                NotebookRecentPinButton(scene: scene, id: placement.item.id)
+            }
+            if allowsRename { renameButton }
+            moveButton
+            if !isFolder, allowsShowInFiles {
+                Button("Show in Files", systemImage: "list.bullet.indent") {
+                    scene.showInFiles(placement.item.id)
+                }
+                .accessibilityIdentifier("notebook-show-in-files")
+            }
+            if isFolder {
+                NotebookSortMenu(scene: scene, parentID: placement.item.id)
                 let isDefault = replica.defaultNewNoteParentID == placement.item.id
                 Button {
                     scene.setDefaultNewNoteParentID(isDefault ? nil : placement.item.id)
@@ -1358,47 +1334,119 @@ struct NotebookItemActions: View {
                     )
                 }
                 .disabled(busy)
-                Divider()
             }
-            Button("Move to Trash", role: .destructive) {
+            templatesAndSnippetsMenu
+            if !isFolder {
+                let hidden = replica.isHiddenFromRecents(placement.item.id)
+                let visibilityTitle: LocalizedStringKey = hidden
+                    ? "Show in Recents" : "Hide from Recents"
+                Button {
+                    scene.setRecentHidden(!hidden, for: placement.item.id)
+                } label: {
+                    Label(visibilityTitle,
+                          systemImage: hidden ? "eye" : "eye.slash")
+                }
+                .disabled(busy)
+                .accessibilityIdentifier("notebook-recents-visibility-" + placement.item.id.uuidString)
+                // Creating beside a note keeps its spot in a hand-sorted folder.
+                if allowsCreation {
+                    Menu {
+                        creationButtons
+                    } label: {
+                        Label("New", systemImage: "plus")
+                    }
+                    .accessibilityIdentifier("notebook-menu-new")
+                }
+            }
+            Divider()
+            Button("Move to Trash", systemImage: "trash", role: .destructive) {
                 scene.changeTrash(placement, trashed: true)
             }
-            if placement.item.kind == .folder {
-                Divider()
-                NotebookSortMenu(
-                    scene: scene,
-                    parentID: placement.item.id,
-                    label: "Sort Folder Once"
-                )
+        }
+    }
+
+    @ViewBuilder private var creationButtons: some View {
+        let parentID = scene.creationParent(for: placement)
+        let position = scene.contextualCreationPosition(for: placement)
+        Button("New Note", systemImage: "square.and.pencil") {
+            scene.createItem(kind: .note, parentID: parentID, position: position)
+        }
+        .disabled(scene.busy)
+        NotebookTemplateCreationButton(scene: scene)
+        Button("New Folder", systemImage: "folder.badge.plus") {
+            scene.createItem(kind: .folder, parentID: parentID, position: position)
+        }
+        .disabled(scene.busy)
+    }
+
+    private var renameButton: some View {
+        Button("Rename…", systemImage: "pencil") { scene.beginRenaming(placement) }
+    }
+
+    private var moveButton: some View {
+        Button("Move…", systemImage: "folder") {
+            scene.beginMoving([placement.item.id], fromTrash: placement.isInTrash)
+        }
+    }
+
+    private var templatesAndSnippetsMenu: some View {
+        let replica = scene.replica
+        return Menu {
+            let registered = replica.isTemplateSource(placement.item.id)
+            let title: LocalizedStringKey = placement.item.kind == .folder
+                ? (registered ? "Stop Using as Template Folder" : "Use as Template Folder")
+                : (registered ? "Stop Using as Template" : "Use as Template")
+            Button {
+                scene.setTemplateSource(placement.item.id, enabled: !registered)
+            } label: {
+                Label(title, systemImage: "doc.on.doc")
             }
+            .disabled(scene.busy)
+            .accessibilityIdentifier("notebook-use-as-template-\(placement.item.id)")
+            let snippetRegistered = replica.isSnippetSource(placement.item.id)
+            let snippetTitle: LocalizedStringKey = placement.item.kind == .folder
+                ? (snippetRegistered ? "Stop Using as Snippet Folder" : "Use as Snippet Folder")
+                : (snippetRegistered ? "Stop Using as Snippet" : "Use as Snippet")
+            Button {
+                scene.setSnippetSource(placement.item.id, enabled: !snippetRegistered)
+            } label: {
+                Label(snippetTitle, systemImage: "text.badge.plus")
+            }
+            .disabled(scene.busy)
+            .accessibilityIdentifier("notebook-use-as-snippet-\(placement.item.id)")
+        } label: {
+            Label("Templates & Snippets", systemImage: "doc.on.doc")
         }
     }
 }
 
+/// Sorts a folder's items once; the manual order stays editable after.
 private struct NotebookSortMenu: View {
     let scene: NotebookSceneState
     let parentID: UUID?
-    let label: LocalizedStringResource
 
     var body: some View {
         Menu {
-            Button("Name, A–Z") { scene.sort(parentID, by: .nameAscending) }
-            Button("Name, Z–A") { scene.sort(parentID, by: .nameDescending) }
-            Divider()
-            Button("Created, Newest First") {
-                scene.sort(parentID, by: .createdNewest)
+            Section("Sorts once. You can still drag to reorder.") {
+                Button("Name, A–Z") { scene.sort(parentID, by: .nameAscending) }
+                Button("Name, Z–A") { scene.sort(parentID, by: .nameDescending) }
             }
-            Button("Created, Oldest First") {
-                scene.sort(parentID, by: .createdOldest)
-            }
-            Button("Modified, Newest First") {
-                scene.sort(parentID, by: .modifiedNewest)
-            }
-            Button("Modified, Oldest First") {
-                scene.sort(parentID, by: .modifiedOldest)
+            Section {
+                Button("Created, Newest First") {
+                    scene.sort(parentID, by: .createdNewest)
+                }
+                Button("Created, Oldest First") {
+                    scene.sort(parentID, by: .createdOldest)
+                }
+                Button("Modified, Newest First") {
+                    scene.sort(parentID, by: .modifiedNewest)
+                }
+                Button("Modified, Oldest First") {
+                    scene.sort(parentID, by: .modifiedOldest)
+                }
             }
         } label: {
-            Label(label, systemImage: "arrow.up.arrow.down")
+            Label("Sort", systemImage: "arrow.up.arrow.down")
         }
         .disabled(scene.busy)
     }
@@ -1419,7 +1467,7 @@ private struct NotebookRecentPinButton: View {
             if swipeIcon {
                 Image(systemName: pinned ? "pin.slash" : "pin.fill")
             } else {
-                Text(title)
+                Label(title, systemImage: pinned ? "pin.slash" : "pin")
             }
         }
         .accessibilityLabel(Text(title))
@@ -1445,10 +1493,10 @@ private struct NotebookEmptySpaceActions: View {
     let scene: NotebookSceneState
 
     var body: some View {
-        Button("New Note") { scene.createDefaultNote() }
+        Button("New Note", systemImage: "square.and.pencil") { scene.createDefaultNote() }
             .disabled(scene.busy)
         NotebookTemplateCreationButton(scene: scene)
-        Button("New Folder") {
+        Button("New Folder", systemImage: "folder.badge.plus") {
             scene.createItem(kind: .folder, parentID: nil)
         }
             .disabled(scene.busy)

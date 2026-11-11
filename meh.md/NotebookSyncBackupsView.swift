@@ -37,9 +37,12 @@ struct NotebookSyncBackupsView: View {
             if workspace.canChooseSyncStorage {
                 syncSection
             }
-            if workspace.syncSetupError != nil || workspace.notificationRegistrationError != nil {
+            // Signed out, the sync footer already says how to sign in.
+            let setupError = workspace.syncFailure?.isSignedOut == true
+                ? nil : workspace.syncSetupError
+            if setupError != nil || workspace.notificationRegistrationError != nil {
                 Section {
-                    ForEach([workspace.syncSetupError, workspace.notificationRegistrationError]
+                    ForEach([setupError, workspace.notificationRegistrationError]
                         .compactMap { $0 }, id: \.self) { error in
                         Label {
                             Text(error)
@@ -206,17 +209,20 @@ struct NotebookSyncBackupsView: View {
                 }
             }
             #else
+            // The date is status, not a value to pick, so it sits under the
+            // action as a subtitle.
             Button { backUpNow() } label: {
                 LabeledContent {
                     if workspace.isBackingUp {
                         ProgressView().controlSize(.small)
-                    } else if let lastBackup = workspace.lastBackup {
-                        Text(lastBackup.createdAt.formatted(date: .abbreviated, time: .shortened))
-                            .accessibilityIdentifier("notebook-last-backup")
                     }
                 } label: {
                     Text(workspace.isBackingUp ? "Backing Up…" : "Back Up Now")
                         .foregroundStyle(.tint)
+                    if let lastBackup = workspace.lastBackup {
+                        Text("Last backup \(lastBackup.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                            .accessibilityIdentifier("notebook-last-backup")
+                    }
                 }
             }
             .disabled(workspace.isBackingUp || exporting)
@@ -319,14 +325,17 @@ struct NotebookSyncBackupsView: View {
 
     private var intro: String {
         #if os(macOS)
-        workspace.usesSync
-            ? "Your notes are saved on this Mac and in \(workspace.syncStorageDestination)."
-            : "Your notes are saved only on this Mac."
+        let device = "this Mac"
         #else
-        workspace.usesSync
-            ? "Your notes are saved on this device and in \(workspace.syncStorageDestination)."
-            : "Your notes are saved only on this device."
+        let device = "this device"
         #endif
+        // Copies synced before signing out can still be in iCloud.
+        if workspace.syncFailure?.isSignedOut == true {
+            return "New changes are saved only on \(device)."
+        }
+        return workspace.usesSync
+            ? "Your notes are saved on \(device) and in \(workspace.syncStorageDestination)."
+            : "Your notes are saved only on \(device)."
     }
 
     private var backupFooter: String {
@@ -341,7 +350,9 @@ struct NotebookSyncBackupsView: View {
 
     private var syncFooter: String {
         let description = switch workspace.syncStorage {
-        case .iCloud: "Changes reach your other devices right away."
+        case .iCloud: workspace.syncFailure?.isSignedOut == true
+            ? "Sign in to iCloud in the Settings app to sync with your other devices."
+            : "Changes reach your other devices right away."
         case .s3: "Changes arrive about once a minute while meh.md is open."
         case .off: "Notes stay on this device only."
         }

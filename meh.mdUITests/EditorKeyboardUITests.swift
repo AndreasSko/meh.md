@@ -310,9 +310,9 @@ final class EditorKeyboardUITests: XCTestCase {
         let toolbar = toolbarContainer(in: app)
         XCTAssertTrue(toolbar.waitForExistence(timeout: 5))
         let expectedCommands = [
-            "bold", "italic", "strikethrough", "highlight", "heading",
-            "indent", "outdent", "task-list", "link", "inline-code",
-            "code-block", "insert-table",
+            "bold", "italic", "highlight", "heading", "task-list",
+            "indent", "outdent", "strikethrough", "link", "inline-code",
+            "code-block", "quote", "insert-table",
         ]
         assertToolbarCommandsReachable(expectedCommands, in: app, toolbar: toolbar)
         let table = toolbarCommand("editor-table-menu", in: app)
@@ -350,9 +350,19 @@ final class EditorKeyboardUITests: XCTestCase {
             visibleToolbarOrder(in: relaunchedToolbar), reorderedVisibleOrder
         )
 
+        // Dropping after the neighbour needs room past it; the neighbour can
+        // be the last button, half under the bar's edge, so scroll to the end.
+        for _ in 0..<3 where relaunchedNeighbour.frame.maxX + 12 > relaunchedToolbar.frame.maxX {
+            relaunchedToolbar.swipeLeft()
+        }
         drag(relaunchedTable, onto: relaunchedNeighbour, before: false, in: app)
         let restoredVisibleOrder = visibleToolbarOrder(in: relaunchedToolbar)
-        XCTAssertEqual(restoredVisibleOrder, initialVisibleOrder)
+        // The bar may be scrolled now, so compare the buttons both show.
+        XCTAssertEqual(
+            restoredVisibleOrder.filter(initialVisibleOrder.contains),
+            initialVisibleOrder.filter(restoredVisibleOrder.contains)
+        )
+        XCTAssertGreaterThan(relaunchedTable.frame.midX, relaunchedNeighbour.frame.midX)
         assertToolbarOrderStaysStable(restoredVisibleOrder, in: relaunchedToolbar)
         capture(app, name: "Formatting bar after two drags")
 

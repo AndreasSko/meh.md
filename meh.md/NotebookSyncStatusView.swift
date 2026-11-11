@@ -432,6 +432,7 @@ struct NotebookSyncPresentation {
 
     var title: LocalizedStringResource {
         guard workspace.usesSync else { return "Sync not enabled" }
+        if isSignedOut { return "Sign in to iCloud to sync" }
         if workspace.isSyncUpdateRequired { return "Update needed to sync" }
         if showsActivity { return activity.title }
         if let failure = workspace.syncFailure {
@@ -457,7 +458,7 @@ struct NotebookSyncPresentation {
         else { pending = false }
         let waitingForSave = workspace.isWaitingForLocalSave(at: now)
         return NotebookSyncIndicator(
-            isEnabled: workspace.usesSync, isSyncing: workspace.isSyncing,
+            isEnabled: workspace.usesSync && !isSignedOut, isSyncing: workspace.isSyncing,
             isRetryPaused: retryDeadline != nil || workspace.isSyncUpdateRequired,
             hasError: workspace.isSyncUpdateRequired || (failed && !waitingForSave)
                 || (workspace.syncSetupError != nil && !waitingForSave)
@@ -467,8 +468,11 @@ struct NotebookSyncPresentation {
         )
     }
 
+    /// Signing in is a setting, so it looks like sync being off.
+    var isSignedOut: Bool { workspace.syncFailure?.isSignedOut == true }
+
     var failureSymbol: String? {
-        guard let failure = workspace.syncFailure, !showsActivity,
+        guard let failure = workspace.syncFailure, !failure.isSignedOut, !showsActivity,
               !workspace.isWaitingForLocalSave(at: now) else { return nil }
         return failure.isOffline
             ? "wifi.slash" : NotebookSyncIndicator.failed.symbol
@@ -476,7 +480,7 @@ struct NotebookSyncPresentation {
 
     /// A face only when nothing needs attention; problems keep plain text.
     var mood: MehFace.Mood? {
-        guard workspace.usesSync else { return .asleep }
+        guard workspace.usesSync, !isSignedOut else { return .asleep }
         guard indicator == .synced, !showsActivity, workspace.syncFailure == nil,
               workspace.lastSuccessfulSync != nil else { return nil }
         return .relaxed
@@ -525,36 +529,43 @@ struct NotebookSyncEventLogView: View {
     @State private var copied = false
 
     var body: some View {
+        #if os(iOS)
+        // A sheet like the others on iPhone: title bar, Done, and the
+        // actions in the bottom toolbar.
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    intro
+                    logText
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            }
+            .navigationTitle("Sync Event Log")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .bottomBar) {
+                    copyButton
+                    ShareLink("Share Log", item: diagnosticText)
+                    Spacer()
+                    Button("Clear Log", role: .destructive) { log.clear(); copied = false }
+                }
+            }
+        }
+        #else
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Sync Event Log").font(.headline)
                 Spacer()
                 Button("Done") { dismiss() }
             }
-            Text("Recent events from this device. No note contents, names, paths, or account identifiers are recorded.")
-                .font(.caption).foregroundStyle(.secondary)
-            if log.persistenceError {
-                Text("Some log history could not be loaded or saved. Current events are available below.")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-            ScrollView {
-                Text(diagnosticText)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("notebook-sync-event-log-text")
-            }
+            intro
+            ScrollView { logText }
             HStack {
-                Button(copied ? "Copied" : "Copy Log") {
-                    #if os(macOS)
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(diagnosticText, forType: .string)
-                    #else
-                    UIPasteboard.general.string = diagnosticText
-                    #endif
-                    copied = true
-                }
-                .accessibilityIdentifier("notebook-sync-event-log-copy")
+                copyButton
                 ShareLink("Share Log", item: diagnosticText)
                 Spacer()
                 Button("Clear Log") { log.clear(); copied = false }
@@ -562,6 +573,37 @@ struct NotebookSyncEventLogView: View {
         }
         .padding(20)
         .frame(minWidth: 300, idealWidth: 680, minHeight: 360, idealHeight: 540)
+        #endif
+    }
+
+    @ViewBuilder private var intro: some View {
+        Text("Recent events from this device. No note contents, names, paths, or account identifiers are recorded.")
+            .font(.caption).foregroundStyle(.secondary)
+        if log.persistenceError {
+            Text("Some log history could not be loaded or saved. Current events are available below.")
+                .font(.caption).foregroundStyle(.orange)
+        }
+    }
+
+    private var logText: some View {
+        Text(diagnosticText)
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("notebook-sync-event-log-text")
+    }
+
+    private var copyButton: some View {
+        Button(copied ? "Copied" : "Copy Log") {
+            #if os(macOS)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(diagnosticText, forType: .string)
+            #else
+            UIPasteboard.general.string = diagnosticText
+            #endif
+            copied = true
+        }
+        .accessibilityIdentifier("notebook-sync-event-log-copy")
     }
 
     private var diagnosticText: String { NotebookFeedback.logText(log) }

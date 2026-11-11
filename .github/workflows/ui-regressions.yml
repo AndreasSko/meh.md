@@ -36,7 +36,9 @@ jobs:
       - name: Pick goals from the diff and coverage
         id: select
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
+          # A stacked PR compares against the stack's base, so the top PR
+          # picks goals for every layer.
+          BASE: ${{ github.event.pull_request.stack.base.sha || github.event.pull_request.base.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ -n "$BASE" ]; then
@@ -48,7 +50,8 @@ jobs:
   ui:
     name: UI goals (${{ matrix.platform }})
     needs: select
-    if: needs.select.outputs.matrix != '[]'
+    # In a stack only the top PR runs the lanes; it holds every layer.
+    if: needs.select.outputs.matrix != '[]' && (github.event.pull_request.stack == null || github.event.pull_request.stack.position == github.event.pull_request.stack.size)
     runs-on: xcode-27
     # Harness watchdog with export/cleanup headroom, not an app speed budget.
     timeout-minutes: 195

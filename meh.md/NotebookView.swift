@@ -14,6 +14,8 @@ import SwiftUI
 /// thread has only 1 MiB of stack.
 struct NotebookView: View {
     @State private var scene: NotebookSceneState
+    @AppStorage(NotebookNavigationState.recentCountKey, store: NotebookEditorPreferences.store)
+    private var recentCount = NotebookNavigationState.defaultRecentCount
     @FocusState private var searchFocused: Bool
     @FocusState private var focusedNameID: UUID?
     @FocusState private var browserFocused: Bool
@@ -69,6 +71,10 @@ struct NotebookView: View {
             }
             .onChange(of: focusedRecentID) { _, id in
                 scene.recentCommands.focusedNoteID = id
+            }
+            .onChange(of: recentCount, initial: true) { _, count in
+                let range = NotebookNavigationState.recentCountRange
+                scene.navigationState.recentCount = min(max(count, range.lowerBound), range.upperBound)
             }
             #if os(macOS)
             // The Mac menu bar's Move and Trash act on a focused Files list.
@@ -602,7 +608,12 @@ private struct NotebookScenePresentation: ViewModifier {
             placements: scene.replica.placements,
             sourceIDs: scene.movingIDs,
             initialParentID: scene.destination,
+            newNoteFolderID: scene.replica.defaultNewNoteParentID,
             isDestinationAllowed: { scene.canMoveSelection(into: $0) },
+            isCurrentLocation: {
+                !scene.movingFromTrash
+                    && scene.selectionAlreadyAtDestination(scene.movingIDs, parentID: $0)
+            },
             onSubmit: { parentID in
                 #if DEBUG
                 // Make the in-flight layout observable in isolated UI tests.

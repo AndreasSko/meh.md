@@ -142,8 +142,7 @@ final class LargeNoteHistoryUITests: XCTestCase {
     @MainActor
     private func openHistory(in app: XCUIApplication) {
         app.buttons["notebook-note-actions"].tap()
-        let history = app.descendants(matching: .any)
-            .matching(identifier: "notebook-version-history").firstMatch
+        let history = app.noteMenuAction("notebook-version-history", label: "History")
         XCTAssertTrue(history.waitForExistence(timeout: 5))
         if !history.isHittable {
             let menu = app.collectionViews.containing(

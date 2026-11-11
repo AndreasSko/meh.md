@@ -285,7 +285,7 @@ struct NotebookGhostRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: placement.item.kind == .folder ? "folder" : "note.text")
+            Image(systemName: placement.item.kind == .folder ? "folder" : "doc.text")
                 .foregroundStyle(.secondary)
             Text(title)
                 .italic()

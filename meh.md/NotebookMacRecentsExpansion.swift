@@ -51,6 +51,7 @@ private final class NotebookMacRecentsCompactGeometryBox {
 
 struct NotebookMacRecentsExpansionHost<Browser: View, Row: View>: View {
     let items: [NotebookPlacement]
+    let compactCount: Int
     let selectedNoteID: UUID?
     @Binding var isExpanded: Bool
     let onSelect: (UUID) -> Void
@@ -108,7 +109,8 @@ struct NotebookMacRecentsExpansionHost<Browser: View, Row: View>: View {
                         )
                         let frame = isExpanded ? expandedFrame : compactFrame
                         NotebookMacRecentsSurface(
-                            items: items, selectedNoteID: selectedNoteID,
+                            items: items, compactCount: compactCount,
+                            selectedNoteID: selectedNoteID,
                             isExpanded: isExpanded,
                             onSelect: onSelect, onCollapse: onCollapse,
                             onVisibleIDs: onVisibleIDs, rowContent: rowContent
@@ -153,6 +155,7 @@ struct NotebookMacRecentsExpansionHost<Browser: View, Row: View>: View {
 
 private struct NotebookMacRecentsSurface<Row: View>: View {
     let items: [NotebookPlacement]
+    let compactCount: Int
     let selectedNoteID: UUID?
     let isExpanded: Bool
     let onSelect: (UUID) -> Void
@@ -165,7 +168,7 @@ private struct NotebookMacRecentsSurface<Row: View>: View {
     @FocusState private var listFocused: Bool
 
     private var displayedItems: [NotebookPlacement] {
-        isExpanded ? items : Array(items.prefix(5))
+        isExpanded ? items : Array(items.prefix(compactCount))
     }
 
     var body: some View {

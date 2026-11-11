@@ -134,16 +134,28 @@ extension NotebookSceneState {
         let id = try await replica.createNoteFromTemplate(sourceID)
         if showingTemplates {
             pendingPresentedItemID = id
+            pendingPresentedItemIsNew = true
         } else {
             // A completed write must still open its note if presentation
             // ended while storage was saving; never leave a stale route.
             reveal(id)
             try await selectNote(id)
+            nameNewNote(id)
         }
+    }
+
+    /// A note made from a template is new, so its title waits for a name
+    /// like a blank note's does.
+    func nameNewNote(_ id: UUID) {
+        guard let placement = replica.placements.first(where: { $0.item.id == id })
+        else { return }
+        beginNamingNewNote(id, name: placement.item.name)
+        newTemplateNoteID = id
     }
 
     func openReusableSource(_ id: UUID) {
         pendingPresentedItemID = id
+        pendingPresentedItemIsNew = false
         showingSettings = false
         showingTemplates = false
     }

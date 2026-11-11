@@ -36,16 +36,21 @@ jobs:
         id: app
         env:
           PR: ${{ github.event_name == 'pull_request' }}
+          # A stacked PR's first parent is the layer below, not main.
+          STACKED: ${{ github.event.pull_request.stack != null }}
         run: |
           app=true
-          [[ $PR == true ]] && app=$(scripts/app_changed.sh HEAD^1 HEAD)
+          [[ $PR == true && $STACKED != true ]] && app=$(scripts/app_changed.sh HEAD^1 HEAD)
           echo "app=$app" >> "$GITHUB_OUTPUT"
 
   sync:
     # A skipped job counts as passed, so a PR that can't change the app
     # isn't held up by this required check.
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.app != 'false' }}
+    # In a stack only the top PR runs this; it holds every layer.
+    if: >-
+      !cancelled() && needs.changes.outputs.app != 'false'
+      && (github.event.pull_request.stack == null || github.event.pull_request.stack.position == github.event.pull_request.stack.size)
     name: Deterministic replica and loopback checks
     runs-on: xcode-27
     timeout-minutes: >-

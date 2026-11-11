@@ -24,7 +24,7 @@ struct NotebookTemplatesSettingsView: View {
                     } header: {
                         Text("Templates")
                     } footer: {
-                        Text("Templates create new notes. In Files, use a note or folder’s context menu and choose Use as Template.")
+                        Text("A template starts new notes. In Files, open a note’s menu and choose Templates & Snippets › Use as Template.")
                     }
                 }
                 if !folders.isEmpty {
@@ -72,7 +72,7 @@ struct NotebookTemplatesSettingsView: View {
                     } header: {
                         Text("Templates")
                     } footer: {
-                        Text("Creating from a template copies its current Markdown into an independent new note.")
+                        Text("A new note starts as a copy of its template.")
                     }
                 }
                 NotebookSnippetOverviewSections(
@@ -141,9 +141,9 @@ private struct NotebookSnippetOverviewSections: View {
             Text("Snippets")
         } footer: {
             if snippets.isEmpty {
-                Text("Snippets insert Markdown into the note you’re editing. In Files, use a note or folder’s context menu and choose Use as Snippet or Use as Snippet Folder.")
+                Text("A snippet adds its text where you’re writing. In Files, open a note’s menu and choose Templates & Snippets › Use as Snippet.")
             } else {
-                Text("Snippets insert their current Markdown into the note you’re editing. Open a snippet here to edit its source.")
+                Text("Insert a snippet from the formatting bar. Open one here to edit it.")
             }
         }
     }
@@ -276,7 +276,7 @@ struct NotebookTemplatePicker: View {
                     ContentUnavailableView {
                         Label("No Templates Yet", systemImage: "doc.on.doc")
                     } description: {
-                        Text("Use a note or folder as a template from its context menu in Files.")
+                        Text("In Files, open a note’s menu and choose Templates & Snippets › Use as Template.")
                     } actions: {
                         NavigationLink("Manage Templates") {
                             NotebookTemplatesSettingsView(
@@ -402,6 +402,18 @@ private struct NotebookTemplateOptionsView: View {
     @State private var saving = false
     @State private var errorMessage: String?
     @State private var loaded = false
+    @State private var savedDraft: Draft?
+
+    /// What the screen shows; it saves on its own, like the rest of Settings.
+    private struct Draft: Hashable {
+        let destination: NotebookTemplateDestination
+        let filenamePattern: String?
+    }
+
+    private var draft: Draft {
+        Draft(destination: destination,
+              filenamePattern: customFilename ? filenamePattern : nil)
+    }
 
     var body: some View {
         let source = replica.placements.first { $0.item.id == sourceID }
@@ -410,7 +422,8 @@ private struct NotebookTemplateOptionsView: View {
         Form {
             Section {
                 if let source {
-                    Label(source.displayName,
+                    Label(isFolder ? source.displayName
+                            : NotebookNoteName.title(from: source.displayName),
                           systemImage: isFolder ? "folder" : "doc.text")
                 }
                 if !isFolder, let onOpenNote {
@@ -425,13 +438,13 @@ private struct NotebookTemplateOptionsView: View {
                           }) {
                     Text("Available through \(parent.name). Defaults come from that folder unless you override them here.")
                 } else {
-                    Text("The source note stays ordinary Markdown. New notes receive a copy of its current content. Type {{ in the source for variables.")
+                    Text("New notes start as a copy of this note. To fill in the date or other details, type {{ in it.")
                 }
             }
             NotebookTemplateDestinationSection(
                 placements: replica.placements, destination: $destination,
                 inheritedLabel: inheritedTemplateFolderID == nil
-                    ? "Usual new-note destination" : "Template folder default"
+                    ? "Same as Other New Notes" : "Same as Template Folder"
             )
             NotebookTemplateFilenameSection(
                 customFilename: $customFilename,
@@ -480,20 +493,26 @@ private struct NotebookTemplateOptionsView: View {
             ? LocalizedStringResource("Template Folder")
             : LocalizedStringResource("Template Options")))
         .disabled(saving)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") { save() }
-                    .disabled(saving || filenameValidationMessage != nil)
-                    .accessibilityIdentifier("notebook-save-template-options")
-            }
-        }
         .task {
             guard !loaded else { return }
             let settings = replica.templateSettings(for: sourceID)
             destination = settings.destination
             customFilename = settings.filenamePattern != nil
             filenamePattern = settings.filenamePattern ?? "{{date}} — {{template}}"
+            savedDraft = draft
             loaded = true
+        }
+        // Typing a title waits a moment, so not every key writes the notebook.
+        .task(id: draft) {
+            guard loaded, draft != savedDraft else { return }
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            await save(draft)
+        }
+        .onDisappear {
+            let pending = draft
+            guard loaded, pending != savedDraft else { return }
+            Task { await save(pending) }
         }
     }
 
@@ -541,21 +560,21 @@ private struct NotebookTemplateOptionsView: View {
         } catch { return error.localizedDescription }
     }
 
-    private func save() {
-        guard !saving else { return }
-        saving = true
-        Task { @MainActor in
-            defer { saving = false }
-            do {
-                try await replica.setTemplateSettings(
-                    NotebookTemplateSettings(
-                        destination: destination,
-                        filenamePattern: customFilename ? filenamePattern : nil
-                    ), for: sourceID
-                )
-                dismiss()
-            } catch { errorMessage = error.localizedDescription }
-        }
+    private func save(_ draft: Draft) async {
+        if draft.filenamePattern != nil, filenameValidationMessage != nil { return }
+        do {
+            try await replica.setTemplateSettings(
+                NotebookTemplateSettings(
+                    destination: draft.destination,
+                    filenamePattern: draft.filenamePattern
+                ), for: sourceID
+            )
+            savedDraft = draft
+            errorMessage = nil
+        } catch { errorMessage = error.localizedDescription; return }
+        // The draft can change back to what was saved before while this save
+        // runs; the debounce then sees nothing new, so write it here.
+        if self.draft != draft { await save(self.draft) }
     }
 
     private func removeSource() {
@@ -577,8 +596,8 @@ private struct NotebookTemplateDestinationSection: View {
     let inheritedLabel: LocalizedStringResource
 
     var body: some View {
-        Section("New Note Destination") {
-            Picker("Save in", selection: $destination) {
+        Section("New Notes") {
+            Picker("Save In", selection: $destination) {
                 Text(inheritedLabel).tag(NotebookTemplateDestination.inherit)
                 Text("Top Level").tag(NotebookTemplateDestination.root)
                 ForEach(activeFolders, id: \.item.id) { folder in
@@ -627,7 +646,7 @@ private struct NotebookTemplateFilenameSection: View {
 
     var body: some View {
         Section {
-            Toggle("Custom filename", isOn: $customFilename)
+            Toggle("Custom Title", isOn: $customFilename)
                 .accessibilityIdentifier("notebook-template-custom-filename")
             if customFilename {
                 TextField("{{date}} — {{template}}", text: $filenamePattern)
@@ -636,14 +655,16 @@ private struct NotebookTemplateFilenameSection: View {
                     .textInputAutocapitalization(.never)
                     #endif
                     .accessibilityIdentifier("template-filename-pattern")
-                Menu("Insert Variable") {
-                    Button("Date") { filenamePattern += "{{date}}" }
-                    Button("Time") { filenamePattern += "{{time}}" }
-                    Button("Template name") { filenamePattern += "{{template}}" }
+                HStack(spacing: 8) {
+                    Text("Add").foregroundStyle(.secondary)
+                    variableButton("Date", token: "{{date}}")
+                    variableButton("Time", token: "{{time}}")
+                    variableButton("Template", token: "{{template}}")
                 }
+                .font(.subheadline)
             }
             if let preview = preview {
-                LabeledContent("Preview", value: preview)
+                LabeledContent("Example", value: preview)
                     .font(.footnote)
                     .accessibilityIdentifier("notebook-template-filename-preview")
             }
@@ -652,22 +673,35 @@ private struct NotebookTemplateFilenameSection: View {
                     .font(.footnote)
             }
         } header: {
-            Text("New Note Filename")
+            Text("Title")
         } footer: {
             if isFolder {
-                Text("Without a custom filename, notes use the parent template folder’s default or the usual date-based name. Template name uses each source note’s name.")
+                Text("Without a custom title, notes use the parent template folder’s title or today’s date. Template stands for each template’s own name.")
             } else {
-                Text("Without a custom filename, notes use their template folder’s default or the usual date-based name. Matching filenames receive a number.")
+                Text("Without a custom title, notes use their template folder’s title or today’s date. A title already in use gets a number.")
             }
         }
     }
 
+    private func variableButton(_ title: LocalizedStringKey, token: String) -> some View {
+        Button(title) {
+            // Keep variables apart, so "{{date}}" and "{{template}}" don't run together.
+            if let last = filenamePattern.last, !last.isWhitespace, !"-—–_".contains(last) {
+                filenamePattern += " "
+            }
+            filenamePattern += token
+        }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
+    }
+
     private var preview: String? {
         let pattern = customFilename ? filenamePattern : inheritedPattern
-        return try? NotebookTemplateFilename.preview(
+        return (try? NotebookTemplateFilename.preview(
             pattern: pattern,
             templateName: templateName
-        )
+        )).map { NotebookNoteName.title(from: $0) }
     }
 
     private var validationMessage: String? {

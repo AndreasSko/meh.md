@@ -89,17 +89,17 @@ final class NotebookOrderingUITests: XCTestCase {
         let moveSheet = openMoveSheet(in: app)
         let path = app.staticTexts["notebook-move-path"]
         XCTAssertTrue(path.waitForExistence(timeout: 5))
-        XCTAssertEqual(path.text, "Notebook")
+        XCTAssertEqual(path.text, "Top Level")
         XCTAssertEqual(app.staticTexts["notebook-move-source"].text, "2 items")
         browseMoveSheet(to: folder, in: app)
-        XCTAssertEqual(path.text, "Notebook / Folder \(suffix)")
+        XCTAssertEqual(path.text, "Top Level / Folder \(suffix)")
         let moveUp = app.buttons["notebook-move-up"]
         XCTAssertTrue(moveUp.waitForExistence(timeout: 5))
         activate(moveUp)
-        XCTAssertEqual(path.text, "Notebook")
+        XCTAssertEqual(path.text, "Top Level")
         XCTAssertFalse(moveUp.exists)
         browseMoveSheet(to: folder, in: app)
-        XCTAssertEqual(path.text, "Notebook / Folder \(suffix)")
+        XCTAssertEqual(path.text, "Top Level / Folder \(suffix)")
         let confirm = app.buttons["notebook-confirm-move"]
         let idleSize = confirm.frame.size
         capture(app, name: "Move confirmation before submission")

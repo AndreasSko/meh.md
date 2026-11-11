@@ -495,3 +495,26 @@ extension XCUIApplication {
         }
     }
 }
+
+extension XCUIApplication {
+    /// A note menu action. On iPhone and iPad, Share, Find and History sit in
+    /// the menu's row of icons, which drops accessibility identifiers.
+    func noteMenuAction(_ identifier: String, label: String) -> XCUIElement {
+        descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == %@ OR (elementType == %d AND label == %@)",
+            identifier, XCUIElement.ElementType.button.rawValue, label
+        )).firstMatch
+    }
+}
+
+extension XCUIApplication {
+    /// The open note's title. A note made from a template opens with its
+    /// title selected for naming, so it may be a text field then.
+    var openNoteTitle: String {
+        let field = textFields["title-field"]
+        if field.waitForExistence(timeout: 2), let value = field.value as? String {
+            return value
+        }
+        return buttons["note-title"].label
+    }
+}

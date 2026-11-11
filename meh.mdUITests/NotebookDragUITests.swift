@@ -372,7 +372,7 @@ final class NotebookDragUITests: XCTestCase {
         // The production sheet initializes this path from the selected note's
         // parent placement. Cancel without choosing or submitting a move.
         let allowedPaths = [
-            "Notebook", "Notebook / Journeys", "Notebook / Journeys / Weekend"
+            "Top Level", "Top Level / Journeys", "Top Level / Journeys / Weekend"
         ]
         // SwiftUI Label may expose the path on its combined element or its
         // text child, depending on the platform's native accessibility bridge.
@@ -412,13 +412,13 @@ final class NotebookDragUITests: XCTestCase {
         let sourceName = "01 Field observation"
         let siblingNames: Set<String>
         switch parent {
-        case "Notebook":
+        case "Top Level":
             siblingNames = Set((2...48).map {
                 String(format: "%02d Field observation", $0)
             } + ["Journeys", sourceName])
-        case "Notebook / Journeys":
+        case "Top Level / Journeys":
             siblingNames = ["Weekend", sourceName]
-        case "Notebook / Journeys / Weekend":
+        case "Top Level / Journeys / Weekend":
             siblingNames = ["Island", sourceName]
         default:
             XCTFail("Unexpected edge-drop parent")
@@ -472,7 +472,7 @@ final class NotebookDragUITests: XCTestCase {
                                  "The native placement snapshot must contain the stable source ID")
         let previous = index > 0 ? siblings[index - 1] : nil
         let next = index + 1 < siblings.count ? siblings[index + 1] : nil
-        if parent == "Notebook" {
+        if parent == "Top Level" {
             // 02 and Journeys are the fixed first/last root siblings. Any
             // missing neighbor must be a proven boundary, not virtualization.
             XCTAssertTrue(previous != nil || next?.name == "02 Field observation",
@@ -791,7 +791,7 @@ final class NotebookDragUITests: XCTestCase {
                 + "buttonEnabled=\(appMenu(in: app).isEnabled) "
                 + "buttonFrame=\(appMenu(in: app).frame) "
                 + "sortIDExists=\(app.menuItems["notebook-sort-root"].exists) "
-                + "sortLabelExists=\(app.menuItems["Sort Files Once"].exists) "
+                + "sortLabelExists=\(app.menuItems["Sort"].exists) "
                 + "newFolderExists=\(app.menuItems["New Folder"].exists)")
         diagnostic.name = "Native Files sort menu availability"
         diagnostic.lifetime = .keepAlways

@@ -3,6 +3,9 @@ import Darwin
 import Foundation
 
 public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
+    /// No iCloud account is signed in. Other statuses, such as restricted or
+    /// temporarily unavailable, are `accountUnavailable`.
+    case signedOut
     case accountUnavailable
     case corruptState
     case unrecoverableRetryDelay
@@ -20,6 +23,7 @@ public enum CloudKitSyncTransportError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
+        case .signedOut: "No iCloud account is signed in."
         case .accountUnavailable: "An iCloud account is required for sync."
         case .corruptState: "The saved CloudKit sync state is corrupt."
         case .unrecoverableRetryDelay:
@@ -2138,7 +2142,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
             throw error
         }
         guard accountStatus == .available else {
-            throw CloudKitSyncTransportError.accountUnavailable
+            throw accountStatus == .noAccount
+                ? CloudKitSyncTransportError.signedOut
+                : CloudKitSyncTransportError.accountUnavailable
         }
         let userRecordID: CKRecord.ID
         do {

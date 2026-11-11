@@ -116,7 +116,7 @@ final class NotebookSearchState {
                         guard seen.insert(id).inserted, let entry = byID[id] else { return nil }
                         return NotebookSearchResult(
                             id: entry.id, title: entry.title, path: entry.path,
-                            excerpt: String(entry.text.prefix(180)),
+                            excerpt: NotebookRecentPreview.text(from: entry.text),
                             titleMatchRange: nil, excerptMatchRange: nil,
                             bodyMatchRange: nil, matchesTitle: false
                         )

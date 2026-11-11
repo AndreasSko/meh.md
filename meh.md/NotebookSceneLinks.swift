@@ -81,27 +81,41 @@ extension NotebookSceneState {
                 return true
             }
             guard let completion = linkCompletion else { return false }
-            let suggestions = links.suggestions(for: completion.query)
+            let suggestions = links.suggestions(for: completion.query, excluding: selectedID)
             let headings = completionHeadings
             let isHeading = completion.query.contains("#")
-            let count = isHeading ? headings.count : suggestions.count
+            let newNoteTitle = isHeading ? nil : linkedNoteTitle(for: completion.query)
+            let count = isHeading ? headings.count
+                : suggestions.count + (newNoteTitle == nil ? 0 : 1)
             switch command {
             case "dismiss":
                 dismissEditorCompletion()
                 navigation?.hasLinkCompletion = false
             case "accept":
-                guard count > 0 else { return false }
+                // Return alone never creates a note; it has to be chosen.
+                let createsNote = !isHeading && linkNewNoteChosen && newNoteTitle != nil
+                guard isHeading ? count > 0 : (!suggestions.isEmpty || createsNote)
+                else { return false }
                 if isHeading, let target = completionHeadingTarget {
                     let heading = headings[min(linkCompletionSelection, headings.count - 1)]
                     insertCompletedLink(to: target,
                         fragment: NotebookLinkDestination.wikiHeadingFragment(heading))
+                } else if createsNote, let newNoteTitle {
+                    createLinkedNote(named: newNoteTitle)
                 } else {
                     insertCompletedLink(to: suggestions[min(linkCompletionSelection, suggestions.count - 1)])
                 }
             case "next":
-                linkCompletionSelection = min(max(0, count - 1), linkCompletionSelection + 1)
+                if !isHeading, newNoteTitle != nil,
+                   linkNewNoteChosen || linkCompletionSelection + 1 >= suggestions.count {
+                    linkNewNoteChosen = true
+                    linkCompletionSelection = suggestions.count
+                } else {
+                    linkCompletionSelection = min(max(0, count - 1), linkCompletionSelection + 1)
+                }
             case "previous":
-                linkCompletionSelection = max(0, linkCompletionSelection - 1)
+                linkNewNoteChosen = false
+                linkCompletionSelection = max(0, min(linkCompletionSelection, suggestions.count) - 1)
             default: return false
             }
             return true
@@ -122,7 +136,10 @@ extension NotebookSceneState {
             if variable != nil { variableCompletionSelection = range }
             let completion = variable == nil
                 ? NotebookLinkCompletion.detect(in: text, selection: range) : nil
-            if completion?.query != linkCompletion?.query { linkCompletionSelection = 0 }
+            if completion?.query != linkCompletion?.query {
+                linkCompletionSelection = 0
+                linkNewNoteChosen = false
+            }
             linkCompletion = completion
             navigation?.hasLinkCompletion = completion != nil || variable != nil
             // Only an active completion needs a source snapshot. Publishing
@@ -166,6 +183,68 @@ extension NotebookSceneState {
             errorMessage = NotebookLinkUIError.changed.localizedDescription
         }
         dismissEditorCompletion()
+    }
+
+    /// Every note's name, including names it had before a move or rename,
+    /// in the form the editor compares `[[links]]` with.
+    var knownLinkNames: Set<String> {
+        let heads = replica.searchRevision.catalogHeads
+        if let cached = cachedLinkNames, cached.heads == heads { return cached.names }
+        var names = Set<String>()
+        for note in replica.linkNotes {
+            names.insert(MarkdownPresentation.linkName(note.name))
+            for former in note.formerLocations {
+                names.insert(MarkdownPresentation.linkName(former.name))
+            }
+        }
+        cachedLinkNames = (heads, names)
+        return names
+    }
+
+    /// The title for a new note when `[[` names one that doesn't exist yet.
+    func linkedNoteTitle(for query: String) -> String? {
+        let title = query.trimmingCharacters(in: .whitespaces)
+        guard !title.isEmpty,
+              title.rangeOfCharacter(from: CharacterSet(charactersIn: "#|[]/\\\n")) == nil,
+              !replica.linkNotes.contains(where: {
+                  NotebookNoteName.title(from: $0.name).caseInsensitiveCompare(title) == .orderedSame
+              })
+        else { return nil }
+        // A name an existing link already resolves to, such as "Garden.md"
+        // or a note's former name, must not get a second note.
+        if let selectedID, let link = NotebookLinkParser.parse("[[\(title)]]").first {
+            if case .missing = NotebookLinkResolver.resolve(
+                link, sourceID: selectedID, notes: replica.linkNotes) {} else { return nil }
+        }
+        return title
+    }
+
+    /// Links to a note that doesn't exist yet and creates it next to this one,
+    /// without leaving the note being written.
+    func createLinkedNote(named title: String,
+                          completionSnapshot: NotebookLinkCompletion? = nil,
+                          textSnapshot: String? = nil, sourceID: UUID? = nil) {
+        guard let completion = completionSnapshot ?? linkCompletion,
+              let sourceID = sourceID ?? selectedID, sourceID == selectedID,
+              let source = replica.placements.first(where: { $0.item.id == sourceID })
+        else { return }
+        let replacement = "[[\(title)]]"
+        let change = MarkdownEditingChange(range: completion.range, replacement: replacement,
+            selection: NSRange(location: completion.range.location + replacement.utf16.count, length: 0))
+        guard editorNavigation.insertLink?(change, textSnapshot ?? linkCompletionText) == true else {
+            errorMessage = NotebookLinkUIError.changed.localizedDescription
+            return
+        }
+        dismissEditorCompletion()
+        editorNavigation.hasLinkCompletion = false
+        let parentID = source.item.parentID
+        Task { @MainActor in
+            do {
+                _ = try await replica.createNote(name: title + ".md", parentID: parentID)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     var completionHeadingTarget: NotebookLinkNote? {

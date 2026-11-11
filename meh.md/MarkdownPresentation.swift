@@ -997,6 +997,30 @@ enum MarkdownPresentation {
         }
     }
 
+    /// Lowercased names of every note, set by the editor. A `[[link]]` to a
+    /// name outside it gets a dashed underline. Nil leaves all links alike.
+    static var knownLinkNames: Set<String>?
+
+    static func isMissingNoteLink(_ range: NSRange, in source: NSString) -> Bool {
+        guard let names = knownLinkNames, NSMaxRange(range) <= source.length else { return false }
+        let text = source.substring(with: range)
+        guard text.hasPrefix("[["), text.hasSuffix("]]"),
+              let link = NotebookLinkParser.parse(text).first, link.kind == .wiki
+        else { return false }
+        let path = NotebookLinkParser.literalDestinationParts(link.destination).path
+        // `[[#Heading]]` points into the same note.
+        guard !path.isEmpty else { return false }
+        return !names.contains(linkName(path))
+    }
+
+    /// The comparable form of a note name or wiki destination: its last
+    /// path part, without `.md`, lowercased.
+    static func linkName(_ path: String) -> String {
+        var name = path.split(separator: "/").last.map(String.init) ?? path
+        if name.lowercased().hasSuffix(".md") { name.removeLast(3) }
+        return name.lowercased()
+    }
+
     private static func applyLayoutAttributes(
         to textStorage: NSTextStorage,
         text: String,
@@ -1094,6 +1118,7 @@ enum MarkdownPresentation {
         // Hidden ranges arrive sorted and merged from Live Preview.
         for span in result.spans where span.role == .link {
             guard local(span.range) != nil else { continue }
+            let isMissing = isMissingNoteLink(span.range, in: source)
             var start = span.range.location
             var hidden: [NSRange] = []
             var index = firstRange(in: hiddenRanges, endingAfter: span.range.location)
@@ -1106,10 +1131,16 @@ enum MarkdownPresentation {
                 let visible = NSRange(location: start, length: max(0, gap.location - start))
                 if visible.length > 0, let localRange = local(visible) {
                     desired.addAttributes(
-                        [
-                            .underlineColor: MehStyle.highlighterStroke,
-                            .underlineStyle: NSUnderlineStyle.thick.rawValue,
-                        ],
+                        isMissing
+                            ? [
+                                .underlineColor: secondaryTextColor,
+                                .underlineStyle: NSUnderlineStyle.single.rawValue
+                                    | NSUnderlineStyle.patternDash.rawValue,
+                            ]
+                            : [
+                                .underlineColor: MehStyle.highlighterStroke,
+                                .underlineStyle: NSUnderlineStyle.thick.rawValue,
+                            ],
                         range: localRange
                     )
                 }
@@ -1872,8 +1903,9 @@ enum MarkdownPresentation {
         let em = bodyFont.pointSize
         switch run.kind {
         case let .heading(level):
-            style.paragraphSpacingBefore = level <= 2 ? em * 0.7 : em * 0.45
-            style.paragraphSpacing = level <= 2 ? em * 0.35 : em * 0.25
+            // More room above than below ties a heading to its section.
+            style.paragraphSpacingBefore = level <= 2 ? em * 0.95 : em * 0.65
+            style.paragraphSpacing = level <= 2 ? em * 0.15 : em * 0.1
             style.lineSpacing = 0
         case .list:
             style.headIndent = isTask

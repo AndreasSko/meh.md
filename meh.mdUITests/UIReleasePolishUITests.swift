@@ -211,6 +211,13 @@ final class UIReleasePolishUITests: XCTestCase {
         var opened = false
         app.withoutIdleWait {
             note.press(forDuration: 1)
+            // Creating beside a note lives in its New submenu.
+            // Context menus may drop a submenu's identifier, so match its
+            // label too.
+            let newMenu = app.buttons.matching(NSPredicate(
+                format: "identifier == %@ OR label == %@", "notebook-menu-new", "New"
+            )).firstMatch
+            if newMenu.waitForExistence(timeout: 2) { newMenu.tap() }
             let newFolderID = app.buttons["notebook-menu-new-folder"]
             let newFolderFallback = app.buttons["New Folder"]
             let newFolder = newFolderID.exists ? newFolderID : newFolderFallback

@@ -79,6 +79,9 @@ struct NotebookSearchResults: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                // The button keeps its first label while the same note stays
+                // in the results, so a new excerpt needs a new identity.
+                .id(NotebookSearchRow.Content(result))
                 .overlay(alignment: .bottom) {
                     Divider().padding(.horizontal, 8)
                 }
@@ -90,7 +93,20 @@ struct NotebookSearchResults: View {
 }
 
 struct NotebookSearchRow: View {
+    struct Content: Hashable {
+        let excerpt: String
+        let titleMatch: NSRange?
+        let excerptMatch: NSRange?
+
+        init(_ result: NotebookSearchResult) {
+            excerpt = result.excerpt
+            titleMatch = result.titleMatchRange
+            excerptMatch = result.excerptMatchRange
+        }
+    }
+
     let result: NotebookSearchResult
+    @Environment(\.mehPalette) private var palette
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -98,11 +114,7 @@ struct NotebookSearchRow: View {
             if !result.path.isEmpty {
                 Text(result.path).font(.caption).foregroundStyle(.secondary)
             }
-            Text(highlight(
-                result.bodyMatchRange == nil
-                    ? NotebookRecentPreview.text(from: result.excerpt) : result.excerpt,
-                range: result.excerptMatchRange
-            ))
+            Text(highlight(result.excerpt, range: result.excerptMatchRange))
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -113,8 +125,8 @@ struct NotebookSearchRow: View {
         if let range, let stringRange = Range(range, in: text),
            let lower = AttributedString.Index(stringRange.lowerBound, within: result),
            let upper = AttributedString.Index(stringRange.upperBound, within: result) {
-            result[lower..<upper].font = .body.bold()
-            result[lower..<upper].underlineStyle = .single
+            result[lower..<upper].backgroundColor = palette.markColor
+            result[lower..<upper].foregroundColor = .primary
         }
         return result
     }

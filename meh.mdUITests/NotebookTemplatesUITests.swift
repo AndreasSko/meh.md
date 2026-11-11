@@ -98,7 +98,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertEqual(editor.value as? String, meetingBody)
-        XCTAssertNotEqual(app.buttons["note-title"].label, "Meeting")
+        XCTAssertNotEqual(app.openNoteTitle, "Meeting")
 
         // The editor's ordinary plus tap must stay immediate after adding
         // feedback to its long press.
@@ -137,7 +137,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         enableCustomFilename(app)
         replaceText(app.textFields["template-filename-pattern"],
                     with: "{{date}} — {{template}}", in: app)
-        app.buttons["notebook-save-template-options"].tap()
+        leaveTemplateOptions(app)
         XCTAssertTrue(sourceOptions.waitForExistence(timeout: 5))
         closeTemplatesSettings(app)
 
@@ -158,7 +158,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["template-destination"].exists)
         XCTAssertEqual(editor.value as? String, meetingBody)
-        let copyName = app.buttons["note-title"].label
+        let copyName = app.openNoteTitle
         XCTAssertNotNil(copyName.range(
             of: "^[0-9]{4}-[0-9]{2}-[0-9]{2} — Meeting$",
             options: .regularExpression
@@ -211,7 +211,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         XCTAssertTrue(choice.waitForExistence(timeout: 5))
         choice.tap()
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        let copyName = app.buttons["note-title"].label
+        let copyName = app.openNoteTitle
         let text = editor.value as? String ?? ""
         XCTAssertTrue(text.hasPrefix("# \(copyName)\nDone "), text)
         XCTAssertNotNil(text.range(of: "Done [0-9]{4}-[0-9]{2}-[0-9]{2}$",
@@ -255,14 +255,14 @@ final class NotebookTemplatesUITests: XCTestCase {
         enableCustomFilename(app)
         replaceText(app.textFields["template-filename-pattern"],
                     with: "Folder {{template}}", in: app)
-        app.buttons["notebook-save-template-options"].tap()
+        leaveTemplateOptions(app)
         journalOptions.tap()
         let inheritedPreview = app.descendants(matching: .any).matching(
             identifier: "notebook-template-filename-preview"
         ).firstMatch
         let inheritedName = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@",
-                                   "Folder Journal.md", "Folder Journal.md"),
+                                   "Folder Journal", "Folder Journal"),
             object: inheritedPreview
         )
         XCTAssertEqual(
@@ -273,7 +273,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         enableCustomFilename(app)
         replaceText(app.textFields["template-filename-pattern"],
                     with: "Journal entry", in: app)
-        app.buttons["notebook-save-template-options"].tap()
+        leaveTemplateOptions(app)
         closeTemplatesSettings(app)
         app.buttons["notebook-app-menu"].tap()
         app.buttons["notebook-new-from-template"].tap()
@@ -285,7 +285,7 @@ final class NotebookTemplatesUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["template-destination"].exists)
-        XCTAssertEqual(app.buttons["note-title"].label, "Journal entry")
+        XCTAssertEqual(app.openNoteTitle, "Journal entry")
         XCTAssertEqual(editor.value as? String, "# Journal\n\nToday: ")
         showFiles(app)
         app.buttons["notebook-disclosure-" + folderID].tap()
@@ -437,6 +437,13 @@ final class NotebookTemplatesUITests: XCTestCase {
         let choice = app.collectionViews.buttons[name].firstMatch
         XCTAssertTrue(choice.waitForExistence(timeout: 5))
         choice.tap()
+    }
+
+    /// Template Options saves on its own; going back is enough.
+    private func leaveTemplateOptions(_ app: XCUIApplication) {
+        let back = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
     }
 
     private func enableCustomFilename(_ app: XCUIApplication) {

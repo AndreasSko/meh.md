@@ -126,9 +126,13 @@ final class NotebookLinkState {
             && expected.catalogHeads == current.catalogHeads
     }
 
-    func suggestions(for query: String) -> [NotebookLinkNote] {
+    /// Notes matching a `[[` query. The note being edited is left out, since
+    /// linking a note to itself only makes sense with a heading.
+    func suggestions(for query: String, excluding excludedID: UUID? = nil) -> [NotebookLinkNote] {
         let name = query.components(separatedBy: "#").first ?? query
         return notes.filter {
+            $0.id != excludedID
+        }.filter {
             name.isEmpty || NotebookNoteName.title(from: $0.name)
                 .localizedCaseInsensitiveContains(name)
                 || $0.fullPath.localizedCaseInsensitiveContains(name)

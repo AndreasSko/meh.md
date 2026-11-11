@@ -164,6 +164,26 @@ final class NotebookNavigationStateTests: XCTestCase {
         XCTAssertIdentical(state.selectedSession, session)
     }
 
+    func testRecentCountLimitsRecentsButKeepsEveryPin() async throws {
+        let fixture = try await Fixture()
+        var ids: [UUID] = []
+        for index in 0..<8 {
+            let id = try await fixture.replica.createNote(name: "Note \(index).md")
+            try await fixture.replica.recordRecentActivity(for: id)
+            ids.append(id)
+        }
+        let state = fixture.makeState()
+        XCTAssertEqual(state.recentNoteIDs.count, 5)
+
+        state.recentCount = 3
+        XCTAssertEqual(state.recentNoteIDs, Array(ids.reversed().prefix(3)))
+
+        for id in ids.prefix(4) {
+            try await fixture.replica.setPinnedInRecents(true, for: id)
+        }
+        XCTAssertEqual(state.recentNoteIDs.count, 4, "Every pin stays visible")
+    }
+
     func testLocalRenamePromotesWithoutReplacingLastEditor() async throws {
         let fixture = try await Fixture()
         let selected = try await fixture.replica.createNote(name: "Open.md")

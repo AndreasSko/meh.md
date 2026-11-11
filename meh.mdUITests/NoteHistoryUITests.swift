@@ -31,8 +31,7 @@ final class NoteHistoryUITests: XCTestCase {
         let editor = app.textViews["markdown-editor"]
         waitForPreview(currentBody, in: editor)
         app.buttons["notebook-note-actions"].tap()
-        let history = app.descendants(matching: .any)
-            .matching(identifier: "notebook-version-history").firstMatch
+        let history = app.noteMenuAction("notebook-version-history", label: "History")
         XCTAssertTrue(history.waitForExistence(timeout: 5))
         history.tap()
         let preview = app.textViews["note-history-preview"]

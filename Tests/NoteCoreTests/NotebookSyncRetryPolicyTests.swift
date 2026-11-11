@@ -36,6 +36,7 @@ final class NotebookSyncRetryPolicyTests: XCTestCase {
     func testPermanentFailuresAndCancellationDoNotLoop() {
         for error: any Error in [SyncError.scopeChanged, SyncError.invalidRecord,
                                   CloudKitSyncTransportError.corruptState,
+                                  CloudKitSyncTransportError.signedOut,
                                   CloudKitSyncTransportError.accountUnavailable,
                                   CKError(.partialFailure),
                                   CancellationError()] {

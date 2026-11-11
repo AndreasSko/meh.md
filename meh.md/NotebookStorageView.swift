@@ -19,12 +19,10 @@ struct NotebookStorageView: View {
                 NotebookLargestNotesSection(
                     documents: report.documents, onOpenNote: onOpenNote
                 )
-                Section {
-                    Text("Sizes measure notebook files on this device, including copies and backups. They do not measure the app, memory use, or iCloud storage.")
-                    Text("File sizes are measured before filesystem compression and may differ from device storage settings.")
+                // Fine print, not rows: rows here read as settings.
+                Section {} footer: {
+                    Text("Sizes count notebook files on this device, including copies and backups, before file system compression. They don’t include the app itself or iCloud storage, so they can differ from the iPhone Storage settings.")
                 }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
             } else if loading {
                 Section {
                     ProgressView("Measuring Storage…")
@@ -72,7 +70,7 @@ private struct NotebookStorageSummary: View {
                     .font(.largeTitle.bold())
                     .accessibilityIdentifier("notebook-storage-total")
                 HStack(alignment: .firstTextBaseline) {
-                    Text("\(report.activeNoteCount) notes")
+                    Text(noteCountLabel(report.activeNoteCount))
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("notebook-storage-note-count")
                     if report.trashNoteCount > 0 {
@@ -108,7 +106,7 @@ struct NotebookStorageOverview: View {
                     .font(.title2.bold())
                     .accessibilityIdentifier("notebook-storage-overview-total")
                 Spacer(minLength: 12)
-                Text("\(report.activeNoteCount) notes")
+                Text(noteCountLabel(report.activeNoteCount))
                     .foregroundStyle(.secondary)
             }
             NotebookStorageBar(
@@ -227,9 +225,12 @@ private struct NotebookStorageNoteLink: View {
             )
         } label: {
             NotebookStorageValueRow(
-                title: nil, name: document.name,
+                title: nil, name: NotebookNoteName.title(from: document.name),
                 value: storageBytes(document.totalBytes),
-                subtitle: document.isInTrash ? "Trash" : document.path,
+                subtitle: document.isInTrash ? "Trash"
+                    // A top-level note's path is just its own name.
+                    : (document.path.isEmpty || document.path == document.name
+                        ? "Top Level" : document.path),
                 color: nil
             )
         }
@@ -244,7 +245,7 @@ private struct NotebookStorageNoteDetail: View {
     var body: some View {
         Form {
             Section {
-                Text(document.name).font(.headline)
+                Text(NotebookNoteName.title(from: document.name)).font(.headline)
                 Text(document.path).foregroundStyle(.secondary)
                 if document.isInTrash {
                     Label("In Trash", systemImage: "trash")
@@ -368,4 +369,9 @@ func storageBytes(_ bytes: Int64) -> String {
 private func storagePercent(_ bytes: Int64, of total: Int64) -> String {
     (total > 0 ? Double(bytes) / Double(total) : 0)
         .formatted(.percent.precision(.fractionLength(0...1)))
+}
+
+/// "1 note" or "12 notes".
+func noteCountLabel(_ count: Int) -> String {
+    count == 1 ? String(localized: "1 note") : String(localized: "\(count) notes")
 }

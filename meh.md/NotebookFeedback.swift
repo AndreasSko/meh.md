@@ -116,20 +116,23 @@ struct NotebookFeedbackSection: View {
     #endif
 
     var body: some View {
+        // The note about the log belongs under the button it explains.
         Section {
             Button("Send Feedback") { sendFeedback() }
                 .accessibilityIdentifier("notebook-send-feedback")
                 #if os(iOS)
                 .background(NotebookMailAnchorView(anchor: anchor))
                 #endif
-            Link("About meh.md", destination: NotebookFeedback.aboutURL)
-            Link("Privacy Policy", destination: NotebookFeedback.privacyURL)
-            NavigationLink("Open Source Licenses") { NotebookLicensesView() }
-                .accessibilityIdentifier("notebook-licenses-settings")
         } footer: {
             Text("If your mail app allows it, feedback includes the sync event log. It contains no note contents or names.")
         }
         .task { source = await NotebookFeedback.installSource() }
+        Section {
+            Link("About meh.md", destination: NotebookFeedback.aboutURL)
+            Link("Privacy Policy", destination: NotebookFeedback.privacyURL)
+            NavigationLink("Open Source Licenses") { NotebookLicensesView() }
+                .accessibilityIdentifier("notebook-licenses-settings")
+        }
     }
 
     private func sendFeedback() {

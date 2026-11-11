@@ -16,6 +16,7 @@ enum CloudKitSyncErrors: SyncBackendErrors {
         }
         guard let error = error as? CloudKitSyncTransportError else { return nil }
         switch error {
+        case .signedOut: return "CloudKitSyncTransportError.signedOut"
         case .accountUnavailable: return "CloudKitSyncTransportError.accountUnavailable"
         case .corruptState: return "CloudKitSyncTransportError.corruptState"
         case .unrecoverableRetryDelay:
@@ -99,6 +100,12 @@ enum CloudKitSyncErrors: SyncBackendErrors {
 
     private static func failure(of error: CloudKitSyncTransportError) -> Failure {
         switch error {
+        case .signedOut:
+            return Failure(
+                SyncFailurePresentation.signedOutTitle,
+                "No iCloud account is signed in on this device.",
+                actionHint: "Sign in to iCloud, then try syncing again."
+            )
         case .accountUnavailable:
             return Failure(
                 "iCloud account unavailable",
@@ -161,10 +168,16 @@ enum CloudKitSyncErrors: SyncBackendErrors {
             return SyncFailurePresentation.unknownFailure
         }
         switch code {
-        case .notAuthenticated, .accountTemporarilyUnavailable:
+        case .notAuthenticated:
+            return Failure(
+                SyncFailurePresentation.signedOutTitle,
+                "No iCloud account is signed in on this device.",
+                actionHint: "Sign in to iCloud, then try syncing again."
+            )
+        case .accountTemporarilyUnavailable:
             return Failure(
                 "iCloud account unavailable",
-                "The iCloud account is signed out or temporarily unavailable.",
+                "The iCloud account is temporarily unavailable.",
                 actionHint: "Check iCloud sign-in, then try syncing again."
             )
         case .quotaExceeded:

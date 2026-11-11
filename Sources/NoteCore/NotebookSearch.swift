@@ -147,15 +147,22 @@ public struct NotebookSearchResult: Equatable, Sendable {
 
     private static let locale = Locale(identifier: "en_US_POSIX")
 
+    /// How much Markdown around a match is cleaned before trimming, so
+    /// syntax that starts or ends just outside the snippet is still removed.
+    private static let cleanWindow = 400
+
     private static func preview(of text: String) -> String {
         let source = text as NSString
-        guard source.length > 0 else { return "" }
-        let length = min(source.length, 160)
-        let range = source.rangeOfComposedCharacterSequences(
-            for: NSRange(location: 0, length: length)
+        let window = source.rangeOfComposedCharacterSequences(
+            for: NSRange(location: 0, length: min(source.length, cleanWindow))
         )
-        return source.substring(with: range)
-            + (NSMaxRange(range) < source.length ? "…" : "")
+        let plain = MarkdownExcerpt.plain(source.substring(with: window)).text as NSString
+        guard plain.length > 0 else { return "" }
+        let range = plain.rangeOfComposedCharacterSequences(
+            for: NSRange(location: 0, length: min(plain.length, 160))
+        )
+        let more = NSMaxRange(range) < plain.length || NSMaxRange(window) < source.length
+        return plain.substring(with: range) + (more ? "…" : "")
     }
 
     private static func snippet(
@@ -163,6 +170,34 @@ public struct NotebookSearchResult: Equatable, Sendable {
         around match: NSRange
     ) -> (text: String, matchRange: NSRange) {
         let source = text as NSString
+        // Start on a line boundary when one is close, so list and heading
+        // markers at the start of that line are recognised.
+        let earliest = max(0, match.location - cleanWindow)
+        let lineStart = source.lineRange(for: NSRange(location: earliest, length: 0)).location
+        let windowStart = earliest - lineStart <= cleanWindow ? lineStart : earliest
+        let window = source.rangeOfComposedCharacterSequences(for: NSRange(
+            location: windowStart,
+            length: min(source.length, NSMaxRange(match) + cleanWindow) - windowStart
+        ))
+        let local = NSRange(location: match.location - window.location, length: match.length)
+        let cleaned = MarkdownExcerpt.plain(source.substring(with: window), keeping: local)
+        guard let plainMatch = cleaned.range else {
+            return trimmed(source, around: match, cutBefore: false, cutAfter: false)
+        }
+        return trimmed(
+            cleaned.text as NSString,
+            around: plainMatch,
+            cutBefore: window.location > 0,
+            cutAfter: NSMaxRange(window) < source.length
+        )
+    }
+
+    private static func trimmed(
+        _ source: NSString,
+        around match: NSRange,
+        cutBefore: Bool,
+        cutAfter: Bool
+    ) -> (text: String, matchRange: NSRange) {
         let context = 70
         let proposedStart = max(0, match.location - context)
         let proposedEnd = min(source.length, NSMaxRange(match) + context)
@@ -174,8 +209,8 @@ public struct NotebookSearchResult: Equatable, Sendable {
         )
         let start = range.location
         let end = NSMaxRange(range)
-        let prefix = start > 0 ? "…" : ""
-        let suffix = end < source.length ? "…" : ""
+        let prefix = start > 0 || cutBefore ? "…" : ""
+        let suffix = end < source.length || cutAfter ? "…" : ""
         return (
             prefix + source.substring(with: NSRange(location: start, length: end - start)) + suffix,
             NSRange(
