@@ -313,4 +313,25 @@ final class SyncFailurePresentationTests: XCTestCase {
             String(localized: unknown.message).localizedCaseInsensitiveContains("storage is full")
         )
     }
+
+    func testSignedOutAccountIsMarkedAsSignedOut() {
+        for error: any Error in [
+            CloudKitSyncTransportError.signedOut, CKError(.notAuthenticated),
+        ] {
+            let presentation = SyncFailurePresentation(
+                error: error, retryWillOccurAutomatically: false
+            )
+            XCTAssertTrue(presentation.isSignedOut)
+            XCTAssertFalse(presentation.isOffline)
+        }
+        // Restricted or temporarily unavailable accounts are still failures.
+        for error: any Error in [
+            CloudKitSyncTransportError.accountUnavailable,
+            CKError(.accountTemporarilyUnavailable), CKError(.quotaExceeded),
+        ] {
+            XCTAssertFalse(SyncFailurePresentation(
+                error: error, retryWillOccurAutomatically: false
+            ).isSignedOut)
+        }
+    }
 }

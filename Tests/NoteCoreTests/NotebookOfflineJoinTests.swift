@@ -281,7 +281,7 @@ final class NotebookOfflineJoinTests: XCTestCase {
                 stateDirectory: local.directory.appending(path: "CloudKit"))
             XCTFail("Expected unavailable-account setup failure")
         } catch {
-            XCTAssertEqual(error as? CloudKitSyncTransportError, .accountUnavailable)
+            XCTAssertEqual(error as? CloudKitSyncTransportError, .signedOut)
         }
         let offline = try await local.openNote(localID)
         XCTAssertEqual(offline.text, "Before account activation")

@@ -432,6 +432,7 @@ struct NotebookSyncPresentation {
 
     var title: LocalizedStringResource {
         guard workspace.usesSync else { return "Sync not enabled" }
+        if isSignedOut { return "Sign in to iCloud to sync" }
         if workspace.isSyncUpdateRequired { return "Update needed to sync" }
         if showsActivity { return activity.title }
         if let failure = workspace.syncFailure {
@@ -457,7 +458,7 @@ struct NotebookSyncPresentation {
         else { pending = false }
         let waitingForSave = workspace.isWaitingForLocalSave(at: now)
         return NotebookSyncIndicator(
-            isEnabled: workspace.usesSync, isSyncing: workspace.isSyncing,
+            isEnabled: workspace.usesSync && !isSignedOut, isSyncing: workspace.isSyncing,
             isRetryPaused: retryDeadline != nil || workspace.isSyncUpdateRequired,
             hasError: workspace.isSyncUpdateRequired || (failed && !waitingForSave)
                 || (workspace.syncSetupError != nil && !waitingForSave)
@@ -467,8 +468,11 @@ struct NotebookSyncPresentation {
         )
     }
 
+    /// Signing in is a setting, so it looks like sync being off.
+    var isSignedOut: Bool { workspace.syncFailure?.isSignedOut == true }
+
     var failureSymbol: String? {
-        guard let failure = workspace.syncFailure, !showsActivity,
+        guard let failure = workspace.syncFailure, !failure.isSignedOut, !showsActivity,
               !workspace.isWaitingForLocalSave(at: now) else { return nil }
         return failure.isOffline
             ? "wifi.slash" : NotebookSyncIndicator.failed.symbol
@@ -476,7 +480,7 @@ struct NotebookSyncPresentation {
 
     /// A face only when nothing needs attention; problems keep plain text.
     var mood: MehFace.Mood? {
-        guard workspace.usesSync else { return .asleep }
+        guard workspace.usesSync, !isSignedOut else { return .asleep }
         guard indicator == .synced, !showsActivity, workspace.syncFailure == nil,
               workspace.lastSuccessfulSync != nil else { return nil }
         return .relaxed

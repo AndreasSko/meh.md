@@ -24,6 +24,11 @@ public struct SyncFailurePresentation: Equatable, Sendable {
     /// This device has no network connection, as opposed to iCloud or the
     /// connection to it having a temporary problem.
     public let isOffline: Bool
+    /// No iCloud account is signed in on this device. That is a setting,
+    /// not a fault, so it shows like sync being off.
+    public let isSignedOut: Bool
+
+    static let signedOutTitle: LocalizedStringResource = "Signed out of iCloud"
 
     /// `storageName` names the storage that can't be reached, such as "S3".
     public init(
@@ -40,6 +45,7 @@ public struct SyncFailurePresentation: Equatable, Sendable {
         isWaitingForLocalSave = failure.isWaitingForLocalSave
             && retryWillOccurAutomatically
         isOffline = failure.title == Self.offlineFailure.title
+        isSignedOut = failure.title == Self.signedOutTitle
         if failure.disposition == .automatic {
             actionHint = retryWillOccurAutomatically
                 ? "Sync will retry automatically."
