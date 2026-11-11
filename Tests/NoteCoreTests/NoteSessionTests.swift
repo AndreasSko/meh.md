@@ -279,6 +279,58 @@ final class NoteSessionTests: XCTestCase {
         XCTAssertTrue(session.isEditingEnabled)
     }
 
+    func testReceivedVersionRepairsTheFileAndReloadsTheSession() async throws {
+        let previous = try NoteDocument(text: "known good")
+        let storage = ControlledStorage(loadResult: .recoveryRequired(
+            NoteRecovery(previous: previous.snapshot(), currentFailure: .corrupt)))
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
+        await session.load()
+        let remote = try previous.fork()
+        try remote.replaceAll(with: "changed elsewhere")
+
+        let repaired = try await session.repair(from: remote.snapshot()) {
+            await storage.setLoadResult(.current(remote.snapshot()))
+            return true
+        }
+
+        XCTAssertTrue(repaired)
+        XCTAssertTrue(session.isEditingEnabled)
+        XCTAssertEqual(session.text, "changed elsewhere")
+    }
+
+    func testRepairAfterTheUsersRecoveryMergesIntoTheRecoveredNote() async throws {
+        let previous = try NoteDocument(text: "known good")
+        let storage = ControlledStorage(loadResult: .recoveryRequired(
+            NoteRecovery(previous: previous.snapshot(), currentFailure: .corrupt)))
+        let session = NoteSession(storage: storage, saveScheduling: .immediate)
+        await session.load()
+        let remote = try previous.fork()
+        try remote.replaceAll(with: "changed elsewhere")
+
+        // The user restores the previous copy; it is still running when the
+        // received version arrives.
+        await storage.pauseNextRecovery()
+        let recovering = Task { await session.recoverFromPrevious() }
+        while !(await storage.isRecoveryPaused) { await Task.yield() }
+        var wroteFile = false
+        let repairing = Task {
+            try await session.repair(from: remote.snapshot()) {
+                wroteFile = true
+                return true
+            }
+        }
+        for _ in 0..<10 { await Task.yield() }
+        await storage.releaseRecovery()
+        await recovering.value
+        let repaired = try await repairing.value
+
+        XCTAssertTrue(repaired)
+        XCTAssertFalse(wroteFile, "the recovered document takes the version instead")
+        XCTAssertEqual(session.text, "changed elsewhere")
+        let saved = await storage.savedSnapshots
+        XCTAssertEqual(saved.last?.heads, session.currentSnapshot?.heads)
+    }
+
     func testEditsCoalesceAfterOneSecondIdle() async throws {
         let initial = try NoteDocument(text: "initial").snapshot()
         let clock = TestClock()
@@ -653,10 +705,13 @@ private actor ControlledStorage: NoteStorage {
     private var continuations: [CheckedContinuation<Void, Never>] = []
     private var failSave = false
     private var failRecovery = false
+    private var pauseRecovery = false
+    private var recoveryContinuation: CheckedContinuation<Void, Never>?
     private(set) var savedSnapshots: [NoteSnapshot] = []
 
     var saveCount: Int { savedSnapshots.count + continuations.count }
     var isLoadPaused: Bool { loadContinuation != nil }
+    var isRecoveryPaused: Bool { recoveryContinuation != nil }
 
     init(loadResult: NoteLoadResult) {
         self.loadResult = loadResult
@@ -693,7 +748,11 @@ private actor ControlledStorage: NoteStorage {
         savedSnapshots.append(snapshot)
     }
 
-    func recover(_ recovery: NoteRecovery) throws -> NoteSnapshot {
+    func recover(_ recovery: NoteRecovery) async throws -> NoteSnapshot {
+        if pauseRecovery {
+            pauseRecovery = false
+            await withCheckedContinuation { recoveryContinuation = $0 }
+        }
         if failRecovery {
             failRecovery = false
             throw ControlledStorageError.injected
@@ -715,5 +774,18 @@ private actor ControlledStorage: NoteStorage {
 
     func failNextRecovery() {
         failRecovery = true
+    }
+
+    func pauseNextRecovery() {
+        pauseRecovery = true
+    }
+
+    func releaseRecovery() {
+        recoveryContinuation?.resume()
+        recoveryContinuation = nil
+    }
+
+    func setLoadResult(_ result: NoteLoadResult) {
+        loadResult = result
     }
 }

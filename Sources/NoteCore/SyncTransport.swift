@@ -266,6 +266,11 @@ public protocol SyncTransport: Sendable {
     func snapshotMaintenanceStatus(
         notebookID: UUID
     ) async throws -> SyncSnapshotMaintenanceStatus?
+    /// The documents the storage holds at least one snapshot of, when the
+    /// backend cannot rule out that stored snapshots were removed behind
+    /// its back. nil means no check is due. An acknowledged document that
+    /// is missing here is uploaded again.
+    func storedDocumentIDs(notebookID: UUID) async throws -> Set<UUID>?
     func setReceiveActivityHandler(
         _ handler: SyncReceiveActivityHandler?
     ) async
@@ -328,6 +333,8 @@ extension SyncTransport {
     ) async {}
 
     public func retryNotBefore() async -> Date? { nil }
+
+    public func storedDocumentIDs(notebookID: UUID) async throws -> Set<UUID>? { nil }
 
     public func recoveryEvents() async -> [String] { [] }
 

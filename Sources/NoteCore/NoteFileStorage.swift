@@ -102,8 +102,13 @@ public actor NoteFileStorage: NoteStorage {
     }
 
     /// Merges a received snapshot into the stored note. Decoding and merging
-    /// run on this actor, away from the caller. Returns false when the stored
-    /// note needs recovery or cannot be read, and leaves it unchanged.
+    /// run on this actor, away from the caller.
+    ///
+    /// A damaged or missing current file is repaired from the received
+    /// snapshot, merged with the previous file when that is still valid. The
+    /// damaged bytes are kept beside the note. Returns false, and changes
+    /// nothing, for a file that cannot be read at all or that a newer app
+    /// version wrote: neither is known to be damaged.
     func merge(_ remote: NoteSnapshot) throws -> Bool {
         switch load() {
         case .firstLaunch:
@@ -112,10 +117,35 @@ public actor NoteFileStorage: NoteStorage {
             let document = try NoteDocument(snapshot: local)
             try document.merge(NoteDocument(snapshot: remote))
             if document.heads != local.heads { try write(document.snapshot()) }
-        case .recoveryRequired, .blocked:
-            return false
+        case .recoveryRequired(let recovery):
+            guard Self.isDamaged(recovery.currentFailure) else { return false }
+            let document = try NoteDocument(snapshot: recovery.previous)
+            try document.merge(NoteDocument(snapshot: remote))
+            try setAside(current: recovery.currentFailure == .corrupt, previous: false)
+            try write(document.snapshot())
+        case .blocked(let failure):
+            guard Self.isDamaged(failure.current), Self.isDamaged(failure.previous) else {
+                return false
+            }
+            _ = try NoteDocument(snapshot: remote)
+            try setAside(
+                current: failure.current == .corrupt, previous: failure.previous == .corrupt)
+            try write(remote)
         }
         return true
+    }
+
+    private static func isDamaged(_ failure: NoteFileFailure) -> Bool {
+        failure == .corrupt || failure == .absent
+    }
+
+    private func setAside(current: Bool, previous: Bool) throws {
+        let directory = currentURL.deletingLastPathComponent()
+        for (url, moved) in [(currentURL, current), (previousURL, previous)] where moved {
+            try DurableFileIO.renameReplacing(url, with: directory.appendingPathComponent(
+                "note.quarantine-\(UUID().uuidString).automerge"))
+        }
+        try DurableFileIO.syncDirectory(directory)
     }
 
     public func recover(_ recovery: NoteRecovery) throws -> NoteSnapshot {

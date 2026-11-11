@@ -178,16 +178,14 @@ final class CloudKitStateValidationTests: XCTestCase {
         let fileURL = directory.appendingPathComponent("cloudkit-sync-state.json")
         try JSONEncoder().encode(corrupted).write(to: fileURL)
 
-        XCTAssertThrowsError(
-            try CloudKitTransportStateStore(
-                directory: directory, accountRecordName: "account",
-                zoneName: "zone"
-            )
-        ) { error in
-            XCTAssertEqual(
-                error as? CloudKitSyncTransportError, .corruptState
-            )
-        }
+        // Damaged state is set aside; the inbox is fetched again.
+        let rebuilt = try CloudKitTransportStateStore(
+            directory: directory, accountRecordName: "account",
+            zoneName: "zone"
+        )
+        XCTAssertTrue(rebuilt.rebuiltDamagedState)
+        let rebuiltState = await rebuilt.snapshot()
+        XCTAssertEqual(rebuiltState.inbox, [])
     }
 
     func testStartupTrustsOnlyRecordsSavedByTheSameBuild() async throws {
@@ -237,31 +235,31 @@ final class CloudKitStateValidationTests: XCTestCase {
             in: await store.snapshot(), with: changedHeads
         )
 
-        let manifests: [(String, Data)] = [
-            ("other build", try CloudKitStateDiskStorage(
+        let manifests: [(String, () throws -> Data)] = [
+            ("other build", { try CloudKitStateDiskStorage(
                 directory: directory, recordValidationStamp: "build-b"
-            ).encode(invalid)),
-            ("no stamp", try CloudKitStateDiskStorage(
+            ).encode(invalid) }),
+            ("no stamp", { try CloudKitStateDiskStorage(
                 directory: directory
-            ).encode(invalid)),
-            ("inline records", try JSONEncoder().encode(invalid)),
+            ).encode(invalid) }),
+            ("inline records", { try JSONEncoder().encode(invalid) }),
         ]
         for (name, manifest) in manifests {
-            try manifest.write(to: fileURL)
             for stamp in ["build-a", nil] {
-                XCTAssertThrowsError(try CloudKitTransportStateStore(
+                // Each open replaces the invalid state, so save it again.
+                try manifest().write(to: fileURL)
+                let rebuilt = try CloudKitTransportStateStore(
                     directory: directory, accountRecordName: "account",
                     zoneName: "zone", recordValidationStamp: stamp
-                ), name) { error in
-                    XCTAssertEqual(
-                        error as? CloudKitSyncTransportError, .corruptState, name
-                    )
-                }
+                )
+                XCTAssertTrue(rebuilt.rebuiltDamagedState, name)
+                let state = await rebuilt.snapshot()
+                XCTAssertEqual(state.inbox, [], name)
             }
         }
     }
 
-    func testTrustedStartupStillRejectsChangedPayloadBytes() async throws {
+    func testTrustedStartupStillDetectsChangedPayloadBytes() async throws {
         let directory = temporaryDirectory()
         let store = try CloudKitTransportStateStore(
             directory: directory, accountRecordName: "account", zoneName: "zone",
@@ -278,12 +276,13 @@ final class CloudKitStateValidationTests: XCTestCase {
             try data.write(to: url)
         }
 
-        XCTAssertThrowsError(try CloudKitTransportStateStore(
+        let rebuilt = try CloudKitTransportStateStore(
             directory: directory, accountRecordName: "account", zoneName: "zone",
             recordValidationStamp: "build-a"
-        )) { error in
-            XCTAssertEqual(error as? CloudKitSyncTransportError, .corruptState)
-        }
+        )
+        XCTAssertTrue(rebuilt.rebuiltDamagedState)
+        let state = await rebuilt.snapshot()
+        XCTAssertEqual(state.inbox, [])
     }
 
     func testFullStartupValidationRecordsTheCurrentBuild() async throws {

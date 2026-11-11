@@ -161,8 +161,9 @@ references. Inbox slots, generations, issued cursors, outbox records, and
 deleted replay payloads are preserved.
 
 Reopening verifies payload digests, record identity, notebook scope, and all
-existing state invariants. Missing or corrupt payloads and unknown local disk
-versions fail closed. A failed manifest replacement leaves the earlier state
+existing state invariants. Unknown local disk versions fail closed. Missing
+or corrupt payloads are [set aside and rebuilt](sync-damage-recovery.md).
+A failed manifest replacement leaves the earlier state
 usable and can leave harmless unused payload files. No automatic local
 compaction or disk-space reduction is claimed. The initial migration and full
 startup validation remain measurable costs.

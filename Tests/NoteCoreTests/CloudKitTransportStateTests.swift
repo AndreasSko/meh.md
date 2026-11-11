@@ -935,25 +935,29 @@ final class CloudKitTransportStateTests: XCTestCase {
         }
     }
 
-    func testCorruptPersistedStateIsRejected() throws {
+    func testCorruptPersistedStateIsSetAsideAndReplaced() async throws {
         let directory = temporaryDirectory()
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true
         )
-        try Data("not json".utf8).write(
-            to: directory.appendingPathComponent("cloudkit-sync-state.json")
+        let fileURL = directory.appendingPathComponent("cloudkit-sync-state.json")
+        try Data("not json".utf8).write(to: fileURL)
+        let store = try CloudKitTransportStateStore(
+            directory: directory, accountRecordName: "account",
+            zoneName: "zone"
         )
-        XCTAssertThrowsError(
-            try CloudKitTransportStateStore(
-                directory: directory, accountRecordName: "account",
-                zoneName: "zone"
-            )
-        ) {
-            XCTAssertEqual(
-                $0 as? CloudKitSyncTransportError,
-                .corruptState
-            )
-        }
+        XCTAssertTrue(store.rebuiltDamagedState)
+        let state = await store.snapshot()
+        XCTAssertEqual(state.inbox, [])
+        // Nothing was saved before, so this device may still join first.
+        XCTAssertFalse(state.rebuiltAfterJoining)
+        let kept = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix("cloudkit-sync-state.json.damaged-") }
+        XCTAssertEqual(kept.count, 1)
+        XCTAssertEqual(
+            try Data(contentsOf: directory.appendingPathComponent(kept[0])),
+            Data("not json".utf8)
+        )
     }
 
     func testRemoteSnapshotIDRejectsPathsAndUppercase() {

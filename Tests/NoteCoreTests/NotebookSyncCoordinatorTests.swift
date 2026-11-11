@@ -333,7 +333,7 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(reopenedSession.text, "arrived")
     }
 
-    func testDamagedOpenNoteDoesNotAcceptRemoteBodyAsFirstArrival() async throws {
+    func testDamagedOpenNoteIsRepairedAndKeepsTheDamagedBytes() async throws {
         let catalog = try NotebookCatalogDocument()
         let note = try NoteDocument(text: "remote")
         try catalog.add(id: note.noteID, kind: .note, name: "remote.md")
@@ -349,17 +349,19 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         let blocked = try await replica.openNote(note.noteID, allowingRecovery: true)
         XCTAssertFalse(blocked.isWaitingForRemoteBody)
 
-        do {
-            try await replica.apply(SyncRecord(
-                snapshot: note.snapshot(), notebookID: catalog.notebookID
-            ))
-            XCTFail("Remote arrival must not replace a damaged local file")
-        } catch let error as NotebookReplicaError {
-            XCTAssertEqual(error, .noteUnavailable(note.noteID))
-        }
+        try await replica.apply(SyncRecord(
+            snapshot: note.snapshot(), notebookID: catalog.notebookID
+        ))
 
-        XCTAssertEqual(try Data(contentsOf: storage.currentURL), damaged)
-        XCTAssertFalse(blocked.isEditingEnabled)
+        // Repaired from the received version, not taken for a missing body.
+        XCTAssertTrue(blocked.isEditingEnabled)
+        XCTAssertEqual(blocked.text, "remote")
+        let folder = storage.currentURL.deletingLastPathComponent()
+        let kept = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+            .filter { $0.hasPrefix("note.quarantine-") }
+        XCTAssertEqual(kept.count, 1)
+        XCTAssertEqual(
+            try Data(contentsOf: folder.appending(path: try XCTUnwrap(kept.first))), damaged)
     }
 
     func testOpenMissingSessionJoinsBodyWrittenBeforeDelivery() async throws {
@@ -496,7 +498,7 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
         )
     }
 
-    func testFailedRemoteSaveDoesNotAdvanceCursor() async throws {
+    func testUnreadableLocalNoteIsSkippedAndReported() async throws {
         let notebookID = UUID()
         let seed = try NotebookCatalogDocument(notebookID: notebookID)
         let note = try NoteDocument(text: "remote")
@@ -525,16 +527,28 @@ final class NotebookSyncCoordinatorTests: XCTestCase {
 
         await coordinator.synchronize()
 
-        guard case .failed = coordinator.status else {
-            return XCTFail("Expected durable note save failure")
-        }
+        // The rest of the notebook synced; only this note is reported.
+        let failure = try XCTUnwrap(coordinator.lastError as? NotebookUnreadableNotes)
+        XCTAssertEqual(failure.noteIDs, [note.noteID])
+        XCTAssertEqual(failure.names, ["remote.md"])
         let state = try JSONDecoder().decode(
             NotebookSyncState.self,
             from: Data(
                 contentsOf: root.appending(path: "notebook-sync-state.json")
             )
         )
-        XCTAssertNil(state.cursor)
+        XCTAssertNotNil(state.cursor)
+        // Its received version is applied once the note is readable again.
+        XCTAssertEqual(state.skippedNotes, [note.noteID])
+
+        try FileManager.default.removeItem(
+            at: notesURL.appending(path: note.noteID.uuidString))
+        await coordinator.synchronize()
+        XCTAssertNil(coordinator.lastError)
+        let replica = NotebookReplica(directory: root)
+        try await replica.load()
+        let received = try await replica.openNote(note.noteID)
+        XCTAssertEqual(received.text, "remote")
     }
 
     func testTypingDuringUploadLeavesCoordinatorPending() async throws {

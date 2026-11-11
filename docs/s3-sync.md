@@ -131,6 +131,10 @@ A simulator reaches it at `http://127.0.0.1:9000`.
   not the small log entries and deletion markers, so listing them slowly
   takes more requests. iCloud keeps deletion markers too; the logs are
   specific to S3, because CloudKit tracks changes on the server.
+- **Damaged or missing objects.** An object the app can't read is skipped,
+  and the rest keeps syncing. Once a day each device checks that the
+  bucket still holds every note it uploaded and uploads missing ones
+  again. See [sync when something is damaged](sync-damage-recovery.md).
 - **Restored devices.** A device restored from a backup continues under a
   new log name when the storage supports conditional writes. On storage
   that doesn't, the original and the restored copy can overwrite each

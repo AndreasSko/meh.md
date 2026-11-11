@@ -27,6 +27,7 @@ public final class FakeS3Server: @unchecked Sendable {
     private var _putFailures: [PutFailure] = []
     private var _putFailurePrefix = ""
     private var _putFailureMethod = "PUT"
+    private var _storedBeforePut: [String: Data] = [:]
 
     /// A failed PUT. With `afterStoring`, the object is stored but the
     /// reply is still an error, as when a response is lost on the way back.
@@ -78,6 +79,19 @@ public final class FakeS3Server: @unchecked Sendable {
         _ count: Int, with failure: PutFailure = PutFailure(), prefix: String = ""
     ) {
         failNext(count, method: "PUT", with: failure, prefix: prefix)
+    }
+
+    /// Fails the next GET requests to keys under `prefix`.
+    public func failNextGets(
+        _ count: Int, with failure: PutFailure = PutFailure(), prefix: String = ""
+    ) {
+        failNext(count, method: "GET", with: failure, prefix: prefix)
+    }
+
+    /// Stores `data` at `key` just before the next PUT to it arrives, as
+    /// another device writing first would.
+    public func storeBeforeNextPut(_ data: Data, bucket: String, key: String) {
+        lock.withLock { _storedBeforePut[bucket + "/" + key] = data }
     }
 
     /// Fails the next DELETE requests to keys under `prefix` with a 503.
@@ -138,6 +152,9 @@ public final class FakeS3Server: @unchecked Sendable {
             }
             switch method {
             case "PUT":
+                if let first = _storedBeforePut.removeValue(forKey: full) {
+                    objects[full] = first
+                }
                 if request.value(forHTTPHeaderField: "If-None-Match") == "*" {
                     switch _conditionalWrites {
                     case .supported where objects[full] != nil:

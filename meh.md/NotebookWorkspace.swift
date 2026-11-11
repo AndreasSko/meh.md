@@ -415,7 +415,7 @@ final class NotebookWorkspace {
         if isResetPending { return false }
         if isSyncUpdateRequired { return false }
         if syncFailure?.retryDisposition == .unavailable { return false }
-        if let syncHalt { return syncHalt.isRecoverable }
+        if let syncHalt { return syncHalt.isRecoverable || syncHalt.reason == .other }
         return true
     }
     var isSyncUpdateRequired: Bool {
@@ -1417,9 +1417,13 @@ final class NotebookWorkspace {
                 recordUpdateRequirement(from: failure)
                 if let syncHalt { recordUpdateRequirement(from: syncHalt.underlyingError) }
                 let now = syncClock.now()
-                plannedRetryDate = syncHalt == nil ? retryPolicy.retryDate(
-                    for: failure, now: now,
-                    serverNotBefore: syncRetryNotBefore) : nil
+                // A halt without a known cause is rebuilt on the next
+                // refresh, so schedule one with the usual backoff.
+                plannedRetryDate = syncHalt == nil || syncHalt?.reason == .other
+                    ? retryPolicy.retryDate(
+                        for: failure, now: now,
+                        serverNotBefore: syncRetryNotBefore,
+                        always: syncHalt != nil) : nil
                 plannedRetryUptime = plannedRetryDate == nil ? nil
                     : syncClock.uptime()
                 plannedRetryDelay = plannedRetryDate.map {
@@ -1610,8 +1614,15 @@ final class NotebookWorkspace {
             syncHalt = halt
             let accountRecheck = recheckAccount && halt.reason == .accountChanged
             // An interruption needs no user action, so any refresh may rebuild.
+            // Neither does a halt without a known cause: a relaunch would
+            // rebuild the transport from the same saved state.
+            // A cause that keeps failing, such as missing iCloud permission,
+            // stops being rebuilt automatically; Try Again still does.
             let recover = recoverIfHalted || halt.reason == .interrupted
-            guard (recover && halt.isRecoverable) || accountRecheck else {
+            let rebuildsUnknown = halt.reason == .other
+                && (recoverIfHalted || retryPolicy.mayRetryUnknownFailure)
+            guard (recover && halt.isRecoverable) || rebuildsUnknown
+                || accountRecheck else {
                 throw halt.underlyingError
             }
             // refresh owns the exchange throughout retirement and replacement.

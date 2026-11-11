@@ -141,6 +141,8 @@ public final class NotebookReplica {
     private var sessionsGeneration: UInt64 = 0
     @ObservationIgnored private var sessionLoads: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var rememberedDeletions: Set<UUID> = []
+    /// Notes whose files the last scan for sync could not read.
+    @ObservationIgnored private(set) var unreadableNoteIDs: Set<UUID> = []
     @ObservationIgnored private var loaded = false
     @ObservationIgnored private var writingCatalog = false
     @ObservationIgnored private var writeWaiters: [CheckedContinuation<Void, Never>] = []
@@ -1841,6 +1843,16 @@ public final class NotebookReplica {
                             throw NotebookReplicaError.noteUnavailable(id)
                         }
                     }
+                } else if session.canAttemptRecovery {
+                    // An open note that could not be loaded is repaired like
+                    // an unopened one, then shown again.
+                    let repaired = try await withCatalogWrite {
+                        try await session.repair(from: record.snapshot) {
+                            try await self.noteStorage(id).merge(record.snapshot)
+                        }
+                    }
+                    guard repaired else { throw NotebookReplicaError.noteUnavailable(id) }
+                    searchBodyGeneration &+= 1
                 } else {
                     guard session.isEditingEnabled else {
                         throw NotebookReplicaError.noteUnavailable(id)
@@ -1878,14 +1890,22 @@ public final class NotebookReplica {
             try await self.reconcileDeletionLedgerIntoCatalog()
         }
         guard let catalog else { throw NotebookReplicaError.notJoined }
+        var brokenSessions: Set<UUID> = []
         for (id, session) in sessions where !(try deletedIDs.contains(id)) {
             if let load = sessionLoads[id] { await load.value }
             if session.isWaitingForRemoteBody { continue }
+            // A note that needs recovery has nothing to save, and must not
+            // keep every other note from syncing.
+            if session.needsRecovery {
+                brokenSessions.insert(id)
+                continue
+            }
             try await session.flush()
         }
         let deleted = try deletedIDs
         let listed = Set(try catalog.items().filter { $0.kind == .note }.map(\.id))
         var records: [SyncRecord] = []
+        var unreadable = brokenSessions
         var nextCache: [UUID: NoteFileStorage.ValidatedSnapshot] = [:]
         var cachedBytes = 0
         let ids = try storedNoteIDs().filter {
@@ -1899,6 +1919,9 @@ public final class NotebookReplica {
             switch loaded.result {
             case .current(let snapshot):
                 guard snapshot.noteID == id else { throw SyncError.identityConflict }
+                // Its open editor could not load it, so received versions
+                // cannot be applied either.
+                if brokenSessions.contains(id) { break }
                 records.append(SyncRecord(snapshot: snapshot, notebookID: catalog.notebookID))
                 // Keep one bounded set of successfully decoded current files.
                 // The next scan still reads bytes, even on a cache hit. Using
@@ -1911,7 +1934,7 @@ public final class NotebookReplica {
                     cachedBytes += cost
                 }
             case .firstLaunch: break
-            case .recoveryRequired, .blocked: throw NotebookReplicaError.noteUnavailable(id)
+            case .recoveryRequired, .blocked: unreadable.insert(id)
             }
             let completed = index + 1
             if completed == 1 || completed.isMultiple(of: progressInterval) {
@@ -1922,6 +1945,7 @@ public final class NotebookReplica {
         // receiver must remain correct for either arrival order.
         records.append(SyncRecord(catalog: catalogSnapshot!))
         recordReadCache = nextCache
+        unreadableNoteIDs = unreadable
         progress?(total, total)
         return records
     }
@@ -2499,9 +2523,10 @@ struct ExistingNotebookNoteStorage: NoteStorage {
 }
 
 private extension NoteSession {
-    var canAttemptRecovery: Bool {
-        switch status {
-        case .recoveryRequired, .blocked: true
+    var needsRecovery: Bool {
+        if isWaitingForRemoteBody { return false }
+        return switch status {
+        case .recoveryRequired, .blocked, .loadFailed: true
         default: false
         }
     }

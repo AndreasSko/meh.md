@@ -19,9 +19,13 @@ Pending outbox saves are requeued even if absent from the engine checkpoint.
 An unsuccessful reconstruction can be retried without clearing the original
 failure or changing the expected account scope.
 
-Corrupt state, account changes, invalid records, and unexplained remote
-deletion do not authorize reconstruction. A zone missing after this device
-has joined counts as remote deletion: only a first join creates the zone.
+Account changes and unexplained remote deletion do not authorize
+reconstruction. Damaged saved state and unreadable records no longer stop
+sync; see [sync when something is damaged](sync-damage-recovery.md). A halt
+without a known cause is rebuilt automatically on the next refresh.
+
+A zone missing after this device has joined counts as remote deletion: only
+a first join creates the zone.
 Provisional note deletions can still be reconciled by a later catalog marker.
 Recovery never resets local or cloud data, and an uncertain upload result
 remains pending until acknowledged.
