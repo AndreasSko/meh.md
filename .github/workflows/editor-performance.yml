@@ -47,7 +47,9 @@ jobs:
       - name: Pick steps from the diff and coverage
         id: select
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
+          # A stacked PR compares against the stack's base, so the top PR
+          # picks steps for every layer.
+          BASE: ${{ github.event.pull_request.stack.base.sha || github.event.pull_request.base.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ -n "$BASE" ]; then
@@ -62,7 +64,8 @@ jobs:
   editor:
     name: Editor regressions and performance
     needs: select
-    if: needs.select.outputs.any == 'true'
+    # In a stack only the top PR runs this; it holds every layer.
+    if: needs.select.outputs.any == 'true' && (github.event.pull_request.stack == null || github.event.pull_request.stack.position == github.event.pull_request.stack.size)
     runs-on: xcode-27
     timeout-minutes: 150
     steps:

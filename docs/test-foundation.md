@@ -128,6 +128,20 @@ run summary. Manual runs use the whole plan. Locally,
 uncommitted changes with `origin/main` and prints the matching
 `xcodebuild` arguments, with the reason for each file on stderr.
 
+## Stacked pull requests
+
+In a [stack of pull requests](https://docs.github.com/en/pull-requests/get-started/about-stacked-prs),
+only the top PR runs the Mac jobs: the UI lanes, the editor checks, the
+sync checks and the release builds. The top PR holds every layer, so one
+run covers the whole stack instead of one per layer. Its selection jobs
+compare against the stack's base (`pull_request.stack.base.sha`) instead
+of the layer below, so goals are picked for every layer's changes. On
+lower PRs the jobs are skipped, and a skipped job counts as passed for
+required checks. PRs outside a stack, nightly runs and `main` run as
+before. GitHub's
+[CI guide for stacks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/optimizing-ci-for-stacked-pull-requests)
+describes the `stack` fields.
+
 ## Picking goals from coverage
 
 Every night `ui-coverage.yml` runs each PR goal of every lane on its own,

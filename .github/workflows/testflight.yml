@@ -43,9 +43,11 @@ jobs:
         id: app
         env:
           PR: ${{ github.event_name == 'pull_request' }}
+          # A stacked PR's first parent is the layer below, not main.
+          STACKED: ${{ github.event.pull_request.stack != null }}
         run: |
           app=true
-          [[ $PR == true ]] && app=$(scripts/app_changed.sh HEAD^1 HEAD)
+          [[ $PR == true && $STACKED != true ]] && app=$(scripts/app_changed.sh HEAD^1 HEAD)
           echo "app=$app" >> "$GITHUB_OUTPUT"
 
   build:
@@ -56,6 +58,7 @@ jobs:
     if: >-
       !cancelled() && github.ref != 'refs/heads/main'
       && needs.changes.outputs.app != 'false'
+      && (github.event.pull_request.stack == null || github.event.pull_request.stack.position == github.event.pull_request.stack.size)
     # One runner builds both platforms, which keeps a macOS runner free
     # for the UI lanes.
     name: Release builds
