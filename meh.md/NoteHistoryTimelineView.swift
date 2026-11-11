@@ -74,7 +74,13 @@ struct NoteHistoryTimelineView: View {
                 }
                 .frame(height: Self.height)
                 .frame(maxWidth: 560)
-                .popoverTip(tip, arrowEdge: .bottom)
+                // With only a version or two and no finer steps, there is
+                // nothing to scrub.
+                .popoverTip(
+                    versions.count >= 3 || versions.contains { !$0.isOverviewStop }
+                        ? tip : nil,
+                    arrowEdge: .bottom
+                )
                 caption
             }
             .frame(maxWidth: .infinity)
@@ -467,9 +473,9 @@ struct NoteHistoryTimelineView: View {
     static func sizeLabel(added: Int, removed: Int) -> String {
         switch (added, removed) {
         case (0, 0): String(localized: "no text changes")
-        case (_, 0): "+\(added.formatted())"
-        case (0, _): "−\(removed.formatted())"
-        default: "+\(added.formatted()) −\(removed.formatted())"
+        case (_, 0): String(localized: "\(added.formatted()) characters added")
+        case (0, _): String(localized: "\(removed.formatted()) characters removed")
+        default: String(localized: "\(added.formatted()) added, \(removed.formatted()) removed")
         }
     }
 

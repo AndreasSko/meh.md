@@ -299,19 +299,22 @@ struct NoteHistoryBrowserView: View {
                 Button("Restore…") { showingRestoreChoices = true }
                     .disabled(state.isViewingCurrent || state.isLoadingPreview)
                     .accessibilityIdentifier("note-history-restore")
+                    // Anchored here, so the choices point at the button.
+                    .confirmationDialog(
+                        "Restore this version?",
+                        isPresented: $showingRestoreChoices,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Restore This Note…") { confirmingReplacement = true }
+                        Button("Restore as New Note", action: onRestoreAsNewNote)
+                        Button("Cancel", role: .cancel) {}
+                    }
             }
         }
-        .confirmationDialog(
-            "Restore this version?",
-            isPresented: $showingRestoreChoices,
-            titleVisibility: .visible
-        ) {
-            Button("Restore This Note…") { confirmingReplacement = true }
-            Button("Restore as New Note", action: onRestoreAsNewNote)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Choose where to put the selected text.")
-        }
+        #if os(iOS)
+        // Done closes History; a second way back only competes with it.
+        .navigationBarBackButtonHidden(true)
+        #endif
         .alert(
             "Replace this note’s current text?",
             isPresented: $confirmingReplacement
