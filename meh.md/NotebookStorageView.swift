@@ -72,7 +72,7 @@ private struct NotebookStorageSummary: View {
                     .font(.largeTitle.bold())
                     .accessibilityIdentifier("notebook-storage-total")
                 HStack(alignment: .firstTextBaseline) {
-                    Text("\(report.activeNoteCount) notes")
+                    Text(noteCountLabel(report.activeNoteCount))
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("notebook-storage-note-count")
                     if report.trashNoteCount > 0 {
@@ -108,7 +108,7 @@ struct NotebookStorageOverview: View {
                     .font(.title2.bold())
                     .accessibilityIdentifier("notebook-storage-overview-total")
                 Spacer(minLength: 12)
-                Text("\(report.activeNoteCount) notes")
+                Text(noteCountLabel(report.activeNoteCount))
                     .foregroundStyle(.secondary)
             }
             NotebookStorageBar(
@@ -368,4 +368,9 @@ func storageBytes(_ bytes: Int64) -> String {
 private func storagePercent(_ bytes: Int64, of total: Int64) -> String {
     (total > 0 ? Double(bytes) / Double(total) : 0)
         .formatted(.percent.precision(.fractionLength(0...1)))
+}
+
+/// "1 note" or "12 notes".
+func noteCountLabel(_ count: Int) -> String {
+    count == 1 ? String(localized: "1 note") : String(localized: "\(count) notes")
 }
