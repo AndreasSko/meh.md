@@ -220,7 +220,9 @@ private final class MarkdownTableOverlayController: NSObject {
             if let row = rowByLocation[location] {
                 framesByTable[row.tableRange, default: [:]][location] = CGRect(
                     x: x,
-                    y: origin.y + fragment.layoutFragmentFrame.minY,
+                    y: origin.y + MarkdownTableLayout.rowMinY(
+                        in: fragment.layoutFragmentFrame, row: row
+                    ),
                     width: layout.width,
                     height: row.height
                 )

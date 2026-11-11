@@ -279,6 +279,13 @@ struct MarkdownTableLayout {
         )
     }
 
+    /// iOS puts the gap before a table into the header's fragment, above
+    /// its line. A row's box sits at the bottom of its fragment, so the
+    /// header still meets the first row.
+    static func rowMinY(in fragmentFrame: CGRect, row: Row) -> CGFloat {
+        fragmentFrame.maxY - row.height
+    }
+
     func draw(
         fragment: NSTextLayoutFragment,
         layoutManager: NSTextLayoutManager,
@@ -296,7 +303,7 @@ struct MarkdownTableLayout {
         guard let row = rows.first(where: { $0.range.location == location }) else { return }
         let rect = CGRect(
             x: origin.x + lineFragmentPadding,
-            y: origin.y + fragment.layoutFragmentFrame.minY,
+            y: origin.y + Self.rowMinY(in: fragment.layoutFragmentFrame, row: row),
             width: width, height: row.height
         )
         context.saveGState()
