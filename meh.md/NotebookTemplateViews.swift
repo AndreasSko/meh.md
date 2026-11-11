@@ -24,7 +24,7 @@ struct NotebookTemplatesSettingsView: View {
                     } header: {
                         Text("Templates")
                     } footer: {
-                        Text("Templates create new notes. In Files, use a note or folder’s context menu and choose Use as Template.")
+                        Text("A template starts new notes. In Files, open a note’s menu and choose Templates & Snippets › Use as Template.")
                     }
                 }
                 if !folders.isEmpty {
@@ -72,7 +72,7 @@ struct NotebookTemplatesSettingsView: View {
                     } header: {
                         Text("Templates")
                     } footer: {
-                        Text("Creating from a template copies its current Markdown into an independent new note.")
+                        Text("A new note starts as a copy of its template.")
                     }
                 }
                 NotebookSnippetOverviewSections(
@@ -141,9 +141,9 @@ private struct NotebookSnippetOverviewSections: View {
             Text("Snippets")
         } footer: {
             if snippets.isEmpty {
-                Text("Snippets insert Markdown into the note you’re editing. In Files, use a note or folder’s context menu and choose Use as Snippet or Use as Snippet Folder.")
+                Text("A snippet adds its text where you’re writing. In Files, open a note’s menu and choose Templates & Snippets › Use as Snippet.")
             } else {
-                Text("Snippets insert their current Markdown into the note you’re editing. Open a snippet here to edit its source.")
+                Text("Insert a snippet from the formatting bar. Open one here to edit it.")
             }
         }
     }
@@ -276,7 +276,7 @@ struct NotebookTemplatePicker: View {
                     ContentUnavailableView {
                         Label("No Templates Yet", systemImage: "doc.on.doc")
                     } description: {
-                        Text("Use a note or folder as a template from its context menu in Files.")
+                        Text("In Files, open a note’s menu and choose Templates & Snippets › Use as Template.")
                     } actions: {
                         NavigationLink("Manage Templates") {
                             NotebookTemplatesSettingsView(
