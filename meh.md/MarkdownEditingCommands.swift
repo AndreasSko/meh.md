@@ -227,6 +227,26 @@ enum MarkdownEditingRules {
         )
     }
 
+    /// Where the caret goes after inserting a snippet: at the first place
+    /// left to fill in, such as after `Squats:` or in an empty `- [ ] `, or
+    /// else after the snippet. UTF-16 offset into `snippet`.
+    static func firstBlankOffset(in snippet: String) -> Int {
+        let source = snippet as NSString
+        var location = 0
+        while location < source.length {
+            let line = contentLine(containing: location, in: source)
+            let text = source.substring(with: line)
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            let isEmptyItem = ["-", "*", "+", "- [ ]", "* [ ]", "+ [ ]"].contains(trimmed)
+                && text.hasSuffix(" ")
+            if trimmed.hasSuffix(":") || isEmptyItem {
+                return NSMaxRange(line)
+            }
+            location = NSMaxRange(line) + 1
+        }
+        return source.length
+    }
+
     static func toggleTask(
         text: String,
         at location: Int,

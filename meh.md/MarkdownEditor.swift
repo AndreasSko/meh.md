@@ -131,7 +131,8 @@ extension MarkdownTextView {
             let change = MarkdownEditingChange(
                 range: selection, replacement: snippet,
                 selection: NSRange(
-                    location: selection.location + snippet.utf16.count,
+                    location: selection.location
+                        + MarkdownEditingRules.firstBlankOffset(in: snippet),
                     length: 0
                 )
             )

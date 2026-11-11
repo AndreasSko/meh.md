@@ -93,6 +93,14 @@ final class MarkdownEditingCommandsTests: XCTestCase {
         ))
     }
 
+    func testSnippetCaretGoesToFirstBlank() {
+        let legs = "11/10 – Legs\n- Squats: \n- Lunges: \n"
+        XCTAssertEqual(MarkdownEditingRules.firstBlankOffset(in: legs), 23)
+        XCTAssertEqual(MarkdownEditingRules.firstBlankOffset(in: "Done\n- [ ] \n"), 11)
+        let plain = "No blanks here.\n"
+        XCTAssertEqual(MarkdownEditingRules.firstBlankOffset(in: plain), 16)
+    }
+
     func testOpenTasksIgnoreCheckedTasksAndCode() {
         XCTAssertTrue(MarkdownEditingRules.hasOpenTask(in: "- [x] Paint\n- [ ] Dry"))
         XCTAssertFalse(MarkdownEditingRules.hasOpenTask(in: "- [x] Paint\n- [X] Dry"))
