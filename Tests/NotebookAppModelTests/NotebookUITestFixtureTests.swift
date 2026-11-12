@@ -41,6 +41,8 @@ final class NotebookUITestFixtureTests: XCTestCase {
             case .readme:
                 expected = ["Inbox", "Projects", "Areas", "Resources", "Archive"]
             case .snippets: expected = ["Snippets", "Training log.md"]
+            case .snippetsNested:
+                expected = ["Projects", "Areas", "Resources", "Archive"]
             case .conflicts:
                 expected = ["Inbox", "Projects", "Archive", "Rome 2023.md"]
             case .dragLongList:

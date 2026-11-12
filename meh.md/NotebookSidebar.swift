@@ -871,13 +871,17 @@ private struct NotebookLibraryBrowser: View {
         }
         .task(id: scene.fileRevealRequest) {
             guard let request = scene.fileRevealRequest else { return }
-            await Task.yield()
             #if os(iOS)
+            // The List drops a scroll to rows it inserts in the same update,
+            // such as the children of folders the reveal just expanded.
+            await NotebookNextFrame.wait()
             // A new inline editor replaces the row's drag source. Allow
             // that layout to finish before revealing a virtualized row.
             if scene.editingID == request.id {
                 try? await Task.sleep(for: .milliseconds(100))
             }
+            #else
+            await Task.yield()
             #endif
             guard !Task.isCancelled else { return }
             withAnimation { scrollProxy.scrollTo(request.id, anchor: .center) }
@@ -1554,6 +1558,27 @@ private struct NotebookBrowserScrollReader: UIViewRepresentable {
 
     func updateUIView(_ view: NotebookBrowserScrollProbe, context: Context) {
         view.connect()
+    }
+}
+
+/// Resumes once the next frame is drawn, after pending view updates.
+@MainActor
+private final class NotebookNextFrame: NSObject {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    static func wait() async {
+        let frame = NotebookNextFrame()
+        await withCheckedContinuation { continuation in
+            frame.continuation = continuation
+            CADisplayLink(target: frame, selector: #selector(drawn))
+                .add(to: .main, forMode: .common)
+        }
+    }
+
+    @objc private func drawn(_ link: CADisplayLink) {
+        link.invalidate()
+        continuation?.resume()
+        continuation = nil
     }
 }
 
