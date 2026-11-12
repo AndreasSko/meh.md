@@ -46,22 +46,39 @@ enum NotebookNoteName {
             components.month ?? 0,
             components.day ?? 0
         )
-        let reserved = Set(existingNames.map(collisionKey))
-        var attempt = 1
-        var candidate = stem + ".md"
-        while reserved.contains(collisionKey(candidate)) {
-            attempt += 1
-            candidate = "\(stem) \(attempt).md"
+        return uniqueFilename(stem: stem, existingNames: existingNames)
+    }
+
+    /// The name of a note made outside a window, such as from Shortcuts:
+    /// `title` with ".md", or today's date when it's empty, like a new
+    /// note in the app.
+    nonisolated static func newFilename(
+        named title: String?,
+        on date: Date = Date(),
+        existingNames: some Sequence<String>,
+        calendar: Calendar = .current
+    ) -> String {
+        let title = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let stem = markdownExtension(in: title)
+            .map { String(title.dropLast($0.count)) } ?? title
+        guard !stem.isEmpty else {
+            return defaultFilename(
+                on: date, existingNames: existingNames, calendar: calendar)
         }
-        return candidate
+        return uniqueFilename(stem: stem, existingNames: existingNames)
     }
 
     nonisolated static func restoredFilename(
         for title: String,
         existingNames: some Sequence<String>
     ) -> String {
+        uniqueFilename(stem: "\(title) (Restored)", existingNames: existingNames)
+    }
+
+    nonisolated private static func uniqueFilename(
+        stem: String, existingNames: some Sequence<String>
+    ) -> String {
         let reserved = Set(existingNames.map(collisionKey))
-        let stem = "\(title) (Restored)"
         var attempt = 1
         var candidate = stem + ".md"
         while reserved.contains(collisionKey(candidate)) {

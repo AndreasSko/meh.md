@@ -42,6 +42,7 @@
         "MacSidebarClickUITests",
         "NoteHistoryTourUITests",
         "NoteHistoryUITests/testRestoreAsNewNoteKeepsOriginalCurrentText",
+        "NoteIntentUITests/testCreateNoteShortcutAddsANoteAndItsLinkOpensIt",
         "NoteIntentUITests/testNewNoteControlStartsANewNote",
         "NoteLinkTourUITests",
         "NotebookAutomaticCloudUITests",

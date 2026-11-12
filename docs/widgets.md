@@ -62,11 +62,10 @@ folder, and shows "Open meh.md to show this note here." The next time the
 app writes the copy, it includes that note. The file keeps the eight newest
 requests; a widget whose note drops out simply asks again.
 
-Widget links use the `mehmd://note/<UUID>` and `mehmd://new` URLs. The
-system hands widget links to the app that owns the widget, so the scheme is
-not registered with the system. Links go through the same request queue as
-Home Screen quick actions, so they work while the app is starting.
-The window that receives a link handles it; on the Mac, links go to an open
+Widget links use the `mehmd://note/<UUID>` and `mehmd://new` URLs, with the
+build's own scheme (see [Shortcuts](shortcuts.md#links)). Links go through
+the same request queue as Home Screen quick actions, so they work while the
+app is starting. The window that receives a link handles it; on the Mac, links go to an open
 window instead of a new one. Opening a note closes Settings, Trash,
 Templates, Quick Open, Backlinks and search first.
 

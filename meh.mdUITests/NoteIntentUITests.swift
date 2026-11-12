@@ -27,6 +27,50 @@ final class NoteIntentUITests: XCTestCase {
         XCTAssertTrue(name.hasPrefix(Self.todayStem), "Got \(name)")
     }
 
+    @MainActor
+    func testCreateNoteShortcutAddsANoteAndItsLinkOpensIt() async throws {
+        continueAfterFailure = false
+        let app = launchPreview()
+        let createNote = definitions.intents["CreateNoteIntent"]
+
+        let named = try await createNote.makeIntent(
+            text: "Milk\nEggs", name: "Groceries"
+        ).run()
+        try await createNote.makeIntent(text: "Call Sam").run()
+
+        app.revealNotebookSidebar()
+        XCTAssertTrue(sidebarTitle("Groceries", in: app).waitForExistence(timeout: 10),
+                      "The note must show up while the app is open")
+        XCTAssertTrue(sidebarTitle(Self.todayStem, in: app).exists,
+                      "Without a name, the note must get today's date")
+
+        let link: URL = try named.value
+        XCTAssertEqual(link.host(), "note")
+        app.open(link)
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertEqual(editor.value as? String, "Milk\nEggs")
+        XCTAssertEqual(app.openNoteTitle, "Groceries")
+
+        do {
+            try await createNote.makeIntent(text: "Lost", name: "Work/Ideas").run()
+            XCTFail("A name with a / must fail")
+        } catch {
+            XCTAssertTrue(
+                "\(error)".contains("Names cannot contain"),
+                "Shortcuts must show why the name failed, got \(error)"
+            )
+        }
+    }
+
+    @MainActor
+    private func sidebarTitle(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@",
+            "notebook-sidebar-title-", title
+        )).firstMatch
+    }
+
     private static var todayStem: String {
         Date.now.formatted(
             Date.ISO8601FormatStyle(timeZone: .current).year().month().day())

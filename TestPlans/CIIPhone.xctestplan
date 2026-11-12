@@ -57,7 +57,8 @@
         "FlairUITests/testLibraryEndsWithTheNoteCount",
         "FlairUITests/testAppearanceSwitchesTheInk",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
-        "NoteIntentUITests/testNewNoteControlStartsANewNote"
+        "NoteIntentUITests/testNewNoteControlStartsANewNote",
+        "NoteIntentUITests/testCreateNoteShortcutAddsANoteAndItsLinkOpensIt"
       ]
     }
   ],
