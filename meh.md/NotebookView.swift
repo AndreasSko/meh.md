@@ -562,6 +562,8 @@ private struct NotebookScenePresentation: ViewModifier {
                                  beforeExport: scene.flushEditor,
                                  onOpenNote: scene.openReusableSource,
                                  initialRoute: scene.settingsRoute)
+                // A form sheet needed three screens of scrolling on iPad.
+                .presentationSizing(.page)
         }
         #endif
         .sheet(item: $scene.sharedImport, onDismiss: scene.finishSharedImport) { request in
