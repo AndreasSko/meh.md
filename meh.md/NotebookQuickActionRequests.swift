@@ -5,9 +5,10 @@ import Observation
 import UIKit
 #endif
 
-/// Requests from outside a notebook window: Home Screen quick actions and
-/// widget taps. A widget tap belongs to the window that received its link;
-/// the first ready window takes a quick action.
+/// Requests from outside a notebook window: Home Screen quick actions,
+/// widget taps and the New Note control. A widget tap belongs to the
+/// window that received its link; the first ready window takes a quick
+/// action or a control's request.
 @MainActor
 @Observable
 final class NotebookQuickActionRequests {
@@ -46,10 +47,20 @@ final class NotebookQuickActionRequests {
         }
     }
 
+    func receiveNewNote() {
+        pendingActions.append((.newNote, nil))
+    }
+
     func takeNextAction(for sceneID: UUID) -> Action? {
         guard let index = pendingActions.firstIndex(where: {
             $0.sceneID == nil || $0.sceneID == sceneID
         }) else { return nil }
         return pendingActions.remove(at: index).action
+    }
+}
+
+extension NewNoteIntent {
+    @MainActor static func openNewNote() async {
+        NotebookQuickActionRequests.shared.receiveNewNote()
     }
 }

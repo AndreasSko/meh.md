@@ -42,6 +42,7 @@
         "MacSidebarClickUITests",
         "NoteHistoryTourUITests",
         "NoteHistoryUITests/testRestoreAsNewNoteKeepsOriginalCurrentText",
+        "NoteIntentUITests/testNewNoteControlStartsANewNote",
         "NoteLinkTourUITests",
         "NotebookAutomaticCloudUITests",
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",

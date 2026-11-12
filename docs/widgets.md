@@ -81,6 +81,20 @@ show the release app's notes:
 The `MEH_APP_GROUP` build setting sets the group in the entitlements and
 in each Info.plist, where `MehWidgetStore` reads it.
 
+## New Note control
+
+The widget extension also has a New Note control for Control Center, the
+Lock Screen, the Action button and, on the Mac, Control Center and the menu
+bar. It opens the app and starts a new note in the default New Note folder,
+like the app icon's New Note quick action.
+
+The control runs `NewNoteIntent`, which opens the app. To open the app, the
+system needs the intent in both the app and the widget extension, so it
+lives in `meh.mdShared/`, a folder both targets compile. Only the app runs
+it: the app's `openNewNote()` hands the request to the same queue as quick
+actions, and the first ready window takes it. Shortcuts doesn't list the
+intent.
+
 ## Code
 
 `MehWidgetData` is a small Swift package target shared by the app and the

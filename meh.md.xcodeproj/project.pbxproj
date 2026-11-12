@@ -90,6 +90,11 @@
 			path = meh.mdWidgets;
 			sourceTree = "<group>";
 		};
+		000000000000000000000013 /* meh.mdShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = meh.mdShared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -121,6 +126,7 @@
 				000000000000000000000010 /* meh.md */,
 				000000000000000000000011 /* meh.mdUITests */,
 				000000000000000000000012 /* meh.mdWidgets */,
+				000000000000000000000013 /* meh.mdShared */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -154,6 +160,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				000000000000000000000010 /* meh.md */,
+				000000000000000000000013 /* meh.mdShared */,
 			);
 			name = meh.md;
 			packageProductDependencies = (
@@ -198,6 +205,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				000000000000000000000012 /* meh.mdWidgets */,
+				000000000000000000000013 /* meh.mdShared */,
 			);
 			name = meh.mdWidgets;
 			packageProductDependencies = (

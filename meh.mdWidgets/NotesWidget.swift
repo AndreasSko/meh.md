@@ -6,6 +6,7 @@ import WidgetKit
 struct MehWidgets: WidgetBundle {
     var body: some Widget {
         NotesWidget()
+        NewNoteControl()
     }
 }
 
