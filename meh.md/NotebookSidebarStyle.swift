@@ -25,6 +25,20 @@ enum NotebookSidebarPalette {
     }
 }
 
+/// Marks a row in the iPad sidebar, such as the open note, with one
+/// rounded fill inside the row, so Files, Recents and search look alike.
+struct NotebookRowHighlight: View {
+    let color: Color
+    var inset: CGFloat = 8
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(color)
+            .padding(.horizontal, inset)
+            .padding(.vertical, 1)
+    }
+}
+
 #if os(iOS)
 /// The sidebar and the note share one paper color, so the edge between them
 /// needs a line to show where the sidebar ends and where to drag its width.
@@ -156,6 +170,14 @@ struct NotebookRecentRow: View {
             }
         }
         .padding(.horizontal, 14)
+        #if os(iOS)
+        // The Mac marks the open note with its native list selection.
+        .background {
+            if isCurrent {
+                NotebookRowHighlight(color: NotebookSidebarPalette.openNote, inset: 6)
+            }
+        }
+        #endif
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityValue(

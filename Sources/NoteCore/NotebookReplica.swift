@@ -1250,6 +1250,9 @@ public final class NotebookReplica {
                     !$0.isInTrash && $0.item.kind == .note
                 }.map { $0.item.id })
                 try next.clearRecents(for: former.subtracting(now))
+            } else if self.placements.first(where: { $0.item.id == id })?.item.kind == .note {
+                // As in restoreItems: a restored note returns to Recents.
+                try next.recordRecentActivity(for: id)
             }
             try await self.persistCatalog(next)
         }
@@ -1336,6 +1339,13 @@ public final class NotebookReplica {
                     parent = byID[id]?.parentID
                 }
                 if !hasSelectedAncestor { try next.move(placement.item.id, to: nil) }
+            }
+            // Trash clears a note's Recents entry. Restoring it is fresh
+            // activity, so the note comes back to Recents; notes inside a
+            // restored folder stay out, so a folder doesn't flood Recents.
+            for id in selected.sorted(by: { $0.uuidString < $1.uuidString })
+            where byID[id]?.item.kind == .note {
+                try next.recordRecentActivity(for: id)
             }
             try await self.persistCatalog(next)
         }

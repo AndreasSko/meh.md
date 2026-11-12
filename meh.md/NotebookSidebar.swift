@@ -29,6 +29,7 @@ struct NotebookSidebar: View {
     }
 
     private var sidebarTitle: String {
+        if showsTrash { return "Trash" }
         #if os(iOS)
         // The app name repeats the window identity and crowds a split sidebar.
         if !isCompact { return "" }
@@ -46,10 +47,22 @@ struct NotebookSidebar: View {
         #endif
     }
 
+    private var showsTrash: Bool { scene.showingTrash && scene.showsTrashInSidebar }
+
     var body: some View {
             ZStack {
                 Group {
-                    if isCompact && scene.isLibraryEmpty {
+                    if showsTrash {
+                        NotebookTrashView(
+                            replica: scene.replica,
+                            beforeMutation: scene.flushEditor,
+                            onMutation: scene.trashDidChange,
+                            onOpenNote: scene.openNoteFromTrash,
+                            onClose: { scene.showingTrash = false },
+                            openNoteID: scene.selectedID,
+                            afterMutation: { scene.editorNavigation.resumeEditing?() }
+                        )
+                    } else if isCompact && scene.isLibraryEmpty {
                         NotebookEmptyLibraryView(scene: scene)
                             .disabled(scene.busy)
                     } else {
@@ -75,9 +88,9 @@ struct NotebookSidebar: View {
                 if !isCompact { NotebookSidebarDivider() }
             }
             #endif
-            .searchable(text: Bindable(search).query, isPresented: Bindable(search).isPresented,
-                        placement: .toolbar, prompt: "Search all notes")
-            .searchFocused(focus.search)
+            // Search covers notes outside Trash, so it steps aside there.
+            .modifier(NotebookSidebarSearch(search: search, focus: focus.search,
+                                            isEnabled: !showsTrash))
             #if os(macOS)
             .scrollIndicators(.automatic)
             #endif
@@ -86,17 +99,22 @@ struct NotebookSidebar: View {
             }
             .overlay(alignment: .bottom) {
                 if !isCompact && !search.isPresented && !scene.showsSelectionControls
-                    && !scene.browsingAllRecents {
+                    && !scene.browsingAllRecents && !showsTrash {
                     NotebookSidebarControls(
                         busy: scene.busy,
                         showSettings: { scene.openSettings() },
                         showTrash: { scene.openTrash() }
                     )
+                    // Stay at the bottom under the keyboard instead of
+                    // floating over the Files rows while typing.
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
                 }
             }
             .navigationTitle(sidebarTitle)
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
+            // The split sidebar has no title. A large mode there leaves an
+            // empty title row once search ends, pushing the field down.
+            .navigationBarTitleDisplayMode(isCompact ? .large : .inline)
             #endif
             #if os(iOS)
             // Frees room for Done next to Deselect All. Applied after the
@@ -245,12 +263,6 @@ struct NotebookSidebar: View {
 
     private var applicationMenu: some View {
         Menu {
-            if supportsMultipleWindows {
-                Button("New Window", systemImage: "macwindow.badge.plus") {
-                    openWindow(id: "notebook", value: NotebookWindowValue())
-                }
-                Divider()
-            }
             Button {
                 scene.createItem(kind: .folder, parentID: nil)
             } label: {
@@ -270,6 +282,13 @@ struct NotebookSidebar: View {
             .accessibilityIdentifier("notebook-import-browser")
             Divider()
             browserUndoActions
+            // Window management comes after the everyday notebook actions.
+            if supportsMultipleWindows {
+                Divider()
+                Button("New Window", systemImage: "macwindow.badge.plus") {
+                    openWindow(id: "notebook", value: NotebookWindowValue())
+                }
+            }
             if isCompact {
                 Button { scene.openSettings() } label: {
                     Label("Settings", systemImage: "gearshape")
@@ -344,10 +363,7 @@ private struct NotebookLibraryBrowser: View {
                 compactCount: scene.navigationState.recentNoteIDs.count,
                 selectedNoteID: scene.selectedID,
                 isExpanded: Bindable(scene).browsingAllRecents,
-                onSelect: { id in
-                    guard id != scene.selectedID else { return }
-                    scene.perform { try await scene.selectNote(id) }
-                },
+                onSelect: { id in scene.openFromRecents(id) },
                 onCollapse: collapseMacRecents,
                 onVisibleIDs: { scene.visibleRecentPreviewIDs = $0 },
                 rowContent: { placement, index, count in
@@ -645,7 +661,10 @@ private struct NotebookLibraryBrowser: View {
                     .tag(row.id)
                     .id(row.id)
                     .listRowSeparator(.hidden)
-                    .listRowBackground(rowBackground(for: row.id))
+                    .modifier(NotebookFileRowBackground(
+                        color: rowBackground(for: row.id),
+                        insetHighlight: insetRowHighlight(for: row.id)
+                    ))
                     .listRowInsets(sidebarSectionInsets)
             case .ghost(let placement, let parentID, let depth):
                 NotebookGhostRow(scene: scene, placement: placement, parentID: parentID, depth: depth)
@@ -660,19 +679,28 @@ private struct NotebookLibraryBrowser: View {
     /// A custom background also hides the native selected fill.
     private func rowBackground(for id: UUID) -> Color? {
         switch scene.browserSelection.highlight(of: id, openNoteID: scene.selectedID) {
-        case .selected:
-            #if os(iOS)
-            // On iPad a row that drops its custom background for the native
-            // fill keeps showing the first custom background it gets back,
-            // such as the open note's gray. The sidebar's native fill is the
-            // tint, so paint that; compact width shows no open note.
-            if !isCompact { return palette.accentColor ?? .accentColor }
-            #endif
-            return nil
+        case .selected: return nil
         // While picking items, gray would read as a selection the circle denies.
         case .open: return scene.selectingItems ? .clear : NotebookSidebarPalette.openNote
         case .none: return .clear
         }
+    }
+
+    /// The iPad sidebar paints every row, selected or not, as one rounded
+    /// fill. A row that drops its custom background for the native fill
+    /// would keep showing the first custom background it gets back.
+    private func insetRowHighlight(for id: UUID) -> Color? {
+        #if os(iOS)
+        guard !isCompact else { return nil }
+        switch scene.browserSelection.highlight(of: id, openNoteID: scene.selectedID) {
+        // The sidebar's native selected fill is the tint.
+        case .selected: return palette.accentColor ?? .accentColor
+        case .open: return scene.selectingItems ? .clear : NotebookSidebarPalette.openNote
+        case .none: return .clear
+        }
+        #else
+        return nil
+        #endif
     }
 
     @ViewBuilder
@@ -965,9 +993,7 @@ private struct NotebookRecentNoteRow: View {
         let replica = scene.replica
         let isCurrent = showsCurrentNote && scene.selectedID == id
         let row = Button {
-            scene.perform {
-                try await scene.selectNote(id)
-            }
+            scene.openFromRecents(id)
         } label: {
             NotebookRecentRow(
                 title: NotebookNoteName.title(from: placement.displayName),
@@ -1485,7 +1511,15 @@ private struct NotebookTemplateCreationButton: View {
 
     var body: some View {
         Button(action: scene.showTemplates) {
-            Label("New from Template…", systemImage: "doc.on.doc")
+            Label {
+                Text("New from Template…")
+                // Disabled without a hint, it looked broken.
+                if scene.replica.templates.isEmpty {
+                    Text("First use a note as a template")
+                }
+            } icon: {
+                Image(systemName: "doc.on.doc")
+            }
         }
         .disabled(scene.busy || scene.replica.templates.isEmpty)
         .accessibilityIdentifier("notebook-new-from-template")
@@ -1504,6 +1538,37 @@ private struct NotebookEmptySpaceActions: View {
             scene.createItem(kind: .folder, parentID: nil)
         }
             .disabled(scene.busy)
+    }
+}
+
+private struct NotebookSidebarSearch: ViewModifier {
+    let search: NotebookSearchState
+    let focus: FocusState<Bool>.Binding
+    let isEnabled: Bool
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content
+                .searchable(text: Bindable(search).query,
+                            isPresented: Bindable(search).isPresented,
+                            placement: .toolbar, prompt: "Search all notes")
+                .searchFocused(focus)
+        } else {
+            content
+        }
+    }
+}
+
+private struct NotebookFileRowBackground: ViewModifier {
+    let color: Color?
+    let insetHighlight: Color?
+
+    func body(content: Content) -> some View {
+        if let insetHighlight {
+            content.listRowBackground(NotebookRowHighlight(color: insetHighlight))
+        } else {
+            content.listRowBackground(color)
+        }
     }
 }
 

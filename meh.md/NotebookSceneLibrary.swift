@@ -207,7 +207,13 @@ extension NotebookSceneState {
         }
         if workspace?.isResetPending == true { return "Restart to finish reset" }
         guard recent.isEditingEnabled else { return "Note unavailable" }
-        let preview = cached ?? NotebookRecentPreview.text(from: recent.text)
+        var preview = cached ?? NotebookRecentPreview.text(from: recent.text)
+        // A new note's cached excerpt is empty until typing pauses. Read its
+        // first words live meanwhile; once the cache has text, rows stop
+        // observing the editor again, so typing doesn't redraw Recents.
+        if preview.isEmpty, cached != nil {
+            preview = NotebookRecentPreview.text(from: recent.text)
+        }
         return preview.isEmpty ? "Empty note" : preview
     }
 
@@ -369,6 +375,7 @@ extension NotebookSceneState {
         if let click = browserScrollView.pendingClick, click.kind != .plain { return }
         #endif
         browserSelection.activate(placement.item.id)
+        navigationState.keepRevealedFolders()
         if placement.item.kind == .folder, editingID == nil {
             toggleFolder(placement.item.id)
             return
@@ -386,6 +393,7 @@ extension NotebookSceneState {
     }
 
     func toggleFolder(_ id: UUID) {
+        navigationState.keepRevealedFolders()
         if expandedIDs.contains(id) {
             expandedIDs.remove(id)
         } else {
@@ -824,7 +832,7 @@ extension NotebookSceneState {
     }
 
     func openNoteFromTrash(_ id: UUID) {
-        showingTrash = false
+        if !showsTrashInSidebar { showingTrash = false }
         perform { [self] in try await selectNote(id) }
     }
 
@@ -873,10 +881,31 @@ extension NotebookSceneState {
     // MARK: Revealing
 
     func reveal(_ id: UUID) {
+        navigationState.keepRevealedFolders()
+        expandedIDs.formUnion(ancestors(of: id))
+    }
+
+    private func ancestors(of id: UUID) -> [UUID] {
+        var result: [UUID] = []
         var next = replica.placements.first { $0.item.id == id }
         while let parentID = next?.parentID {
-            expandedIDs.insert(parentID)
+            result.append(parentID)
             next = replica.placements.first { $0.item.id == parentID }
+        }
+        return result
+    }
+
+    /// Opens a note picked in Recents. Beside the editor, Files also shows
+    /// where it lives, folding back what the previous pick opened.
+    func openFromRecents(_ id: UUID) {
+        // Picking the open note again still selects it, which also ends a
+        // search visit, but leaves Files as it is.
+        let isReselection = !isCompact && id == selectedID
+        perform { [self] in
+            try await selectNote(id)
+            guard !isCompact, !isReselection, selectedID == id else { return }
+            navigationState.isTreeExpanded = true
+            navigationState.revealFromRecents(ancestors: ancestors(of: id))
         }
     }
 

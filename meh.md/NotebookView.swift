@@ -110,10 +110,13 @@ private struct NotebookNavigationContainer: View {
     let isCompact: Bool
 
     var body: some View {
-        NavigationSplitView(preferredCompactColumn: Binding(
-            get: { scene.preferredCompactColumn },
-            set: { scene.setPreferredCompactColumn($0, isCompact: isCompact) }
-        )) {
+        NavigationSplitView(
+            columnVisibility: Bindable(scene).columnVisibility,
+            preferredCompactColumn: Binding(
+                get: { scene.preferredCompactColumn },
+                set: { scene.setPreferredCompactColumn($0, isCompact: isCompact) }
+            )
+        ) {
             NotebookSidebar(scene: scene, focus: focus, isCompact: isCompact)
         } detail: {
             Group {
@@ -289,6 +292,11 @@ private struct NotebookSearchNavigation: ViewModifier {
         }
         .focusedSceneValue(\.notebookSearch, scene.search)
         .focusedSceneValue(\.notebookRecentCommands, scene.recentCommands)
+        .onChange(of: scene.search.isPresented) { _, presented in
+            // Beside the editor, the note stays in view after search ends;
+            // its match mark shouldn't outlive the search.
+            if !presented, !scene.isCompact { scene.editorNavigation.clearSearchMark?() }
+        }
         #if os(iOS)
         .onChange(of: scene.canGoBack, initial: true) { _, available in
             scene.search.canGoBack = available
@@ -304,8 +312,12 @@ private struct NotebookSearchNavigation: ViewModifier {
                 scene.recentCommands.errorMessage = nil
             }
         }
-        #if os(macOS)
         .modifier(NotebookMenuNavigation(scene: scene))
+        #if os(macOS)
+        .focusedSceneValue(
+            \.notebookEditor,
+            scene.session?.isEditingEnabled == true ? scene.editorNavigation : nil
+        )
         #endif
         .task(id: scene.searchTaskID) { await scene.refreshSearch() }
         .onChange(of: scene.search.quickOpenRequest) { _, _ in scene.showQuickOpen() }
@@ -326,8 +338,7 @@ private struct NotebookSearchNavigation: ViewModifier {
     }
 }
 
-#if os(macOS)
-/// Handles the Mac menu bar's notebook commands.
+/// Handles the menu bar's notebook commands.
 private struct NotebookMenuNavigation: ViewModifier {
     let scene: NotebookSceneState
     @Environment(\.openWindow) private var openWindow
@@ -336,19 +347,23 @@ private struct NotebookMenuNavigation: ViewModifier {
     func body(content: Content) -> some View {
         let menu = scene.menu
         content
+        #if os(macOS)
         .onChange(of: scene.hasMoreRecents, initial: true) { _, available in
             scene.recentCommands.canBrowseAll = available
         }
         .onChange(of: scene.browsingAllRecents) { _, expanded in
             scene.recentCommands.isBrowsingAll = expanded
         }
+        #endif
         .focusedSceneValue(\.notebookMenu, menu)
         .onChange(of: scene.menuAvailable, initial: true) { _, available in
             menu.isAvailable = available
         }
+        #if os(macOS)
         .onChange(of: scene.canManageMenuSelection, initial: true) { _, available in
             menu.canManageSelection = available
         }
+        #endif
         .onChange(of: scene.isLibraryEmpty, initial: true) { _, empty in
             menu.canExport = !empty
         }
@@ -371,6 +386,7 @@ private struct NotebookMenuNavigation: ViewModifier {
             guard scene.menuAvailable, !scene.isLibraryEmpty else { return }
             scene.showingExport = true
         }
+        #if os(macOS)
         .onChange(of: menu.moveRequest) { _, _ in
             guard scene.canManageMenuSelection else { return }
             scene.beginMoving(scene.selectedBrowserIDs)
@@ -379,13 +395,13 @@ private struct NotebookMenuNavigation: ViewModifier {
             guard scene.canManageMenuSelection else { return }
             scene.trashItems(scene.selectedBrowserIDs)
         }
+        #endif
         .onChange(of: menu.newNoteRequest) { _, _ in
             guard scene.menuAvailable else { return }
             scene.createDefaultNote()
         }
     }
 }
-#endif
 
 /// The scene's sheets, dialogs, and lifecycle work.
 private struct NotebookScenePresentation: ViewModifier {
@@ -502,13 +518,22 @@ private struct NotebookScenePresentation: ViewModifier {
             Button("Import Folder…") { scene.showImport(choosingFolder: true) }
                 .accessibilityIdentifier("notebook-import-folder")
         }
-        .sheet(isPresented: $scene.showingTrash, onDismiss: scene.finishTemplatePresentation) {
+        // Sidebar Trash has no sheet to dismiss, so its closing finishes
+        // what waited for it, such as a template quick action or an import.
+        .onChange(of: scene.showingTrash) { _, showing in
+            if !showing, scene.showsTrashInSidebar { scene.finishTemplatePresentation() }
+        }
+        .sheet(isPresented: Binding(
+            get: { scene.showingTrash && !scene.showsTrashInSidebar },
+            set: { if !$0 { scene.showingTrash = false } }
+        ), onDismiss: scene.finishTemplatePresentation) {
             NavigationStack {
                 NotebookTrashView(
                     replica: scene.replica,
                     beforeMutation: scene.flushEditor,
                     onMutation: scene.trashDidChange,
-                    onOpenNote: scene.openNoteFromTrash
+                    onOpenNote: scene.openNoteFromTrash,
+                    afterMutation: { scene.editorNavigation.resumeEditing?() }
                 )
             }
             #if os(macOS)
@@ -546,6 +571,8 @@ private struct NotebookScenePresentation: ViewModifier {
                                  beforeExport: scene.flushEditor,
                                  onOpenNote: scene.openReusableSource,
                                  initialRoute: scene.settingsRoute)
+                // A form sheet needed three screens of scrolling on iPad.
+                .presentationSizing(.page)
         }
         #endif
         .sheet(item: $scene.sharedImport, onDismiss: scene.finishSharedImport) { request in

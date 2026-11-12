@@ -39,7 +39,7 @@ runs.
 The writing case preserves the original UTF-8 prefix and save-status checks
 from the old persistence case, and adds native formatting/undo.
 
-The UI plans select 26 iPhone cases, 14 on iPad and 7 entries on Mac, where
+The UI plans select 26 iPhone cases, 15 entries on iPad and 8 on Mac, where
 `MacFormattingUITests` runs as a whole class. The plans in `TestPlans/` are the
 source of truth for this selection.
 Eleven obsolete UI methods are removed from the iOS test source inventory.

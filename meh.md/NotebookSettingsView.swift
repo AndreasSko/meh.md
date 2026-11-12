@@ -600,6 +600,15 @@ private struct NotebookTextSizeSettings: View {
                 .accessibilityValue("\(size) points")
                 .accessibilityIdentifier("editor-font-size")
             }
+            // The sheet covers the note, so show the choice here.
+            Section("Preview") {
+                Text("Four days, no plans before ten. Pack light.")
+                    .font(Font(MarkdownPresentation.bodyFont(
+                        for: family.wrappedValue, pointSize: CGFloat(size)
+                    )))
+                    .padding(.vertical, 4)
+                    .accessibilityIdentifier("editor-font-preview")
+            }
             Section {
                 Button("Reset to Defaults") {
                     fontFamilyRaw = EditorFontFamily.system.rawValue

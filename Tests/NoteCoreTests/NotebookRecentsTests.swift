@@ -264,7 +264,8 @@ final class NotebookRecentsTests: XCTestCase {
         try await replica.setTrashed(ids[3], true)
         XCTAssertFalse(replica.allRecentNotes.contains { $0.id == ids[3] })
         try await replica.setTrashed(ids[3], false)
-        XCTAssertFalse(replica.allRecentNotes.contains { $0.id == ids[3] })
+        // Restoring counts as activity, so the note leads the unpinned notes.
+        XCTAssertEqual(replica.allRecentNotes[1].id, ids[3])
         let reloaded = NotebookReplica(directory: directory)
         try await reloaded.load()
         XCTAssertEqual(reloaded.allRecentNotes, replica.allRecentNotes)

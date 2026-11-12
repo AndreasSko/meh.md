@@ -13,6 +13,13 @@ struct NotebookTrashView: View {
     let beforeMutation: () async throws -> Void
     let onMutation: () -> Void
     let onOpenNote: (UUID) -> Void
+    /// Closes Trash where it isn't a sheet, as in the iPad sidebar.
+    var onClose: (() -> Void)? = nil
+    /// The note open beside Trash in the iPad sidebar, marked in the list.
+    var openNoteID: UUID? = nil
+    /// Runs after each change, failed or not. `beforeMutation` leaves the
+    /// open note read-only, as the scene's own actions do.
+    var afterMutation: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
     @State private var expandedFolderIDs: Set<UUID> = []
@@ -45,7 +52,10 @@ struct NotebookTrashView: View {
                         delete: { preparePermanentDeletion(rootID: row.id) }
                     )
                     .tag(row.id)
-                    .listRowBackground(Color.clear)
+                    .listRowBackground(
+                        NotebookRowHighlight(color: !selectingItems && row.id == openNoteID
+                                             ? NotebookSidebarPalette.openNote : .clear)
+                    )
                     .listSectionSeparator(.hidden, edges: .top)
                 }
                 .listStyle(.inset)
@@ -83,54 +93,14 @@ struct NotebookTrashView: View {
             if trashRows.isEmpty { selectingItems = false }
         }
         .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Done") {
-                    if selectingItems {
-                        selectingItems = false
-                        selectedIDs.removeAll()
-                    } else {
-                        dismiss()
-                    }
-                }
-                .disabled(busy)
-                .accessibilityIdentifier(selectingItems
-                    ? "notebook-trash-done-selection" : "notebook-trash-close")
-            }
-            ToolbarItem(placement: .cancellationAction) {
-                if selectingItems {
-                    selectAllButton
-                } else if !trashRows.isEmpty {
-                    Button("Empty Trash…", role: .destructive) {
-                        preparePermanentDeletion(rootID: nil)
-                    }
-                    .disabled(busy || trashRows.isEmpty)
-                    .accessibilityIdentifier("notebook-empty-trash")
-                }
-            }
             #if os(iOS)
-            if !selectingItems, !trashRows.isEmpty {
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Select") { selectingItems = true }
-                        .disabled(busy || trashRows.isEmpty)
-                        .accessibilityIdentifier("notebook-trash-select")
-                }
-            }
-            if selectingItems {
-                ToolbarItemGroup(placement: .bottomBar) {
-                    restoreButton
-                    Spacer()
-                    deleteButton
-                }
-                ToolbarItem(placement: .status) { selectionCount }
-                    .sharedBackgroundVisibility(.hidden)
+            if let onClose, !selectingItems {
+                sidebarToolbar(close: onClose)
+            } else {
+                sheetToolbar
             }
             #else
-            ToolbarItemGroup(placement: .automatic) {
-                restoreButton
-                deleteButton
-            }
-            ToolbarItem(placement: .status) { selectionCount }
-                .sharedBackgroundVisibility(.hidden)
+            sheetToolbar
             #endif
         }
         .sheet(
@@ -187,6 +157,95 @@ struct NotebookTrashView: View {
     private var nativeSelection: Binding<Set<UUID>>? {
         usesNativeSelection ? $selectedIDs : nil
     }
+
+    @ToolbarContentBuilder
+    private var sheetToolbar: some ToolbarContent {
+        ToolbarItem(placement: .confirmationAction) {
+            Button("Done") {
+                if selectingItems {
+                    selectingItems = false
+                    selectedIDs.removeAll()
+                } else if let onClose {
+                    onClose()
+                } else {
+                    dismiss()
+                }
+            }
+            .disabled(busy)
+            .accessibilityIdentifier(selectingItems
+                ? "notebook-trash-done-selection" : "notebook-trash-close")
+        }
+        ToolbarItem(placement: .cancellationAction) {
+            if selectingItems {
+                selectAllButton
+            } else if !trashRows.isEmpty {
+                Button("Empty Trash…", role: .destructive) {
+                    preparePermanentDeletion(rootID: nil)
+                }
+                .disabled(busy || trashRows.isEmpty)
+                .accessibilityIdentifier("notebook-empty-trash")
+            }
+        }
+        #if os(iOS)
+        if !selectingItems, !trashRows.isEmpty {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Select") { selectingItems = true }
+                    .disabled(busy || trashRows.isEmpty)
+                    .accessibilityIdentifier("notebook-trash-select")
+            }
+        }
+        if selectingItems {
+            ToolbarItemGroup(placement: .bottomBar) {
+                restoreButton
+                Spacer()
+                deleteButton
+            }
+            ToolbarItem(placement: .status) { selectionCount }
+                .sharedBackgroundVisibility(.hidden)
+        }
+        #else
+        ToolbarItemGroup(placement: .automatic) {
+            restoreButton
+            deleteButton
+        }
+        ToolbarItem(placement: .status) { selectionCount }
+            .sharedBackgroundVisibility(.hidden)
+        #endif
+    }
+
+    #if os(iOS)
+    /// In the iPad sidebar Trash replaces Files, so the way back leads,
+    /// the title says where you are and the rest waits in a menu.
+    @ToolbarContentBuilder
+    private func sidebarToolbar(close: @escaping () -> Void) -> some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button(action: close) {
+                Label("Files", systemImage: "chevron.backward")
+            }
+            .disabled(busy)
+            .accessibilityIdentifier("notebook-trash-close")
+        }
+        if !trashRows.isEmpty {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button("Select", systemImage: "checkmark.circle") {
+                        selectingItems = true
+                    }
+                    .accessibilityIdentifier("notebook-trash-select")
+                    Divider()
+                    Button("Empty Trash…", systemImage: "trash", role: .destructive) {
+                        preparePermanentDeletion(rootID: nil)
+                    }
+                    .accessibilityIdentifier("notebook-empty-trash")
+                } label: {
+                    Label("Trash Actions", systemImage: "ellipsis")
+                }
+                .disabled(busy)
+                .accessibilityIdentifier("notebook-trash-actions")
+            }
+        }
+    }
+    #endif
 
     private var selectAllButton: some View {
         Button("Select All") {
@@ -362,7 +421,10 @@ struct NotebookTrashView: View {
         guard !busy else { return }
         busy = true
         Task { @MainActor in
-            defer { busy = false }
+            defer {
+                busy = false
+                afterMutation()
+            }
             do {
                 try await operation()
             } catch {

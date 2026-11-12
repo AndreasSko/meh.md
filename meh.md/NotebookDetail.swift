@@ -12,6 +12,7 @@ private struct EditorAttachmentID: Hashable {
 struct NotebookDetail: View {
     @Bindable var scene: NotebookSceneState
     let isCompact: Bool
+    @Environment(\.mehPalette) private var palette
     @AppStorage("editor.fontSize", store: NotebookEditorPreferences.store)
     private var editorFontSize = 17.0
     @AppStorage("editor.fontFamily", store: NotebookEditorPreferences.store)
@@ -224,6 +225,16 @@ struct NotebookDetail: View {
                         if let message = scene.navigationState.restorationMessage {
                             Text(message)
                         }
+                    } actions: {
+                        // The highlighter marks the main action, as on the
+                        // New Note button in the sidebar.
+                        Button("New Note") { scene.createDefaultNote() }
+                            .buttonStyle(.borderedProminent)
+                            .buttonBorderShape(.capsule)
+                            .tint(palette.highlighterColor)
+                            .foregroundStyle(MehStyle.onHighlighterColor)
+                            .disabled(scene.busy)
+                            .accessibilityIdentifier("notebook-empty-detail-new-note")
                     }
                 }
             }
@@ -284,7 +295,9 @@ struct NotebookDetail: View {
         #endif
         if let placement = scene.selectedPlacement, scene.historyBrowser == nil {
             #if os(iOS)
-            if isCompact {
+            // iPhone, and iPad with Files hidden, would otherwise have no
+            // way to start a note without a keyboard.
+            if isCompact || scene.columnVisibility == .detailOnly {
                 ToolbarItem {
                     NotebookLibraryNewNote(scene: scene)
                 }

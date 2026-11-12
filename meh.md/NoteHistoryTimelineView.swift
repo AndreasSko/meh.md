@@ -73,7 +73,8 @@ struct NoteHistoryTimelineView: View {
                     rail(width: geometry.size.width)
                 }
                 .frame(height: Self.height)
-                .frame(maxWidth: 560)
+                // Room for more days on iPad and Mac; iPhone is narrower.
+                .frame(maxWidth: 760)
                 // With only a version or two and no finer steps, there is
                 // nothing to scrub.
                 .popoverTip(

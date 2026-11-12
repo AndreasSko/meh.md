@@ -1170,7 +1170,9 @@ struct EditorKeyboardToolbar: View {
                 action()
             }
         }
-        .frame(maxWidth: 520)
+        // iPad shows every command when the editor column has room; the
+        // bar still never reaches past the column (see alignWithEditor).
+        .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? .infinity : 520)
         .frame(height: 50)
         .background {
             Capsule().fill(.clear).glassEffect(.regular, in: .capsule)
@@ -1302,7 +1304,9 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
             // glass, so the cue matches whatever is behind the toolbar.
             let bounds = collectionView.bounds
             let maximumOffset = collectionView.contentSize.width - bounds.width
-            let fade = min(24 / max(bounds.width, 1), 0.5)
+            // About one button wide, so a half-visible command fades out
+            // instead of reading as a stray glyph.
+            let fade = min(40 / max(bounds.width, 1), 0.5)
             let opaque = UIColor.black.cgColor
             let clear = UIColor.clear.cgColor
             CATransaction.begin()

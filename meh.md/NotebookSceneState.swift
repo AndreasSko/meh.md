@@ -21,9 +21,10 @@ final class NotebookSceneState {
     let sceneID: UUID
     let navigationState: NotebookNavigationState
     let recentCommands: NotebookRecentCommandState
-    #if os(macOS)
     let menu = NotebookMenuState()
-    #endif
+    /// Whether the split view shows Files. The editor offers New Note
+    /// itself while Files is hidden.
+    var columnVisibility: NavigationSplitViewVisibility = .all
 
     // MARK: Scene
 
@@ -59,6 +60,15 @@ final class NotebookSceneState {
     var pendingPresentedItemID: UUID?
     var pendingPresentedItemIsNew = false
     var showingTrash = false
+    /// iPad shows Trash in the sidebar, so a trashed note can open beside
+    /// it. iPhone and the Mac show it as a sheet.
+    var showsTrashInSidebar: Bool {
+        #if os(iOS)
+        !isCompact
+        #else
+        false
+        #endif
+    }
     var showingTextSize = false
     var sharedFile: NotebookSharedFile?
     var deletionSelection: NotebookDeletionSelection?
@@ -186,9 +196,8 @@ final class NotebookSceneState {
         }
     }
 
-    #if os(macOS)
     var menuAvailable: Bool {
-        !busy && !search.showingQuickOpen && !showingSettings
+        !busy && !search.showingQuickOpen && !showingSettings && !showingTemplates
             && !showingTrash && !showingImport && !showingExport
             && !choosingImportSource && !showingTextSize
             && movingIDs.isEmpty && deletionSelection == nil
@@ -198,6 +207,7 @@ final class NotebookSceneState {
             && workspace?.isResetPending != true
     }
 
+    #if os(macOS)
     var canManageMenuSelection: Bool {
         menuAvailable && browserFocused && editingID == nil
             && detailEditingID == nil && !search.isPresented

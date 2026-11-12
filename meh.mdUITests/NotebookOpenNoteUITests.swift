@@ -215,11 +215,12 @@ final class NotebookOpenNoteUITests: XCTestCase {
     }
 
     #if os(iOS)
-    /// The color of a row's background at its trailing end, past its title.
+    /// The color of a row's background at its trailing end, past its title
+    /// and inside the rounded mark, which leaves 8 points at each side.
     private func fill(of row: XCUIElement) -> [UInt8] {
         let screenshot = row.screenshot()
         guard let image = screenshot.image.cgImage else { return [] }
-        let x = CGFloat(image.width) - 4 * screenshot.image.scale
+        let x = CGFloat(image.width) - 16 * screenshot.image.scale
         let y = CGFloat(image.height) / 2
         var pixel = [UInt8](repeating: 0, count: 4)
         pixel.withUnsafeMutableBytes { bytes in

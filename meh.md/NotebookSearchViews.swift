@@ -74,8 +74,13 @@ struct NotebookSearchResults: View {
                         .padding(.vertical, 14)
                         .padding(.horizontal, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(selection == result.id ? Color.primary.opacity(0.08) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 8))
+                        .background {
+                            if selection == result.id {
+                                NotebookRowHighlight(
+                                    color: NotebookSidebarPalette.openNote, inset: 0
+                                )
+                            }
+                        }
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -114,9 +119,11 @@ struct NotebookSearchRow: View {
             if !result.path.isEmpty {
                 Text(result.path).font(.caption).foregroundStyle(.secondary)
             }
+            // The snippet starts just before the match, so two lines keep it
+            // in view while long notes don't turn into walls of text.
             Text(highlight(result.excerpt, range: result.excerptMatchRange))
                 .font(.subheadline).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(2)
         }
     }
 

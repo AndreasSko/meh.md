@@ -198,9 +198,9 @@ public struct NotebookSearchResult: Equatable, Sendable {
         cutBefore: Bool,
         cutAfter: Bool
     ) -> (text: String, matchRange: NSRange) {
-        let context = 70
-        let proposedStart = max(0, match.location - context)
-        let proposedEnd = min(source.length, NSMaxRange(match) + context)
+        // Little context before the match, so it shows in a two-line row.
+        let proposedStart = max(0, match.location - 30)
+        let proposedEnd = min(source.length, NSMaxRange(match) + 110)
         let range = source.rangeOfComposedCharacterSequences(
             for: NSRange(
                 location: proposedStart,

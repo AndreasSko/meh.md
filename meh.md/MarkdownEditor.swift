@@ -44,6 +44,8 @@ final class MarkdownEditorNavigation {
     var hasLinkCompletion = false
     var completionCommand: ((String) -> Bool)?
     var revealSearchMatch: ((NSRange) -> Void)?
+    /// Removes the mark a search result left on the matched text.
+    var clearSearchMark: (() -> Void)?
     var searchLandingPosition: MarkdownEditorPosition?
     var capturePosition: (() -> MarkdownEditorPosition?)?
     var restorePosition: ((MarkdownEditorPosition) -> Void)?
@@ -815,6 +817,8 @@ final class MarkdownTextView: NSTextView {
         case ("h", [.command, .shift]): command = .heading
         case ("c", [.command, .shift]): command = .inlineCode
         case ("t", [.command, .shift]): command = .toggleTask
+        case ("x", [.command, .shift]): command = .strikethrough
+        case ("e", [.command, .shift]): command = .highlight
         default: command = nil
         }
         if let command, performMarkdownCommand(command) { return true }
@@ -1137,6 +1141,10 @@ struct MarkdownEditor: NSViewRepresentable {
                 let sender = NSMenuItem()
                 sender.tag = NSTextFinder.Action.showFindInterface.rawValue
                 textView.performFindPanelAction(sender)
+            }
+            parent.navigation?.clearSearchMark = { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.clearDestinationHighlight(in: textView)
             }
             parent.navigation?.revealSearchMatch = {
                 [weak self, weak textView] range in
@@ -2178,6 +2186,30 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         // Estimated TextKit extents can leave the caret covered on focus.
         // Reveal the current selection once native keyboard bounds settle.
         scrollRangeToVisible(selection)
+        revealRestOfParagraph(after: selection)
+    }
+
+    /// Live Preview reveals the syntax of the paragraph you tap, which can
+    /// add lines below the caret. Show them too, so they don't end up under
+    /// the formatting bar, unless the paragraph is taller than the space.
+    private func revealRestOfParagraph(after selection: NSRange) {
+        let source = textStorage.string as NSString
+        let paragraph = source.paragraphRange(for: selection)
+        var end = NSMaxRange(paragraph)
+        if end > NSMaxRange(selection), end > 0,
+           source.character(at: end - 1) == 10 {
+            end -= 1
+        }
+        guard end > NSMaxRange(selection),
+              let start = position(from: beginningOfDocument, offset: selection.location),
+              let last = position(from: beginningOfDocument, offset: end) else { return }
+        let top = caretRect(for: start).minY
+        let bottom = caretRect(for: last).maxY
+        // The bottom inset already reserves the keyboard and its bar.
+        let visible = bounds.height - adjustedContentInset.top
+            - adjustedContentInset.bottom
+        guard bottom - top <= visible else { return }
+        scrollRangeToVisible(NSRange(location: end, length: 0))
     }
 
     private func reportWindowAttachmentIfNeeded() {
@@ -2502,18 +2534,26 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     }
 
     override var keyCommands: [UIKeyCommand]? {
-        let commands: [(String, UIKeyModifierFlags, Selector)] = [
-            ("\t", [], #selector(indentMarkdown)),
-            ("\t", .shift, #selector(outdentMarkdown)),
-            ("b", .command, #selector(boldMarkdown)),
-            ("i", .command, #selector(italicMarkdown)),
-            ("k", .command, #selector(linkMarkdown)),
-            ("h", [.command, .shift], #selector(headingMarkdown)),
-            ("c", [.command, .shift], #selector(codeMarkdown)),
-            ("t", [.command, .shift], #selector(toggleTaskMarkdown)),
+        // Titles list the styles while ⌘ is held; the Mac shows the same
+        // shortcuts in its Format menu.
+        let commands: [(String, String, UIKeyModifierFlags, Selector)] = [
+            ("Indent", "\t", [], #selector(indentMarkdown)),
+            ("Outdent", "\t", .shift, #selector(outdentMarkdown)),
+            ("Bold", "b", .command, #selector(boldMarkdown)),
+            ("Italic", "i", .command, #selector(italicMarkdown)),
+            ("Strikethrough", "x", [.command, .shift], #selector(strikethroughMarkdown)),
+            ("Highlight", "e", [.command, .shift], #selector(highlightMarkdown)),
+            ("Inline Code", "c", [.command, .shift], #selector(codeMarkdown)),
+            ("Link", "k", .command, #selector(linkMarkdown)),
+            ("Heading", "h", [.command, .shift], #selector(headingMarkdown)),
+            ("Check or Uncheck Task", "t", [.command, .shift], #selector(toggleTaskMarkdown)),
         ]
-        return linkCompletionKeyCommands + (super.keyCommands ?? []) + commands.map { input, flags, action in
-            let key = UIKeyCommand(input: input, modifierFlags: flags, action: action)
+        return linkCompletionKeyCommands + (super.keyCommands ?? []) + commands.map {
+            title, input, flags, action in
+            // Tab keeps no title: it is typing, not a menu command.
+            let key = input == "\t"
+                ? UIKeyCommand(input: input, modifierFlags: flags, action: action)
+                : UIKeyCommand(title: title, action: action, input: input, modifierFlags: flags)
             key.wantsPriorityOverSystemBehavior = true
             return key
         }
@@ -2530,6 +2570,8 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     }
     @objc private func boldMarkdown() { _ = performMarkdownCommand(.bold) }
     @objc private func italicMarkdown() { _ = performMarkdownCommand(.italic) }
+    @objc private func strikethroughMarkdown() { _ = performMarkdownCommand(.strikethrough) }
+    @objc private func highlightMarkdown() { _ = performMarkdownCommand(.highlight) }
     @objc private func linkMarkdown() { _ = performMarkdownCommand(.link) }
     @objc private func headingMarkdown() { _ = performMarkdownCommand(.heading) }
     @objc private func codeMarkdown() { _ = performMarkdownCommand(.inlineCode) }
@@ -2912,6 +2954,10 @@ struct MarkdownEditor: UIViewRepresentable {
                 textView.findInteraction?.presentFindNavigator(
                     showingReplace: false
                 )
+            }
+            parent.navigation?.clearSearchMark = { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.clearDestinationHighlight(in: textView)
             }
             parent.navigation?.revealSearchMatch = {
                 [weak self, weak textView] range in

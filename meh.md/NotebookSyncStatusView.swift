@@ -388,6 +388,7 @@ private struct NotebookSyncFailureView: View {
                         Button("Try Again") {
                             Task { await workspace.requestSyncFromStatus() }
                         }
+                        .buttonStyle(.bordered)
                         .disabled(workspace.isRefreshing)
                         .accessibilityIdentifier("sync-now")
                     }

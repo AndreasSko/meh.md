@@ -11,7 +11,7 @@ final class MarkdownExcerptTests: XCTestCase {
     func testRemovesCommonMarkdown() {
         XCTAssertEqual(
             plain("## Project update\n\n**Ready** for _review_ with [the team](https://example.com)."),
-            "Project update Ready for review with the team."
+            "Project update · Ready for review with the team."
         )
     }
 
@@ -23,7 +23,7 @@ final class MarkdownExcerptTests: XCTestCase {
             - [ ] Reserve dinner in ==Bairro Alto==
             * [X] See [[Lisbon in May|Lisbon]]
             """),
-            "Bring the Packing list. Book flights Reserve dinner in Bairro Alto See Lisbon"
+            "Bring the Packing list. Book flights · Reserve dinner in Bairro Alto · See Lisbon"
         )
     }
 
@@ -37,7 +37,7 @@ final class MarkdownExcerptTests: XCTestCase {
             | --- | :--- |
             | Thu | Tram 28 |
             """),
-            "Slow down. It's a work holiday. First Second Day What Thu Tram 28"
+            "Slow down. It's a work holiday. First · Second · Day What · Thu Tram 28"
         )
     }
 
@@ -60,7 +60,7 @@ final class MarkdownExcerptTests: XCTestCase {
 
             Run `**not bold**` now.
             """),
-            "Example # literal * punctuation == Run **not bold** now."
+            "Example · # literal * punctuation == · Run **not bold** now."
         )
     }
 
@@ -91,5 +91,24 @@ final class MarkdownExcerptTests: XCTestCase {
         XCTAssertEqual(result.text, "😀 Café needle")
         let range = try XCTUnwrap(result.range)
         XCTAssertEqual((result.text as NSString).substring(with: range), "needle")
+    }
+
+    func testSeparatesLinesUnlessASentenceEnded() throws {
+        XCTAssertEqual(plain("Packing\nPassport\n\nDone.\nShoes"),
+                       "Packing · Passport · Done. Shoes")
+        let source = "- [ ] Tram\n- [ ] Ferry to Cacilhas" as NSString
+        let result = MarkdownExcerpt.plain(source as String, keeping: source.range(of: "Ferry"))
+        XCTAssertEqual(result.text, "Tram · Ferry to Cacilhas")
+        let range = try XCTUnwrap(result.range)
+        XCTAssertEqual((result.text as NSString).substring(with: range), "Ferry")
+    }
+
+    func testKeepsALiteralMiddleDotInTheMatch() throws {
+        let source = "**a·b**" as NSString
+        for needle in ["·b", "·"] {
+            let result = MarkdownExcerpt.plain(source as String, keeping: source.range(of: needle))
+            let range = try XCTUnwrap(result.range)
+            XCTAssertEqual((result.text as NSString).substring(with: range), needle)
+        }
     }
 }
