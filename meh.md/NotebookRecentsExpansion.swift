@@ -38,6 +38,8 @@ struct NotebookRecentsExpansionHost<Browser: View, Row: View>: View {
         GeometryReader { geometry in
             ZStack {
                 browser(isExpanded || isPulling)
+                    // Rows and their selection would show beside the card.
+                    .opacity(isExpanded && !isPulling ? 0 : 1)
                     .scrollDisabled(isExpanded || isPulling)
                     .allowsHitTesting(!isExpanded && !isPulling)
                     .accessibilityHidden(isExpanded || isPulling)
@@ -107,9 +109,18 @@ private struct NotebookRecentsSurface<Row: View>: View {
 
     private var expandedFrame: CGRect {
         let inset = max(16, compactFrame.minX)
+        let available = max(0, availableSize.height - 24)
+        // Fit a short history instead of leaving an empty card. Rows share
+        // one height, so the compact card tells how tall each one is.
+        var height = available
+        if compactCount > 0, compactFrame.height > footerSize {
+            let row = (compactFrame.height - footerSize) / CGFloat(compactCount)
+            let content = headerSize + row * CGFloat(items.count) + footerSize
+            height = min(available, max(compactFrame.height, content))
+        }
         return CGRect(x: inset, y: 12,
                       width: max(0, availableSize.width - inset * 2),
-                      height: max(0, availableSize.height - 24))
+                      height: height)
     }
 
     private var frame: CGRect {

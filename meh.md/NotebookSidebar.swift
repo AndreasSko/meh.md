@@ -92,11 +92,16 @@ struct NotebookSidebar: View {
                         showSettings: { scene.openSettings() },
                         showTrash: { scene.openTrash() }
                     )
+                    // Stay at the bottom under the keyboard instead of
+                    // floating over the Files rows while typing.
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
                 }
             }
             .navigationTitle(sidebarTitle)
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
+            // The split sidebar has no title. A large mode there leaves an
+            // empty title row once search ends, pushing the field down.
+            .navigationBarTitleDisplayMode(isCompact ? .large : .inline)
             #endif
             #if os(iOS)
             // Frees room for Done next to Deselect All. Applied after the
