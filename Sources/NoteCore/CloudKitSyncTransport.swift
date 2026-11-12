@@ -810,7 +810,8 @@ actor CloudKitTransportStateStore {
                 || counts.values.contains { $0 > 1 },
             hasNewSnapshotsSinceLastCleanup: state.lastSnapshotCleanupInboxCount.map {
                 state.inboxPositionCount > $0
-            } ?? true
+            } ?? true,
+            skippedRecordCount: state.unreadableRecordIDs.count
         )
     }
 

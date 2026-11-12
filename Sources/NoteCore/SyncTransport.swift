@@ -188,19 +188,24 @@ public struct SyncSnapshotMaintenanceStatus: Sendable, Equatable {
     public let retainedSnapshotBytes: Int
     public let hasPendingCleanup: Bool
     public let hasNewSnapshotsSinceLastCleanup: Bool
+    /// Stored records this device skipped because it couldn't read them.
+    /// The rest of the notebook syncs; this shows that it happened.
+    public let skippedRecordCount: Int
 
     public init(
         lastSuccessfulCleanup: Date? = nil,
         maximumSnapshotsPerDocument: Int = 0,
         retainedSnapshotBytes: Int = 0,
         hasPendingCleanup: Bool = false,
-        hasNewSnapshotsSinceLastCleanup: Bool = true
+        hasNewSnapshotsSinceLastCleanup: Bool = true,
+        skippedRecordCount: Int = 0
     ) {
         self.lastSuccessfulCleanup = lastSuccessfulCleanup
         self.maximumSnapshotsPerDocument = maximumSnapshotsPerDocument
         self.retainedSnapshotBytes = retainedSnapshotBytes
         self.hasPendingCleanup = hasPendingCleanup
         self.hasNewSnapshotsSinceLastCleanup = hasNewSnapshotsSinceLastCleanup
+        self.skippedRecordCount = skippedRecordCount
     }
 }
 

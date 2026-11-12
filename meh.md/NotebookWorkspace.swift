@@ -166,7 +166,8 @@ final class NotebookWorkspace {
             try? await Task.sleep(for: .milliseconds(300))
             snapshotMaintenanceStatus = SyncSnapshotMaintenanceStatus(
                 lastSuccessfulCleanup: Date(), maximumSnapshotsPerDocument: 1,
-                retainedSnapshotBytes: 0, hasPendingCleanup: false
+                retainedSnapshotBytes: 0, hasPendingCleanup: false,
+                skippedRecordCount: previewSkippedRecordCount
             )
             return
         }
@@ -208,6 +209,13 @@ final class NotebookWorkspace {
                 let currentStatus = try await coordinator.snapshotMaintenanceStatus()
                 try Task.checkCancellation()
                 guard self.transportGeneration == generation else { return }
+                if let skipped = currentStatus?.skippedRecordCount, skipped > 0,
+                   skipped != self.snapshotMaintenanceStatus?.skippedRecordCount {
+                    // The event log keeps only recent events, so a skip
+                    // found long ago still shows up in a shared log.
+                    self.syncEventLog.record(
+                        "skipped unreadable sync records", counts: ["records": skipped])
+                }
                 self.snapshotMaintenanceStatus = currentStatus
                 guard let status = currentStatus else { return }
                 let due = NotebookSnapshotMaintenancePolicy.isDue(status)
@@ -458,6 +466,10 @@ final class NotebookWorkspace {
     private var isPreviewCloudCleanupFixture: Bool {
         isPreview && requestedPreviewFixture == .storageLarge
             && ProcessInfo.processInfo.environment["MEH_STORAGE_CLEANUP_FIXTURE"] == "1"
+    }
+
+    private var previewSkippedRecordCount: Int {
+        Int(ProcessInfo.processInfo.environment["MEH_STORAGE_SKIPPED_RECORDS"] ?? "") ?? 0
     }
 
     private var isPreviewSyncStatusFixture: Bool {
@@ -902,7 +914,8 @@ final class NotebookWorkspace {
             if isPreviewCloudCleanupFixture {
                 snapshotMaintenanceStatus = SyncSnapshotMaintenanceStatus(
                     lastSuccessfulCleanup: nil, maximumSnapshotsPerDocument: 10,
-                    retainedSnapshotBytes: 100, hasPendingCleanup: true
+                    retainedSnapshotBytes: 100, hasPendingCleanup: true,
+                    skippedRecordCount: previewSkippedRecordCount
                 )
             }
             if isPreviewSyncStatusFixture,

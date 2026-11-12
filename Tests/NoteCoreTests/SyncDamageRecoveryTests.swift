@@ -35,6 +35,8 @@ final class SyncDamageRecoveryTests: XCTestCase {
         let received = try await fetchAll(reader)
         XCTAssertEqual(Set(received.map(\.id)), Set(notes.map(\.id) + [catalog.id]))
         XCTAssertEqual(try unreadableRecordIDs("reader"), [damaged])
+        let status = try await reader.snapshotMaintenanceStatus(notebookID: notebookID)
+        XCTAssertEqual(status?.skippedRecordCount, 1)
         let halt = await reader.haltStatus()
         XCTAssertNil(halt)
         // The device still uploads.

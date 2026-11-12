@@ -36,6 +36,10 @@ notes a failed request repeats only its batch, and the rest of the
 exchange goes on. A single record that iCloud refuses for a lasting
 reason stays skipped until the next launch.
 
+Settings › Sync shows how many records this device skipped, when there
+are any, and the sync event log notes the count, so a support request
+can tell that a note is out of date for this reason.
+
 This only works when **every format change raises the gate**: a new note
 schema version, catalog fields that older versions reject, or an
 Automerge upgrade that changes the saved format. A change that skips the

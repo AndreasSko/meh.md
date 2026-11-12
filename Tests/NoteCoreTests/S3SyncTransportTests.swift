@@ -669,6 +669,9 @@ final class S3SyncTransportTests: XCTestCase {
         let page = try await reader.fetch(after: nil)
         XCTAssertEqual(Set(page.records.map(\.id)), [fixture.catalog.id, fixture.notes[1].id])
         XCTAssertFalse(page.hasMore)
+        let status = try await reader.snapshotMaintenanceStatus(
+            notebookID: try XCTUnwrap(fixture.catalog.notebookID))
+        XCTAssertEqual(status?.skippedRecordCount, 1)
 
         // Readable now, as a record from a newer app is after an update.
         server.setObject(intact, bucket: "notes", key: key)

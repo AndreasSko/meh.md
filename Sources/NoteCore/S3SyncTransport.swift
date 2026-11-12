@@ -517,7 +517,8 @@ public actor S3SyncTransport: SyncTransport {
             maximumSnapshotsPerDocument: maximum,
             retainedSnapshotBytes: state.retainedBytes,
             hasPendingCleanup: maximum > 1,
-            hasNewSnapshotsSinceLastCleanup: state.hasNewSnapshots
+            hasNewSnapshotsSinceLastCleanup: state.hasNewSnapshots,
+            skippedRecordCount: state.unreadable.count + state.unreadableLogs.count
         )
     }
 
