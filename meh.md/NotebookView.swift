@@ -292,6 +292,11 @@ private struct NotebookSearchNavigation: ViewModifier {
         }
         .focusedSceneValue(\.notebookSearch, scene.search)
         .focusedSceneValue(\.notebookRecentCommands, scene.recentCommands)
+        .onChange(of: scene.search.isPresented) { _, presented in
+            // Beside the editor, the note stays in view after search ends;
+            // its match mark shouldn't outlive the search.
+            if !presented, !scene.isCompact { scene.editorNavigation.clearSearchMark?() }
+        }
         #if os(iOS)
         .onChange(of: scene.canGoBack, initial: true) { _, available in
             scene.search.canGoBack = available

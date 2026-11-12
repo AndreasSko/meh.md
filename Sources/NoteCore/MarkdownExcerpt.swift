@@ -30,39 +30,54 @@ public enum MarkdownExcerpt {
             lineStart = lineEnd + 1
         }
 
-        // Fold whitespace runs, including line breaks, into single spaces.
-        var lastKeptIsSpace = true
-        for index in source.indices where keep[index] {
-            if isWhitespace(output[index]) {
-                if lastKeptIsSpace {
-                    keep[index] = false
-                } else {
-                    output[index] = space
-                    lastKeptIsSpace = true
-                }
-            } else {
-                lastKeptIsSpace = false
-            }
-        }
-        if let last = source.indices.last(where: { keep[$0] }), output[last] == space {
-            keep[last] = false
-        }
-
+        // Fold whitespace runs into one space. A run that crossed a line
+        // break becomes " · ", so list items and table rows stay apart,
+        // unless the line already ended a sentence.
         var kept: [UInt16] = []
         kept.reserveCapacity(source.count)
         // keptBefore[i]: kept units before source index i.
         var keptBefore = [Int](repeating: 0, count: source.count + 1)
+        // Positions in kept that the folding added, not the source.
+        var added = IndexSet()
+        var pendingSpace = false
+        var pendingBreak = false
         for index in source.indices {
+            guard keep[index] else {
+                keptBefore[index] = kept.count
+                if source[index] == newline { pendingBreak = true; pendingSpace = true }
+                continue
+            }
+            if isWhitespace(output[index]) {
+                keptBefore[index] = kept.count
+                pendingSpace = true
+                if source[index] == newline { pendingBreak = true }
+                continue
+            }
+            if pendingSpace, !kept.isEmpty {
+                let first = kept.count
+                if pendingBreak, let last = kept.last, !endsSentence(last) {
+                    kept.append(contentsOf: lineSeparator)
+                } else {
+                    kept.append(space)
+                }
+                added.insert(integersIn: first..<kept.count)
+            }
+            pendingSpace = false
+            pendingBreak = false
             keptBefore[index] = kept.count
-            if keep[index] { kept.append(output[index]) }
+            kept.append(output[index])
         }
         keptBefore[source.count] = kept.count
 
         let text = String(decoding: kept, as: UTF16.self)
         guard let range, range.location != NSNotFound,
               NSMaxRange(range) <= source.count else { return (text, nil) }
-        let start = keptBefore[range.location]
-        let end = keptBefore[NSMaxRange(range)]
+        var start = keptBefore[range.location]
+        var end = keptBefore[NSMaxRange(range)]
+        // A range that starts or ends in deleted syntax can take in the
+        // separator next to it. A literal "·" in the match stays.
+        while start < end, added.contains(start) { start += 1 }
+        while end > start, added.contains(end - 1) { end -= 1 }
         return (text, end > start ? NSRange(location: start, length: end - start) : nil)
     }
 
@@ -317,6 +332,11 @@ public enum MarkdownExcerpt {
     }
 
     private static let space = UInt16(UInt8(ascii: " "))
+    private static let lineSeparator = Array(" · ".utf16)
+
+    private static func endsSentence(_ unit: UInt16) -> Bool {
+        ".!?:;,".utf16.contains(unit)
+    }
     private static let tab = UInt16(UInt8(ascii: "\t"))
     private static let newline = UInt16(UInt8(ascii: "\n"))
     private static let carriageReturn = UInt16(UInt8(ascii: "\r"))

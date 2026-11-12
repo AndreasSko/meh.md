@@ -52,7 +52,9 @@ final class NotebookSearchTests: XCTestCase {
             .hasSuffix("😀…"))
 
         let snippetText = String(repeating: "a", count: 69) + "😀"
-            + String(repeating: "b", count: 69) + "needle"
+            // The snippet starts 30 characters before the match, which
+            // falls inside the emoji.
+            + String(repeating: "b", count: 29) + "needle"
             + String(repeating: "c", count: 80)
         let snippetCorpus = NotebookSearchCorpus(
             notebookID: UUID(),
@@ -78,12 +80,12 @@ final class NotebookSearchTests: XCTestCase {
         )
 
         let body = try XCTUnwrap(corpus.search("bairro").first)
-        XCTAssertEqual(body.excerpt, "To do Reserve dinner in Bairro Alto Read the list")
+        XCTAssertEqual(body.excerpt, "To do · Reserve dinner in Bairro Alto · Read the list")
         let range = try XCTUnwrap(body.excerptMatchRange)
         XCTAssertEqual((body.excerpt as NSString).substring(with: range), "Bairro")
 
         let title = try XCTUnwrap(corpus.search("lisbon").first)
-        XCTAssertEqual(title.excerpt, "To do Reserve dinner in Bairro Alto Read the list")
+        XCTAssertEqual(title.excerpt, "To do · Reserve dinner in Bairro Alto · Read the list")
     }
 
     func testRepresentativeCorpusFindsBodyPhraseWithTitleFirstOrdering() {

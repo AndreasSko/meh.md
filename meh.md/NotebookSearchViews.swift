@@ -114,9 +114,11 @@ struct NotebookSearchRow: View {
             if !result.path.isEmpty {
                 Text(result.path).font(.caption).foregroundStyle(.secondary)
             }
+            // The snippet starts just before the match, so two lines keep it
+            // in view while long notes don't turn into walls of text.
             Text(highlight(result.excerpt, range: result.excerptMatchRange))
                 .font(.subheadline).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(2)
         }
     }
 

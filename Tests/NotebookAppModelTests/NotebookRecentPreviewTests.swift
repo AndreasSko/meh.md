@@ -11,7 +11,7 @@ final class NotebookRecentPreviewTests: XCTestCase {
 
         XCTAssertEqual(
             NotebookRecentPreview.text(from: source),
-            "Project update Ready for review with the team."
+            "Project update · Ready for review with the team."
         )
     }
 
@@ -28,9 +28,9 @@ final class NotebookRecentPreviewTests: XCTestCase {
         XCTAssertEqual(
             NotebookRecentPreview.text(
                 from: "First\n\n- second item\n- third item",
-                characterLimit: 17
+                characterLimit: 19
             ),
-            "First second item"
+            "First · second item"
         )
     }
 
@@ -56,7 +56,7 @@ final class NotebookRecentPreviewTests: XCTestCase {
 
         XCTAssertEqual(
             NotebookRecentPreview.text(from: source),
-            "Example # literal * punctuation Documentation"
+            "Example · # literal * punctuation · Documentation"
         )
     }
 }

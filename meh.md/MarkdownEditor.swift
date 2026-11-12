@@ -44,6 +44,8 @@ final class MarkdownEditorNavigation {
     var hasLinkCompletion = false
     var completionCommand: ((String) -> Bool)?
     var revealSearchMatch: ((NSRange) -> Void)?
+    /// Removes the mark a search result left on the matched text.
+    var clearSearchMark: (() -> Void)?
     var searchLandingPosition: MarkdownEditorPosition?
     var capturePosition: (() -> MarkdownEditorPosition?)?
     var restorePosition: ((MarkdownEditorPosition) -> Void)?
@@ -1139,6 +1141,10 @@ struct MarkdownEditor: NSViewRepresentable {
                 let sender = NSMenuItem()
                 sender.tag = NSTextFinder.Action.showFindInterface.rawValue
                 textView.performFindPanelAction(sender)
+            }
+            parent.navigation?.clearSearchMark = { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.clearDestinationHighlight(in: textView)
             }
             parent.navigation?.revealSearchMatch = {
                 [weak self, weak textView] range in
@@ -2948,6 +2954,10 @@ struct MarkdownEditor: UIViewRepresentable {
                 textView.findInteraction?.presentFindNavigator(
                     showingReplace: false
                 )
+            }
+            parent.navigation?.clearSearchMark = { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.clearDestinationHighlight(in: textView)
             }
             parent.navigation?.revealSearchMatch = {
                 [weak self, weak textView] range in
