@@ -250,12 +250,6 @@ struct NotebookSidebar: View {
 
     private var applicationMenu: some View {
         Menu {
-            if supportsMultipleWindows {
-                Button("New Window", systemImage: "macwindow.badge.plus") {
-                    openWindow(id: "notebook", value: NotebookWindowValue())
-                }
-                Divider()
-            }
             Button {
                 scene.createItem(kind: .folder, parentID: nil)
             } label: {
@@ -275,6 +269,13 @@ struct NotebookSidebar: View {
             .accessibilityIdentifier("notebook-import-browser")
             Divider()
             browserUndoActions
+            // Window management comes after the everyday notebook actions.
+            if supportsMultipleWindows {
+                Divider()
+                Button("New Window", systemImage: "macwindow.badge.plus") {
+                    openWindow(id: "notebook", value: NotebookWindowValue())
+                }
+            }
             if isCompact {
                 Button { scene.openSettings() } label: {
                     Label("Settings", systemImage: "gearshape")
@@ -1490,7 +1491,15 @@ private struct NotebookTemplateCreationButton: View {
 
     var body: some View {
         Button(action: scene.showTemplates) {
-            Label("New from Template…", systemImage: "doc.on.doc")
+            Label {
+                Text("New from Template…")
+                // Disabled without a hint, it looked broken.
+                if scene.replica.templates.isEmpty {
+                    Text("First use a note as a template")
+                }
+            } icon: {
+                Image(systemName: "doc.on.doc")
+            }
         }
         .disabled(scene.busy || scene.replica.templates.isEmpty)
         .accessibilityIdentifier("notebook-new-from-template")
