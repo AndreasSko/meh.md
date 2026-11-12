@@ -2178,6 +2178,30 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         // Estimated TextKit extents can leave the caret covered on focus.
         // Reveal the current selection once native keyboard bounds settle.
         scrollRangeToVisible(selection)
+        revealRestOfParagraph(after: selection)
+    }
+
+    /// Live Preview reveals the syntax of the paragraph you tap, which can
+    /// add lines below the caret. Show them too, so they don't end up under
+    /// the formatting bar, unless the paragraph is taller than the space.
+    private func revealRestOfParagraph(after selection: NSRange) {
+        let source = textStorage.string as NSString
+        let paragraph = source.paragraphRange(for: selection)
+        var end = NSMaxRange(paragraph)
+        if end > NSMaxRange(selection), end > 0,
+           source.character(at: end - 1) == 10 {
+            end -= 1
+        }
+        guard end > NSMaxRange(selection),
+              let start = position(from: beginningOfDocument, offset: selection.location),
+              let last = position(from: beginningOfDocument, offset: end) else { return }
+        let top = caretRect(for: start).minY
+        let bottom = caretRect(for: last).maxY
+        // The bottom inset already reserves the keyboard and its bar.
+        let visible = bounds.height - adjustedContentInset.top
+            - adjustedContentInset.bottom
+        guard bottom - top <= visible else { return }
+        scrollRangeToVisible(NSRange(location: end, length: 0))
     }
 
     private func reportWindowAttachmentIfNeeded() {
