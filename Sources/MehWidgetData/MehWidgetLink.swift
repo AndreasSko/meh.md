@@ -1,12 +1,15 @@
 import Foundation
 
-/// What tapping a widget asks the app to do. The system hands widget links
-/// to the app that owns the widget, so the scheme needs no registration.
+/// What a widget tap or a link from Shortcuts asks the app to do. Each
+/// build registers its own scheme, so links from the iCloud Dev build
+/// never open the release app.
 public enum MehWidgetLink: Equatable, Sendable {
     case note(UUID)
     case newNote
 
-    public static let scheme = "mehmd"
+    public static let scheme = Bundle.main.object(
+        forInfoDictionaryKey: "MehURLScheme"
+    ) as? String ?? "mehmd"
 
     public var url: URL {
         switch self {

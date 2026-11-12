@@ -62,11 +62,10 @@ folder, and shows "Open meh.md to show this note here." The next time the
 app writes the copy, it includes that note. The file keeps the eight newest
 requests; a widget whose note drops out simply asks again.
 
-Widget links use the `mehmd://note/<UUID>` and `mehmd://new` URLs. The
-system hands widget links to the app that owns the widget, so the scheme is
-not registered with the system. Links go through the same request queue as
-Home Screen quick actions, so they work while the app is starting.
-The window that receives a link handles it; on the Mac, links go to an open
+Widget links use the `mehmd://note/<UUID>` and `mehmd://new` URLs, with the
+build's own scheme (see [Shortcuts](shortcuts.md#links)). Links go through
+the same request queue as Home Screen quick actions, so they work while the
+app is starting. The window that receives a link handles it; on the Mac, links go to an open
 window instead of a new one. Opening a note closes Settings, Trash,
 Templates, Quick Open, Backlinks and search first.
 
@@ -80,6 +79,20 @@ show the release app's notes:
 
 The `MEH_APP_GROUP` build setting sets the group in the entitlements and
 in each Info.plist, where `MehWidgetStore` reads it.
+
+## New Note control
+
+The widget extension also has a New Note control for Control Center, the
+Lock Screen, the Action button and, on the Mac, Control Center and the menu
+bar. It opens the app and starts a new note in the default New Note folder,
+like the app icon's New Note quick action.
+
+The control runs `NewNoteIntent`, which opens the app. To open the app, the
+system needs the intent in both the app and the widget extension, so it
+lives in `meh.mdShared/`, a folder both targets compile. Only the app runs
+it: the app's `openNewNote()` hands the request to the same queue as quick
+actions, and the first ready window takes it. Shortcuts doesn't list the
+intent.
 
 ## Code
 

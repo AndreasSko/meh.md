@@ -323,6 +323,7 @@ final class NotebookWorkspace {
     private var publicationRetryPending = false
     // A notification may launch the process without creating a UI scene.
     private var isForeground = false
+    private var noteCreation: Task<UUID, any Error>?
     @ObservationIgnored private var activeSceneIDs = Set<UUID>()
     @ObservationIgnored private var sceneActivityPhases: [UUID: SceneActivityPhase] = [:]
     private(set) var notificationRegistrationError: String?
@@ -1054,6 +1055,80 @@ final class NotebookWorkspace {
     func contentDidSave(trigger: String = "saved content or catalog update") {
         guard !isResetPending, !isPreview else { return }
         scheduleRefresh(trigger: trigger)
+    }
+
+    /// Adds a note to the default New Note folder without a window, for
+    /// the Create Note shortcut. The system may have launched the app just
+    /// for this, so it opens the notebook first.
+    func createNote(text: String, name: String?) async throws -> UUID {
+        // One at a time, so two quick runs can't pick the same name.
+        let previous = noteCreation
+        let creation = Task {
+            _ = try? await previous?.value
+            return try await addNote(text: text, name: name)
+        }
+        noteCreation = creation
+        let id = try await creation.value
+        let trigger = "note created from Shortcuts"
+        contentDidSave(trigger: trigger)
+        if !isForeground, usesSync, automaticSync { syncCreatedNote(trigger: trigger) }
+        return id
+    }
+
+    /// Without an active window nothing schedules sync, and the system may
+    /// suspend the app as soon as the action returns. Waiting for sync in
+    /// the action could run past its time limit on a slow network, so this
+    /// syncs afterwards and keeps the app running until no refresh is left.
+    private func syncCreatedNote(trigger: String) {
+        #if os(iOS)
+        var lease = UIBackgroundTaskIdentifier.invalid
+        let end = {
+            guard lease != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(lease)
+            lease = .invalid
+        }
+        lease = UIApplication.shared.beginBackgroundTask(
+            withName: "Sync note from Shortcuts", expirationHandler: end)
+        #else
+        let end = {}
+        #endif
+        Task {
+            while isLoading { try? await Task.sleep(for: .milliseconds(50)) }
+            await refresh(trigger: trigger)
+            // A refresh that was already running syncs the note in a
+            // follow-up.
+            while isRefreshing || hasPendingRefresh {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            end()
+        }
+    }
+
+    private func addNote(text: String, name: String?) async throws -> UUID {
+        let replica = try await openedReplica()
+        let parentID = replica.defaultNewNoteParentID
+        let siblingNames = replica.placements.compactMap { placement in
+            placement.parentID == parentID && !placement.isInTrash
+                ? placement.item.name : nil
+        }
+        return try await replica.createNote(
+            name: NotebookNoteName.newFilename(
+                named: name, existingNames: siblingNames),
+            text: text, parentID: parentID
+        )
+    }
+
+    private func openedReplica() async throws -> NotebookReplica {
+        if replica == nil, !isLoading { Task.immediate { await start() } }
+        // `start()` opens the notebook before its first sync, so this
+        // doesn't wait for the network.
+        while true {
+            if let replica { return replica }
+            guard isLoading else {
+                throw NotebookUnavailableError(reason: errorMessage)
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
     }
 
     /// The reset is durable before the current workspace stops accepting work.
@@ -2229,3 +2304,11 @@ struct NotebookCloudUITestScope {
     var directoryComponent: String { "CloudKitUITests/" + runID.uuidString.lowercased() }
 }
 #endif
+
+struct NotebookUnavailableError: LocalizedError {
+    let reason: String?
+
+    var errorDescription: String? {
+        reason ?? "meh.md couldn’t open your notes."
+    }
+}

@@ -82,6 +82,7 @@ let package = Package(
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
                 "NotebookQuickActionRequests.swift",
                 "NotebookWidgetSnapshotWriter.swift",
+                "CreateNoteIntent.swift",
                 "NotebookBackupBackgroundScheduler.swift",
                 "NotebookSettingsView.swift", "NotebookStorageView.swift",
                 "NotebookSyncStorageView.swift",
@@ -195,6 +196,7 @@ let package = Package(
                 "NotebookAppDelegate.swift", "NotebookBackupBackgroundScheduler.swift",
                 "NotebookQuickActionRequests.swift",
                 "NotebookWidgetSnapshotWriter.swift",
+                "CreateNoteIntent.swift",
                 "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",
             ],
             sources: [

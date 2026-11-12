@@ -28,6 +28,9 @@ when publishing from `main`; there is no separate signing rehearsal.
   both platforms. Pushes excluded by the path filter do not cancel a run.
 - Both platforms use the standard `xcode-27` arm64 runner. It is currently a
   public preview. The workflow fails if its selected Xcode is not version 27.
+- Every workflow on that runner selects Xcode 27.2 through `DEVELOPER_DIR`.
+  The image defaults to 27.1, whose `AppIntentsTesting` doesn't load on the
+  iOS 27.2 simulators, so UI tests and shipped builds use the same Xcode.
 - Notebook validation must pass before signing starts. Pushes to `main`
   skip the unsigned Release builds, since the signed archives compile the
   same code.

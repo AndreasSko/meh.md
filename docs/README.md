@@ -53,6 +53,8 @@ and the evidence collected along the way.
   experiment behind a Labs setting.
 - [Widgets](widgets.md): Recents or one note on the Home Screen and the Mac
   desktop, and how the app shares notes with them.
+- [Create Note in Shortcuts](shortcuts.md): add a note from any app, and
+  the links that open it.
 - [Navigation and preview](notebook-navigation-preview.md): app interaction
   and the isolated Debug workspace.
 - [Markdown import](notebook-import-contract.md): source-preserving import.

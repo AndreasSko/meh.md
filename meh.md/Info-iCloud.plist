@@ -4,6 +4,19 @@
 <dict>
 	<key>MehAppGroup</key>
 	<string>$(MEH_APP_GROUP)</string>
+	<key>MehURLScheme</key>
+	<string>$(MEH_URL_SCHEME)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(MEH_URL_SCHEME)</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>meh.md syncs your notes with S3 storage on your local network, such as a MinIO server, when you set it up in Settings › Sync.</string>
 	<key>NSAppTransportSecurity</key>

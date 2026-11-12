@@ -91,6 +91,24 @@ final class NotebookNoteNameTests: XCTestCase {
         )
     }
 
+    func testNewFilenameUsesTheGivenNameOrTheDate() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = calendar.date(
+            from: DateComponents(year: 2026, month: 9, day: 14)
+        )!
+        func filename(_ title: String?, existing: [String] = []) -> String {
+            NotebookNoteName.newFilename(
+                named: title, on: date, existingNames: existing, calendar: calendar)
+        }
+        XCTAssertEqual(filename("Groceries"), "Groceries.md")
+        XCTAssertEqual(filename("  Groceries.MD\n"), "Groceries.md")
+        XCTAssertEqual(filename("Groceries", existing: ["groceries.md"]), "Groceries 2.md")
+        XCTAssertEqual(filename(nil), "2026-09-14.md")
+        XCTAssertEqual(filename(" "), "2026-09-14.md")
+        XCTAssertEqual(filename(".md", existing: ["2026-09-14.md"]), "2026-09-14 2.md")
+    }
+
     func testRestoredFilenameUsesCatalogCollisionRules() {
         XCTAssertEqual(
             NotebookNoteName.restoredFilename(
