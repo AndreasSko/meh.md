@@ -60,7 +60,8 @@ struct NotebookTrashUndoBar: View {
                 HStack(spacing: 12) {
                     message(for: trashed.noteID)
                         .lineLimit(1)
-                    Spacer(minLength: 0)
+                        // A long title gives way; "moved to Trash" stays.
+                        .truncationMode(.middle)
                     Button("Undo", action: scene.undoTrashingOpenNote)
                         .buttonStyle(.borderedProminent)
                         .buttonBorderShape(.capsule)
@@ -73,9 +74,11 @@ struct NotebookTrashUndoBar: View {
                 .foregroundStyle(Self.text)
                 .padding(.leading, 18).padding(.trailing, 7)
                 .frame(minHeight: 44)
-                .frame(maxWidth: 360)
                 .background(Self.fill, in: .capsule)
                 .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
+                // As wide as its message, up to a limit. The capsule comes
+                // first, since a width limit fills all the width offered.
+                .frame(maxWidth: 480)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .gesture(DragGesture(minimumDistance: 10).onEnded { drag in
                     if drag.translation.height > 0 { scene.trashedOpenNote = nil }
