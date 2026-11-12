@@ -690,6 +690,28 @@ final class S3SyncTransportTests: XCTestCase {
         XCTAssertEqual(afterRelaunch.records, [])
     }
 
+    func testReplayFromTheStartDeliversThisDevicesOwnUploads() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let device = transport(server)
+        _ = try await device.bootstrap(proposing: fixture.catalog)
+        let first = try await device.fetch(after: nil)
+        try await device.publishBatch(fixture.notes).error.map { throw $0 }
+        // A later page leaves out what this device just stored.
+        let next = try await device.fetch(after: first.cursor)
+        XCTAssertEqual(next.records, [])
+        // A replay repairs a damaged note from this device's latest upload.
+        let replay = try await device.fetch(after: nil)
+        XCTAssertEqual(
+            Set(replay.records.map(\.id)),
+            Set(([fixture.catalog] + fixture.notes).map(\.id))
+        )
+        // Offered again, it is stored again rather than assumed present.
+        let result = try await device.publishBatch(fixture.notes)
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.acknowledgedIDs, Set(fixture.notes.map(\.id)))
+    }
+
     func testFailedRetryOfAnUnreadableRecordIsTriedAgainWithoutARelaunch() async throws {
         let server = FakeS3Server()
         let fixture = try Fixture()
