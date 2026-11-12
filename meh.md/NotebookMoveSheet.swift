@@ -14,12 +14,18 @@ struct NotebookMoveSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var path: [UUID]
+    @State private var query = ""
+    @State private var isSearching = false
     @State private var isSubmitting = false
     @State private var errorMessage: String?
+    private let startPath: [UUID]
+    private let recentFolders: [NotebookFolderShortcut]
+    private let allowedFolderIDs: Set<UUID>
 
     init(
         placements: [NotebookPlacement], sourceIDs: [UUID],
         initialParentID: UUID?, newNoteFolderID: UUID? = nil,
+        recentFolderIDs: [UUID] = [],
         isDestinationAllowed: @escaping (UUID?) -> Bool,
         isCurrentLocation: @escaping (UUID?) -> Bool = { _ in false },
         onSubmit: @escaping (UUID?) async throws -> Void,
@@ -32,33 +38,53 @@ struct NotebookMoveSheet: View {
         self.isCurrentLocation = isCurrentLocation
         self.onSubmit = onSubmit
         self.onSuccess = onSuccess
-        _path = State(
-            initialValue: Self.initialPath(
-                to: initialParentID,
-                placements: placements,
-                isDestinationAllowed: isDestinationAllowed
-            )
+        let allowed = Set(placements.lazy.filter {
+            $0.item.kind == .folder && !$0.isInTrash
+        }.map(\.item.id).filter { isDestinationAllowed($0) })
+        allowedFolderIDs = allowed
+        recentFolders = NotebookFolderSearch.shortcuts(
+            for: recentFolderIDs, in: placements, isAllowed: allowed.contains)
+        let start = Self.path(
+            to: initialParentID,
+            placements: placements,
+            isDestinationAllowed: isDestinationAllowed
         )
+        startPath = start
+        _path = State(initialValue: start)
     }
 
     var body: some View {
         NavigationStack {
-            NotebookMoveDestinationLevel(
-                folders: childFolders(of: path.last),
-                sourceSummary: sourceSummary,
-                path: displayPath(to: path.last),
-                canGoUp: !path.isEmpty,
-                onOpenFolder: { folderID in
-                    path.append(folderID)
-                    errorMessage = nil
-                },
-                onGoUp: {
-                    _ = path.popLast()
-                    errorMessage = nil
-                },
-                isSubmitting: isSubmitting,
-                errorMessage: errorMessage
-            )
+            Group {
+                if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    NotebookMoveDestinationLevel(
+                        folders: childFolders(of: path.last),
+                        recentFolders: path == startPath ? recentFolders : [],
+                        sourceSummary: sourceSummary,
+                        path: displayPath(to: path.last),
+                        canGoUp: !path.isEmpty,
+                        onOpenFolder: { folderID in
+                            path.append(folderID)
+                            errorMessage = nil
+                        },
+                        onGoUp: {
+                            _ = path.popLast()
+                            errorMessage = nil
+                        },
+                        onOpenShortcut: open,
+                        isSubmitting: isSubmitting,
+                        errorMessage: errorMessage
+                    )
+                } else {
+                    NotebookMoveSearchResults(
+                        folders: NotebookFolderSearch.matches(
+                            query, in: placements, isAllowed: allowedFolderIDs.contains),
+                        query: query,
+                        onOpen: open
+                    )
+                }
+            }
+            .searchable(text: $query, isPresented: $isSearching, prompt: "Find a folder")
             .disabled(isSubmitting)
             .navigationTitle(sourceIDs.count == 1 ? "Move Item" : "Move Items")
             .toolbar {
@@ -68,9 +94,12 @@ struct NotebookMoveSheet: View {
                         .accessibilityIdentifier("notebook-cancel-move")
                 }
                 ToolbarItem(placement: .confirmationAction) {
+                    // While searching, the sheet hides where Move Here
+                    // would go, so pick a result first.
                     Button("Move Here", action: submit)
                         .disabled(isSubmitting || !isDestinationAllowed(path.last)
-                            || isCurrentLocation(path.last))
+                            || isCurrentLocation(path.last)
+                            || !query.trimmingCharacters(in: .whitespaces).isEmpty)
                         .accessibilityIdentifier("notebook-confirm-move")
                 }
             }
@@ -90,11 +119,20 @@ struct NotebookMoveSheet: View {
             ? NotebookNoteName.title(from: placement.displayName) : placement.displayName
     }
 
+    /// Shows a folder picked from search or Recent. Move Here still confirms.
+    private func open(_ folderID: UUID) {
+        path = Self.path(to: folderID, placements: placements,
+                         isDestinationAllowed: isDestinationAllowed)
+        query = ""
+        isSearching = false
+        errorMessage = nil
+    }
+
     /// Folders in the same order as Files.
     private func childFolders(of parentID: UUID?) -> [NotebookMoveFolder] {
         NotebookOrdering.orderedChildren(placements, parentID: parentID, inTrash: false).compactMap { placement in
             guard placement.item.kind == .folder,
-                  isDestinationAllowed(placement.item.id)
+                  allowedFolderIDs.contains(placement.item.id)
             else { return nil }
             return NotebookMoveFolder(
                 id: placement.item.id,
@@ -137,7 +175,7 @@ struct NotebookMoveSheet: View {
         }
     }
 
-    private static func initialPath(
+    private static func path(
         to parentID: UUID?, placements: [NotebookPlacement],
         isDestinationAllowed: (UUID?) -> Bool
     ) -> [UUID] {
@@ -170,11 +208,13 @@ private struct NotebookMoveFolder: Identifiable {
 
 private struct NotebookMoveDestinationLevel: View {
     let folders: [NotebookMoveFolder]
+    let recentFolders: [NotebookFolderShortcut]
     let sourceSummary: String
     let path: String
     let canGoUp: Bool
     let onOpenFolder: (UUID) -> Void
     let onGoUp: () -> Void
+    let onOpenShortcut: (UUID) -> Void
     let isSubmitting: Bool
     let errorMessage: String?
 
@@ -200,6 +240,17 @@ private struct NotebookMoveDestinationLevel: View {
                         Label("Up one level", systemImage: "arrow.up")
                     }
                     .accessibilityIdentifier("notebook-move-up")
+                }
+            }
+            if !recentFolders.isEmpty {
+                Section("Recent") {
+                    ForEach(recentFolders) { folder in
+                        NotebookFolderShortcutButton(folder: folder) {
+                            onOpenShortcut(folder.id)
+                        }
+                        .accessibilityIdentifier(
+                            "notebook-move-recent-" + folder.id.uuidString)
+                    }
                 }
             }
             Section("Folders") {
@@ -239,6 +290,67 @@ private struct NotebookMoveDestinationLevel: View {
                         .textSelection(.enabled)
                         .accessibilityIdentifier("notebook-move-error")
                 }
+            }
+        }
+    }
+}
+
+/// Folders whose name or path matches the search.
+private struct NotebookMoveSearchResults: View {
+    let folders: [NotebookFolderShortcut]
+    let query: String
+    let onOpen: (UUID) -> Void
+
+    var body: some View {
+        if folders.isEmpty {
+            ContentUnavailableView {
+                Label {
+                    Text("No folder matches “\(query)”")
+                } icon: {
+                    MehFace(mood: .puzzled)
+                }
+            }
+            .accessibilityIdentifier("notebook-move-search-empty")
+        } else {
+            List {
+                Section("Folders") {
+                    ForEach(folders) { folder in
+                        NotebookFolderShortcutButton(folder: folder) { onOpen(folder.id) }
+                            .accessibilityIdentifier(
+                                "notebook-move-search-result-" + folder.id.uuidString)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A folder with the path above it, which opens that folder in the sheet.
+private struct NotebookFolderShortcutButton: View {
+    let folder: NotebookFolderShortcut
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(folder.name)
+                            .foregroundStyle(.primary)
+                        Text((["Top Level"] + folder.ancestors).joined(separator: " / "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .lineLimit(1)
+                } icon: {
+                    Image(systemName: "folder")
+                        .foregroundStyle(.tint)
+                }
+                Spacer()
+                Image(systemName: "chevron.forward")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
         }
     }

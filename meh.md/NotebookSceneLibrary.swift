@@ -588,6 +588,11 @@ extension NotebookSceneState {
                         browserUndo = undo
                         browserRedo = nil
                     }
+                    // A drop between rows can also land in another folder.
+                    if target.position == .into
+                        || drag.sources.contains(where: { $0.parentID != target.parentID }) {
+                        navigationState.recordMoveDestination(target.parentID)
+                    }
                     if let parentID = target.parentID { expandedIDs.insert(parentID) }
                     for id in drag.itemIDs { reveal(id) }
                 }
@@ -996,6 +1001,7 @@ extension NotebookSceneState {
                 browserRedo = nil
             }
         }
+        navigationState.recordMoveDestination(parentID)
         if let parentID { expandedIDs.insert(parentID) }
         for id in ids { reveal(id) }
         browserSelection.clear()

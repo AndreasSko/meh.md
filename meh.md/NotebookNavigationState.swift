@@ -277,6 +277,31 @@ final class NotebookNavigationState {
         }
     }
 
+    static let recentMoveFolderLimit = 3
+
+    /// The folders items last moved to, newest first, that still exist
+    /// outside Trash. Every window of the notebook on this device shares them.
+    var recentMoveFolderIDs: [UUID] {
+        let folders = availableFolderIDs
+        return storedMoveFolderIDs.filter(folders.contains)
+    }
+
+    /// Remembers a folder items were moved to. Top Level is always at hand,
+    /// so it isn't kept.
+    func recordMoveDestination(_ folderID: UUID?) {
+        guard let folderID, let moveFoldersKey,
+              availableFolderIDs.contains(folderID) else { return }
+        let ids = [folderID] + recentMoveFolderIDs.filter { $0 != folderID }
+        store.set(ids.prefix(Self.recentMoveFolderLimit).map(\.uuidString),
+                  forKey: moveFoldersKey)
+    }
+
+    private var storedMoveFolderIDs: [UUID] {
+        guard let moveFoldersKey else { return [] }
+        return (store.array(forKey: moveFoldersKey) as? [String] ?? [])
+            .compactMap(UUID.init(uuidString:))
+    }
+
     func position(for id: UUID) -> Data? {
         positions[id]
     }
@@ -334,6 +359,10 @@ final class NotebookNavigationState {
             let notebookKey = storagePrefix + notebookID.uuidString
             return sceneID.map { notebookKey + ".scene." + $0.uuidString } ?? notebookKey
         }
+    }
+
+    private var moveFoldersKey: String? {
+        notebookID.map { storagePrefix + $0.uuidString + ".moveFolders" }
     }
 
     private func migrateLegacyPreferencesIfNeeded() {

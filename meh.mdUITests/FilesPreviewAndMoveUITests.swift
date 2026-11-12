@@ -1,6 +1,7 @@
 import XCTest
 
-/// Previews under notes in Files, in the fictional README notebook.
+/// Previews under notes in Files, and the Move sheet's search and recent
+/// folders, in the fictional README notebook.
 final class FilesPreviewAndMoveUITests: XCTestCase {
     func testPreviewsInFilesFollowTheSetting() throws {
         continueAfterFailure = false
@@ -44,6 +45,57 @@ final class FilesPreviewAndMoveUITests: XCTestCase {
         XCTAssertTrue(reviewPreview.waitForExistence(timeout: 10))
         waitForText("Lisbon is booked", of: reviewPreview, prefixOnly: true)
         capture(app, name: "Previews in Files")
+    }
+
+    func testMoveSearchOpensAFolderAndRemembersIt() throws {
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        app.revealNotebookSidebar(timeout: 30)
+        expandFolder(named: "Inbox", in: app)
+        let groceries = itemID(named: "Groceries", in: app)
+
+        openMoveSheet(forNote: groceries, in: app)
+        let search = searchField(in: app)
+        activate(search)
+        search.typeText("temp")
+        let result = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "notebook-move-search-result-"
+        ))
+        XCTAssertTrue(result.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(result.count, 1)
+        let templates = result.firstMatch.identifier
+            .replacingOccurrences(of: "notebook-move-search-result-", with: "")
+        capture(app, name: "Move search")
+        activate(result.firstMatch)
+
+        let path = app.staticTexts["notebook-move-path"]
+        XCTAssertTrue(path.waitForExistence(timeout: 5))
+        waitForText("Top Level / Resources / Templates", of: path)
+        let confirm = app.buttons["notebook-confirm-move"]
+        XCTAssertTrue(confirm.isEnabled)
+        activate(confirm)
+        XCTAssertTrue(confirm.waitForNonExistence(timeout: 10))
+
+        // Moving opens the destination, with the note inside it.
+        let folderRow = app.descendants(matching: .any)["notebook-sidebar-folder-" + templates]
+        let noteRow = app.descendants(matching: .any)["notebook-sidebar-note-" + groceries]
+        scrollUntilExists(noteRow, in: app)
+        XCTAssertTrue(folderRow.exists)
+        XCTAssertEqual(
+            app.descendants(matching: .any)["notebook-disclosure-" + templates].value as? String,
+            "Expanded")
+        XCTAssertGreaterThan(noteRow.frame.minY, folderRow.frame.minY)
+
+        // The next move offers the folder under Recent.
+        openMoveSheet(forNote: groceries, in: app)
+        let recent = app.descendants(matching: .any)["notebook-move-recent-" + templates]
+        XCTAssertTrue(recent.waitForExistence(timeout: 5))
+        capture(app, name: "Move recent folders")
+        activate(recent)
+        waitForText("Top Level / Resources / Templates", of: path)
+        activate(app.buttons["notebook-cancel-move"])
+        XCTAssertTrue(path.waitForNonExistence(timeout: 5))
     }
 
     // MARK: Helpers

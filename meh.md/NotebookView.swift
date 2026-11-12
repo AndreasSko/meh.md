@@ -636,6 +636,7 @@ private struct NotebookScenePresentation: ViewModifier {
             sourceIDs: scene.movingIDs,
             initialParentID: scene.destination,
             newNoteFolderID: scene.replica.defaultNewNoteParentID,
+            recentFolderIDs: scene.navigationState.recentMoveFolderIDs,
             isDestinationAllowed: { scene.canMoveSelection(into: $0) },
             isCurrentLocation: {
                 !scene.movingFromTrash

@@ -74,6 +74,43 @@ final class NotebookNavigationStateTests: XCTestCase {
         XCTAssertTrue(state.previewText.isEmpty)
     }
 
+    func testRecentMoveFoldersAreNewestFirstAndSharedByWindows() async throws {
+        let fixture = try await Fixture()
+        var folders: [UUID] = []
+        for name in ["A", "B", "C", "D"] {
+            folders.append(try await fixture.replica.createFolder(name: name))
+        }
+        let first = fixture.makeState(sceneID: UUID())
+        first.recordMoveDestination(nil)
+        XCTAssertEqual(first.recentMoveFolderIDs, [])
+        for folder in folders { first.recordMoveDestination(folder) }
+        first.recordMoveDestination(folders[1])
+        XCTAssertEqual(first.recentMoveFolderIDs, [folders[1], folders[3], folders[2]])
+
+        let second = fixture.makeState(sceneID: UUID())
+        XCTAssertEqual(second.recentMoveFolderIDs, [folders[1], folders[3], folders[2]])
+
+        // A trashed folder leaves the list and frees its place.
+        try await fixture.replica.setTrashed(folders[3], true)
+        XCTAssertEqual(second.recentMoveFolderIDs, [folders[1], folders[2]])
+        second.recordMoveDestination(folders[0])
+        XCTAssertEqual(first.recentMoveFolderIDs, [folders[0], folders[1], folders[2]])
+    }
+
+    func testRecentMoveFoldersBelongToTheirNotebook() async throws {
+        let first = try await Fixture()
+        let second = try await Fixture(store: first.store)
+        let folder = try await first.replica.createFolder(name: "Inbox")
+        first.makeState().recordMoveDestination(folder)
+        XCTAssertEqual(first.makeState().recentMoveFolderIDs, [folder])
+
+        let other = try await second.replica.createFolder(name: "Inbox")
+        let state = second.makeState()
+        XCTAssertEqual(state.recentMoveFolderIDs, [])
+        state.recordMoveDestination(other)
+        XCTAssertEqual(first.makeState().recentMoveFolderIDs, [folder])
+    }
+
     func testFirstSceneMigratesLegacySelectionOnlyOnce() async throws {
         let fixture = try await Fixture()
         let note = try await fixture.replica.createNote(name: "Legacy.md")
