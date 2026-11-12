@@ -33,6 +33,30 @@ final class NotebookDeletionTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(reopened.placements.first { $0.item.id == other }).isInTrash)
     }
 
+    func testRestoredNoteReturnsToRecents() async throws {
+        let root = temporaryDirectory()
+        let replica = NotebookReplica(directory: root)
+        try await replica.createLocalNotebook()
+        let folder = try await replica.createFolder(name: "Folder")
+        let restored = try await replica.createNote(name: "Restored.md")
+        let inside = try await replica.createNote(name: "Inside.md", parentID: folder)
+        let other = try await replica.createNote(name: "Other.md")
+        for id in [inside, restored, other] { try await replica.recordRecentActivity(for: id) }
+        _ = try await replica.trashItems([restored, folder])
+        XCTAssertEqual(replica.allRecentNotes.map(\.id), [other])
+
+        try await replica.restoreItems([restored, folder])
+
+        // The restored note leads; a note inside a restored folder doesn't
+        // come back on its own.
+        XCTAssertEqual(replica.allRecentNotes.map(\.id), [restored, other])
+
+        // Restoring one note from its "In Trash" bar does the same.
+        try await replica.setTrashed(other, true)
+        try await replica.setTrashed(other, false)
+        XCTAssertEqual(replica.allRecentNotes.map(\.id), [other, restored])
+    }
+
     func testBatchRestoreChildOfRetainedTrashReturnsToRoot() async throws {
         let root = temporaryDirectory()
         let replica = NotebookReplica(directory: root)
