@@ -104,7 +104,8 @@ enum CloudKitSyncErrors: SyncBackendErrors {
             return Failure(
                 SyncFailurePresentation.signedOutTitle,
                 "No iCloud account is signed in on this device.",
-                actionHint: "Sign in to iCloud, then try syncing again."
+                // The title already asks to sign in.
+                actionHint: nil
             )
         case .accountUnavailable:
             return Failure(
@@ -172,7 +173,8 @@ enum CloudKitSyncErrors: SyncBackendErrors {
             return Failure(
                 SyncFailurePresentation.signedOutTitle,
                 "No iCloud account is signed in on this device.",
-                actionHint: "Sign in to iCloud, then try syncing again."
+                // The title already asks to sign in.
+                actionHint: nil
             )
         case .accountTemporarilyUnavailable:
             return Failure(
