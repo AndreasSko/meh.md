@@ -194,27 +194,42 @@ extension NotebookSceneState {
     }
     #endif
 
-    /// The compact rows, then the expanded rows on screen.
-    var recentPreviewIDs: [UUID] {
+    /// The compact Recents rows, then the expanded Recents and Files rows on
+    /// screen. Files rows count only while they show previews.
+    func previewIDs(includingFiles: Bool) -> [UUID] {
         navigationState.recentNoteIDs + visibleRecentPreviewIDs
+            + (includingFiles ? visibleFilePreviewIDs : [])
     }
 
     /// Reads the cached excerpt, so rows don't redraw on every keystroke.
     func recentPreview(for id: UUID) -> String {
-        let cached = navigationState.recentPreviewText[id]
+        let cached = navigationState.previewText[id]
         guard let recent = navigationState.recentSessions[id] else {
             return cached ?? "Preview unavailable"
         }
         if workspace?.isResetPending == true { return "Restart to finish reset" }
         guard recent.isEditingEnabled else { return "Note unavailable" }
-        var preview = cached ?? NotebookRecentPreview.text(from: recent.text)
+        var preview = cached ?? NotebookRecentPreview.rowText(from: recent.text)
         // A new note's cached excerpt is empty until typing pauses. Read its
         // first words live meanwhile; once the cache has text, rows stop
         // observing the editor again, so typing doesn't redraw Recents.
         if preview.isEmpty, cached != nil {
-            preview = NotebookRecentPreview.text(from: recent.text)
+            preview = NotebookRecentPreview.rowText(from: recent.text)
         }
         return preview.isEmpty ? "Empty note" : preview
+    }
+
+    /// A note's first words under its name in Files, once loaded.
+    func filePreview(for id: UUID) -> String? {
+        navigationState.previewText[id].map { $0.isEmpty ? "Empty note" : $0 }
+    }
+
+    func fileRowAppeared(_ id: UUID) {
+        if !visibleFilePreviewIDs.contains(id) { visibleFilePreviewIDs.append(id) }
+    }
+
+    func fileRowDisappeared(_ id: UUID) {
+        visibleFilePreviewIDs.removeAll { $0 == id }
     }
 
     func setRecentPinned(_ pinned: Bool, for id: UUID) {

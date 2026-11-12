@@ -317,6 +317,8 @@ private struct NotebookLibraryBrowser: View {
     @Environment(\.mehPalette) private var palette
     @State private var notice: NotebookNoticeRequest?
     @State private var frame: CGRect = .zero
+    @AppStorage(NotebookNavigationState.filePreviewsKey, store: NotebookEditorPreferences.store)
+    private var showsFilePreviews = false
 
     private var showsCurrentNote: Bool { !isCompact }
 
@@ -652,7 +654,8 @@ private struct NotebookLibraryBrowser: View {
             switch entry {
             case .row(let row):
                 NotebookFileRow(scene: scene, row: row, afterEndID: afterEndID,
-                                targetDepth: targetDepth, focusedNameID: focus.name,
+                                targetDepth: targetDepth, showsPreview: showsFilePreviews,
+                                focusedNameID: focus.name,
                                 openNotice: { markFrame in
                                     notice = NotebookNoticeRequest(
                                         id: row.id,
@@ -1068,6 +1071,8 @@ private struct NotebookFileRow: View {
     let row: NotebookSidebarRow
     let afterEndID: UUID?
     let targetDepth: Int
+    /// A second line with the note's first words.
+    let showsPreview: Bool
     var focusedNameID: FocusState<UUID?>.Binding
     let openNotice: (CGRect) -> Void
 
@@ -1191,10 +1196,20 @@ private struct NotebookFileRow: View {
                         .notebookSelectNameOnFocus()
                 } else {
                     Label {
-                        Text(placement.item.kind == .note
-                            ? NotebookNoteName.title(from: placement.displayName)
-                            : placement.displayName)
-                            .accessibilityIdentifier("notebook-sidebar-title-" + row.id.uuidString)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(placement.item.kind == .note
+                                ? NotebookNoteName.title(from: placement.displayName)
+                                : placement.displayName)
+                                .accessibilityIdentifier("notebook-sidebar-title-" + row.id.uuidString)
+                            if showsPreview, placement.item.kind == .note {
+                                // A blank line keeps the row's height while it loads.
+                                Text(scene.filePreview(for: row.id) ?? " ")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier(
+                                        "notebook-sidebar-preview-" + row.id.uuidString)
+                            }
+                        }
                     } icon: {
                         if placement.item.kind == .folder {
                             NotebookFolderIcon(
@@ -1218,8 +1233,13 @@ private struct NotebookFileRow: View {
                 }
             }
             .padding(.leading, CGFloat(row.depth) * 16)
+            .padding(.vertical, showsPreview && placement.item.kind == .note ? 4 : 0)
             .frame(minHeight: rowHeight)
             .contentShape(Rectangle())
+            .onAppear {
+                if placement.item.kind == .note { scene.fileRowAppeared(row.id) }
+            }
+            .onDisappear { scene.fileRowDisappeared(row.id) }
             #if os(macOS)
             // Covers the whole row, as the List selects it from anywhere.
             // On the label alone, a click near the row's edge only selected.

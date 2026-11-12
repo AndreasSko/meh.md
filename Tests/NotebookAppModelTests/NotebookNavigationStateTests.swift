@@ -56,6 +56,24 @@ final class NotebookNavigationStateTests: XCTestCase {
         XCTAssertEqual(state.expandedFolderIDs, [open, projects, trips, areas])
     }
 
+    func testPreviewsLoadForNotesOutsideRecents() async throws {
+        let fixture = try await Fixture()
+        let folder = try await fixture.replica.createFolder(name: "Inbox")
+        let filed = try await fixture.replica.createNote(
+            name: "Filed.md", text: "## Good\nFiled away", parentID: folder)
+        let reader = NotebookReplica(directory: fixture.root)
+        try await reader.load()
+        let state = NotebookNavigationState(replica: reader, store: fixture.store)
+        XCTAssertFalse(state.allRecentNoteIDs.contains(filed))
+
+        await state.loadPreviews(for: [filed, folder])
+        XCTAssertEqual(state.previewText, [filed: "Filed away"])
+
+        try await reader.setTrashed(filed, true)
+        state.refreshAvailability()
+        XCTAssertTrue(state.previewText.isEmpty)
+    }
+
     func testFirstSceneMigratesLegacySelectionOnlyOnce() async throws {
         let fixture = try await Fixture()
         let note = try await fixture.replica.createNote(name: "Legacy.md")
@@ -279,10 +297,10 @@ final class NotebookNavigationStateTests: XCTestCase {
         let state = NotebookNavigationState(replica: reader, store: fixture.store)
         let revision = reader.searchRevision
         let heads = reader.catalogSnapshot?.heads
-        await state.loadRecentPreviews(for: [ids[0], ids[1], ids[0], UUID()])
+        await state.loadPreviews(for: [ids[0], ids[1], ids[0], UUID()])
         XCTAssertEqual(state.allRecentNoteIDs, Array(ids.reversed()))
-        XCTAssertEqual(Set(state.recentPreviewText.keys), Set(ids.prefix(2)))
-        XCTAssertEqual(state.recentPreviewText[ids[0]], "Fictional preview 0")
+        XCTAssertEqual(Set(state.previewText.keys), Set(ids.prefix(2)))
+        XCTAssertEqual(state.previewText[ids[0]], "Fictional preview 0")
         XCTAssertTrue(state.recentSessions.isEmpty)
         XCTAssertEqual(reader.searchRevision, revision)
         XCTAssertEqual(reader.catalogSnapshot?.heads, heads)
@@ -291,9 +309,9 @@ final class NotebookNavigationStateTests: XCTestCase {
 
         try await reader.setTrashed(ids[0], true)
         state.refreshAvailability()
-        XCTAssertNil(state.recentPreviewText[ids[0]])
-        await state.loadRecentPreviews(for: [ids[0], ids[1]])
-        XCTAssertEqual(Set(state.recentPreviewText.keys), [ids[1]])
+        XCTAssertNil(state.previewText[ids[0]])
+        await state.loadPreviews(for: [ids[0], ids[1]])
+        XCTAssertEqual(Set(state.previewText.keys), [ids[1]])
     }
 
     func testExpandedPreviewRefreshUsesUnsavedEditorAndRemoteBodies() async throws {
@@ -301,13 +319,13 @@ final class NotebookNavigationStateTests: XCTestCase {
         let id = try await fixture.replica.createNote(name: "Draft.md", text: "old")
         try await fixture.replica.recordRecentActivity(for: id)
         let state = fixture.makeState()
-        await state.loadRecentPreviews(for: [id])
-        XCTAssertEqual(state.recentPreviewText[id], "old")
+        await state.loadPreviews(for: [id])
+        XCTAssertEqual(state.previewText[id], "old")
         let session = try await fixture.replica.openNote(id)
         try session.replaceAll(with: "**unsaved** draft")
         let editedOrder = fixture.replica.allRecentNotes
-        await state.loadRecentPreviews(for: [id])
-        XCTAssertEqual(state.recentPreviewText[id], "unsaved draft")
+        await state.loadPreviews(for: [id])
+        XCTAssertEqual(state.previewText[id], "unsaved draft")
         XCTAssertEqual(fixture.replica.allRecentNotes, editedOrder)
         XCTAssertTrue(state.recentSessions.isEmpty)
 
@@ -318,8 +336,8 @@ final class NotebookNavigationStateTests: XCTestCase {
             snapshot: remote.snapshot(),
             notebookID: XCTUnwrap(fixture.replica.catalogSnapshot).notebookID
         ))
-        await state.loadRecentPreviews(for: [id])
-        XCTAssertEqual(state.recentPreviewText[id], "remote body")
+        await state.loadPreviews(for: [id])
+        XCTAssertEqual(state.previewText[id], "remote body")
         XCTAssertEqual(fixture.replica.allRecentNotes, editedOrder)
     }
 
@@ -329,17 +347,17 @@ final class NotebookNavigationStateTests: XCTestCase {
         let other = try await fixture.replica.createNote(name: "Other.md", text: "other")
         for id in [edited, other] { try await fixture.replica.recordRecentActivity(for: id) }
         let state = fixture.makeState()
-        await state.loadRecentPreviews(for: [edited, other])
+        await state.loadPreviews(for: [edited, other])
 
         let session = try await fixture.replica.openNote(edited)
         try session.replaceAll(with: "new")
-        let request = Task { await state.loadRecentPreviews(for: [edited, other]) }
+        let request = Task { await state.loadPreviews(for: [edited, other]) }
         request.cancel()
         await request.value
-        XCTAssertEqual(state.recentPreviewText, [edited: "old", other: "other"])
+        XCTAssertEqual(state.previewText, [edited: "old", other: "other"])
 
-        await state.loadRecentPreviews(for: [edited, other])
-        XCTAssertEqual(state.recentPreviewText, [edited: "new", other: "other"])
+        await state.loadPreviews(for: [edited, other])
+        XCTAssertEqual(state.previewText, [edited: "new", other: "other"])
     }
 
     func testMaintainedPreviewsRefreshOnceEditsPause() async throws {
@@ -347,15 +365,15 @@ final class NotebookNavigationStateTests: XCTestCase {
         let id = try await fixture.replica.createNote(name: "Draft.md", text: "old")
         try await fixture.replica.recordRecentActivity(for: id)
         let state = fixture.makeState()
-        state.recentPreviewRefreshDelay = .seconds(1)
+        state.previewRefreshDelay = .seconds(1)
         let session = try await fixture.replica.openNote(id)
-        let maintenance = Task { await state.maintainRecentPreviews(for: [id]) }
-        try await waitUntil { state.recentPreviewText[id] == "old" }
+        let maintenance = Task { await state.maintainPreviews(for: [id]) }
+        try await waitUntil { state.previewText[id] == "old" }
 
         try session.replaceAll(with: "new")
         try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(state.recentPreviewText[id], "old")
-        try await waitUntil { state.recentPreviewText[id] == "new" }
+        XCTAssertEqual(state.previewText[id], "old")
+        try await waitUntil { state.previewText[id] == "new" }
         maintenance.cancel()
         await maintenance.value
     }
@@ -367,13 +385,13 @@ final class NotebookNavigationStateTests: XCTestCase {
         let reader = NotebookReplica(directory: fixture.root)
         try await reader.load()
         let state = NotebookNavigationState(replica: reader, store: fixture.store)
-        state.recentPreviewRefreshDelay = .milliseconds(50)
-        let maintenance = Task { await state.maintainRecentPreviews(for: [id]) }
-        try await waitUntil { state.recentPreviewText[id] == "old" }
+        state.previewRefreshDelay = .milliseconds(50)
+        let maintenance = Task { await state.maintainPreviews(for: [id]) }
+        try await waitUntil { state.previewText[id] == "old" }
 
         let session = try await reader.openNote(id)
         try session.replaceAll(with: "new")
-        try await waitUntil { state.recentPreviewText[id] == "new" }
+        try await waitUntil { state.previewText[id] == "new" }
         maintenance.cancel()
         await maintenance.value
     }
@@ -390,10 +408,10 @@ final class NotebookNavigationStateTests: XCTestCase {
         let id = try await fixture.replica.createNote(name: "Draft.md", text: "draft")
         try await fixture.replica.recordRecentActivity(for: id)
         let state = fixture.makeState()
-        let request = Task { await state.loadRecentPreviews(for: [id]) }
+        let request = Task { await state.loadPreviews(for: [id]) }
         request.cancel()
         await request.value
-        XCTAssertTrue(state.recentPreviewText.isEmpty)
+        XCTAssertTrue(state.previewText.isEmpty)
     }
 
     func testExpandedPreviewRequestsAndCacheStayBounded() async throws {
@@ -410,15 +428,15 @@ final class NotebookNavigationStateTests: XCTestCase {
         try await reader.load()
         let state = NotebookNavigationState(replica: reader, store: fixture.store)
         let revision = reader.searchRevision
-        await state.loadRecentPreviews(for: ids)
-        XCTAssertEqual(Set(state.recentPreviewText.keys), Set(ids.prefix(64)))
-        await state.loadRecentPreviews(for: Array(ids[64..<128]))
-        XCTAssertEqual(state.recentPreviewText.count, 128)
-        await state.loadRecentPreviews(for: Array(ids.suffix(2)))
-        XCTAssertEqual(state.recentPreviewText.count, 128)
-        XCTAssertNil(state.recentPreviewText[ids[0]])
-        XCTAssertNil(state.recentPreviewText[ids[1]])
-        XCTAssertEqual(state.recentPreviewText[ids[129]], "preview 129")
+        await state.loadPreviews(for: ids)
+        XCTAssertEqual(Set(state.previewText.keys), Set(ids.prefix(64)))
+        await state.loadPreviews(for: Array(ids[64..<128]))
+        XCTAssertEqual(state.previewText.count, 128)
+        await state.loadPreviews(for: Array(ids.suffix(2)))
+        XCTAssertEqual(state.previewText.count, 128)
+        XCTAssertNil(state.previewText[ids[0]])
+        XCTAssertNil(state.previewText[ids[1]])
+        XCTAssertEqual(state.previewText[ids[129]], "preview 129")
         XCTAssertEqual(reader.searchRevision, revision)
     }
 

@@ -612,9 +612,8 @@ private struct NotebookScenePresentation: ViewModifier {
         .task(id: scene.navigationState.recentSessionsRequest) {
             await scene.navigationState.loadRecentSessions()
         }
-        .task(id: scene.recentPreviewIDs) {
-            await scene.navigationState.maintainRecentPreviews(for: scene.recentPreviewIDs)
-        }
+        // Its own view, so rows coming into view don't redraw this one.
+        .background { NotebookPreviewMaintenance(scene: scene) }
         .onChange(of: scene.search.isPresented) { _, presented in
             if presented { scene.browsingAllRecents = false }
         }
@@ -627,6 +626,7 @@ private struct NotebookScenePresentation: ViewModifier {
         .onChange(of: scene.replica.catalogSnapshot?.notebookID) { _, _ in
             scene.browsingAllRecents = false
             scene.visibleRecentPreviewIDs = []
+            scene.visibleFilePreviewIDs = []
         }
     }
 
@@ -661,5 +661,21 @@ private struct NotebookScenePresentation: ViewModifier {
         #else
         UIApplication.willTerminateNotification
         #endif
+    }
+}
+
+/// Keeps the excerpts of the Recents and Files rows on screen current.
+private struct NotebookPreviewMaintenance: View {
+    let scene: NotebookSceneState
+    @AppStorage(NotebookNavigationState.filePreviewsKey, store: NotebookEditorPreferences.store)
+    private var showsFilePreviews = false
+
+    var body: some View {
+        let ids = scene.previewIDs(includingFiles: showsFilePreviews)
+        Color.clear
+            .accessibilityHidden(true)
+            .task(id: ids) {
+                await scene.navigationState.maintainPreviews(for: ids)
+            }
     }
 }

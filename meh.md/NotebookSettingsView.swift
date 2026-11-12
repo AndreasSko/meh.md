@@ -414,6 +414,8 @@ private struct NotebookAppearanceSection: View {
     private var highlighter = MehPalette.Highlighter.yellow
     @AppStorage(NotebookNavigationState.recentCountKey, store: NotebookEditorPreferences.store)
     private var recentCount = NotebookNavigationState.defaultRecentCount
+    @AppStorage(NotebookNavigationState.filePreviewsKey, store: NotebookEditorPreferences.store)
+    private var showsFilePreviews = false
 
     var body: some View {
         pens
@@ -462,10 +464,12 @@ private struct NotebookAppearanceSection: View {
             .accessibilityIdentifier("notebook-appearance-text-size")
             #endif
             recents
+            Toggle("Previews in Files", isOn: $showsFilePreviews)
+                .accessibilityIdentifier("notebook-appearance-file-previews")
         } header: {
             Text("Appearance")
         } footer: {
-            Text("Ink colors checkboxes, links and buttons. The highlighter marks highlights, folders and the New Note button. Recent Notes is how many notes Recents shows; pinned notes always show.")
+            Text("Ink colors checkboxes, links and buttons. The highlighter marks highlights, folders and the New Note button. Recent Notes is how many notes Recents shows; pinned notes always show. Previews in Files shows a note's first words under its name.")
         }
     }
 }

@@ -56,6 +56,10 @@ Requests are capped at 64 notes; a cache retains 128 rendered excerpts. Stored
 notes are decoded transiently away from the main actor. Reads do not open an
 editor session or record activity, and live editor text takes precedence.
 Revision changes, cancellation, and notebook switches discard stale results.
+Files shares this cache when Settings › Appearance › Previews in Files is
+on: its note rows on screen join the request after Recents. Both lists skip
+heading lines, so notes made from one template show their own words; a note
+of only headings still shows them.
 
 The compact UIKit table stays inside the native Files list. Vertical swipes
 on recent rows scroll the browser, and horizontal swipes retain the native

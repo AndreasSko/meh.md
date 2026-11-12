@@ -128,6 +128,8 @@ final class NotebookSceneState {
 
     var browsingAllRecents = false
     var visibleRecentPreviewIDs: [UUID] = []
+    /// Notes in Files on screen while it shows previews, in order of appearance.
+    var visibleFilePreviewIDs: [UUID] = []
     var editingID: UUID?
     var originalName = ""
     var proposedName = ""

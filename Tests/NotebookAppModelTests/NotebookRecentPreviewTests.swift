@@ -59,4 +59,26 @@ final class NotebookRecentPreviewTests: XCTestCase {
             "Example · # literal * punctuation · Documentation"
         )
     }
+
+    func testRowTextSkipsHeadingsSoTemplatedNotesDiffer() {
+        let source = """
+        ## Good
+        - Lisbon is booked
+        ## Meh
+        - Too many meetings
+        """
+
+        XCTAssertEqual(
+            NotebookRecentPreview.rowText(from: source),
+            "Lisbon is booked · Too many meetings"
+        )
+    }
+
+    func testRowTextKeepsANoteOfOnlyHeadings() {
+        XCTAssertEqual(
+            NotebookRecentPreview.rowText(from: "# Ideas\n## Later"),
+            "Ideas · Later"
+        )
+        XCTAssertEqual(NotebookRecentPreview.rowText(from: ""), "")
+    }
 }

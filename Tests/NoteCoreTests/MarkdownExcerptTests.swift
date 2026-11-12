@@ -15,6 +15,45 @@ final class MarkdownExcerptTests: XCTestCase {
         )
     }
 
+    func testSkipsHeadingLinesOutsideCode() {
+        let source = """
+        # Weekly review
+        ## Good
+        - Lisbon is booked
+          ### Meh
+        ```
+        # kept as code
+        ```
+        #hashtag stays
+        """
+        XCTAssertEqual(
+            MarkdownExcerpt.plain(source, skippingHeadings: true).text,
+            "Lisbon is booked · # kept as code · #hashtag stays"
+        )
+        XCTAssertEqual(
+            MarkdownExcerpt.plain("    # indented code\nBody", skippingHeadings: true).text,
+            "indented code · Body"
+        )
+        XCTAssertEqual(
+            plain("# Weekly review\nBody"),
+            "Weekly review · Body"
+        )
+        // A shorter or different fence inside a code block doesn't end it.
+        XCTAssertEqual(
+            MarkdownExcerpt.plain(
+                "````\n```\n# kept as code\n~~~~\n````\nBody", skippingHeadings: true
+            ).text,
+            "``` · # kept as code · ~~~~ · Body"
+        )
+        // A fence with text after it doesn't end the code either.
+        XCTAssertEqual(
+            MarkdownExcerpt.plain(
+                "```\n# kept\n``` swift\n```\nBody", skippingHeadings: true
+            ).text,
+            "# kept · ``` swift · Body"
+        )
+    }
+
     func testRemovesTasksWikiLinksAndHighlights() {
         XCTAssertEqual(
             plain("""
