@@ -815,6 +815,8 @@ final class MarkdownTextView: NSTextView {
         case ("h", [.command, .shift]): command = .heading
         case ("c", [.command, .shift]): command = .inlineCode
         case ("t", [.command, .shift]): command = .toggleTask
+        case ("x", [.command, .shift]): command = .strikethrough
+        case ("e", [.command, .shift]): command = .highlight
         default: command = nil
         }
         if let command, performMarkdownCommand(command) { return true }
@@ -2526,18 +2528,26 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     }
 
     override var keyCommands: [UIKeyCommand]? {
-        let commands: [(String, UIKeyModifierFlags, Selector)] = [
-            ("\t", [], #selector(indentMarkdown)),
-            ("\t", .shift, #selector(outdentMarkdown)),
-            ("b", .command, #selector(boldMarkdown)),
-            ("i", .command, #selector(italicMarkdown)),
-            ("k", .command, #selector(linkMarkdown)),
-            ("h", [.command, .shift], #selector(headingMarkdown)),
-            ("c", [.command, .shift], #selector(codeMarkdown)),
-            ("t", [.command, .shift], #selector(toggleTaskMarkdown)),
+        // Titles list the styles while ⌘ is held; the Mac shows the same
+        // shortcuts in its Format menu.
+        let commands: [(String, String, UIKeyModifierFlags, Selector)] = [
+            ("Indent", "\t", [], #selector(indentMarkdown)),
+            ("Outdent", "\t", .shift, #selector(outdentMarkdown)),
+            ("Bold", "b", .command, #selector(boldMarkdown)),
+            ("Italic", "i", .command, #selector(italicMarkdown)),
+            ("Strikethrough", "x", [.command, .shift], #selector(strikethroughMarkdown)),
+            ("Highlight", "e", [.command, .shift], #selector(highlightMarkdown)),
+            ("Inline Code", "c", [.command, .shift], #selector(codeMarkdown)),
+            ("Link", "k", .command, #selector(linkMarkdown)),
+            ("Heading", "h", [.command, .shift], #selector(headingMarkdown)),
+            ("Check or Uncheck Task", "t", [.command, .shift], #selector(toggleTaskMarkdown)),
         ]
-        return linkCompletionKeyCommands + (super.keyCommands ?? []) + commands.map { input, flags, action in
-            let key = UIKeyCommand(input: input, modifierFlags: flags, action: action)
+        return linkCompletionKeyCommands + (super.keyCommands ?? []) + commands.map {
+            title, input, flags, action in
+            // Tab keeps no title: it is typing, not a menu command.
+            let key = input == "\t"
+                ? UIKeyCommand(input: input, modifierFlags: flags, action: action)
+                : UIKeyCommand(title: title, action: action, input: input, modifierFlags: flags)
             key.wantsPriorityOverSystemBehavior = true
             return key
         }
@@ -2554,6 +2564,8 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     }
     @objc private func boldMarkdown() { _ = performMarkdownCommand(.bold) }
     @objc private func italicMarkdown() { _ = performMarkdownCommand(.italic) }
+    @objc private func strikethroughMarkdown() { _ = performMarkdownCommand(.strikethrough) }
+    @objc private func highlightMarkdown() { _ = performMarkdownCommand(.highlight) }
     @objc private func linkMarkdown() { _ = performMarkdownCommand(.link) }
     @objc private func headingMarkdown() { _ = performMarkdownCommand(.heading) }
     @objc private func codeMarkdown() { _ = performMarkdownCommand(.inlineCode) }

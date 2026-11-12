@@ -58,8 +58,9 @@ struct NotebookWindowValue: Codable, Hashable {
             NotebookWindowValue()
         }
         .commands {
-            #if os(macOS)
             NotebookMenuCommands()
+            #if os(macOS)
+            NotebookFormatCommands()
             #endif
             NotebookSearchCommands()
             NotebookRecentCommands()
@@ -73,7 +74,6 @@ struct NotebookWindowValue: Codable, Hashable {
 }
 #endif
 
-#if os(macOS)
 @MainActor @Observable final class NotebookMenuState {
     var newNoteRequest = 0
     var newFolderRequest = 0
@@ -112,6 +112,9 @@ struct NotebookMenuCommands: Commands {
             Button("Export All Notes…") { menu?.exportRequest += 1 }
                 .disabled(menu?.isAvailable != true || menu?.canExport != true)
         }
+        #if os(macOS)
+        // iPad has no keyboard focus on the Files list, and ⌘⌫ has to keep
+        // deleting text in the note.
         CommandGroup(after: .pasteboard) {
             Divider()
             Button("Move Selected…") { menu?.moveRequest += 1 }
@@ -121,6 +124,53 @@ struct NotebookMenuCommands: Commands {
                 .keyboardShortcut(.delete, modifiers: .command)
                 .disabled(menu?.canManageSelection != true)
         }
+        #endif
+    }
+}
+
+extension FocusedValues {
+    @Entry var notebookEditor: MarkdownEditorNavigation?
+}
+
+#if os(macOS)
+/// Markdown styles with their shortcuts in the Mac's Format menu, in place
+/// of the system's rich-text font commands. The editor handles the keys
+/// itself; the menu shows them. iPad lists them from the editor's titled
+/// key commands instead.
+struct NotebookFormatCommands: Commands {
+    @FocusedValue(\.notebookEditor) private var editor
+
+    var body: some Commands {
+        CommandGroup(replacing: .textFormatting) {
+            item("Bold", .bold, "b")
+            item("Italic", .italic, "i")
+            item("Strikethrough", .strikethrough, "x", [.command, .shift])
+            item("Highlight", .highlight, "e", [.command, .shift])
+            item("Inline Code", .inlineCode, "c", [.command, .shift])
+            item("Link", .link, "k")
+            Divider()
+            item("Heading", .heading, "h", [.command, .shift])
+            item("Task", .taskList)
+            item("Check or Uncheck Task", .toggleTask, "t", [.command, .shift])
+            // ⌘' needs Shift on many layouts, so Quote has no shortcut.
+            item("Quote", .quote)
+            item("Code Block", .codeBlock)
+            item("Table", .insertTable)
+        }
+    }
+
+    private func item(
+        _ title: String, _ command: MarkdownEditingCommand,
+        _ key: KeyEquivalent? = nil, _ modifiers: EventModifiers = .command
+    ) -> some View {
+        Button(title) {
+            // Only while the note has keyboard focus, never behind a sheet
+            // or while the Files list or a title field has it.
+            guard let editor, editor.captureHasEditingFocus?() == true else { return }
+            editor.performCommand?(command)
+        }
+        .keyboardShortcut(key.map { KeyboardShortcut($0, modifiers: modifiers) })
+        .disabled(editor == nil)
     }
 }
 #endif

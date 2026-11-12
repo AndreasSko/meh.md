@@ -43,7 +43,8 @@
         "FlairUITests/testLibraryEndsWithTheNoteCount",
         "FlairUITests/testAppearanceSwitchesTheInk",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
-        "NotebookOpenNoteUITests"
+        "NotebookOpenNoteUITests",
+        "KeyboardCommandUITests"
       ]
     }
   ],

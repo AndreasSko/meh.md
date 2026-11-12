@@ -21,9 +21,7 @@ final class NotebookSceneState {
     let sceneID: UUID
     let navigationState: NotebookNavigationState
     let recentCommands: NotebookRecentCommandState
-    #if os(macOS)
     let menu = NotebookMenuState()
-    #endif
 
     // MARK: Scene
 
@@ -186,9 +184,8 @@ final class NotebookSceneState {
         }
     }
 
-    #if os(macOS)
     var menuAvailable: Bool {
-        !busy && !search.showingQuickOpen && !showingSettings
+        !busy && !search.showingQuickOpen && !showingSettings && !showingTemplates
             && !showingTrash && !showingImport && !showingExport
             && !choosingImportSource && !showingTextSize
             && movingIDs.isEmpty && deletionSelection == nil
@@ -198,6 +195,7 @@ final class NotebookSceneState {
             && workspace?.isResetPending != true
     }
 
+    #if os(macOS)
     var canManageMenuSelection: Bool {
         menuAvailable && browserFocused && editingID == nil
             && detailEditingID == nil && !search.isPresented

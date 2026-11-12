@@ -72,7 +72,8 @@
         "UIReleasePolishUITests/testRetryCountdownMatchesTheDisabledRetryWindow",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
         "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote",
-        "WritingFlowUITests/testSyncStatusLivesInCloudDetailsWhileWriting"
+        "WritingFlowUITests/testSyncStatusLivesInCloudDetailsWhileWriting",
+        "KeyboardCommandUITests"
       ]
     }
   ],
