@@ -28,7 +28,11 @@ an app update that understands them picks them up. A remembered record
 that has since been deleted is forgotten. In S3 a record read again stays
 remembered until the page that carried it was applied, so a crash in
 between reads it again. A retry that fails, for example offline, is
-repeated on the next exchange.
+repeated on the next exchange. In iCloud the records are read 100 at a
+time and each batch is saved, so after a format change that rewrote many
+notes a failed request repeats only its batch, and the rest of the
+exchange goes on. A single record that iCloud refuses for a lasting
+reason stays skipped until the next launch.
 
 This only works when **every format change raises the gate**: a new note
 schema version, catalog fields that older versions reject, or an

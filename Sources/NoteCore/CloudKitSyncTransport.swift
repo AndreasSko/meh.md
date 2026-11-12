@@ -967,6 +967,14 @@ actor CloudKitEventCommitter {
     }
 }
 
+/// One batched read: the records that arrived, the names iCloud no longer
+/// has, and the names whose read failed and needs another try.
+struct CloudKitRecordRead {
+    var records: [CKRecord] = []
+    var missing = Set<String>()
+    var failed = Set<String>()
+}
+
 struct CloudKitAcknowledgedRecord: Sendable {
     let id: String
     let record: SyncRecord
@@ -1998,6 +2006,9 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
     /// pushes can be lost. A new transport, as at app launch, checks too.
     private var serverCheckRequested = true
     private var retriedUnreadableRecords = false
+    /// Skipped records already read again at this launch, so a retry that
+    /// stopped part-way continues where it stopped.
+    private var retriedUnreadableIDs = Set<String>()
     public private(set) var rebuiltDamagedState = false
     public private(set) var rebuiltEngineState = false
     private var retryThrottle = CloudKitRetryThrottle()
@@ -2851,7 +2862,6 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
         }
         if !retriedUnreadableRecords {
             try await retryUnreadableRecords()
-            retriedUnreadableRecords = true
         }
         try await resolveRemoteSnapshotDeletions()
         let state = await store.snapshot()
@@ -2861,30 +2871,86 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
     }
 
     /// Reads skipped records again, once per launch: an app update may have
-    /// taught this device to understand them.
+    /// taught this device to understand them. After a format change there
+    /// can be thousands, so each batch is saved on its own, and a failed
+    /// request leaves the rest for the next exchange instead of failing
+    /// this one.
     private func retryUnreadableRecords() async throws {
-        let ids = await store.snapshot().unreadableRecordIDs
-        guard !ids.isEmpty else { return }
-        var modifications: [CKRecord] = []
-        var deleted: [CKRecord.ID] = []
-        for name in ids.sorted() {
-            let id = CKRecord.ID(recordName: name, zoneID: zoneID)
+        let names = await store.snapshot().unreadableRecordIDs
+            .subtracting(retriedUnreadableIDs).sorted()
+        var finished = true
+        for batch in Self.recordReadBatches(names) {
+            let read: CloudKitRecordRead
             do {
-                modifications.append(try await cloudRequest(
-                    labLabel: "fetch.unreadableRecord"
-                ) { try await database.record(for: id) })
-            } catch let error as CKError where error.code == .unknownItem {
-                deleted.append(id)
+                read = try await readRecords(
+                    named: batch, labLabel: "fetch.unreadableRecords"
+                )
+            } catch let error as CKError
+                where delegateFailure == nil && NotebookSyncRetryPolicy.isTransient(error) {
+                await diagnose(
+                    "unreadable_records_retry_failed:"
+                        + NotebookSyncEventLog.errorCode(error),
+                    counts: ["remaining": names.count
+                        - retriedUnreadableIDs.intersection(names).count]
+                )
+                return
+            }
+            // Never known to this device, so their removal needs no proof.
+            if !read.missing.isEmpty {
+                try await store.update {
+                    $0.unreadableRecordIDs.subtract(read.missing)
+                }
+            }
+            _ = try await commitFetchedChanges(
+                read.records, deletions: [], event: "unreadable_records_retried"
+            )
+            retriedUnreadableIDs.formUnion(batch)
+            retriedUnreadableIDs.subtract(read.failed)
+            finished = finished && read.failed.isEmpty
+        }
+        if finished { retriedUnreadableRecords = true }
+    }
+
+    static let recordReadBatchSize = 100
+
+    static func recordReadBatches(_ names: [String]) -> [[String]] {
+        stride(from: 0, to: names.count, by: recordReadBatchSize).map {
+            Array(names[$0..<min($0 + recordReadBatchSize, names.count)])
+        }
+    }
+
+    /// Reads one batch of records by name.
+    private func readRecords(
+        named names: [String], labLabel: String
+    ) async throws -> CloudKitRecordRead {
+        let ids = names.map { CKRecord.ID(recordName: $0, zoneID: zoneID) }
+        let results = try await cloudRequest(labLabel: labLabel) {
+            try await database.records(for: ids)
+        }
+        var read = CloudKitRecordRead()
+        for id in ids {
+            switch results[id] {
+            case let .success(record)?:
+                read.records.append(record)
+            case let .failure(error as CKError)? where error.code == .unknownItem:
+                read.missing.insert(id.recordName)
+            case let .failure(error)? where NotebookSyncRetryPolicy.isTransient(error):
+                // A batch that returns per-record failures doesn't throw, so
+                // their retry delay must reach the throttle here.
+                await observeRetryAfter(error)
+                read.failed.insert(id.recordName)
+            case let .failure(error)?:
+                // The record stays skipped; reading it again this launch
+                // would fail the same way.
+                await diagnose(
+                    "unreadable_record_retry_failed:"
+                        + NotebookSyncEventLog.errorCode(error)
+                )
+            case nil:
+                read.failed.insert(id.recordName)
             }
         }
-        // Never known to this device, so their removal needs no proof.
-        let gone = Set(deleted.map(\.recordName))
-        if !gone.isEmpty {
-            try await store.update { $0.unreadableRecordIDs.subtract(gone) }
-        }
-        _ = try await commitFetchedChanges(
-            modifications, deletions: [], event: "unreadable_records_retried"
-        )
+        return read
     }
 
     /// Makes the next fetch also read the zone directly from iCloud, so it
