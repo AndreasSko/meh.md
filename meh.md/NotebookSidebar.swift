@@ -29,6 +29,7 @@ struct NotebookSidebar: View {
     }
 
     private var sidebarTitle: String {
+        if showsTrash { return "Trash" }
         #if os(iOS)
         // The app name repeats the window identity and crowds a split sidebar.
         if !isCompact { return "" }
@@ -46,10 +47,22 @@ struct NotebookSidebar: View {
         #endif
     }
 
+    private var showsTrash: Bool { scene.showingTrash && scene.showsTrashInSidebar }
+
     var body: some View {
             ZStack {
                 Group {
-                    if isCompact && scene.isLibraryEmpty {
+                    if showsTrash {
+                        NotebookTrashView(
+                            replica: scene.replica,
+                            beforeMutation: scene.flushEditor,
+                            onMutation: scene.trashDidChange,
+                            onOpenNote: scene.openNoteFromTrash,
+                            onClose: { scene.showingTrash = false },
+                            openNoteID: scene.selectedID,
+                            afterMutation: { scene.editorNavigation.resumeEditing?() }
+                        )
+                    } else if isCompact && scene.isLibraryEmpty {
                         NotebookEmptyLibraryView(scene: scene)
                             .disabled(scene.busy)
                     } else {
@@ -75,9 +88,9 @@ struct NotebookSidebar: View {
                 if !isCompact { NotebookSidebarDivider() }
             }
             #endif
-            .searchable(text: Bindable(search).query, isPresented: Bindable(search).isPresented,
-                        placement: .toolbar, prompt: "Search all notes")
-            .searchFocused(focus.search)
+            // Search covers notes outside Trash, so it steps aside there.
+            .modifier(NotebookSidebarSearch(search: search, focus: focus.search,
+                                            isEnabled: !showsTrash))
             #if os(macOS)
             .scrollIndicators(.automatic)
             #endif
@@ -86,7 +99,7 @@ struct NotebookSidebar: View {
             }
             .overlay(alignment: .bottom) {
                 if !isCompact && !search.isPresented && !scene.showsSelectionControls
-                    && !scene.browsingAllRecents {
+                    && !scene.browsingAllRecents && !showsTrash {
                     NotebookSidebarControls(
                         busy: scene.busy,
                         showSettings: { scene.openSettings() },
@@ -1525,6 +1538,24 @@ private struct NotebookEmptySpaceActions: View {
             scene.createItem(kind: .folder, parentID: nil)
         }
             .disabled(scene.busy)
+    }
+}
+
+private struct NotebookSidebarSearch: ViewModifier {
+    let search: NotebookSearchState
+    let focus: FocusState<Bool>.Binding
+    let isEnabled: Bool
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content
+                .searchable(text: Bindable(search).query,
+                            isPresented: Bindable(search).isPresented,
+                            placement: .toolbar, prompt: "Search all notes")
+                .searchFocused(focus)
+        } else {
+            content
+        }
     }
 }
 

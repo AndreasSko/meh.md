@@ -60,6 +60,15 @@ final class NotebookSceneState {
     var pendingPresentedItemID: UUID?
     var pendingPresentedItemIsNew = false
     var showingTrash = false
+    /// iPad shows Trash in the sidebar, so a trashed note can open beside
+    /// it. iPhone and the Mac show it as a sheet.
+    var showsTrashInSidebar: Bool {
+        #if os(iOS)
+        !isCompact
+        #else
+        false
+        #endif
+    }
     var showingTextSize = false
     var sharedFile: NotebookSharedFile?
     var deletionSelection: NotebookDeletionSelection?

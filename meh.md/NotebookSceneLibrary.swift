@@ -832,7 +832,7 @@ extension NotebookSceneState {
     }
 
     func openNoteFromTrash(_ id: UUID) {
-        showingTrash = false
+        if !showsTrashInSidebar { showingTrash = false }
         perform { [self] in try await selectNote(id) }
     }
 

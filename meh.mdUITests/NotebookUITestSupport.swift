@@ -134,6 +134,21 @@ extension XCUIApplication {
     }
 #endif
 
+    /// A Trash toolbar action. In the iPad sidebar Select and Empty Trash
+    /// wait in the Trash Actions menu; the sheet shows them directly.
+    func trashAction(_ identifier: String, timeout: TimeInterval = 5) -> XCUIElement {
+        let action = buttons[identifier]
+#if os(iOS)
+        let menu = buttons["notebook-trash-actions"].firstMatch
+        if !action.exists, menu.waitForExistence(timeout: 1) {
+            menu.tap()
+        }
+#endif
+        XCTAssertTrue(action.waitForExistence(timeout: timeout),
+                      "Expected the Trash action \(identifier)")
+        return action
+    }
+
     func openTrash(timeout: TimeInterval = 15) {
 #if os(iOS)
         // An empty library has no sidebar to reveal; its menu opens Trash.

@@ -518,13 +518,22 @@ private struct NotebookScenePresentation: ViewModifier {
             Button("Import Folder…") { scene.showImport(choosingFolder: true) }
                 .accessibilityIdentifier("notebook-import-folder")
         }
-        .sheet(isPresented: $scene.showingTrash, onDismiss: scene.finishTemplatePresentation) {
+        // Sidebar Trash has no sheet to dismiss, so its closing finishes
+        // what waited for it, such as a template quick action or an import.
+        .onChange(of: scene.showingTrash) { _, showing in
+            if !showing, scene.showsTrashInSidebar { scene.finishTemplatePresentation() }
+        }
+        .sheet(isPresented: Binding(
+            get: { scene.showingTrash && !scene.showsTrashInSidebar },
+            set: { if !$0 { scene.showingTrash = false } }
+        ), onDismiss: scene.finishTemplatePresentation) {
             NavigationStack {
                 NotebookTrashView(
                     replica: scene.replica,
                     beforeMutation: scene.flushEditor,
                     onMutation: scene.trashDidChange,
-                    onOpenNote: scene.openNoteFromTrash
+                    onOpenNote: scene.openNoteFromTrash,
+                    afterMutation: { scene.editorNavigation.resumeEditing?() }
                 )
             }
             #if os(macOS)

@@ -48,7 +48,7 @@ final class NotebookTrashUITests: XCTestCase {
             .matching(identifier: "notebook-sidebar-folder-" + folderID).firstMatch
         XCTAssertTrue(folderRow.waitForExistence(timeout: 5))
         XCTAssertFalse(trashRow(noteID, in: app).exists)
-        app.buttons["notebook-trash-select"].tap()
+        app.trashAction("notebook-trash-select").tap()
         app.buttons["notebook-trash-select-all"].tap()
         XCTAssertEqual(app.staticTexts["notebook-trash-selection-count"].label,
                        "1 Selected")
@@ -96,7 +96,7 @@ final class NotebookTrashUITests: XCTestCase {
         // Dismiss by tapping the navigation title, outside the action menu.
         app.navigationBars["Trash"].staticTexts["Trash"].tap()
 
-        app.buttons["notebook-trash-select"].tap()
+        app.trashAction("notebook-trash-select").tap()
         trashRow(ids[0], in: app).tap()
         trashRow(ids[1], in: app).tap()
         XCTAssertTrue(app.staticTexts["notebook-trash-selection-count"]
@@ -109,8 +109,8 @@ final class NotebookTrashUITests: XCTestCase {
         XCTAssertTrue(trashRow(ids[0], in: app).waitForNonExistence(timeout: 5))
         XCTAssertFalse(trashRow(ids[1], in: app).exists)
         XCTAssertTrue(trashRow(ids[2], in: app).exists)
-        if app.buttons["notebook-trash-select"].exists {
-            app.buttons["notebook-trash-select"].tap()
+        if !app.buttons["notebook-trash-done-selection"].exists {
+            app.trashAction("notebook-trash-select").tap()
         }
         trashRow(ids[2], in: app).tap()
         trashRow(ids[3], in: app).tap()
@@ -136,7 +136,10 @@ final class NotebookTrashUITests: XCTestCase {
         XCTAssertTrue(doneSelecting.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["notebook-trash-close"].exists)
         doneSelecting.tap()
-        XCTAssertTrue(app.buttons["notebook-trash-select"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["notebook-trash-close"].waitForExistence(timeout: 5))
+        // The sheet shows Select; the iPad sidebar keeps it in Trash Actions.
+        XCTAssertTrue(app.buttons["notebook-trash-select"].exists
+                      || app.buttons["notebook-trash-actions"].firstMatch.exists)
         XCTAssertTrue(trashRow(ids[4], in: app).exists)
         XCTAssertFalse(app.buttons["notebook-trash-restore-selected"].exists)
         app.closeTrash()
@@ -210,8 +213,7 @@ final class NotebookTrashUITests: XCTestCase {
         app.openTrash()
         let note = trashRow(id, in: app)
         XCTAssertTrue(note.waitForExistence(timeout: 5))
-        let emptyTrash = app.buttons["notebook-empty-trash"]
-        XCTAssertTrue(emptyTrash.waitForExistence(timeout: 5))
+        let emptyTrash = app.trashAction("notebook-empty-trash")
         emptyTrash.tap()
         let delete = app.buttons["Delete Permanently"]
         XCTAssertTrue(delete.waitForExistence(timeout: 5))
@@ -228,7 +230,7 @@ final class NotebookTrashUITests: XCTestCase {
         XCTAssertTrue(delete.waitForNonExistence(timeout: 5))
         XCTAssertTrue(note.exists)
 
-        emptyTrash.tap()
+        app.trashAction("notebook-empty-trash").tap()
         XCTAssertTrue(delete.waitForExistence(timeout: 5))
         delete.tap()
         XCTAssertTrue(app.staticTexts["Trash is empty"].waitForExistence(timeout: 10))
