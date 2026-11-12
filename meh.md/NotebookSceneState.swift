@@ -22,6 +22,9 @@ final class NotebookSceneState {
     let navigationState: NotebookNavigationState
     let recentCommands: NotebookRecentCommandState
     let menu = NotebookMenuState()
+    /// Whether the split view shows Files. The editor offers New Note
+    /// itself while Files is hidden.
+    var columnVisibility: NavigationSplitViewVisibility = .all
 
     // MARK: Scene
 

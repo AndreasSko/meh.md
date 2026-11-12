@@ -110,10 +110,13 @@ private struct NotebookNavigationContainer: View {
     let isCompact: Bool
 
     var body: some View {
-        NavigationSplitView(preferredCompactColumn: Binding(
-            get: { scene.preferredCompactColumn },
-            set: { scene.setPreferredCompactColumn($0, isCompact: isCompact) }
-        )) {
+        NavigationSplitView(
+            columnVisibility: Bindable(scene).columnVisibility,
+            preferredCompactColumn: Binding(
+                get: { scene.preferredCompactColumn },
+                set: { scene.setPreferredCompactColumn($0, isCompact: isCompact) }
+            )
+        ) {
             NotebookSidebar(scene: scene, focus: focus, isCompact: isCompact)
         } detail: {
             Group {
