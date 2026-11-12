@@ -1687,7 +1687,11 @@ final class NotebookWorkspace {
             guard let haltable = existing as? any HaltableSyncTransport,
                   let halt = await haltable.haltStatus() else { return }
             syncHalt = halt
-            let accountRecheck = recheckAccount && halt.reason == .accountChanged
+            // A sign-out is checked again on any refresh, so a missed account
+            // notification can't leave it stuck. Building the transport anew
+            // still refuses another account.
+            let signedOut = halt.underlyingError as? CloudKitSyncTransportError == .signedOut
+            let accountRecheck = (recheckAccount || signedOut) && halt.reason == .accountChanged
             // An interruption needs no user action, so any refresh may rebuild.
             // Neither does a halt without a known cause: a relaunch would
             // rebuild the transport from the same saved state.

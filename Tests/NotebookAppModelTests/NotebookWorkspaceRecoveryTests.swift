@@ -267,6 +267,44 @@ final class NotebookWorkspaceRecoveryTests: XCTestCase {
         workspace.localStorageResetWasScheduled()
     }
 
+    func testSignedOutHaltIsCheckedAgainWithoutAnAccountNotification() async throws {
+        let factory = RecoveryTransportFactory()
+        let original = HaltableRecordingTransport(scope: "same-account", remoteStore: factory.remoteStore)
+        let workspace = makeWorkspace(transport: original, factory: factory)
+        await workspace.start()
+        await original.setHalt(
+            .accountChanged, underlyingError: CloudKitSyncTransportError.signedOut,
+            recoverable: false
+        )
+
+        // Signed in again with the same account; the notification was missed.
+        await workspace.refresh(trigger: "foreground")
+
+        XCTAssertEqual(factory.expectedScopes, ["same-account"])
+        XCTAssertNil(workspace.syncHalt)
+        XCTAssertNil(workspace.syncFailure)
+    }
+
+    func testAnotherAccountAfterASignOutShowsTheAccountChange() async throws {
+        let factory = RecoveryTransportFactory()
+        let original = HaltableRecordingTransport(scope: "account-a", remoteStore: factory.remoteStore)
+        let workspace = makeWorkspace(transport: original, factory: factory)
+        await workspace.start()
+        await original.setHalt(
+            .accountChanged, underlyingError: CloudKitSyncTransportError.signedOut,
+            recoverable: false
+        )
+        // Building the transport for account A refuses account B.
+        factory.nextCreationError = SyncError.scopeChanged
+
+        await workspace.refresh(manual: true)
+
+        XCTAssertEqual(factory.expectedScopes, ["account-a"])
+        let failure = try XCTUnwrap(workspace.syncFailure)
+        XCTAssertFalse(failure.isSignedOut, "A signed-in user must not be asked to sign in")
+        XCTAssertEqual(String(localized: failure.title), "Sync paused")
+    }
+
     func testManualStartupRecoveryBootstrapsAnEmptyLocalNotebook() async throws {
         let factory = RecoveryTransportFactory()
         let original = HaltableRecordingTransport(
@@ -443,6 +481,7 @@ private final class RecoveryTransportFactory {
     private(set) var transports: [HaltableRecordingTransport] = []
     var failNextCreations = 0
     var nextScopeOverride: String?
+    var nextCreationError: (any Error)?
     private var pauseNext = false
     private var creationContinuation: CheckedContinuation<Void, Never>?
     var isCreationPaused: Bool { creationContinuation != nil }
@@ -468,6 +507,10 @@ private final class RecoveryTransportFactory {
         if failNextCreations > 0 {
             failNextCreations -= 1
             throw SyncError.unavailable("Transport construction failed")
+        }
+        if let error = nextCreationError {
+            nextCreationError = nil
+            throw error
         }
         let scope = nextScopeOverride ?? expectedScope ?? "replacement"
         nextScopeOverride = nil

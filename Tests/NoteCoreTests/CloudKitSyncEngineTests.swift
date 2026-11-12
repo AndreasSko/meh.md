@@ -546,6 +546,62 @@ final class CloudKitSyncEngineTests: XCTestCase {
         XCTAssertEqual(server.recordNames, [CloudKitTransportMode.notebook.bootstrapName])
     }
 
+    func testSignOutDuringASessionShowsAsSignedOutAndResumesForTheSameAccount() async throws {
+        let transport = try await open("device")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        let cursor = try await fetchAll(transport).cursor
+        server.setAccountStatus(.noAccount)
+        do {
+            _ = try await transport.fetch(after: cursor)
+            XCTFail("A signed-out account must not sync")
+        } catch {
+            XCTAssertEqual(error as? CloudKitSyncTransportError, .signedOut)
+            XCTAssertTrue(SyncFailurePresentation(
+                error: error, retryWillOccurAutomatically: false
+            ).isSignedOut)
+        }
+        // Still a halt, so only an account check builds it again.
+        let status = await transport.haltStatus()
+        let halt = try XCTUnwrap(status)
+        XCTAssertEqual(halt.reason, .accountChanged)
+        XCTAssertFalse(halt.isRecoverable)
+        let engine = try XCTUnwrap(server.latestEngine)
+        await engine.deliver(.accountChange(.switchAccounts))
+        let switchedStatus = await transport.haltStatus()
+        let switched = try XCTUnwrap(switchedStatus)
+        XCTAssertEqual(switched.underlyingError as? SyncError, .scopeChanged,
+                       "Another account must not show as a plain sign-out")
+
+        await transport.retire()
+        server.setAccountStatus(.available)
+        let resumed = try await CloudKitSyncTransport.makeNotebook(
+            services: server.services,
+            containerIdentifier: server.containerIdentifier,
+            stateDirectory: root.appending(path: "device"),
+            expectedScope: transport.scope
+        )
+        _ = try await resumed.fetch(after: cursor)
+        let resumedHalt = await resumed.haltStatus()
+        XCTAssertNil(resumedHalt)
+    }
+
+    func testEngineSignOutHaltsAsSignedOut() async throws {
+        let transport = try await open("device")
+        _ = try await transport.bootstrap(proposing: try makeCatalog())
+        let engine = try XCTUnwrap(server.latestEngine)
+        await engine.deliver(.accountChange(.signOut))
+        let status = await transport.haltStatus()
+        let halt = try XCTUnwrap(status)
+        XCTAssertEqual(halt.reason, .accountChanged)
+        XCTAssertEqual(halt.underlyingError as? CloudKitSyncTransportError, .signedOut)
+        do {
+            _ = try await transport.publishBatch([try makeNote("after sign-out")])
+            XCTFail("A signed-out account must not receive uploads")
+        } catch {
+            XCTAssertEqual(error as? CloudKitSyncTransportError, .signedOut)
+        }
+    }
+
     func testDeletedZoneHaltsFetch() async throws {
         let transport = try await open("device")
         _ = try await transport.bootstrap(proposing: try makeCatalog())

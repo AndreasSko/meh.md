@@ -11,7 +11,10 @@ extension SyncHaltStatus {
             underlyingError = error
             reason = .interrupted
             isRecoverable = true
-        } else if error as? SyncError == .scopeChanged {
+        } else if error as? SyncError == .scopeChanged
+                    || error as? CloudKitSyncTransportError == .signedOut {
+            // Signing in again is checked like any account change: the
+            // transport is rebuilt only for the account it was bound to.
             underlyingError = error
             reason = .accountChanged
             isRecoverable = false

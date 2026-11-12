@@ -2094,6 +2094,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
         services: CloudKitServices,
         containerIdentifier: String,
         stateDirectory: URL,
+        expectedScope: String? = nil,
         writeState: (@Sendable (Data, URL) throws -> Void)? = nil
     ) async throws -> CloudKitSyncTransport {
         try await make(
@@ -2102,6 +2103,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
             zoneName: CloudKitTransportMode.notebook.zoneName,
             mode: .notebook,
             automaticallySync: false,
+            expectedScope: expectedScope,
             services: services,
             writeState: writeState
         )
@@ -3539,8 +3541,10 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
         case .available:
             break
         case .noAccount:
-            latchFailure(SyncError.scopeChanged)
-            throw SyncError.scopeChanged
+            // Halts like an account change, so signing in again needs the
+            // same account check, but shows as signed out.
+            latchFailure(CloudKitSyncTransportError.signedOut)
+            throw CloudKitSyncTransportError.signedOut
         default:
             throw CloudKitSyncTransportError.accountUnavailable
         }
@@ -3691,7 +3695,11 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
         exchangeActive = false
         exchangeAccountVerified = false
         exchangeNotebookGate = nil
-        if error as? SyncError == .scopeChanged {
+        // Account transitions replace other failures, and a sign-out never
+        // hides a switch to another account.
+        if error as? SyncError == .scopeChanged
+            || (error as? CloudKitSyncTransportError == .signedOut
+                && delegateFailure as? SyncError != .scopeChanged) {
             delegateFailure = error
         } else if delegateFailure == nil {
             delegateFailure = error
@@ -4061,7 +4069,7 @@ extension CloudKitSyncTransport {
                   delegateFailure as? SyncError != .scopeChanged,
                   await eventCommitter.failure == nil,
                   !(await store.snapshot().hasUnexpectedDeletion),
-                  delegateFailure as? SyncError != .scopeChanged,
+                  delegateFailure as? CloudKitSyncTransportError != .signedOut,
                   !isRetired, syncEngine === engine {
                 // An upload completed before the failure may still be
                 // acknowledged if the committer remains healthy.
@@ -4298,7 +4306,9 @@ extension CloudKitSyncTransport {
                 case let .signIn(currentUser)
                     where currentUser == expectedUserRecordID:
                     break
-                case .signIn, .signOut, .switchAccounts:
+                case .signOut:
+                    latchFailure(CloudKitSyncTransportError.signedOut)
+                case .signIn, .switchAccounts:
                     latchFailure(SyncError.scopeChanged)
                 }
                 activities.append(.accountChanged)
