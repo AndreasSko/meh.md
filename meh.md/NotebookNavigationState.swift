@@ -48,6 +48,9 @@ final class NotebookNavigationState {
     var isTreeExpanded = true { didSet { persistIfReady() } }
     var isTrashExpanded = false { didSet { persistIfReady() } }
     var expandedFolderIDs: Set<UUID> = [] { didSet { persistIfReady() } }
+    /// Folders opened only to show a note picked in Recents. The next pick
+    /// in Recents closes them again, unless they were kept meanwhile.
+    private(set) var recentRevealFolderIDs: Set<UUID> = []
 
     private var positions: [UUID: Data] = [:]
 
@@ -279,6 +282,21 @@ final class NotebookNavigationState {
         guard selectableNoteIDs.contains(id) else { return }
         positions[id] = position
         savePreferences()
+    }
+
+    /// Shows a note picked in Recents in Files. Folders the previous pick
+    /// opened close first, so browsing Recents doesn't leave Files unfolded.
+    func revealFromRecents(ancestors: [UUID]) {
+        let folders = availableFolderIDs
+        expandedFolderIDs.subtract(recentRevealFolderIDs)
+        let opened = Set(ancestors).intersection(folders).subtracting(expandedFolderIDs)
+        expandedFolderIDs.formUnion(opened)
+        recentRevealFolderIDs = opened
+    }
+
+    /// Someone used Files directly, so what Recents opened stays open.
+    func keepRevealedFolders() {
+        recentRevealFolderIDs = []
     }
 
     func setFolderExpanded(_ id: UUID, isExpanded: Bool) {

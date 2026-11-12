@@ -74,8 +74,13 @@ struct NotebookSearchResults: View {
                         .padding(.vertical, 14)
                         .padding(.horizontal, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(selection == result.id ? Color.primary.opacity(0.08) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 8))
+                        .background {
+                            if selection == result.id {
+                                NotebookRowHighlight(
+                                    color: NotebookSidebarPalette.openNote, inset: 0
+                                )
+                            }
+                        }
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

@@ -30,6 +30,32 @@ final class NotebookNavigationStateTests: XCTestCase {
         XCTAssertEqual(restoredSecond.position(for: second), Data([2]))
     }
 
+    func testRecentsRevealFoldsBackUnlessFilesWasUsed() async throws {
+        let fixture = try await Fixture()
+        let projects = try await fixture.replica.createFolder(name: "Projects")
+        let trips = try await fixture.replica.createFolder(name: "Trips", parentID: projects)
+        let areas = try await fixture.replica.createFolder(name: "Areas")
+        let open = try await fixture.replica.createFolder(name: "Open")
+        let state = fixture.makeState(sceneID: UUID())
+        state.setFolderExpanded(open, isExpanded: true)
+
+        state.revealFromRecents(ancestors: [trips, projects])
+        XCTAssertEqual(state.expandedFolderIDs, [open, projects, trips])
+
+        // The next pick folds back what the previous one opened, but never
+        // a folder that was open before.
+        state.revealFromRecents(ancestors: [areas])
+        XCTAssertEqual(state.expandedFolderIDs, [open, areas])
+        state.revealFromRecents(ancestors: [open])
+        XCTAssertEqual(state.expandedFolderIDs, [open])
+
+        // Once Files was used, what Recents opened stays open.
+        state.revealFromRecents(ancestors: [trips, projects])
+        state.keepRevealedFolders()
+        state.revealFromRecents(ancestors: [areas])
+        XCTAssertEqual(state.expandedFolderIDs, [open, projects, trips, areas])
+    }
+
     func testFirstSceneMigratesLegacySelectionOnlyOnce() async throws {
         let fixture = try await Fixture()
         let note = try await fixture.replica.createNote(name: "Legacy.md")

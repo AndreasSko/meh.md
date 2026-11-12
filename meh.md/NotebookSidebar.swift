@@ -350,10 +350,7 @@ private struct NotebookLibraryBrowser: View {
                 compactCount: scene.navigationState.recentNoteIDs.count,
                 selectedNoteID: scene.selectedID,
                 isExpanded: Bindable(scene).browsingAllRecents,
-                onSelect: { id in
-                    guard id != scene.selectedID else { return }
-                    scene.perform { try await scene.selectNote(id) }
-                },
+                onSelect: { id in scene.openFromRecents(id) },
                 onCollapse: collapseMacRecents,
                 onVisibleIDs: { scene.visibleRecentPreviewIDs = $0 },
                 rowContent: { placement, index, count in
@@ -651,7 +648,10 @@ private struct NotebookLibraryBrowser: View {
                     .tag(row.id)
                     .id(row.id)
                     .listRowSeparator(.hidden)
-                    .listRowBackground(rowBackground(for: row.id))
+                    .modifier(NotebookFileRowBackground(
+                        color: rowBackground(for: row.id),
+                        insetHighlight: insetRowHighlight(for: row.id)
+                    ))
                     .listRowInsets(sidebarSectionInsets)
             case .ghost(let placement, let parentID, let depth):
                 NotebookGhostRow(scene: scene, placement: placement, parentID: parentID, depth: depth)
@@ -666,19 +666,28 @@ private struct NotebookLibraryBrowser: View {
     /// A custom background also hides the native selected fill.
     private func rowBackground(for id: UUID) -> Color? {
         switch scene.browserSelection.highlight(of: id, openNoteID: scene.selectedID) {
-        case .selected:
-            #if os(iOS)
-            // On iPad a row that drops its custom background for the native
-            // fill keeps showing the first custom background it gets back,
-            // such as the open note's gray. The sidebar's native fill is the
-            // tint, so paint that; compact width shows no open note.
-            if !isCompact { return palette.accentColor ?? .accentColor }
-            #endif
-            return nil
+        case .selected: return nil
         // While picking items, gray would read as a selection the circle denies.
         case .open: return scene.selectingItems ? .clear : NotebookSidebarPalette.openNote
         case .none: return .clear
         }
+    }
+
+    /// The iPad sidebar paints every row, selected or not, as one rounded
+    /// fill. A row that drops its custom background for the native fill
+    /// would keep showing the first custom background it gets back.
+    private func insetRowHighlight(for id: UUID) -> Color? {
+        #if os(iOS)
+        guard !isCompact else { return nil }
+        switch scene.browserSelection.highlight(of: id, openNoteID: scene.selectedID) {
+        // The sidebar's native selected fill is the tint.
+        case .selected: return palette.accentColor ?? .accentColor
+        case .open: return scene.selectingItems ? .clear : NotebookSidebarPalette.openNote
+        case .none: return .clear
+        }
+        #else
+        return nil
+        #endif
     }
 
     @ViewBuilder
@@ -971,9 +980,7 @@ private struct NotebookRecentNoteRow: View {
         let replica = scene.replica
         let isCurrent = showsCurrentNote && scene.selectedID == id
         let row = Button {
-            scene.perform {
-                try await scene.selectNote(id)
-            }
+            scene.openFromRecents(id)
         } label: {
             NotebookRecentRow(
                 title: NotebookNoteName.title(from: placement.displayName),
@@ -1518,6 +1525,19 @@ private struct NotebookEmptySpaceActions: View {
             scene.createItem(kind: .folder, parentID: nil)
         }
             .disabled(scene.busy)
+    }
+}
+
+private struct NotebookFileRowBackground: ViewModifier {
+    let color: Color?
+    let insetHighlight: Color?
+
+    func body(content: Content) -> some View {
+        if let insetHighlight {
+            content.listRowBackground(NotebookRowHighlight(color: insetHighlight))
+        } else {
+            content.listRowBackground(color)
+        }
     }
 }
 
