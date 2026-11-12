@@ -51,6 +51,21 @@ enum NotebookFolderSearch {
         return byName + byPath
     }
 
+    /// The folders from Top Level down to `id`, or nothing when it isn't an
+    /// available folder or one above it is missing or in Trash.
+    static func chain(to id: UUID?, in placements: [NotebookPlacement]) -> [UUID] {
+        let byID = Dictionary(uniqueKeysWithValues: placements.map { ($0.item.id, $0) })
+        var chain: [UUID] = []
+        var next = id
+        while let current = next, !chain.contains(current),
+              let placement = byID[current], placement.item.kind == .folder,
+              !placement.isInTrash, !placement.item.isPermanentlyDeleted {
+            chain.insert(current, at: 0)
+            next = placement.parentID
+        }
+        return next == nil ? chain : []
+    }
+
     /// The given folders that still take the moved items, with their paths.
     static func shortcuts(
         for ids: [UUID], in placements: [NotebookPlacement],

@@ -48,6 +48,8 @@ final class NotebookNavigationState {
     var isTreeExpanded = true { didSet { persistIfReady() } }
     var isTrashExpanded = false { didSet { persistIfReady() } }
     var expandedFolderIDs: Set<UUID> = [] { didSet { persistIfReady() } }
+    /// Changes with every folder view choice, so pages redraw.
+    private(set) var folderViewRevision = 0
     /// Folders opened only to show a note picked in Recents. The next pick
     /// in Recents closes them again, unless they were kept meanwhile.
     private(set) var recentRevealFolderIDs: Set<UUID> = []
@@ -296,6 +298,25 @@ final class NotebookNavigationState {
                   forKey: moveFoldersKey)
     }
 
+    /// How a folder's page shows its notes. Each folder keeps its own
+    /// choice on this device; the list is the default.
+    func folderView(_ folderID: UUID) -> NotebookFolderView {
+        _ = folderViewRevision
+        guard let folderViewsKey,
+              let raw = (store.dictionary(forKey: folderViewsKey) as? [String: String])?[
+                folderID.uuidString]
+        else { return .list }
+        return NotebookFolderView(rawValue: raw) ?? .list
+    }
+
+    func setFolderView(_ view: NotebookFolderView, for folderID: UUID) {
+        guard let folderViewsKey else { return }
+        var views = store.dictionary(forKey: folderViewsKey) as? [String: String] ?? [:]
+        views[folderID.uuidString] = view == .list ? nil : view.rawValue
+        store.set(views, forKey: folderViewsKey)
+        folderViewRevision += 1
+    }
+
     private var storedMoveFolderIDs: [UUID] {
         guard let moveFoldersKey else { return [] }
         return (store.array(forKey: moveFoldersKey) as? [String] ?? [])
@@ -359,6 +380,10 @@ final class NotebookNavigationState {
             let notebookKey = storagePrefix + notebookID.uuidString
             return sceneID.map { notebookKey + ".scene." + $0.uuidString } ?? notebookKey
         }
+    }
+
+    private var folderViewsKey: String? {
+        notebookID.map { storagePrefix + $0.uuidString + ".folderViews" }
     }
 
     private var moveFoldersKey: String? {
@@ -485,6 +510,11 @@ private struct StoredPreferences: Codable {
         self.expandedFolderIDs = expandedFolderIDs
         self.positions = positions
     }
+}
+
+enum NotebookFolderView: String {
+    case list
+    case cards
 }
 
 struct NotebookRecentSessionsRequest: Hashable {

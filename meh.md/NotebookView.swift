@@ -212,6 +212,13 @@ private struct NotebookLinkScreen: View {
         // Keep editor geometry fixed when a link preview is removed.
         .ignoresSafeArea(.container, edges: showsHistory ? .bottom
                          : showsBottomBar ? .top : [.top, .bottom])
+        // A folder's page covers the note beside Files. As an overlay it
+        // keeps the bars' safe area, while the note's geometry stays put.
+        .overlay {
+            if showsLiveEditor, !isCompact, let folderID = scene.pageFolderID {
+                NotebookFolderPage(scene: scene, folderID: folderID, isCompact: false)
+            }
+        }
         .animation(nil, value: isRestoring)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)

@@ -38,7 +38,13 @@
         "FlairUITests/testSettingsEndWithTheVersion",
         "FlairUITests/testLibraryEndsWithTheNoteCount",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
-        "KeyboardCommandUITests"
+        "KeyboardCommandUITests",
+        "FolderPagesUITests/testFolderPageOpensNotesAndNewNotesGoIntoIt",
+        "FolderPagesUITests/testEachFolderKeepsItsView",
+        "FolderPagesUITests/testPageBesideFilesClosesBackToTheNote",
+        "FolderPagesUITests/testTrashingTheFolderClosesItsPage",
+        "FolderPagesUITests/testMacCommandClickSelectsPageRowsWithoutOpeningThem",
+        "FolderPagesUITests/testMacDraggingFromAPageMovesNotesIntoAFolder"
       ]
     }
   ],

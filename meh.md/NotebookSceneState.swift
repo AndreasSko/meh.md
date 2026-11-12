@@ -42,7 +42,18 @@ final class NotebookSceneState {
     var recentActivityFailureIDs = Set<UUID>()
     var preferredCompactColumn = NavigationSplitViewColumn.sidebar
     /// Mirrors the window's size class for actions; views read their own.
-    var isCompact = false
+    var isCompact = false {
+        didSet {
+            // Only beside Files does a page cover the note.
+            guard isCompact != oldValue, pageFolderID != nil else { return }
+            if isCompact {
+                uncoverEditor()
+            } else if !coverEditor() {
+                // Unfinished input keeps the note in view.
+                pageFolderIDs = []
+            }
+        }
+    }
 
     // MARK: Presentation
 
@@ -127,9 +138,18 @@ final class NotebookSceneState {
     // MARK: Library browser
 
     var browsingAllRecents = false
+    /// The folder pages opened, in order; the last one shows. Beside Files
+    /// it covers the open note. On iPhone each one is a screen in Files, so
+    /// Back returns to the page or the Files screen it was opened from.
+    var pageFolderIDs: [UUID] = []
+    var pageFolderID: UUID? { pageFolderIDs.last }
+    /// Whether the note had the keyboard when a page covered it.
+    @ObservationIgnored var editorFocusedBeforePage = false
     var visibleRecentPreviewIDs: [UUID] = []
     /// Notes in Files on screen while it shows previews, in order of appearance.
     var visibleFilePreviewIDs: [UUID] = []
+    /// Notes on a folder page on screen, which always show previews.
+    var visiblePagePreviewIDs: [UUID] = []
     var editingID: UUID?
     var originalName = ""
     var proposedName = ""
@@ -238,6 +258,7 @@ final class NotebookSceneState {
     ) {
         workspace?.contentDidSave(trigger: "catalog snapshot changed")
         navigationState.refreshAvailability()
+        pruneFolderPage()
         NotebookWidgetSnapshotWriter.shared.schedule(replica)
         if previous?.notebookID != current?.notebookID {
             browserDrag.reset()
@@ -690,6 +711,7 @@ final class NotebookSceneState {
             navigationState.recordOpened(id)
         }
         if selectedID == id, !linkVisit { resetLinkJourney() }
+        if revealDetail, !isCompact { closeFolderPage() }
         if revealDetail, preferredCompactColumn != .detail {
             preferredCompactColumn = .detail
         }

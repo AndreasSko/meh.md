@@ -57,6 +57,8 @@ and the evidence collected along the way.
   the links that open it.
 - [Navigation and preview](notebook-navigation-preview.md): app interaction
   and the isolated Debug workspace.
+- [Folder pages](notebook-folder-pages.md): a folder's notes as a list or
+  cards, and the path above a note.
 - [Markdown import](notebook-import-contract.md): source-preserving import.
 - [Markdown copies](markdown-copy-contract.md): portable, one-way output.
 - [Markdown backups](markdown-backups.md): local schedule and retention.

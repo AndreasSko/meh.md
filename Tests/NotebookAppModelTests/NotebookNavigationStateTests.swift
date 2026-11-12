@@ -111,6 +111,25 @@ final class NotebookNavigationStateTests: XCTestCase {
         XCTAssertEqual(first.makeState().recentMoveFolderIDs, [folder])
     }
 
+    func testEachFolderKeepsItsViewForEveryWindowOfTheNotebook() async throws {
+        let fixture = try await Fixture()
+        let inbox = try await fixture.replica.createFolder(name: "Inbox")
+        let archive = try await fixture.replica.createFolder(name: "Archive")
+        let first = fixture.makeState(sceneID: UUID())
+        XCTAssertEqual(first.folderView(inbox), .list)
+
+        let revision = first.folderViewRevision
+        first.setFolderView(.cards, for: inbox)
+        XCTAssertGreaterThan(first.folderViewRevision, revision)
+        XCTAssertEqual(first.folderView(inbox), .cards)
+        XCTAssertEqual(first.folderView(archive), .list)
+
+        let second = fixture.makeState(sceneID: UUID())
+        XCTAssertEqual(second.folderView(inbox), .cards)
+        second.setFolderView(.list, for: inbox)
+        XCTAssertEqual(first.folderView(inbox), .list)
+    }
+
     func testFirstSceneMigratesLegacySelectionOnlyOnce() async throws {
         let fixture = try await Fixture()
         let note = try await fixture.replica.createNote(name: "Legacy.md")

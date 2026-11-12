@@ -80,4 +80,21 @@ final class NotebookFolderSearchTests: XCTestCase {
             NotebookFolderShortcut(id: lisbon, name: "Lisbon trip", ancestors: ["Projects"])
         ])
     }
+
+    func testChainRunsFromTopLevelAndEndsAtMissingOrTrashedFolders() async throws {
+        let projects = try await replica.createFolder(name: "Projects")
+        let lisbon = try await replica.createFolder(name: "Lisbon trip", parentID: projects)
+        let photos = try await replica.createFolder(name: "Photos", parentID: lisbon)
+        let note = try await replica.createNote(name: "Note.md", parentID: lisbon)
+
+        XCTAssertEqual(
+            NotebookFolderSearch.chain(to: photos, in: replica.placements),
+            [projects, lisbon, photos])
+        XCTAssertEqual(NotebookFolderSearch.chain(to: nil, in: replica.placements), [])
+        XCTAssertEqual(NotebookFolderSearch.chain(to: note, in: replica.placements), [])
+        XCTAssertEqual(NotebookFolderSearch.chain(to: UUID(), in: replica.placements), [])
+
+        try await replica.setTrashed(projects, true)
+        XCTAssertEqual(NotebookFolderSearch.chain(to: photos, in: replica.placements), [])
+    }
 }
