@@ -171,6 +171,46 @@ final class SyncDamageRecoveryTests: XCTestCase {
         XCTAssertEqual(try unreadableRecordIDs("reader"), [note.id])
     }
 
+    func testFileThatIsStillMissingOnTheNextTryIsSkipped() async throws {
+        let catalog = try makeCatalog()
+        let note = try makeNote("its file keeps going missing")
+        let other = try makeNote("arrives regardless")
+        let writer = try await open("writer")
+        _ = try await writer.bootstrap(proposing: catalog)
+        _ = try await writer.publishBatch([note, other])
+        server.setAssetLost(true, ofRecordNamed: note.id)
+
+        // Usually a short glitch, so the first try fails and is retried.
+        let reader = try await open("reader")
+        _ = try await reader.bootstrap(proposing: catalog)
+        do {
+            _ = try await fetchAll(reader)
+            XCTFail("A missing file is retried at first")
+        } catch {
+            XCTAssertEqual(error as? CloudKitSyncTransportError, .assetUnavailable)
+        }
+        XCTAssertEqual(try stateSet("reader", "unavailableAssetRecordIDs"), [note.id])
+        XCTAssertEqual(try unreadableRecordIDs("reader"), [])
+
+        // The failure halted the transport, which the app builds again.
+        await reader.retire()
+        let rebuilt = try await open("reader")
+        var received = try await fetchAll(rebuilt, after: nil)
+        XCTAssertTrue(received.records.contains(other))
+        XCTAssertFalse(received.records.contains(note))
+        XCTAssertEqual(try unreadableRecordIDs("reader"), [note.id])
+        let halt = await rebuilt.haltStatus()
+        XCTAssertNil(halt)
+
+        // Read again after the next launch, like any skipped record.
+        server.setAssetLost(false, ofRecordNamed: note.id)
+        await rebuilt.retire()
+        received = try await fetchAll(try await open("reader"), after: received.cursor)
+        XCTAssertEqual(received.records, [note])
+        XCTAssertEqual(try unreadableRecordIDs("reader"), [])
+        XCTAssertEqual(try stateSet("reader", "unavailableAssetRecordIDs"), [])
+    }
+
     func testMissingAssetFileIsRetriedInsteadOfSkipped() throws {
         let note = try makeNote("its file did not arrive")
         let codec = CloudKitRecordCodec(mode: .notebook, zoneID: server.zoneID)

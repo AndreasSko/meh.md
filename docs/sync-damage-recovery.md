@@ -19,7 +19,9 @@ See [notebook format upgrades](notebook-upgrade-safety.md).
 - **The gate allows this app.** The record is damaged. The device skips
   it, remembers its name, and keeps syncing everything else.
 - **The record's downloaded file could not be read.** That says nothing
-  about the record. The fetch fails and is tried again.
+  about the record. The fetch fails and is tried again. If the file is
+  still missing on the next try, the record is skipped like a damaged one,
+  so a file that never arrives can't stop sync for good.
 - **The canonical record itself is unreadable.** It carries the notebook
   identity and the gate, so it is never skipped. Sync stops.
 

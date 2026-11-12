@@ -78,6 +78,7 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     private var fetchedBytes = 0
     private var directReads: [String] = []
     private var batchReads: [[String]] = []
+    private var lostAssetNames = Set<String>()
     private var damagedAssetNames = Set<String>()
     private var zoneChangeReads = 0
     private var pushesLost = false
@@ -141,6 +142,14 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     var zoneChangeReadCount: Int { locked { zoneChangeReads } }
 
     func inject(_ fault: Fault) { locked { faults.append(fault) } }
+
+    /// Hands out this record with an asset whose file is missing, as when
+    /// CloudKit purged its staged download, until restored.
+    func setAssetLost(_ lost: Bool, ofRecordNamed name: String) {
+        locked {
+            if lost { lostAssetNames.insert(name) } else { lostAssetNames.remove(name) }
+        }
+    }
 
     /// Hands out this record with unreadable content, without a change a
     /// fetch would report, until restored. A device sees it as damaged.
@@ -627,10 +636,12 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     private func serverCopy(of record: CKRecord) throws -> CKRecord {
         let copy = try retainAssets(of: record)
         let name = record.recordID.recordName
-        if damagedAssetNames.contains(name) {
+        if lostAssetNames.contains(name) || damagedAssetNames.contains(name) {
             for key in copy.allKeys() where copy[key] is CKAsset {
-                let file = assetDirectory.appending(path: "damaged-\(UUID().uuidString)")
-                try Data("not an Automerge document".utf8).write(to: file)
+                let file = assetDirectory.appending(path: "replaced-\(UUID().uuidString)")
+                if damagedAssetNames.contains(name) {
+                    try Data("not an Automerge document".utf8).write(to: file)
+                }
                 copy[key] = CKAsset(fileURL: file)
             }
         }

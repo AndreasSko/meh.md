@@ -67,6 +67,10 @@ struct CloudKitTransportState: Codable, Equatable {
     /// Cloud records this device could not understand. They are skipped
     /// and read again after a relaunch, when an update may understand them.
     var unreadableRecordIDs: Set<String> = []
+    /// Records whose downloaded file could not be read. One that fails
+    /// again on a later try is skipped like an unreadable record, so a file
+    /// that never arrives can't stop sync.
+    var unavailableAssetRecordIDs: Set<String> = []
     /// Set when damaged state was replaced. The inbox then starts empty
     /// although this device has joined, and must not re-create the zone.
     var rebuiltAfterJoining = false
@@ -116,7 +120,7 @@ struct CloudKitTransportState: Codable, Equatable {
         case remoteDeletedSnapshotIDs
         case hasUnexpectedDeletion, retryNotBefore
         case remoteDeletionHaltReason, completedSyncStateMigrations
-        case unreadableRecordIDs, rebuiltAfterJoining
+        case unreadableRecordIDs, unavailableAssetRecordIDs, rebuiltAfterJoining
     }
 
     init(from decoder: any Decoder) throws {
@@ -187,6 +191,9 @@ struct CloudKitTransportState: Codable, Equatable {
         unreadableRecordIDs = try values.decodeIfPresent(
             Set<String>.self, forKey: .unreadableRecordIDs
         ) ?? []
+        unavailableAssetRecordIDs = try values.decodeIfPresent(
+            Set<String>.self, forKey: .unavailableAssetRecordIDs
+        ) ?? []
         rebuiltAfterJoining = try values.decodeIfPresent(
             Bool.self, forKey: .rebuiltAfterJoining
         ) ?? false
@@ -253,6 +260,11 @@ struct CloudKitTransportState: Codable, Equatable {
         if !unreadableRecordIDs.isEmpty {
             try values.encode(unreadableRecordIDs, forKey: .unreadableRecordIDs)
         }
+        if !unavailableAssetRecordIDs.isEmpty {
+            try values.encode(
+                unavailableAssetRecordIDs, forKey: .unavailableAssetRecordIDs
+            )
+        }
         if rebuiltAfterJoining {
             try values.encode(rebuiltAfterJoining, forKey: .rebuiltAfterJoining)
         }
@@ -296,6 +308,7 @@ struct CloudKitTransportState: Codable, Equatable {
         unresolvedRemoteDeletionRecordIDs.remove(record.id)
         remoteDeletedSnapshotIDs.remove(record.id)
         unreadableRecordIDs.remove(record.id)
+        unavailableAssetRecordIDs.remove(record.id)
         if purgedRecordIDs.contains(record.id) {
             if record.protocolVersion == 2, record.kind == .note,
                deletedNoteIDs.contains(record.snapshot.noteID) {
@@ -380,6 +393,7 @@ struct CloudKitTransportState: Codable, Equatable {
         let previouslyUnexpected = hasUnexpectedDeletion
         pendingRemoteDeletionIDs.subtract(recordNames)
         unreadableRecordIDs.subtract(recordNames)
+        unavailableAssetRecordIDs.subtract(recordNames)
         if protocolVersion == 1 {
             hasUnexpectedDeletion = hasUnexpectedDeletion
                 || !recordNames.isEmpty
@@ -2899,6 +2913,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
             if !read.missing.isEmpty {
                 try await store.update {
                     $0.unreadableRecordIDs.subtract(read.missing)
+                    $0.unavailableAssetRecordIDs.subtract(read.missing)
                 }
             }
             _ = try await commitFetchedChanges(
@@ -3038,6 +3053,7 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
         }.map(\.recordName))
         var records: [SyncRecord] = []
         var unreadable = Set<String>()
+        var unavailableAssets = Set<String>()
         for modification in modifications where modification.recordID.zoneID == zoneID {
             do {
                 records.append(try decode(modification))
@@ -3048,7 +3064,36 @@ public final actor CloudKitSyncTransport: HaltableSyncTransport, ActiveSyncTrans
                 // first, so "Update required" still takes precedence when
                 // a newer app wrote it.
                 unreadable.insert(modification.recordID.recordName)
+            } catch CloudKitSyncTransportError.assetUnavailable
+                where modification.recordID.recordName != mode.bootstrapName {
+                unavailableAssets.insert(modification.recordID.recordName)
             }
+        }
+        if !unavailableAssets.isEmpty {
+            // A file that didn't arrive is usually a short glitch, so the
+            // fetch fails and is tried again. A record whose file was
+            // already missing on an earlier try, or that was already
+            // skipped, is skipped like damage and read again after the next
+            // launch.
+            let state = await store.snapshot()
+            let skipped = unavailableAssets.filter {
+                state.unreadableRecordIDs.contains($0)
+                    || state.unavailableAssetRecordIDs.contains($0)
+            }
+            let retried = unavailableAssets.subtracting(skipped)
+            if !retried.isEmpty {
+                try await store.update {
+                    $0.unavailableAssetRecordIDs.formUnion(retried)
+                }
+                throw CloudKitSyncTransportError.assetUnavailable
+            }
+            let newlySkipped = skipped.subtracting(state.unreadableRecordIDs)
+            if !newlySkipped.isEmpty {
+                await diagnose("unavailable_assets_skipped", counts: [
+                    "records": newlySkipped.count
+                ])
+            }
+            unreadable.formUnion(skipped)
         }
         if zoneChangeToken != nil, mode == .notebook,
            let notebookID = await store.snapshot().inbox.first(where: {
