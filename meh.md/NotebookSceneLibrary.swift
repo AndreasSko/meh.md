@@ -207,7 +207,13 @@ extension NotebookSceneState {
         }
         if workspace?.isResetPending == true { return "Restart to finish reset" }
         guard recent.isEditingEnabled else { return "Note unavailable" }
-        let preview = cached ?? NotebookRecentPreview.text(from: recent.text)
+        var preview = cached ?? NotebookRecentPreview.text(from: recent.text)
+        // A new note's cached excerpt is empty until typing pauses. Read its
+        // first words live meanwhile; once the cache has text, rows stop
+        // observing the editor again, so typing doesn't redraw Recents.
+        if preview.isEmpty, cached != nil {
+            preview = NotebookRecentPreview.text(from: recent.text)
+        }
         return preview.isEmpty ? "Empty note" : preview
     }
 
