@@ -1,7 +1,9 @@
 name: Release notes
 
 # Adds each merged PR's first paragraph to the draft GitHub release of the
-# version main builds. See docs/releasing.md.
+# version main builds. A push adds every PR that reached main since the
+# last successful run, so a merged stack and PRs a failed run missed are
+# included. See docs/releasing.md.
 on:
   push:
     branches: [main]
@@ -12,10 +14,11 @@ on:
         required: true
 
 permissions:
+  actions: read
   contents: write
   pull-requests: read
 
-# Queued, not canceled: each run adds a different PR.
+# Queued, not canceled: each run picks up from the last successful one.
 concurrency:
   group: release-notes
   cancel-in-progress: false
@@ -35,10 +38,11 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Add the PR to the draft release
+      - name: Add the PRs to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ inputs.pr }}
+          BEFORE: ${{ github.event.before }}
         run: |
           if [[ -n $PR ]]; then
             pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR")
@@ -46,41 +50,73 @@ jobs:
               echo "::error::#$PR isn't merged."
               exit 1
             }
+            prs=$(jq -c '[.]' <<< "$pr")
           else
-            pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0] // empty')
+            # A merged stack reaches main in one push, and GitHub links
+            # that push to the bottom PR only. So pick every merged PR
+            # whose commits are new since the last successful run.
+            since=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-notes.yml/runs?branch=main&event=push&status=success&per_page=1" \
+              --jq '.workflow_runs[0].head_sha // empty')
+            if [[ -z $since ]] || ! git merge-base --is-ancestor "$since" HEAD 2> /dev/null; then
+              since=$BEFORE
+            fi
+            git cat-file -e "$since^{commit}" 2> /dev/null || since=HEAD^
+            # Commits a published release already has belong to its notes.
+            released=$(git tag --list 'v*' --merged HEAD --no-contains HEAD | sed 's/^/^/')
+            # shellcheck disable=SC2086
+            commits=$(git rev-list HEAD "^$since" $released)
+            prs=$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=closed&sort=updated&direction=desc&per_page=100" |
+              jq -c --arg commits "$commits" '
+                ($commits | split("\n") | map({(.): true}) | add // {}) as $new
+                | [.[] | select(.merged_at and ($new[.head.sha] or $new[.merge_commit_sha // ""]))]
+                | sort_by(.merged_at, .number)')
+            echo "Looking at the commits after $since."
           fi
-          [[ -n $pr ]] || { echo "No PR belongs to this commit."; exit 0; }
-          number=$(jq -r .number <<< "$pr")
-          if jq -e 'any(.labels[]; .name == "no-release-note")' <<< "$pr" > /dev/null; then
-            echo "#$number is labeled no-release-note."
-            exit 0
-          fi
-          note=$(jq -r '.body // ""' <<< "$pr" | scripts/release_notes.py paragraph)
-          [[ -n $note ]] || { echo "#$number has no description."; exit 0; }
+
+          entries=()
+          while read -r pr; do
+            number=$(jq -r .number <<< "$pr")
+            if jq -e 'any(.labels[]; .name == "no-release-note")' <<< "$pr" > /dev/null; then
+              echo "#$number is labeled no-release-note."
+              continue
+            fi
+            note=$(jq -r '.body // ""' <<< "$pr" | scripts/release_notes.py paragraph)
+            [[ -n $note ]] || { echo "#$number has no description."; continue; }
+            entries+=("- $note (#$number)")
+          done < <(jq -c '.[]' <<< "$prs")
+          [[ ${#entries[@]} -gt 0 ]] || { echo "No PR to add."; exit 0; }
 
           version=$(scripts/app_version.sh)
-          entry="- $note (#$number)"
           # Also matches an untagged-… draft by name: older runs
           # edited drafts without tag_name, which gave them that tag.
           release=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
             --jq "[.[] | select(.draft and (.tag_name == \"v$version\" or (.name == \"$version\" and (.tag_name | startswith(\"untagged-\")))))] | last // empty")
+          body=$(jq -r '.body // ""' <<< "$release")
+          added=()
+          for entry in "${entries[@]}"; do
+            number=${entry##*(#}
+            number=${number%)}
+            if grep -qF "(#$number)" <<< "$body"; then
+              echo "#$number is already in the draft release v$version."
+              continue
+            fi
+            body=${body:+$body$'\n'}$entry
+            added+=("#$number")
+          done
+          [[ ${#added[@]} -gt 0 ]] || exit 0
+
           if [[ -z $release ]]; then
-            # Fails when v$version was just published; the PR then
-            # belongs to the next draft, which a rerun picks.
+            # Fails when v$version was just published; the PRs then
+            # belong to the next draft, which a rerun picks.
             gh api -X POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="v$version" \
-              -f name="$version" -F draft=true -f body="$entry" > /dev/null || {
+              -f name="$version" -F draft=true -f body="$body" > /dev/null || {
               echo "::error::Couldn't start the draft v$version. If it was just published, rerun this."
               exit 1
             }
-            echo "Started the draft release v$version with #$number." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          body=$(jq -r '.body // ""' <<< "$release")
-          if grep -qF "(#$number)" <<< "$body"; then
-            echo "#$number is already in the draft release v$version."
+            echo "Started the draft release v$version with ${added[*]}." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           # Without tag_name, GitHub replaces a draft's tag with untagged-….
           gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$(jq -r .id <<< "$release")" \
-            -f tag_name="v$version" -f body="$body"$'\n'"$entry" > /dev/null
-          echo "Added #$number to the draft release v$version." >> "$GITHUB_STEP_SUMMARY"
+            -f tag_name="v$version" -f body="$body" > /dev/null
+          echo "Added ${added[*]} to the draft release v$version." >> "$GITHUB_STEP_SUMMARY"

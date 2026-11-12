@@ -47,7 +47,9 @@ Each release has a draft on GitHub's Releases page, named after the version
 `main` builds, like `v0.31.0`. Only people with write access see drafts.
 When a PR merges, `release-notes.yml` adds its first paragraph to the
 draft, with the PR number. That's why a PR description opens with a
-plain-English summary for users.
+plain-English summary for users. Each run adds every PR that reached
+`main` since the last successful run, so all PRs of a merged stack get
+in, and so do PRs from a run that failed.
 
 PRs labeled `no-release-note` are left out; use it for changes users don't
 notice, like CI, tests, docs or refactors. To add a PR that was missed, run
