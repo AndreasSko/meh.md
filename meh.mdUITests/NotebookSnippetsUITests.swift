@@ -372,6 +372,31 @@ final class NotebookSnippetsUITests: XCTestCase {
             .exists)
     }
 
+    func testShowFolderInFilesScrollsToFolderInCollapsedParent() throws {
+        continueAfterFailure = false
+        let app = makeApp(fixture: "snippets-nested")
+        app.launch()
+
+        XCTAssertTrue(fileTitle("Resources", in: app).waitForExistence(
+            timeout: 5))
+        XCTAssertFalse(fileTitle("Snippets", in: app).exists,
+                       "Resources should start collapsed")
+        openSnippetSettings(app)
+        app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@",
+            "notebook-snippet-folder-overview-"
+        )).firstMatch.tap()
+        app.buttons["notebook-open-snippet-source"].tap()
+
+        let snippets = fileTitle("Snippets", in: app)
+        let onScreen = NSPredicate { _, _ in
+            snippets.exists && app.windows.firstMatch.frame
+                .contains(snippets.frame)
+        }
+        expectation(for: onScreen, evaluatedWith: nil)
+        waitForExpectations(timeout: 5)
+    }
+
     private func makeApp(mode: String = "source",
                          fixture: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()

@@ -19,6 +19,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case readme
     case longNote = "long-note"
     case snippets
+    case snippetsNested = "snippets-nested"
     case markdownTour = "markdown-tour"
     case rendering
     case conflicts
@@ -293,6 +294,26 @@ enum NotebookUITestFixture: String, CaseIterable {
             _ = try await replica.createNote(
                 name: "Training log.md",
                 text: "20.10 – Pull\n- Pull-ups: 7, 7\n- Ring rows: 12, 10\n\n")
+        case .snippetsNested:
+            // A registered folder deep inside a collapsed folder, so
+            // revealing it must expand and scroll in one go.
+            for name in ["Projects", "Areas"] {
+                _ = try await replica.createFolder(name: name)
+            }
+            let resources = try await replica.createFolder(name: "Resources")
+            for name in ["Birds", "Books", "Cooking", "Gardening", "Hiking",
+                         "Music", "Photography", "Recipes", "Sailing",
+                         "Stars", "Tides", "Travel", "Weather"] {
+                _ = try await replica.createFolder(
+                    name: name, parentID: resources)
+            }
+            let snippets = try await replica.createFolder(
+                name: "Snippets", parentID: resources)
+            _ = try await replica.createNote(
+                name: "Log entry.md", text: "**{{date:short}}** – ",
+                parentID: snippets)
+            try await replica.setSnippetSource(snippets, enabled: true)
+            _ = try await replica.createFolder(name: "Archive")
         case .historyTour:
             #if !NOTEBOOK_PERFORMANCE_HOST
             try await seedHistoryTour(replica)
