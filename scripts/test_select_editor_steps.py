@@ -273,6 +273,8 @@ class Recording(unittest.TestCase):
     def test_built_copies_map_to_the_checkout(self):
         for built, path in [
             ("/var/folders/x/meh-editor-performance.AbC123/sources/MarkdownEditor.swift", EDITOR),
+            ("/var/folders/x/meh-editor-performance.AbC123/sources/NewNoteIntent.swift",
+             "meh.mdShared/NewNoteIntent.swift"),
             ("/tmp/native-editor-parity-work.X/current-package/Sources/NoteCore/A.swift",
              "Sources/NoteCore/A.swift"),
             (str(ROOT / "Tools/EditorQuoteCheck/EditorQuoteCheck.swift"),

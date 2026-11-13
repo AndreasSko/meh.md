@@ -93,7 +93,9 @@ if [[ "$revision" != working-tree ]]; then
   revision="$(git -C "$repo_root" rev-parse --verify "$revision^{commit}")"
 fi
 if [[ "$performance_host" == notebook ]]; then
-  for source in "$repo_root"/meh.md/*.swift; do
+  # The app target also compiles the sources it shares with the widgets.
+  for source in "$repo_root"/meh.md/*.swift "$repo_root"/meh.mdShared/*.swift; do
+    [[ -f "$source" ]] || continue
     name="${source##*/}"
     case "$name" in
       NotebookSyncLabApp.swift|CloudKitSmokeCheck.swift|NotebookTypingDiagnostics.swift)
@@ -199,7 +201,12 @@ if [[ "$cache_hit" == 0 ]]; then
   if [[ -n "$coverage_root" ]]; then
     {
       for source in "$check_root"/sources/*.swift; do
-        printf 'meh.md/%s\n' "${source##*/}"
+        name="${source##*/}"
+        if [[ -f "$repo_root/meh.mdShared/$name" ]]; then
+          printf 'meh.mdShared/%s\n' "$name"
+        else
+          printf 'meh.md/%s\n' "$name"
+        fi
       done
       for argument in "${extra_arguments[@]}"; do
         case "$argument" in
