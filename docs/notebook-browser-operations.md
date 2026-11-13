@@ -38,6 +38,11 @@ the group; actions on an unselected row use that row.
 
 The Move sheet starts at the sources' common parent (otherwise root), shows
 child folders and the current path, and provides Up one level navigation.
+A search field lists every folder whose name or path contains all the typed
+words, and a Recent section offers the last three folders items were moved
+to, by the sheet or by dragging. Picking either opens that folder in the
+sheet; Move Here still confirms and is off while a search hides the path.
+Recent folders are kept per notebook on this device.
 The sheet and toolbar stay fixed while the folder list changes. Source
 folders and descendants are excluded. Move Here validates again after the
 editor flush and uses the existing atomic mutation. The sheet prevents repeat

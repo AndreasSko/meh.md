@@ -14,6 +14,10 @@ struct NotebookBrowserAppKitDragReader: NSViewRepresentable {
     let begin: (UUID) -> NSItemProvider
     /// Sees plain clicks before the List deselects on its own.
     let clickEmptySpace: (CGPoint) -> Void
+    /// A folder page tracks drags in the scroll view it sits in, not in
+    /// Files, and finds a list's item by its table row.
+    var tracksOwnScrollView = false
+    var sourceAtRow: ((Int) -> UUID?)?
 
     func makeNSView(context: Context) -> ReaderView {
         let view = ReaderView()
@@ -67,8 +71,11 @@ struct NotebookBrowserAppKitDragReader: NSViewRepresentable {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
         private func connect() {
+            let ownScrollView = configuration?.tracksOwnScrollView == true
+            let shared = ownScrollView ? nil : configuration?.state.scrollView
             guard let window,
-                  let scroll = configuration?.state.scrollView ?? enclosingScrollView,
+                  let scroll = shared ?? enclosingScrollView
+                    ?? (ownScrollView ? Self.scrollView(underneath: self) : nil),
                   scroll.window === window else {
                 disconnect()
                 return
@@ -85,6 +92,29 @@ struct NotebookBrowserAppKitDragReader: NSViewRepresentable {
             self.recognizer = recognizer
             installedView = target
             target.addGestureRecognizer(recognizer)
+        }
+
+        /// The scroll view an overlay lies on: the smallest one around its
+        /// centre, which can reach under the toolbar where the overlay doesn't.
+        private static func scrollView(underneath view: NSView) -> NSScrollView? {
+            guard let root = view.window?.contentView, !view.bounds.isEmpty else { return nil }
+            let frame = view.convert(view.bounds, to: nil)
+            let centre = NSPoint(x: frame.midX, y: frame.midY)
+            var best: (scroll: NSScrollView, area: CGFloat)?
+            func visit(_ parent: NSView) {
+                for child in parent.subviews where child !== view && !child.isHidden {
+                    if let scroll = child as? NSScrollView {
+                        let other = scroll.convert(scroll.bounds, to: nil)
+                        let area = other.width * other.height
+                        if other.contains(centre), area < (best?.area ?? .infinity) {
+                            best = (scroll, area)
+                        }
+                    }
+                    visit(child)
+                }
+            }
+            visit(root)
+            return best?.scroll
         }
 
         private static func table(in view: NSView) -> NSTableView? {
@@ -160,6 +190,11 @@ struct NotebookBrowserAppKitDragReader: NSViewRepresentable {
                   let installedView, let window,
                   let content = window.contentView else { return nil }
             if hitsControl(event) { return nil }
+            if let sourceAtRow = configuration.sourceAtRow,
+               let table = installedView as? NSTableView {
+                let row = table.row(at: table.convert(event.locationInWindow, from: nil))
+                return row >= 0 ? sourceAtRow(row) : nil
+            }
             return configuration.sourceAt(contentPoint(event, in: content))
         }
 

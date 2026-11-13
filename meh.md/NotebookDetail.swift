@@ -55,7 +55,24 @@ struct NotebookDetail: View {
         )
     }
 
+    /// Beside Files a folder's page covers the note, which waits underneath.
+    private var showsFolderPage: Bool { !isCompact && scene.pageFolderID != nil }
+
     var body: some View {
+        ZStack {
+            note
+                .opacity(showsFolderPage ? 0 : 1)
+                .allowsHitTesting(!showsFolderPage)
+                .accessibilityHidden(showsFolderPage)
+            #if os(macOS)
+            if showsFolderPage, let folderID = scene.pageFolderID {
+                NotebookFolderPage(scene: scene, folderID: folderID, isCompact: false)
+            }
+            #endif
+        }
+    }
+
+    private var note: some View {
             Group {
                 if let session = scene.session, let selectedID = scene.selectedID {
                     VStack(spacing: 0) {
@@ -280,6 +297,13 @@ struct NotebookDetail: View {
 
     @ToolbarContentBuilder
     private func toolbar(session: NoteSession, selectedID: UUID) -> some ToolbarContent {
+        if !showsFolderPage {
+            noteToolbar(session: session, selectedID: selectedID)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private func noteToolbar(session: NoteSession, selectedID: UUID) -> some ToolbarContent {
         #if os(macOS)
         if scene.historyBrowser == nil, scene.linkHistory.backTarget != nil {
             ToolbarItemGroup(placement: .navigation) {
@@ -425,6 +449,10 @@ struct NotebookDetailTitle: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            let folders = scene.folderChain(to: placement.parentID)
+            if !folders.isEmpty, !placement.isInTrash {
+                NotebookPathLine(scene: scene, folderIDs: folders, isCompact: scene.isCompact)
+            }
             title
             if !isEditing, let notice = NotebookPlacementNotice(placement) {
                 NotebookNoticeMark(scene: scene, placement: placement, notice: notice)

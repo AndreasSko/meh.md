@@ -19,6 +19,9 @@ final class MarkdownEditorFindPresentation {
 final class MarkdownEditorNavigation {
     var prepareToLeave: (() -> Bool)?
     var resumeEditing: (() -> Void)?
+    /// Hides the text from sight and VoiceOver while something covers it,
+    /// such as a folder's page, keeping its selection and scroll position.
+    var setCovered: ((Bool) -> Void)?
     var focusEditor: (() -> Void)?
     var captureHasEditingFocus: (() -> Bool)?
     var performCommand: ((MarkdownEditingCommand) -> Void)?
@@ -1119,6 +1122,13 @@ struct MarkdownEditor: NSViewRepresentable {
             }
             parent.navigation?.resumeEditing = { [weak textView] in
                 textView?.isEditable = true
+            }
+            parent.navigation?.setCovered = { [weak textView] covered in
+                guard let textView else { return }
+                if covered, textView.window?.firstResponder === textView {
+                    textView.window?.makeFirstResponder(nil)
+                }
+                (textView.enclosingScrollView ?? textView).isHidden = covered
             }
             parent.navigation?.focusEditor = { [weak textView] in
                 guard let textView, textView.isEditable else { return }
@@ -2930,6 +2940,14 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             parent.navigation?.resumeEditing = { [weak textView] in
                 textView?.isEditable = true
+            }
+            parent.navigation?.setCovered = { [weak textView] covered in
+                guard let textView else { return }
+                // A hardware keyboard would otherwise keep typing into it.
+                if covered { textView.resignFirstResponder() }
+                textView.isHidden = covered
+                // SwiftUI's host lists the text view for VoiceOver itself.
+                textView.superview?.accessibilityElementsHidden = covered
             }
             parent.navigation?.focusEditor = { [weak textView] in
                 guard let textView, textView.isEditable else { return }

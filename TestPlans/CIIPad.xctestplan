@@ -44,7 +44,11 @@
         "FlairUITests/testAppearanceSwitchesTheInk",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
         "NotebookOpenNoteUITests",
-        "KeyboardCommandUITests"
+        "KeyboardCommandUITests",
+        "FolderPagesUITests/testFolderPageOpensNotesAndNewNotesGoIntoIt",
+        "FolderPagesUITests/testEachFolderKeepsItsView",
+        "FolderPagesUITests/testPageBesideFilesClosesBackToTheNote",
+        "FolderPagesUITests/testTrashingTheFolderClosesItsPage"
       ]
     }
   ],

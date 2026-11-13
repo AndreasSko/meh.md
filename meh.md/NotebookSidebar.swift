@@ -50,6 +50,29 @@ struct NotebookSidebar: View {
     private var showsTrash: Bool { scene.showingTrash && scene.showsTrashInSidebar }
 
     var body: some View {
+        #if os(iOS)
+        if isCompact {
+            NavigationStack(path: Binding(
+                get: { scene.pageFolderIDs.map(NotebookFolderRoute.init) },
+                set: { routes in
+                    if routes.isEmpty { scene.closeFolderPage() }
+                    else { scene.pageFolderIDs = routes.map(\.id) }
+                }
+            )) {
+                library
+                    .navigationDestination(for: NotebookFolderRoute.self) { route in
+                        NotebookFolderPage(scene: scene, folderID: route.id, isCompact: true)
+                    }
+            }
+        } else {
+            library
+        }
+        #else
+        library
+        #endif
+    }
+
+    private var library: some View {
             ZStack {
                 Group {
                     if showsTrash {
@@ -317,6 +340,8 @@ private struct NotebookLibraryBrowser: View {
     @Environment(\.mehPalette) private var palette
     @State private var notice: NotebookNoticeRequest?
     @State private var frame: CGRect = .zero
+    @AppStorage(NotebookNavigationState.filePreviewsKey, store: NotebookEditorPreferences.store)
+    private var showsFilePreviews = false
 
     private var showsCurrentNote: Bool { !isCompact }
 
@@ -652,7 +677,8 @@ private struct NotebookLibraryBrowser: View {
             switch entry {
             case .row(let row):
                 NotebookFileRow(scene: scene, row: row, afterEndID: afterEndID,
-                                targetDepth: targetDepth, focusedNameID: focus.name,
+                                targetDepth: targetDepth, showsPreview: showsFilePreviews,
+                                focusedNameID: focus.name,
                                 openNotice: { markFrame in
                                     notice = NotebookNoticeRequest(
                                         id: row.id,
@@ -678,7 +704,7 @@ private struct NotebookLibraryBrowser: View {
 
     /// A custom background also hides the native selected fill.
     private func rowBackground(for id: UUID) -> Color? {
-        switch scene.browserSelection.highlight(of: id, openNoteID: scene.selectedID) {
+        switch scene.browserSelection.highlight(of: id, openNoteID: scene.currentSidebarID) {
         case .selected: return nil
         // While picking items, gray would read as a selection the circle denies.
         case .open: return scene.selectingItems ? .clear : NotebookSidebarPalette.openNote
@@ -692,7 +718,7 @@ private struct NotebookLibraryBrowser: View {
     private func insetRowHighlight(for id: UUID) -> Color? {
         #if os(iOS)
         guard !isCompact else { return nil }
-        switch scene.browserSelection.highlight(of: id, openNoteID: scene.selectedID) {
+        switch scene.browserSelection.highlight(of: id, openNoteID: scene.currentSidebarID) {
         // The sidebar's native selected fill is the tint.
         case .selected: return palette.accentColor ?? .accentColor
         case .open: return scene.selectingItems ? .clear : NotebookSidebarPalette.openNote
@@ -825,7 +851,7 @@ private struct NotebookLibraryBrowser: View {
                 if !scene.browserSelection.contains(id) { scene.browserSelection.selectOnly(id) }
                 focus.browser.wrappedValue = true
             },
-            begin: scene.beginBrowserDrag,
+            begin: { scene.beginBrowserDrag($0) },
             clickEmptySpace: scene.clickBrowserEmptySpace(at:)
         ))
         .overlay(NotebookBrowserAppKitDropSurface(interaction: scene.browserDropInteraction()))
@@ -1068,6 +1094,8 @@ private struct NotebookFileRow: View {
     let row: NotebookSidebarRow
     let afterEndID: UUID?
     let targetDepth: Int
+    /// A second line with the note's first words.
+    let showsPreview: Bool
     var focusedNameID: FocusState<UUID?>.Binding
     let openNotice: (CGRect) -> Void
 
@@ -1170,8 +1198,13 @@ private struct NotebookFileRow: View {
                     .frame(width: disclosureWidth, height: rowHeight)
                     #else
                     Button { scene.toggleFolder(row.id) } label: {
+                        // Tapping the name opens the folder's page, so the
+                        // chevron gets room to the left of the row too.
                         disclosureIcon(expanded: isExpanded)
                             .frame(minWidth: 20, minHeight: rowHeight)
+                            .padding(.leading, 16)
+                            .contentShape(Rectangle())
+                            .padding(.leading, -16)
                     }
                     .buttonStyle(.borderless)
                     .accessibilityLabel(placement.displayName)
@@ -1191,10 +1224,20 @@ private struct NotebookFileRow: View {
                         .notebookSelectNameOnFocus()
                 } else {
                     Label {
-                        Text(placement.item.kind == .note
-                            ? NotebookNoteName.title(from: placement.displayName)
-                            : placement.displayName)
-                            .accessibilityIdentifier("notebook-sidebar-title-" + row.id.uuidString)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(placement.item.kind == .note
+                                ? NotebookNoteName.title(from: placement.displayName)
+                                : placement.displayName)
+                                .accessibilityIdentifier("notebook-sidebar-title-" + row.id.uuidString)
+                            if showsPreview, placement.item.kind == .note {
+                                // A blank line keeps the row's height while it loads.
+                                Text(scene.filePreview(for: row.id) ?? " ")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier(
+                                        "notebook-sidebar-preview-" + row.id.uuidString)
+                            }
+                        }
                     } icon: {
                         if placement.item.kind == .folder {
                             NotebookFolderIcon(
@@ -1218,18 +1261,27 @@ private struct NotebookFileRow: View {
                 }
             }
             .padding(.leading, CGFloat(row.depth) * 16)
+            .padding(.vertical, showsPreview && placement.item.kind == .note ? 4 : 0)
             .frame(minHeight: rowHeight)
             .contentShape(Rectangle())
+            .onAppear {
+                if placement.item.kind == .note { scene.fileRowAppeared(row.id) }
+            }
+            .onDisappear { scene.fileRowDisappeared(row.id) }
             #if os(macOS)
             // Covers the whole row, as the List selects it from anywhere.
             // On the label alone, a click near the row's edge only selected.
-            .simultaneousGesture(TapGesture().onEnded {
-                guard placement.item.kind == .note, scene.editingID != row.id,
+            .simultaneousGesture(SpatialTapGesture().onEnded { tap in
+                guard scene.editingID != row.id,
                       !scene.selectingItems, !scene.busy,
                       NSEvent.modifierFlags.intersection([.command, .shift]).isEmpty
                 else { return }
+                // The disclosure button opens the folder in place instead.
+                if placement.item.kind == .folder,
+                   tap.location.x < CGFloat(row.depth) * 16 + disclosureWidth + 4 { return }
                 // List owns range/toggle selection. A plain click also
-                // opens the note, including an already selected row.
+                // opens the note or the folder's page, including an
+                // already selected row.
                 scene.browserSelection.selectOnly(row.id)
                 scene.activateSidebarRow(placement)
             })
@@ -1257,7 +1309,9 @@ private struct NotebookFileRow: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityValue(
-                [scene.selectedID == row.id ? String(localized: "Current note") : nil,
+                [scene.currentSidebarID == row.id
+                    ? (placement.item.kind == .note ? String(localized: "Current note")
+                        : String(localized: "Current folder")) : nil,
                  scene.highlightedFileID == row.id
                     ? String(localized: "Revealed in Files") : nil]
                     .compactMap { $0 }.joined(separator: ", ")
@@ -1451,7 +1505,7 @@ struct NotebookItemActions: View {
 }
 
 /// Sorts a folder's items once; the manual order stays editable after.
-private struct NotebookSortMenu: View {
+struct NotebookSortMenu: View {
     let scene: NotebookSceneState
     let parentID: UUID?
 
@@ -1506,7 +1560,7 @@ private struct NotebookRecentPinButton: View {
     }
 }
 
-private struct NotebookTemplateCreationButton: View {
+struct NotebookTemplateCreationButton: View {
     let scene: NotebookSceneState
 
     var body: some View {
@@ -1585,7 +1639,7 @@ struct NotebookLibraryNewNote: View {
             hasTemplates: !scene.replica.templates.isEmpty,
             onNewNote: scene.createDefaultNote,
             onNewFromTemplate: scene.showTemplates,
-            onNewFolder: { scene.createItem(kind: .folder, parentID: nil) }
+            onNewFolder: { scene.createItem(kind: .folder, parentID: scene.pageFolderID) }
         )
         .frame(width: 44, height: 44)
         #else
@@ -1593,7 +1647,7 @@ struct NotebookLibraryNewNote: View {
             Button("New Note") { scene.createDefaultNote() }
             NotebookTemplateCreationButton(scene: scene)
             Button {
-                scene.createItem(kind: .folder, parentID: nil)
+                scene.createItem(kind: .folder, parentID: scene.pageFolderID)
             } label: {
                 Label("New Folder", systemImage: "folder.badge.plus")
             }

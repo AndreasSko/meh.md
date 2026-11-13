@@ -194,27 +194,51 @@ extension NotebookSceneState {
     }
     #endif
 
-    /// The compact rows, then the expanded rows on screen.
-    var recentPreviewIDs: [UUID] {
-        navigationState.recentNoteIDs + visibleRecentPreviewIDs
+    /// The compact Recents rows, then the rows of a folder page, expanded
+    /// Recents and Files on screen. Files rows count only while they show
+    /// previews.
+    func previewIDs(includingFiles: Bool) -> [UUID] {
+        navigationState.recentNoteIDs + visiblePagePreviewIDs + visibleRecentPreviewIDs
+            + (includingFiles ? visibleFilePreviewIDs : [])
     }
 
     /// Reads the cached excerpt, so rows don't redraw on every keystroke.
     func recentPreview(for id: UUID) -> String {
-        let cached = navigationState.recentPreviewText[id]
+        let cached = navigationState.previewText[id]
         guard let recent = navigationState.recentSessions[id] else {
             return cached ?? "Preview unavailable"
         }
         if workspace?.isResetPending == true { return "Restart to finish reset" }
         guard recent.isEditingEnabled else { return "Note unavailable" }
-        var preview = cached ?? NotebookRecentPreview.text(from: recent.text)
+        var preview = cached ?? NotebookRecentPreview.rowText(from: recent.text)
         // A new note's cached excerpt is empty until typing pauses. Read its
         // first words live meanwhile; once the cache has text, rows stop
         // observing the editor again, so typing doesn't redraw Recents.
         if preview.isEmpty, cached != nil {
-            preview = NotebookRecentPreview.text(from: recent.text)
+            preview = NotebookRecentPreview.rowText(from: recent.text)
         }
         return preview.isEmpty ? "Empty note" : preview
+    }
+
+    /// A note's first words under its name in Files, once loaded.
+    func filePreview(for id: UUID) -> String? {
+        navigationState.previewText[id].map { $0.isEmpty ? "Empty note" : $0 }
+    }
+
+    func fileRowAppeared(_ id: UUID) {
+        if !visibleFilePreviewIDs.contains(id) { visibleFilePreviewIDs.append(id) }
+    }
+
+    func fileRowDisappeared(_ id: UUID) {
+        visibleFilePreviewIDs.removeAll { $0 == id }
+    }
+
+    func pageRowAppeared(_ id: UUID) {
+        if !visiblePagePreviewIDs.contains(id) { visiblePagePreviewIDs.append(id) }
+    }
+
+    func pageRowDisappeared(_ id: UUID) {
+        visiblePagePreviewIDs.removeAll { $0 == id }
     }
 
     func setRecentPinned(_ pinned: Bool, for id: UUID) {
@@ -234,6 +258,90 @@ extension NotebookSceneState {
         perform({ [self] in
             try await replica.setHiddenFromRecents(hidden, for: id)
         }, onCompletion: onCompletion)
+    }
+
+    // MARK: Folder pages
+
+    /// The folders from Top Level down to `id`.
+    func folderChain(to id: UUID?) -> [UUID] {
+        NotebookFolderSearch.chain(to: id, in: replica.placements)
+    }
+
+    /// Shows a folder's page. Beside Files the open note waits underneath,
+    /// read-only, so Close brings it back as it was. A folder opened from a
+    /// page goes on top of it; one opened from Files or a path replaces the
+    /// pages, unless it is one of them, which goes back to it.
+    func openFolderPage(_ id: UUID, fromPage: Bool = false) {
+        guard !busy, !folderChain(to: id).isEmpty else { return }
+        if search.isPresented { search.clear() }
+        if isCompact {
+            #if os(iOS)
+            if preferredCompactColumn == .detail {
+                // A note's path leads back to Files, with the page on top.
+                if !linkRoutes.isEmpty { resetLinkJourney() }
+                setPreferredCompactColumn(.sidebar, isCompact: true)
+                guard preferredCompactColumn == .sidebar else { return }
+            }
+            #endif
+        } else if pageFolderID == nil {
+            guard coverEditor() else { return }
+        }
+        if let index = pageFolderIDs.firstIndex(of: id) {
+            pageFolderIDs.removeSubrange((index + 1)...)
+        } else {
+            pageFolderIDs = fromPage ? pageFolderIDs + [id] : [id]
+        }
+    }
+
+    /// Commits the note's text and hides its editor under a page. False
+    /// when unfinished input must stay where it is.
+    @discardableResult
+    func coverEditor() -> Bool {
+        editorFocusedBeforePage = editorNavigation.captureHasEditingFocus?() ?? false
+        if session?.isEditingEnabled == true {
+            guard editorNavigation.prepareToLeave?() != false, !unrecordedEdit else {
+                errorMessage = NotebookNavigationError.unrecordedEdit.localizedDescription
+                return false
+            }
+        }
+        editorNavigation.setCovered?(true)
+        return true
+    }
+
+    /// Shows the note again; it gets the keyboard back if it had it.
+    func uncoverEditor() {
+        editorNavigation.setCovered?(false)
+        if session?.isEditingEnabled == true { editorNavigation.resumeEditing?() }
+        if editorFocusedBeforePage { editorNavigation.focusEditor?() }
+        editorFocusedBeforePage = false
+    }
+
+    /// Goes back to Files' first screen: on iPhone from a page or a note.
+    /// Beside Files, it closes the page.
+    func openTopLevel() {
+        #if os(iOS)
+        if isCompact, preferredCompactColumn == .detail {
+            if !linkRoutes.isEmpty { resetLinkJourney() }
+            setPreferredCompactColumn(.sidebar, isCompact: true)
+            guard preferredCompactColumn == .sidebar else { return }
+        }
+        #endif
+        closeFolderPage()
+    }
+
+    /// Returns to the note the page covered, or on iPhone to Top Level.
+    func closeFolderPage() {
+        guard !pageFolderIDs.isEmpty else { return }
+        pageFolderIDs = []
+        if !isCompact { uncoverEditor() }
+    }
+
+    /// Pages whose folder is gone close; a page whose folder moved follows
+    /// it.
+    func pruneFolderPage() {
+        let kept = pageFolderIDs.filter { !folderChain(to: $0).isEmpty }
+        guard kept != pageFolderIDs else { return }
+        if kept.isEmpty { closeFolderPage() } else { pageFolderIDs = kept }
     }
 
     // MARK: Files
@@ -376,20 +484,25 @@ extension NotebookSceneState {
         #endif
         browserSelection.activate(placement.item.id)
         navigationState.keepRevealedFolders()
+        let id = placement.item.id
         if placement.item.kind == .folder, editingID == nil {
-            toggleFolder(placement.item.id)
+            openFolderPage(id)
             return
         }
         perform { [self] in
             // A tap outside the naming row finishes its pending name before
             // navigating. Otherwise an unsubmitted folder traps all Files taps.
             try await commitInlineNameIfNeeded()
-            if placement.item.kind == .folder {
-                toggleFolder(placement.item.id)
-            } else {
-                try await selectNote(placement.item.id)
-            }
+            if placement.item.kind == .note { try await selectNote(id) }
+        } onSuccess: { [self] in
+            if placement.item.kind == .folder { openFolderPage(id) }
         }
+    }
+
+    /// The row Files marks as what the big side shows: a folder's page, or
+    /// else the open note.
+    var currentSidebarID: UUID? {
+        (isCompact ? nil : pageFolderID) ?? selectedID
     }
 
     func toggleFolder(_ id: UUID) {
@@ -491,13 +604,20 @@ extension NotebookSceneState {
         return rows.dropFirst(start + 1).prefix { $0.depth > depth }.last?.id ?? id
     }
 
-    func beginBrowserDrag(_ id: UUID) -> NSItemProvider {
+    /// Drags the row, or every selected row with it. A folder page passes
+    /// its own selection.
+    func beginBrowserDrag(_ id: UUID, selection: [UUID]? = nil) -> NSItemProvider {
         guard !busy, editingID == nil, !search.isPresented,
               let notebookID = replica.catalogSnapshot?.notebookID else {
             return NSItemProvider()
         }
-        let ids = browserSelection.contains(id) && browserSelection.count > 1
-            ? selectedBrowserIDs : [id]
+        let ids: [UUID]
+        if let selection {
+            ids = selection.contains(id) ? selection : [id]
+        } else {
+            ids = browserSelection.contains(id) && browserSelection.count > 1
+                ? selectedBrowserIDs : [id]
+        }
         let rootsByID = Dictionary(uniqueKeysWithValues:
             effectiveSelectionRoots(ids).map { ($0.item.id, $0) })
         let roots = ids.compactMap { rootsByID[$0] }
@@ -572,6 +692,11 @@ extension NotebookSceneState {
                     if replica.catalogSnapshot?.heads != oldHeads {
                         browserUndo = undo
                         browserRedo = nil
+                    }
+                    // A drop between rows can also land in another folder.
+                    if target.position == .into
+                        || drag.sources.contains(where: { $0.parentID != target.parentID }) {
+                        navigationState.recordMoveDestination(target.parentID)
                     }
                     if let parentID = target.parentID { expandedIDs.insert(parentID) }
                     for id in drag.itemIDs { reveal(id) }
@@ -659,8 +784,13 @@ extension NotebookSceneState {
         }
     }
 
+    /// In a folder's page, the note goes into that folder.
     func createDefaultNote() {
-        createItem(kind: .note, parentID: nil, usesDefaultDestination: true)
+        if let pageFolderID {
+            createItem(kind: .note, parentID: pageFolderID)
+        } else {
+            createItem(kind: .note, parentID: nil, usesDefaultDestination: true)
+        }
     }
 
     func startWriting() {
@@ -918,7 +1048,11 @@ extension NotebookSceneState {
         search.isPresented = false
         navigationState.isTreeExpanded = true
         reveal(id)
-        if isCompact { preferredCompactColumn = .sidebar }
+        if isCompact {
+            // A folder page would stay on top of the tree.
+            closeFolderPage()
+            preferredCompactColumn = .sidebar
+        }
         fileRevealRequest = NotebookFileReveal(id: id)
     }
 
@@ -981,6 +1115,7 @@ extension NotebookSceneState {
                 browserRedo = nil
             }
         }
+        navigationState.recordMoveDestination(parentID)
         if let parentID { expandedIDs.insert(parentID) }
         for id in ids { reveal(id) }
         browserSelection.clear()

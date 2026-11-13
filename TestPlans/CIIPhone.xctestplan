@@ -58,7 +58,13 @@
         "FlairUITests/testAppearanceSwitchesTheInk",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
         "NoteIntentUITests/testNewNoteControlStartsANewNote",
-        "NoteIntentUITests/testCreateNoteShortcutAddsANoteAndItsLinkOpensIt"
+        "NoteIntentUITests/testCreateNoteShortcutAddsANoteAndItsLinkOpensIt",
+        "FolderPagesUITests/testFolderPageOpensNotesAndNewNotesGoIntoIt",
+        "FolderPagesUITests/testEachFolderKeepsItsView",
+        "FolderPagesUITests/testIPhoneNamesANewFolderOnACardsPage",
+        "FolderPagesUITests/testIPhoneShowInFilesLeavesThePages",
+        "FolderPagesUITests/testIPhoneRotationMovesThePageIntoFiles",
+        "FolderPagesUITests/testIPhoneBackReturnsToWherePagesWereOpened"
       ]
     }
   ],

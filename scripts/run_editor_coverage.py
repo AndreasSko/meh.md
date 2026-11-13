@@ -50,8 +50,9 @@ SWIFT = {
         "report": "MEH_FULL_PARSE_REPORT",
     },
 }
-# run_editor_performance_check.sh compiles copies of the app's Swift files
-# from a temporary `sources` folder.
+# run_editor_performance_check.sh compiles copies of the app's Swift files,
+# including those it shares with the widgets, from a temporary `sources`
+# folder.
 PROBE_COPY = re.compile(r"/meh-editor-performance\.[^/]+/sources/([^/]+\.swift)$")
 # run_native_editor_baseline_parity.sh builds a package that links to the
 # checkout from a temporary folder.
@@ -61,7 +62,8 @@ NATIVE_PACKAGE = "/current-package/"
 def checkout_path(path):
     """The checkout-relative path a built file stands for, or None."""
     if match := PROBE_COPY.search(path):
-        return "meh.md/" + match[1]
+        folder = "meh.mdShared" if (ROOT / "meh.mdShared" / match[1]).exists() else "meh.md"
+        return f"{folder}/{match[1]}"
     if NATIVE_PACKAGE in path:
         return path.split(NATIVE_PACKAGE, 1)[1]
     prefix = str(ROOT) + "/"

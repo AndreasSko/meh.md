@@ -75,7 +75,17 @@
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
         "WritingDurabilityUITests/testFormattedWritingUndoAndRelaunchPreserveExactNote",
         "WritingFlowUITests/testSyncStatusLivesInCloudDetailsWhileWriting",
-        "KeyboardCommandUITests"
+        "KeyboardCommandUITests",
+        "FolderPagesUITests/testFolderPageOpensNotesAndNewNotesGoIntoIt",
+        "FolderPagesUITests/testEachFolderKeepsItsView",
+        "FolderPagesUITests/testIPhoneNamesANewFolderOnACardsPage",
+        "FolderPagesUITests/testIPhoneShowInFilesLeavesThePages",
+        "FolderPagesUITests/testIPhoneRotationMovesThePageIntoFiles",
+        "FolderPagesUITests/testIPhoneBackReturnsToWherePagesWereOpened",
+        "FolderPagesUITests/testPageBesideFilesClosesBackToTheNote",
+        "FolderPagesUITests/testTrashingTheFolderClosesItsPage",
+        "FolderPagesUITests/testMacCommandClickSelectsPageRowsWithoutOpeningThem",
+        "FolderPagesUITests/testMacDraggingFromAPageMovesNotesIntoAFolder"
       ]
     }
   ],

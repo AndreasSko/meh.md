@@ -7,24 +7,37 @@ import Foundation
 /// the source, such as a search match, can be carried over to the result.
 /// Code keeps its punctuation, and markers without a partner stay as text.
 public enum MarkdownExcerpt {
+    /// `skippingHeadings` drops heading lines, so notes made from one
+    /// template don't all start with the same words.
     public static func plain(
         _ markdown: String,
-        keeping range: NSRange? = nil
+        keeping range: NSRange? = nil,
+        skippingHeadings: Bool = false
     ) -> (text: String, range: NSRange?) {
         let source = Array(markdown.utf16)
         var keep = [Bool](repeating: true, count: source.count)
         var output = source
-        var inFence = false
+        var openFence: Fence?
 
         var lineStart = 0
         while lineStart <= source.count {
             var lineEnd = lineStart
             while lineEnd < source.count, source[lineEnd] != newline { lineEnd += 1 }
-            let isFence = startsFence(source, lineStart, lineEnd)
-            if isFence {
-                inFence.toggle()
+            let fence = fence(source, lineStart, lineEnd)
+            if let open = openFence {
+                // Only a bare fence of the same kind, at least as long,
+                // ends the code; any other line is code.
+                if let fence, fence.unit == open.unit, fence.length >= open.length,
+                   fence.isBare {
+                    openFence = nil
+                    delete(&keep, lineStart, lineEnd)
+                }
+            } else if let fence {
+                openFence = fence
                 delete(&keep, lineStart, lineEnd)
-            } else if !inFence {
+            } else if skippingHeadings, isHeading(source, lineStart, lineEnd) {
+                delete(&keep, lineStart, lineEnd)
+            } else {
                 cleanLine(source, lineStart, lineEnd, &keep, &output)
             }
             lineStart = lineEnd + 1
@@ -191,13 +204,25 @@ public enum MarkdownExcerpt {
 
     // MARK: Markers
 
-    private static func startsFence(_ source: [UInt16], _ start: Int, _ end: Int) -> Bool {
+    private struct Fence {
+        let unit: UInt16
+        let length: Int
+        /// Nothing but whitespace follows the marker.
+        let isBare: Bool
+    }
+
+    private static func fence(_ source: [UInt16], _ start: Int, _ end: Int) -> Fence? {
         var index = start
-        while index < end, index - start < 4, source[index] == space { index += 1 }
-        guard index + 2 < end else { return false }
+        while index < end, index - start < 3, source[index] == space { index += 1 }
+        guard index < end else { return nil }
         let unit = source[index]
-        guard unit == backtick || unit == tilde else { return false }
-        return source[index + 1] == unit && source[index + 2] == unit
+        guard unit == backtick || unit == tilde else { return nil }
+        let markerStart = index
+        while index < end, source[index] == unit { index += 1 }
+        let length = index - markerStart
+        guard length >= 3 else { return nil }
+        let isBare = source[index..<end].allSatisfy(isWhitespace)
+        return Fence(unit: unit, length: length, isBare: isBare)
     }
 
     private static func isTableSeparator(_ source: [UInt16], _ start: Int, _ end: Int) -> Bool {
@@ -211,6 +236,13 @@ public enum MarkdownExcerpt {
             }
         }
         return dashes >= 3 && source[start..<end].contains(pipe)
+    }
+
+    private static func isHeading(_ source: [UInt16], _ start: Int, _ end: Int) -> Bool {
+        var index = start
+        // Four spaces start indented code, not a heading.
+        while index < end, index - start < 3, source[index] == space { index += 1 }
+        return headingMarker(source, index, end) != nil
     }
 
     private static func headingMarker(_ source: [UInt16], _ start: Int, _ end: Int) -> Int? {
