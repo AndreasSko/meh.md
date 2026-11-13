@@ -131,10 +131,8 @@ enum MarkdownEditingRules {
         case .codeBlock:
             return codeBlockChange(in: source, selection: selection)
         case .taskList:
-            let line = contentLine(containing: selection.location, in: source)
-            return insertion(
-                "- [ ] ",
-                replacing: NSRange(location: line.location, length: 0)
+            return taskListChange(
+                in: source, selection: selection, syntaxResult: syntaxResult
             )
         case .quote:
             return quoteChange(in: source, selection: selection, syntaxResult: syntaxResult)
@@ -703,6 +701,91 @@ private extension MarkdownEditingRules {
         }
         guard !edits.isEmpty else { return nil }
         return applying(edits, to: affected, selection: selection, source: source)
+    }
+
+    /// Turns the selected lines into tasks in place: a list item keeps its
+    /// indent and marker and gains `[ ] `, any other line gains `- [ ] `
+    /// after its indent and quote markers. When every line already is a
+    /// task, the task markers go and the list items stay.
+    static func taskListChange(
+        in source: NSString,
+        selection: NSRange,
+        syntaxResult: MarkdownSyntaxResult?
+    ) -> MarkdownEditingChange? {
+        guard !isInCode(selection, source: source, syntaxResult: syntaxResult)
+        else { return nil }
+        let affected = affectedLines(for: selection, in: source)
+        let contents = lines(in: affected, source: source).map {
+            contentLine(containing: $0.location, in: source)
+        }
+        // The caret may sit just past a closing fence, but the marker would
+        // go at the start of that fence's line.
+        let fences = (syntaxResult?.spans ?? MarkdownSyntax.spans(in: source as String))
+            .filter { $0.role == .code }
+            .compactMap { parseFencedBlock($0.range, in: source)?.whole }
+        guard !contents.contains(where: { line in
+            fences.contains { NSLocationInRange(line.location, $0) }
+        }) else { return nil }
+        let prefixes = contents.map { taskPrefix(in: source, line: $0) }
+        // Blank lines between items stay as they are, unless the caret is
+        // on one alone.
+        let written = zip(contents, prefixes).filter {
+            contents.count == 1 || !source.substring(with: $0.0)
+                .trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        let removing = !written.isEmpty
+            && written.allSatisfy { $0.1.containers.last?.isTask == true }
+        var edits: [SourceEdit] = []
+        for (_, prefix) in written {
+            let innermost = prefix.containers.last
+            if removing {
+                guard let task = innermost, task.isTask else { continue }
+                let length = task.source.utf16.count
+                edits.append(SourceEdit(
+                    range: NSRange(
+                        location: prefix.contentStart - length, length: length
+                    ),
+                    replacement: ""
+                ))
+            } else if innermost?.isTask != true {
+                let marker: String
+                if let innermost, innermost.isList {
+                    marker = innermost.source.last?.isWhitespace == true
+                        ? "[ ] " : " [ ] "
+                } else {
+                    marker = "- [ ] "
+                }
+                edits.append(SourceEdit(
+                    range: NSRange(location: prefix.contentStart, length: 0),
+                    replacement: marker
+                ))
+            }
+        }
+        guard !edits.isEmpty else { return nil }
+        return applying(edits, to: affected, selection: selection, source: source)
+    }
+
+    /// The containers that can hold a task, as the syntax parser reads them:
+    /// a list marker right after another one is text, so `- - Eggs` is an
+    /// item whose text starts with `- `, and so is a number of ten or more
+    /// digits.
+    static func taskPrefix(in source: NSString, line: NSRange) -> ParsedPrefix {
+        let prefix = containerPrefix(in: source, line: line)
+        var containers: [Container] = []
+        for container in prefix.containers {
+            if container.isList, containers.last?.isList == true { break }
+            if case let .ordered(number, _, _) = container.kind,
+               number.utf16.count > 9 { break }
+            containers.append(container)
+        }
+        guard containers.count < prefix.containers.count else { return prefix }
+        let length = prefix.indentation.utf16.count
+            + containers.reduce(0) { $0 + $1.source.utf16.count }
+        return ParsedPrefix(
+            indentation: prefix.indentation,
+            containers: containers,
+            contentStart: line.location + length
+        )
     }
 
     /// The `>` and its space at the start of a line, after up to three spaces.
