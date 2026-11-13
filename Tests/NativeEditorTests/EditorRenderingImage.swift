@@ -63,6 +63,9 @@ struct EditorRenderingImage {
         )
     }
 
+    /// How much of the pixel is covered, 0...255.
+    func alpha(x: Int, y: Int) -> Int { Int(pixels[(y * width + x) * 4 + 3]) }
+
     func pixelX(_ x: CGFloat) -> Int { Int(((x - origin.x) * scale).rounded(.down)) }
     func pixelY(_ y: CGFloat) -> Int { Int(((y - origin.y) * scale).rounded(.down)) }
     func pointY(_ y: Int) -> CGFloat { CGFloat(y) / scale + origin.y }

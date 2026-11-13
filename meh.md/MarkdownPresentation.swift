@@ -526,7 +526,7 @@ enum MarkdownPresentation {
                 dx: drawingOffset.x,
                 dy: drawingOffset.y
             )
-            draw(decoration, in: rect, context: context)
+            draw(decoration, in: pixelRows(of: rect, in: context), context: context)
         }
         drawListBullets(
             listBulletDecorations(
@@ -682,6 +682,23 @@ enum MarkdownPresentation {
         ) as? PlatformFont)?.pointSize ?? defaultFontSize
     }
 
+    /// Each line draws its own slice of a panel, in a layer of its own,
+    /// and the panel's color is see-through. A slice edge that ends partway
+    /// through a pixel row leaves that row partly covered by two slices,
+    /// which shows as a thin light line. Moving both vertical edges to the
+    /// next pixel boundary, the same way in every slice, makes neighboring
+    /// slices meet exactly.
+    static func pixelRows(of rect: CGRect, in context: CGContext) -> CGRect {
+        func aligned(_ y: CGFloat) -> CGFloat {
+            let device = context.convertToDeviceSpace(CGPoint(x: rect.minX, y: y))
+            let snapped = CGPoint(x: device.x, y: device.y.rounded(.up))
+            return context.convertToUserSpace(snapped).y
+        }
+        let edges = [aligned(rect.minY), aligned(rect.maxY)]
+        guard let top = edges.min(), let bottom = edges.max() else { return rect }
+        return CGRect(x: rect.minX, y: top, width: rect.width, height: bottom - top)
+    }
+
     private static func draw(
         _ decoration: BlockDecoration,
         in rect: CGRect,
@@ -692,15 +709,18 @@ enum MarkdownPresentation {
             : PlatformColor.secondarySystemFill
         context.setFillColor(color.cgColor)
         context.fill(rect)
-        guard let accentRect = decoration.accentRect else { return }
+        guard let accent = accentRect(of: decoration, in: rect) else { return }
         context.setFillColor(MehStyle.highlighterStroke.cgColor)
-        context.fill(
-            CGRect(
-                x: rect.minX + accentRect.minX - decoration.rect.minX,
-                y: rect.minY + accentRect.minY - decoration.rect.minY,
-                width: accentRect.width,
-                height: accentRect.height
-            )
+        context.fill(accent)
+    }
+
+    /// The quote's accent bar inside the panel drawn at `rect`, which
+    /// `pixelRows` may have moved, so the bar keeps the panel's edges.
+    static func accentRect(of decoration: BlockDecoration, in rect: CGRect) -> CGRect? {
+        guard let accentRect = decoration.accentRect else { return nil }
+        return CGRect(
+            x: rect.minX + accentRect.minX - decoration.rect.minX,
+            y: rect.minY, width: accentRect.width, height: rect.height
         )
     }
 

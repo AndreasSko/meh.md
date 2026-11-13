@@ -301,6 +301,39 @@ final class EditorRenderingHarness {
     /// background drawing, then each laid-out line through its fragment.
     func render(scale: CGFloat) -> EditorRenderingImage {
         let visible = visibleRect
+        let context = Self.canvas(for: visible, scale: scale)
+        var paper = CGColor(gray: 1, alpha: 1)
+        withAppearance { paper = MehStyle.paper.cgColor }
+        context.setFillColor(paper)
+        context.fill(visible)
+#if os(macOS)
+        withCurrent(context) { textView.drawBackground(in: visible) }
+#endif
+        withCurrent(context) { drawFragments(in: visible, context: context) }
+        return EditorRenderingImage(
+            image: context.makeImage()!, origin: visible.origin, scale: scale, paper: paper
+        )
+    }
+
+    /// Only the line around one character, on a clear background, as the
+    /// line draws into its own layer on screen.
+    func renderLine(at location: Int, scale: CGFloat) throws -> EditorRenderingImage {
+        let visible = visibleRect
+        let context = Self.canvas(for: visible, scale: scale)
+        let manager = try XCTUnwrap(layoutManager.textContentManager)
+        let start = try XCTUnwrap(
+            manager.location(manager.documentRange.location, offsetBy: location)
+        )
+        let fragment = try XCTUnwrap(layoutManager.textLayoutFragment(for: start))
+        withCurrent(context) { draw(fragment, in: context) }
+        return EditorRenderingImage(
+            image: context.makeImage()!, origin: visible.origin, scale: scale,
+            paper: CGColor(gray: 0, alpha: 0)
+        )
+    }
+
+    /// A flipped bitmap in view coordinates, covering `visible`.
+    private static func canvas(for visible: CGRect, scale: CGFloat) -> CGContext {
         let width = Int((visible.width * scale).rounded())
         let height = Int((visible.height * scale).rounded())
         let context = CGContext(
@@ -311,26 +344,20 @@ final class EditorRenderingHarness {
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: scale, y: -scale)
         context.translateBy(x: -visible.minX, y: -visible.minY)
-        var paper = CGColor(gray: 1, alpha: 1)
-        withAppearance { paper = MehStyle.paper.cgColor }
-        context.setFillColor(paper)
-        context.fill(visible)
+        return context
+    }
+
+    private func withCurrent(_ context: CGContext, _ body: () -> Void) {
 #if os(macOS)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-        withAppearance {
-            textView.drawBackground(in: visible)
-            drawFragments(in: visible, context: context)
-        }
+        withAppearance(body)
         NSGraphicsContext.restoreGraphicsState()
 #else
         UIGraphicsPushContext(context)
-        withAppearance { drawFragments(in: visible, context: context) }
+        withAppearance(body)
         UIGraphicsPopContext()
 #endif
-        return EditorRenderingImage(
-            image: context.makeImage()!, origin: visible.origin, scale: scale, paper: paper
-        )
     }
 
     /// Lines in the last render that drew without the editor's own line
@@ -349,16 +376,21 @@ final class EditorRenderingHarness {
             if String(describing: Swift.type(of: fragment)) != "MarkdownTextLayoutFragment" {
                 plainLines += 1
             }
-            // Each line may only draw inside the surface it reports, as on
-            // screen, so a surface too small for its marks shows up here.
-            context.saveGState()
-            context.clip(to: fragment.renderingSurfaceBounds.offsetBy(
-                dx: frame.minX, dy: frame.minY
-            ))
-            fragment.draw(at: frame.origin, in: context)
-            context.restoreGState()
+            draw(fragment, in: context)
             return true
         }
+    }
+
+    private func draw(_ fragment: NSTextLayoutFragment, in context: CGContext) {
+        let frame = fragment.layoutFragmentFrame.offsetBy(
+            dx: containerOrigin.x, dy: containerOrigin.y
+        )
+        // Each line may only draw inside the surface it reports, as on
+        // screen, so a surface too small for its marks shows up here.
+        context.saveGState()
+        context.clip(to: fragment.renderingSurfaceBounds.offsetBy(dx: frame.minX, dy: frame.minY))
+        fragment.draw(at: frame.origin, in: context)
+        context.restoreGState()
     }
 
     private func withAppearance(_ body: () -> Void) {
