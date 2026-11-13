@@ -57,8 +57,6 @@
         "FlairUITests/testLibraryEndsWithTheNoteCount",
         "FlairUITests/testAppearanceSwitchesTheInk",
         "WelcomeNoteUITests/testFreshNotebookOpensTheWelcomeNoteOnce",
-        "NoteIntentUITests/testNewNoteControlStartsANewNote",
-        "NoteIntentUITests/testCreateNoteShortcutAddsANoteAndItsLinkOpensIt",
         "FolderPagesUITests/testFolderPageOpensNotesAndNewNotesGoIntoIt",
         "FolderPagesUITests/testEachFolderKeepsItsView",
         "FolderPagesUITests/testIPhoneNamesANewFolderOnACardsPage",
