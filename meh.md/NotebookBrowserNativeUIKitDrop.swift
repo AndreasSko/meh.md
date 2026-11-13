@@ -58,6 +58,29 @@ struct NotebookBrowserUIKitRowAnchor: UIViewRepresentable {
     }
 }
 
+/// Hands rows of one list a destination they share, so it outlives any row
+/// that scrolls away. The list's owner detaches it.
+struct NotebookBrowserUIKitSharedDropReader: UIViewRepresentable {
+    let coordinator: NotebookBrowserUIKitDropReader.Coordinator
+
+    func makeUIView(context: Context) -> NotebookBrowserUIKitDropReader.ReaderView {
+        let view = NotebookBrowserUIKitDropReader.ReaderView()
+        view.isUserInteractionEnabled = false
+        view.onHierarchyChange = { [weak coordinator] view in coordinator?.attach(from: view) }
+        return view
+    }
+
+    func updateUIView(_ view: NotebookBrowserUIKitDropReader.ReaderView, context: Context) {
+        coordinator.attach(from: view)
+    }
+
+    static func dismantleUIView(
+        _ view: NotebookBrowserUIKitDropReader.ReaderView, coordinator: ()
+    ) {
+        view.onHierarchyChange = nil
+    }
+}
+
 /// The collection view owns the destination while SwiftUI keeps its rows,
 /// selection, menus, and drag source. One delegate handles the whole tree.
 /// It also reports taps, since SwiftUI rows don't cover the empty space.

@@ -85,7 +85,9 @@
         "FolderPagesUITests/testPageBesideFilesClosesBackToTheNote",
         "FolderPagesUITests/testTrashingTheFolderClosesItsPage",
         "FolderPagesUITests/testMacCommandClickSelectsPageRowsWithoutOpeningThem",
-        "FolderPagesUITests/testMacDraggingFromAPageMovesNotesIntoAFolder"
+        "FolderPagesUITests/testMacDraggingFromAPageMovesNotesIntoAFolder",
+        "FolderPagesUITests/testDraggingSelectedRowsOntoAFolderOfThePageMovesThem",
+        "FolderPagesUITests/testDraggingSelectedCardsOntoAFolderOfThePageMovesThem"
       ]
     }
   ],

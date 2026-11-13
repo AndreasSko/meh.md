@@ -1,6 +1,7 @@
 import Foundation
 import NoteCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if os(iOS)
     import UIKit
@@ -674,35 +675,67 @@ extension NotebookSceneState {
                 if let id { expandedIDs.insert(id) }
                 else { navigationState.isTreeExpanded = true }
             },
-            commit: { [self] drag, target in
-                guard !busy else {
-                    errorMessage = String(localized:
-                        "Another action is still finishing. Try moving the files again.")
-                    return
-                }
-                perform { [self] in
-                    guard workspace == nil || workspace?.replica === replica else { return }
-                    try await flushEditor()
-                    guard workspace == nil || workspace?.replica === replica else { return }
-                    let oldHeads = replica.catalogSnapshot?.heads
-                    let undo = try await replica.placeItems(
-                        drag.itemIDs, to: target.parentID, before: target.beforeID,
-                        expecting: drag.sources, notebookID: drag.notebookID
-                    )
-                    if replica.catalogSnapshot?.heads != oldHeads {
-                        browserUndo = undo
-                        browserRedo = nil
-                    }
-                    // A drop between rows can also land in another folder.
-                    if target.position == .into
-                        || drag.sources.contains(where: { $0.parentID != target.parentID }) {
-                        navigationState.recordMoveDestination(target.parentID)
-                    }
-                    if let parentID = target.parentID { expandedIDs.insert(parentID) }
-                    for id in drag.itemIDs { reveal(id) }
-                }
-            }
+            commit: { [self] drag, target in commitBrowserDrop(drag, to: target) }
         )
+    }
+
+    func commitBrowserDrop(_ drag: NotebookBrowserDrag, to target: NotebookBrowserDropTarget) {
+        guard !busy else {
+            errorMessage = String(localized:
+                "Another action is still finishing. Try moving the files again.")
+            return
+        }
+        perform { [self] in
+            guard workspace == nil || workspace?.replica === replica else { return }
+            try await flushEditor()
+            guard workspace == nil || workspace?.replica === replica else { return }
+            let oldHeads = replica.catalogSnapshot?.heads
+            let undo = try await replica.placeItems(
+                drag.itemIDs, to: target.parentID, before: target.beforeID,
+                expecting: drag.sources, notebookID: drag.notebookID
+            )
+            if replica.catalogSnapshot?.heads != oldHeads {
+                browserUndo = undo
+                browserRedo = nil
+            }
+            // A drop between rows can also land in another folder.
+            if target.position == .into
+                || drag.sources.contains(where: { $0.parentID != target.parentID }) {
+                navigationState.recordMoveDestination(target.parentID)
+            }
+            if let parentID = target.parentID { expandedIDs.insert(parentID) }
+            for id in drag.itemIDs { reveal(id) }
+        }
+    }
+
+    /// Where a drag lands when it is dropped on a folder of a folder page.
+    func pageDropTarget(_ folderID: UUID) -> NotebookBrowserDropTarget? {
+        guard !busy, editingID == nil, let drag = browserDrag.drag,
+              drag.notebookID == replica.catalogSnapshot?.notebookID else { return nil }
+        return NotebookBrowserDragPlacement.target(
+            rowID: folderID, position: .into, drag: drag, placements: replica.placements)
+    }
+
+    /// Moves the drag into a folder of a folder page once every item of the
+    /// gesture has shown it carries the drag's token.
+    func dropOnPageFolder(_ folderID: UUID, providers: [NSItemProvider]) -> Bool {
+        guard let drag = browserDrag.drag, let target = pageDropTarget(folderID),
+              !providers.isEmpty else { return false }
+        browserDrag.reset()
+        Task { @MainActor [self] in
+            for provider in providers {
+                let data = await withCheckedContinuation { continuation in
+                    _ = provider.loadDataRepresentation(
+                        forTypeIdentifier: UTType.mehNotebookItem.identifier
+                    ) { data, _ in continuation.resume(returning: data) }
+                }
+                guard data.flatMap({ String(data: $0, encoding: .utf8) })
+                        == drag.token.uuidString else { return }
+            }
+            guard browserDrag.latestToken == drag.token, browserDrag.drag == nil else { return }
+            commitBrowserDrop(drag, to: target)
+        }
+        return true
     }
 
     // MARK: Creating and renaming

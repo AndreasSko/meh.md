@@ -48,7 +48,9 @@
         "FolderPagesUITests/testFolderPageOpensNotesAndNewNotesGoIntoIt",
         "FolderPagesUITests/testEachFolderKeepsItsView",
         "FolderPagesUITests/testPageBesideFilesClosesBackToTheNote",
-        "FolderPagesUITests/testTrashingTheFolderClosesItsPage"
+        "FolderPagesUITests/testTrashingTheFolderClosesItsPage",
+        "FolderPagesUITests/testDraggingSelectedRowsOntoAFolderOfThePageMovesThem",
+        "FolderPagesUITests/testDraggingSelectedCardsOntoAFolderOfThePageMovesThem"
       ]
     }
   ],

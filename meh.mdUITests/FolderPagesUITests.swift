@@ -219,6 +219,62 @@ final class FolderPagesUITests: XCTestCase {
         #endif
     }
 
+    func testDraggingSelectedRowsOntoAFolderOfThePageMovesThem() throws {
+        try dragSelectedNotesOntoAFolder(view: "List")
+    }
+
+    func testDraggingSelectedCardsOntoAFolderOfThePageMovesThem() throws {
+        try dragSelectedNotesOntoAFolder(view: "Cards")
+    }
+
+    /// On iPhone the page covers Files, so its own folders take the drop.
+    private func dragSelectedNotesOntoAFolder(view: String) throws {
+        #if os(iOS)
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        app.revealNotebookSidebar(timeout: 30)
+        let templates = itemID(named: "Templates", in: app, expanding: "Resources")
+        openFolderPage(named: "Resources", in: app)
+        chooseView(view, in: app)
+
+        func pageNote(_ name: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(
+                format: "(identifier BEGINSWITH %@ OR identifier BEGINSWITH %@) AND label BEGINSWITH %@",
+                "notebook-folder-page-note-", "notebook-folder-page-card-", name
+            )).firstMatch
+        }
+        let actions = app.buttons["notebook-folder-page-actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        actions.tap()
+        let select = app.buttons["notebook-folder-page-select"]
+        XCTAssertTrue(select.waitForExistence(timeout: 5))
+        select.tap()
+        let packing = pageNote("Packing list")
+        let book = pageNote("Book notes")
+        XCTAssertTrue(packing.waitForExistence(timeout: 5))
+        packing.tap()
+        book.tap()
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
+
+        let folder = app.descendants(matching: .any)["notebook-folder-page-folder-" + templates]
+        XCTAssertTrue(folder.waitForExistence(timeout: 5))
+        book.press(
+            forDuration: 1.0, thenDragTo: folder, withVelocity: .slow,
+            thenHoldForDuration: 0.8)
+        XCTAssertTrue(book.waitForNonExistence(timeout: 10), "Book notes stayed on the page")
+        XCTAssertFalse(packing.exists, "The other selected note stayed")
+
+        app.buttons["notebook-folder-page-done"].tap()
+        folder.tap()
+        waitForPageTitle("Templates", in: app)
+        XCTAssertTrue(pageNote("Book notes").waitForExistence(timeout: 5))
+        XCTAssertTrue(pageNote("Packing list").exists)
+        #else
+        throw XCTSkip("The Mac drags with AppKit")
+        #endif
+    }
+
     func testMacDraggingFromAPageMovesNotesIntoAFolder() throws {
         #if os(macOS)
         continueAfterFailure = false
