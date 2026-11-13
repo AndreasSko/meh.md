@@ -39,7 +39,9 @@ with a preview line. Folders open their own page. Cards show notes as
 small sheets with their first lines (headings, list items and tasks
 without the Markdown signs) and the date they last changed, with the
 folder's folders as tiles on top. Each folder keeps its choice on this
-device; the list is the default. The choice does not sync.
+device; the list is the default. The choice does not sync. Both start
+the title and the content at the same margin, so switching between
+them moves nothing.
 
 Select, in the ⋯ menu, picks rows or cards for Move… or Trash; on the
 Mac, ⌘-click selects rows too. On iPad and Mac a row or card can be

@@ -72,6 +72,10 @@ struct NotebookFolderPage: View {
         }
     }
 
+    /// Where the title and the content start, in List and in Cards alike,
+    /// so switching between the two moves nothing.
+    static func margin(isCompact: Bool) -> CGFloat { isCompact ? 20 : 32 }
+
     private func header(_ folder: NotebookPlacement) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             NotebookPathLine(
@@ -327,12 +331,15 @@ private struct NotebookFolderList<Header: View>: View {
     var body: some View {
         List(selection: $selection) {
             header
+                .listRowInsets(.vertical, 0)
+                .listRowInsets(.horizontal, rowInset)
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
                 .selectionDisabled()
                 .padding(.bottom, 8)
             if children.isEmpty {
                 NotebookFolderEmpty()
+                    .listRowInsets(.horizontal, rowInset)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .selectionDisabled()
@@ -351,8 +358,11 @@ private struct NotebookFolderList<Header: View>: View {
                             scene.beginBrowserDrag(placement.item.id, selection: Array(selection))
                         }
                         .tag(placement.item.id)
+                        .listRowInsets(.horizontal, rowInset)
                         .listRowSeparator(.hidden)
-                        .listRowBackground(rowBackground(placement.item.id))
+                        .listRowBackground(
+                            rowBackground(placement.item.id)
+                                .padding(.horizontal, highlightInset))
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             if !isSelecting, scene.editingID == nil {
                                 Button(role: .destructive) {
@@ -364,6 +374,7 @@ private struct NotebookFolderList<Header: View>: View {
                         }
                 }
                 NotebookLibraryFooter(noteCount: noteCount) { _ in }
+                    .listRowInsets(.horizontal, rowInset)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .selectionDisabled()
@@ -371,7 +382,7 @@ private struct NotebookFolderList<Header: View>: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .contentMargins(.horizontal, isCompact ? 8 : 24, for: .scrollContent)
+        .notebookPageEdgeEffect()
         #if os(macOS)
         // As in Files, AppKit tracks the drag; the header is the first row.
         .overlay(NotebookPageDragReader(
@@ -409,6 +420,26 @@ private struct NotebookFolderList<Header: View>: View {
 
     private var noteCount: Int {
         children.count { $0.item.kind == .note }
+    }
+
+    /// Rows start where Cards do. The List ignores content margins beside
+    /// Files, so rows take the whole margin as inset; the Mac's table keeps
+    /// 8 points of its own.
+    private var rowInset: CGFloat {
+        #if os(iOS)
+        NotebookFolderPage.margin(isCompact: isCompact)
+        #else
+        NotebookFolderPage.margin(isCompact: isCompact) - 8
+        #endif
+    }
+
+    /// iOS rows draw their highlight clear of the edges.
+    private var highlightInset: CGFloat {
+        #if os(iOS)
+        isCompact ? 8 : 24
+        #else
+        0
+        #endif
     }
 
     /// A ⌘- or ⇧-click, which selects rows rather than opening one. The
@@ -582,10 +613,11 @@ private struct NotebookFolderCards<Header: View>: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            .padding(.horizontal, isCompact ? 20 : 32)
+            .padding(.horizontal, NotebookFolderPage.margin(isCompact: isCompact))
             .padding(.bottom, 24)
         }
         .scrollContentBackground(.hidden)
+        .notebookPageEdgeEffect()
         #if os(macOS)
         .overlay(NotebookPageDragReader(
             scene: scene, selection: $selection,
@@ -947,5 +979,13 @@ private struct NotebookPageButton<Label: View>: View {
         Button(action: action) { label }
             .buttonStyle(.plain)
         #endif
+    }
+}
+
+private extension View {
+    /// The hard edge effect lays a white strip under the bottom bar, as in
+    /// Files.
+    func notebookPageEdgeEffect() -> some View {
+        scrollEdgeEffectStyle(.soft, for: .all)
     }
 }

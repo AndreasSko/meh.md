@@ -59,10 +59,29 @@ final class FolderPagesUITests: XCTestCase {
         XCTAssertTrue(card.waitForExistence(timeout: 5))
         capture(app, name: "Cards")
 
-        openFolderPage(named: "Areas", in: app)
+        // Switching between Cards and List leaves the title in place. Beside
+        // iPad's Files a List row reports its frame from the column, not the
+        // screen.
+        let title = app.staticTexts["notebook-folder-page-title"]
+        let cardsTitle = title.frame
+        chooseView("List", in: app)
         let row = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "notebook-folder-page-note-"
         )).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertFalse(card.exists)
+        let checksX = !isIPadBesideFiles(app)
+        let inPlace = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            abs(title.frame.minY - cardsTitle.minY) <= 1
+                && (!checksX || abs(title.frame.minX - cardsTitle.minX) <= 1)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter().wait(for: [inPlace], timeout: 5), .completed,
+                       "Title moved from \(cardsTitle) to \(title.frame)")
+        capture(app, name: "List")
+        chooseView("Cards", in: app)
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+
+        openFolderPage(named: "Areas", in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         XCTAssertFalse(card.exists)
 
@@ -391,6 +410,14 @@ final class FolderPagesUITests: XCTestCase {
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "source", "-AppleLanguages", "(en)"]
         return app
+    }
+
+    private func isIPadBesideFiles(_ app: XCUIApplication) -> Bool {
+        #if os(macOS)
+        false
+        #else
+        !isCompact(app)
+        #endif
     }
 
     private func isCompact(_ app: XCUIApplication) -> Bool {
