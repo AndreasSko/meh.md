@@ -390,6 +390,13 @@ final class EditorRenderingUITests: XCTestCase {
         pattern: #"(Amber lantern|Blue compass|Cedar basket|Map|Route) \d+"#
     )
 
+    private static func isReadMark(_ lead: Substring) -> Bool {
+        let words = lead.split(whereSeparator: \.isWhitespace)
+            .filter { $0.contains { $0.isLetter || $0.isNumber } }
+        return words.isEmpty
+            || (words.count == 1 && words[0].count <= 2 && lead.last?.isWhitespace == true)
+    }
+
     private func recognizedLines(in shot: Shot) throws -> [Line] {
         func request(onCPU: Bool, simplest: Bool = false) -> VNRecognizeTextRequest {
             let request = VNRecognizeTextRequest()
@@ -434,11 +441,12 @@ final class EditorRenderingUITests: XCTestCase {
             let box = observation.boundingBox
             var item: String?
             var isTask = false
-            // Only a name at the line's start, perhaps after a read bullet.
+            // Only a name at the line's start, perhaps after its mark read as
+            // a symbol or as one short word, such as “V” for a ticked box.
             if let match = Self.item.firstMatch(
                 in: text, range: NSRange(text.startIndex..., in: text)
             ), let range = Range(match.range, in: text),
-               text[..<range.lowerBound].allSatisfy({ !$0.isLetter && !$0.isNumber }) {
+               Self.isReadMark(text[..<range.lowerBound]) {
                 item = (text as NSString).substring(with: match.range)
                 isTask = ["Map", "Route"].contains(
                     (text as NSString).substring(with: match.range(at: 1))
