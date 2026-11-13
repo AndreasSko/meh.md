@@ -352,14 +352,6 @@ def main():
                 if not os_version.startswith("27."):
                     raise ValueError("macOS 27 required")
                 destination = "platform=macOS"
-                signing = [
-                    "CODE_SIGNING_ALLOWED=YES",
-                    "CODE_SIGN_IDENTITY=-",
-                    "CODE_SIGN_STYLE=Manual",
-                    "DEVELOPMENT_TEAM=",
-                    "CODE_SIGN_ENTITLEMENTS=",
-                    "PROVISIONING_PROFILE_SPECIFIER=",
-                ]
             else:
                 inventory = json.loads(
                     stage(
@@ -393,7 +385,18 @@ def main():
                     WATCHDOG_SECONDS["startup"],
                 ))
                 destination = "platform=iOS Simulator,id=" + udid
-                signing = ["CODE_SIGNING_ALLOWED=NO"]
+            # Sign ad hoc on every platform. Unsigned, the test runner keeps
+            # Apple's XCTRunner signature, and App Intents then refuses to
+            # run intents for it: "Unable to run internal tests on a
+            # Customer build".
+            signing = [
+                "CODE_SIGNING_ALLOWED=YES",
+                "CODE_SIGN_IDENTITY=-",
+                "CODE_SIGN_STYLE=Manual",
+                "DEVELOPMENT_TEAM=",
+                "CODE_SIGN_ENTITLEMENTS=",
+                "PROVISIONING_PROFILE_SPECIFIER=",
+            ]
             common = [
                 "-project",
                 str(ROOT / "meh.md.xcodeproj"),
