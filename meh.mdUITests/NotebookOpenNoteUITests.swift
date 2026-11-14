@@ -12,7 +12,8 @@ final class NotebookOpenNoteUITests: XCTestCase {
         capture(app, name: "Open note marked in Files")
 
         clickEmptySpace(in: app)
-        XCTAssertTrue(app.staticTexts["Select a note"].waitForExistence(timeout: 5),
+        XCTAssertTrue(app.descendants(matching: .any)["notebook-empty-detail"]
+            .waitForExistence(timeout: 5),
                       "A click on empty space kept the note open")
         capture(app, name: "Note closed from empty space")
         XCTAssertFalse(app.textViews["markdown-editor"].exists)
@@ -39,7 +40,8 @@ final class NotebookOpenNoteUITests: XCTestCase {
         capture(app, name: "Selection cleared, note still open")
 
         clickEmptySpace(in: app)
-        XCTAssertTrue(app.staticTexts["Select a note"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["notebook-empty-detail"]
+            .waitForExistence(timeout: 5))
     }
 
     #if os(iOS)
@@ -116,7 +118,8 @@ final class NotebookOpenNoteUITests: XCTestCase {
         #else
         footer.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
         #endif
-        XCTAssertTrue(app.staticTexts["Select a note"].waitForExistence(timeout: 5),
+        XCTAssertTrue(app.descendants(matching: .any)["notebook-empty-detail"]
+            .waitForExistence(timeout: 5),
                       "A click on the footer kept the note open")
     }
 
