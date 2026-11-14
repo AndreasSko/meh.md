@@ -677,10 +677,16 @@ public final class NotebookReplica {
     /// The note's current document, including unsaved editor text, or nil
     /// while its body has not downloaded or cannot be read.
     func integrationNote(_ id: UUID) async throws -> NoteDocument? {
+        try await integrationSnapshot(id).map { try NoteDocument(snapshot: $0) }
+    }
+
+    /// The saved note with the open editor's latest typing, for an
+    /// integration to update away from the main thread.
+    func integrationSnapshot(_ id: UUID) async throws -> NoteSnapshot? {
         if let session = sessions[id], session.isEditingEnabled { try await session.flush() }
         guard case .current(let snapshot) = await noteStorage(id).load(reusing: nil).result
         else { return nil }
-        return try NoteDocument(snapshot: snapshot)
+        return snapshot
     }
 
     /// Read the latest source body without opening or flushing an editor.
