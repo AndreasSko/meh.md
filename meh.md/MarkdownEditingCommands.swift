@@ -686,17 +686,26 @@ private extension MarkdownEditingRules {
             contentLine(containing: $0.location, in: source)
         }
         let markers = contents.map { quoteMarker(in: $0, source: source) }
-        // Blank lines between quoted paragraphs carry no marker.
-        let written = zip(contents, markers).filter { $0.0.length > 0 }
-        let removing = !written.isEmpty && written.allSatisfy { $0.1 != nil }
+        let blank = contents.map {
+            source.substring(with: $0).trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        let written = zip(markers, blank).filter { !$0.1 }
+        let removing = !written.isEmpty && written.allSatisfy { $0.0 != nil }
+        // Blank lines between the first and last written line get a bare `>`
+        // so the selection becomes one quote; those around it stay blank.
+        let firstWritten = blank.firstIndex(of: false)
+        let lastWritten = blank.lastIndex(of: false)
         var edits: [SourceEdit] = []
-        for (line, marker) in zip(contents, markers) {
-            if removing, let marker {
-                edits.append(SourceEdit(range: marker, replacement: ""))
-            } else if !removing, marker == nil, line.length > 0 || contents.count == 1 {
+        for (index, (line, marker)) in zip(contents, markers).enumerated() {
+            if removing {
+                if let marker { edits.append(SourceEdit(range: marker, replacement: "")) }
+            } else if marker == nil, !blank[index] || contents.count == 1 {
                 edits.append(SourceEdit(
                     range: NSRange(location: line.location, length: 0), replacement: "> "
                 ))
+            } else if marker == nil, let firstWritten, let lastWritten,
+                      firstWritten < index, index < lastWritten {
+                edits.append(SourceEdit(range: line, replacement: ">"))
             }
         }
         guard !edits.isEmpty else { return nil }

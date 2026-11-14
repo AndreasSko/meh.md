@@ -159,22 +159,47 @@ final class MarkdownEditingCommandsTests: XCTestCase {
             equals: "Slow down",
             selected: NSRange(location: 4, length: 0)
         )
-        // Mixed lines get quoted; blank lines between them stay blank.
+        // Mixed lines become one quote, blank lines between them included.
         let text = "One\n\n> Two"
         try assertChange(
             .quote,
             text: text,
             selection: NSRange(location: 0, length: (text as NSString).length),
-            equals: "> One\n\n> Two",
-            selected: NSRange(location: 2, length: 10)
+            equals: "> One\n>\n> Two",
+            selected: NSRange(location: 2, length: 11)
         )
-        let quoted = "> One\n\n> Two"
+        let quoted = "> One\n>\n> Two"
         try assertChange(
             .quote,
             text: quoted,
             selection: NSRange(location: 0, length: (quoted as NSString).length),
             equals: "One\n\nTwo",
             selected: NSRange(location: 0, length: 8)
+        )
+        // Pasted text with several and whitespace-only blank lines; blank
+        // lines before the first and after the last text line stay blank.
+        let pasted = "\nLong text\n\nwith multiple\n  \n\nlines\n"
+        try assertChange(
+            .quote,
+            text: pasted,
+            selection: NSRange(location: 0, length: (pasted as NSString).length),
+            equals: "\n> Long text\n>\n> with multiple\n>\n>\n> lines\n",
+            selected: NSRange(location: 0, length: 43)
+        )
+        let pastedQuoted = "\n> Long text\n>\n> with multiple\n>\n>\n> lines\n"
+        try assertChange(
+            .quote,
+            text: pastedQuoted,
+            selection: NSRange(location: 0, length: (pastedQuoted as NSString).length),
+            equals: "\nLong text\n\nwith multiple\n\n\nlines\n",
+            selected: NSRange(location: 0, length: 34)
+        )
+        try assertChange(
+            .quote,
+            text: "One\n\nTwo",
+            selection: NSRange(location: 4, length: 0),
+            equals: "One\n> \nTwo",
+            selected: NSRange(location: 6, length: 0)
         )
         XCTAssertNil(MarkdownEditingRules.change(
             for: .quote, text: "```\ncode\n```", selection: NSRange(location: 5, length: 0)
