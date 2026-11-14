@@ -1732,9 +1732,18 @@ public final class NotebookReplica {
         var texts: [UUID: String] = [:]
         var unavailable = Set<UUID>()
         var editorRevisions: [UUID: Data] = [:]
+        // An integration's template is full of placeholders such as
+        // [[{{ author }}]], which are not links.
+        let templates = integrationTemplateNoteIDs()
         for descriptor in descriptors {
             try Task.checkCancellation()
             let id = descriptor.id
+            if templates.contains(id) {
+                // Listed, so links to it resolve, but its text is not read.
+                texts[id] = ""
+                notes.append(descriptor)
+                continue
+            }
             let text: String?
             if let session = sessions[id] {
                 if let load = sessionLoads[id] { await load.value }
@@ -1882,6 +1891,14 @@ public final class NotebookReplica {
     }
 
     @ObservationIgnored private var integrationNotesCache: (heads: Set<String>, ids: Set<UUID>)?
+
+    /// Notes chosen as an integration's template.
+    func integrationTemplateNoteIDs() -> Set<UUID> {
+        guard let catalog else { return [] }
+        return Set(catalog.integrationConnectionIDs().compactMap { connection in
+            (try? catalog.integrationSettings(connection))?["template"]?.first.flatMap(UUID.init)
+        })
+    }
 
     /// Notes created by an integration, including losing duplicates.
     private func integrationNoteIDs() throws -> Set<UUID> {
