@@ -1868,7 +1868,10 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         let automaticBottom = max(
             0, adjustedContentInset.bottom - contentInset.bottom
         )
-        let bottom = max(0, coveredHeight - automaticBottom)
+        // UIKit follows the caret right up to the inset edge, where the
+        // line would touch the formatting bar. Keep a little air above it.
+        let gap: CGFloat = coveredHeight > 0 ? 12 : 0
+        let bottom = max(0, coveredHeight + gap - automaticBottom)
         if contentInset.bottom != bottom {
             contentInset.bottom = bottom
             verticalScrollIndicatorInsets.bottom = bottom

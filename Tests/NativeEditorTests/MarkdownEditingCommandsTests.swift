@@ -28,7 +28,7 @@ final class MarkdownEditingCommandsTests: XCTestCase {
             text: "Bring a map",
             selection: NSRange(location: 0, length: 11),
             equals: "- [ ] Bring a map",
-            selected: NSRange(location: 6, length: 0)
+            selected: NSRange(location: 6, length: 11)
         )
         let checked = "- [x] Done"
         try assertChange(
@@ -54,6 +54,94 @@ final class MarkdownEditingCommandsTests: XCTestCase {
             equals: "- [ ] Done", selected: caret
         )
         XCTAssertNil(MarkdownEditingRules.toggleTask(text: "`- [x]`", at: 4))
+    }
+
+    func testTaskListConvertsListItemsInPlace() throws {
+        try assertChange(
+            .taskList,
+            text: "* Milk\n  * Eggs",
+            selection: caret(atEndOf: "* Milk\n  * Eggs"),
+            equals: "* Milk\n  * [ ] Eggs",
+            selected: caret(atEndOf: "* Milk\n  * [ ] Eggs")
+        )
+        try assertChange(
+            .taskList,
+            text: "1. Call\n2. Write",
+            selection: NSRange(location: 0, length: 16),
+            equals: "1. [ ] Call\n2. [ ] Write",
+            selected: NSRange(location: 0, length: 24)
+        )
+        try assertChange(
+            .taskList,
+            text: "> Read\n  Write",
+            selection: NSRange(location: 0, length: 14),
+            equals: "> - [ ] Read\n  - [ ] Write",
+            selected: NSRange(location: 0, length: 26)
+        )
+        try assertChange(
+            .taskList,
+            text: "",
+            selection: NSRange(location: 0, length: 0),
+            equals: "- [ ] ",
+            selected: NSRange(location: 6, length: 0)
+        )
+        // When every line already is a task, the list items stay.
+        try assertChange(
+            .taskList,
+            text: "  * [x] Eggs",
+            selection: caret(atEndOf: "  * [x] Eggs"),
+            equals: "  * Eggs",
+            selected: caret(atEndOf: "  * Eggs")
+        )
+        try assertChange(
+            .taskList,
+            text: "- [ ] Milk\n- Eggs",
+            selection: NSRange(location: 0, length: 17),
+            equals: "- [ ] Milk\n- [ ] Eggs",
+            selected: NSRange(location: 0, length: 21)
+        )
+        // A list marker right after another one is text, as the parser
+        // reads it, so the task goes after the first marker.
+        let nested = try XCTUnwrap(MarkdownEditingRules.change(
+            for: .taskList, text: "- - Eggs",
+            selection: caret(atEndOf: "- - Eggs")
+        ))
+        XCTAssertEqual(nested.replacement, "- [ ] - Eggs")
+        XCTAssertTrue(MarkdownEditingRules.hasOpenTask(in: nested.replacement))
+        XCTAssertNotNil(MarkdownEditingRules.toggleTask(
+            text: nested.replacement, at: 0
+        ))
+        let long = try XCTUnwrap(MarkdownEditingRules.change(
+            for: .taskList, text: "1234567890. Eggs",
+            selection: caret(atEndOf: "1234567890. Eggs")
+        ))
+        XCTAssertEqual(long.replacement, "- [ ] 1234567890. Eggs")
+        XCTAssertTrue(MarkdownEditingRules.hasOpenTask(in: long.replacement))
+        // Whitespace-only lines between tasks neither block removal nor
+        // become items.
+        let spaced = "- [ ] A\n  \n- [ ] B"
+        try assertChange(
+            .taskList,
+            text: spaced,
+            selection: NSRange(location: 0, length: (spaced as NSString).length),
+            equals: "- A\n  \n- B",
+            selected: NSRange(location: 0, length: 10)
+        )
+        try assertChange(
+            .taskList,
+            text: "A\n  \nB",
+            selection: NSRange(location: 0, length: 6),
+            equals: "- [ ] A\n  \n- [ ] B",
+            selected: NSRange(location: 6, length: 12)
+        )
+        XCTAssertNil(MarkdownEditingRules.change(
+            for: .taskList, text: "```\ncode\n```",
+            selection: caret(atEndOf: "```\ncode\n```")
+        ))
+        XCTAssertNil(MarkdownEditingRules.change(
+            for: .taskList, text: "```\ncode\n```",
+            selection: NSRange(location: 5, length: 0)
+        ))
     }
 
     func testQuoteTogglesSelectedLines() throws {
