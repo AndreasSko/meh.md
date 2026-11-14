@@ -29,8 +29,8 @@ final class NoteDocument {
     /// Inside a session, a longer pause ends a step of its details.
     private static let stepMaximumGap: TimeInterval = 5
 
-    private let document: Document
-    private let textObject: ObjId
+    let document: Document
+    let textObject: ObjId
     private var historyCache: (heads: Set<String>, builder: HistoryBuilder)?
 
     let noteID: UUID
@@ -828,9 +828,53 @@ final class NoteDocument {
     ) throws {
         guard !text.utf8.elementsEqual((try self.text).utf8) else { return }
         let modifiedAt = try nextModifiedAt(modificationDate)
-        try document.updateText(obj: textObject, value: text)
+        if integrationLink == nil {
+            try document.updateText(obj: textObject, value: text)
+        } else {
+            try replaceChangedRegion(with: text)
+        }
         try setModifiedAt(modifiedAt)
         document.commitWith(message: changeMessage, timestamp: modificationDate)
+    }
+
+    /// A character diff can keep a character of one integration block for
+    /// its neighbour, or pull new text into a block. In linked notes the
+    /// changed region is replaced as one instead, widened so it never cuts
+    /// through a marked block: a block is kept whole or replaced whole, and
+    /// the text inserted there is the person's own.
+    private func replaceChangedRegion(with text: String) throws {
+        let current = try self.text
+        let old = Array(current.unicodeScalars)
+        let new = Array(text.unicodeScalars)
+        guard UInt64(old.count) == document.length(obj: textObject) else {
+            return try document.updateText(obj: textObject, value: text)
+        }
+        var prefix = zip(old, new).prefix { $0 == $1 }.count
+        var suffix = zip(old.dropFirst(prefix).reversed(), new.dropFirst(prefix).reversed())
+            .prefix { $0 == $1 }.count
+        let blocks = try document.marks(obj: textObject)
+            .filter { $0.name == Self.integrationMark }
+            .map { Int($0.start)..<Int($0.end) }
+        var widened = true
+        while widened {
+            widened = false
+            for block in blocks {
+                if block.lowerBound < prefix, prefix < block.upperBound {
+                    prefix = block.lowerBound
+                    widened = true
+                }
+                let end = old.count - suffix
+                if block.lowerBound < end, end < block.upperBound {
+                    suffix = old.count - block.upperBound
+                    widened = true
+                }
+            }
+            suffix = min(suffix, old.count - prefix, new.count - prefix)
+        }
+        try document.spliceText(
+            obj: textObject, start: UInt64(prefix),
+            delete: Int64(old.count - prefix - suffix),
+            value: String(String.UnicodeScalarView(new[prefix..<(new.count - suffix)])))
     }
 
     func snapshot() -> NoteSnapshot {
@@ -858,7 +902,7 @@ final class NoteDocument {
         try document.merge(other: other.document)
     }
 
-    private func nextModifiedAt(_ proposed: Date) throws -> Date {
+    func nextModifiedAt(_ proposed: Date) throws -> Date {
         guard let proposed = proposed.noteTimestamp else {
             throw NoteDocumentError.invalidModifiedAt
         }
@@ -868,7 +912,7 @@ final class NoteDocument {
         return proposed
     }
 
-    private func setModifiedAt(_ date: Date) throws {
+    func setModifiedAt(_ date: Date) throws {
         try document.put(
             obj: .ROOT,
             key: Self.modifiedAtKey,
