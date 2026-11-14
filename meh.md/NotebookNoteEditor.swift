@@ -64,6 +64,7 @@ struct NotebookNoteEditor: View {
                     fontSize: fontSize,
                     fontFamily: fontFamily, mode: mode, palette: palette,
                     knownLinkNames: knownLinkNames,
+                    ownedRanges: session.integrationRanges,
                     timeCalculator: timeCalculator
                 )
                 .overlay {

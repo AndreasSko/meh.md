@@ -1,6 +1,6 @@
 # Readwise sync
 
-Status: 2026-11-14. The foundation is built; the Readwise integration is not.
+Status: 2026-11-14. Built as a Labs experiment.
 
 Readwise collects highlights from books, articles, tweets and podcasts.
 This feature keeps those highlights as ordinary notes in the notebook and
@@ -21,8 +21,9 @@ is not used for system features such as Shortcuts or widgets.
 1. **Settings > Labs > Readwise** turns the feature on for this device and
    shows **Settings > Readwise**, a page of its own.
 2. Setup asks for a Readwise access token, with a link to the page where
-   Readwise shows it. The app checks the token, then asks for a folder.
-   Before the first sync it says how many books will be imported.
+   Readwise shows it, and a folder. Once the token is checked, the button
+   says what will be imported, such as "Import 2 Books and 1 Article", and
+   the first sync shows its progress.
 3. Each Readwise category gets a subfolder: Books, Articles, Tweets,
    Podcasts. A folder is created when its first item arrives, and created
    again if you deleted it. Readwise's own curated highlights
@@ -30,23 +31,33 @@ is not used for system features such as Shortcuts or widgets.
 4. One device syncs with Readwise: when it opens, and every few hours while
    it stays open. The device that set up Readwise starts as that device.
 
-The settings page shows which device syncs and when it last synced. On the
-syncing device it offers **Sync Now**. Every other device shows, for
-example, "Syncs on iPhone · last synced 2 hours ago" and **Sync on This
-iPad**, which makes it the syncing device and syncs immediately. Only you
+The settings page shows which device syncs, when it last synced, the
+folder and how many notes it keeps up to date. On the syncing device it
+offers **Sync Now**. Every other device offers **Sync on This iPad**,
+which makes it the syncing device and syncs immediately. Only you
 change the syncing device. If it has not synced for a week, because it
 was lost, reset or not opened, Settings › Readwise says so on every
 device; if it needs an app update to keep syncing, the other devices say
 that too. Devices are named by type (iPhone, iPad, Mac); "this device"
 marks the one you are using.
 
-The settings page also shows any error, the block ID
-setting, the template choice, **Bring Back Deleted Notes**, and
-**Disconnect**. Disconnecting keeps every note as an ordinary note.
+The settings page also shows any error, **Highlight Links** (block IDs),
+the supplementals switch, **Edit Template**, **Bring Back Deleted Notes**,
+and **Disconnect**, which asks first. Disconnecting keeps every note as an
+ordinary note.
 
 In an imported note, **Note Actions > From Readwise** offers **Open in
-Readwise** and **Delete and Reimport**. A second copy of a note, left by
-an overlap between two devices, is marked as one.
+Readwise**, **Sync Now** and **Reset to Readwise Version…**, which asks
+first, then moves the note to Trash and imports it again. Both are
+unavailable while a sync runs. A second copy of a note, left by an overlap
+between two devices, is marked as one.
+
+The editor marks the text Readwise owns with a faint line in the margin,
+and a hint above the first imported note you open says to write between
+highlights; it stays closed once you close it. In live preview a block ID
+is small and dimmed at the end of its line, and the blank lines around it
+shrink, so a highlight, its ID and the line under it read as one block.
+The Markdown stays the same.
 
 The setup is shared through the notebook, so every device sees the same
 folder and settings. The token is kept in iCloud Keychain, so any device
@@ -61,7 +72,6 @@ One note per book or article. The default layout:
 ```markdown
 ---
 author: Alan Kay
-category: articles
 url: https://example.com/article
 tags: [computing]
 ---
@@ -70,15 +80,17 @@ tags: [computing]
 
 ^rw-512345
 
-Note: Kay at Xerox PARC.
-
-[Open in Readwise](https://readwise.io/…)
+*Kay at Xerox PARC.* · #history · [p. 42](https://readwise.io/…)
 ```
 
-The note's name is the title, so the layout has no title heading.
-Highlights appear in book order. Each one is a blockquote, followed by its
-note, its tags and a link back to Readwise. Discarded highlights are left
-out. Reader's full document text is not included for now.
+The note's name is the title, so the layout has no title heading, and
+the folder already says the category. Highlights appear in book order.
+Each one is a blockquote followed by one line with its note in italics,
+its tags as hashtags, and a link back to Readwise named after where the
+highlight is: a page (`p. 42`), a Kindle location (`Loc. 1234`), a time
+in a podcast (`12:05`), or `↗` when Readwise gives no such place.
+Discarded highlights are left out. Reader's full document text is not
+included for now.
 
 The `^rw-512345` after a quote is a block ID, on its own line as Obsidian
 wants it for quotes. Another note can
@@ -86,8 +98,8 @@ link to that highlight with `[[The Early History of Smalltalk#^rw-512345]]`.
 Block IDs come from Obsidian and are not standard Markdown; no standard
 exists for addressing part of a note. meh.md already follows these links,
 and Obsidian-style tools understand them, so they fit the Wikilinks the
-app already uses. Other apps show the ID as plain text, so a setting turns
-block IDs off. Sync does not depend on them.
+app already uses. Other apps show the ID as plain text, so **Highlight
+Links** turns block IDs off. Sync does not depend on them.
 
 ## Who owns what
 
@@ -128,7 +140,7 @@ The notebook can do better because every note keeps its full history.
 
 ## Templates
 
-By default the built-in layout is used. **Customize Template** creates a
+By default the built-in layout is used. **Edit Template** first creates a
 note called Readwise Template in the Readwise folder, fills it with the
 built-in layout, selects it as the template and opens it. Because it
 matches the built-in layout, nothing changes until you edit it.
@@ -155,14 +167,20 @@ highlight template copied from Readwise works unchanged. The supported
 part of Jinja is what Readwise's templates use: variables, `if`, `elif`,
 `for`, `set`, whitespace control, and the filters `trim`, `default`,
 `join` and `date`. `date` takes Readwise's format letters, as in
-`date('F j, Y')`.
+`date('F j, Y')`. The built-in layout also uses three additions:
+`highlight_location_label` (such as `p. 42`), `emphasis`, which puts each
+line in italics, and `hashtag`, which turns a tag into one word.
 
 - **Edits apply on their own.** A template change applies once you stop
   editing: when you leave the note, or after about a minute without
   typing. There is no Apply button. The update runs in the background, in
   batches, with one history entry per note.
-- **Broken templates keep the last good version.** An unknown variable or
-  an unclosed block is shown in Settings > Readwise.
+- **Broken templates keep the last good version.** A template is used only
+  after it renders a sample book without errors. An unknown variable or
+  field, a filter used wrongly or an unclosed block is shown in Settings >
+  Readwise instead. Loops nest at most three deep, and a template that
+  does too much work for one book stops with an error, so it cannot freeze
+  the app.
 - **No "now".** Variables such as the current date would render
   differently on each device. Templates offer Readwise's dates only,
   formatted in one stored time zone.
@@ -220,9 +238,9 @@ instance ID that is new for every insertion.
 - **Text at the edges stays yours.** The marks use `ExpandMark.none`, so
   text typed directly before or after a block is not marked. The blank
   lines between blocks are not marked either, so a heading typed there is
-  yours. A highlight's span runs from its quote to its last line, such as
-  the Open in Readwise link, so text typed at the end of the quote still
-  belongs to it.
+  yours. A highlight's span runs from its quote to its last line, the one
+  with the link back to Readwise, so text typed at the end of the quote
+  still belongs to it.
 - **Marks travel with the text.** They are part of the document and its
   history, survive every merge, and never appear in exported Markdown,
   Markdown copies or backups.
@@ -361,7 +379,8 @@ registers. Older versions skip keys they do not know.
 - **iCloud Keychain:** the token.
 - **This device only:** the "changed since" position for Readwise's
   export API, which only moves forward after the changes it covers are
-  saved, and the progress of a re-render.
+  saved, the books to fetch again, and a fingerprint of what the notes
+  were last rendered with.
 
 A connection is created at setup with its own ID, and the token is stored
 per connection. A notebook has one active connection per service.
@@ -375,11 +394,28 @@ notes.
 
 ### Re-rendering
 
-A template edit, the block ID setting, a newer renderer and Bring Back
+A template edit, the display settings, a newer renderer and Bring Back
 Deleted Notes change notes whose Readwise data did not change. The
 "changed since" position never returns those, so these run a full
-refetch from Readwise. It is restartable and keeps its own progress. The
-export API pages through all books, a few hundred requests at most.
+refetch from Readwise. The syncing device keeps a fingerprint of the
+renderer version, display settings, time zone and template it last
+rendered with, and compares it before every sync, so a setting changed
+on another device is noticed too. An interrupted full refetch starts
+again at the next sync. Once a week the syncing device also refetches
+every book, which repairs a highlight that an older device put back late
+even when Readwise never changes that book again. A request to bring a
+note back is saved before anything moves to Trash and kept until the
+note exists again. The export API pages through all books, a few hundred
+requests at most.
+
+A full export leaves deleted books out, so every sync first asks for
+books changed or deleted since the last one, also before a full refetch.
+
+Readwise data that cannot be read is never applied, because a missing
+highlight would look like a deleted one and take its block with it. A
+book with a highlight that cannot be read waits and is fetched again
+next time. A page with a book that cannot be read fails, and the
+"changed since" position stays where it was.
 
 ### Readwise API
 
@@ -390,6 +426,11 @@ highlight has a `readwise_url`. Requests send `Authorization: Token …`,
 and `GET /api/v2/auth/` returns 204 for a valid token. The default rate
 limit is 240 requests per minute; a 429 response carries `Retry-After`. A
 revoked token stops Readwise sync and says so in Settings.
+
+Setup saves the token before it creates the connection and removes it
+again if that fails, so a Keychain error leaves nothing half set up. A
+device that has the connection but no token, for example after the
+Keychain lost it, shows a field to enter it again.
 
 ## Compatibility
 

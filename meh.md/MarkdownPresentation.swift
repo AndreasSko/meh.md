@@ -185,6 +185,9 @@ enum MarkdownPresentation {
             layoutRange = layoutRange.length == 0 ? tableRange
                 : NSUnionRange(layoutRange, tableRange)
         }
+        // A block ID line styles the blank lines around it, so an edit that
+        // adds or removes one restyles its neighbours too.
+        layoutRange = paragraphGapLayoutRange(layoutRange, in: text)
         syntaxCache.tableRefresh = { [weak textView] in
             guard let textView else { return }
             refresh(textView, fontSize: fontSize, fontFamily: fontFamily, mode: mode)
@@ -449,7 +452,9 @@ enum MarkdownPresentation {
             style.paragraphSpacingBefore = originalParagraphSpacing(
                 at: previous.location, source: source,
                 result: presentation.result, bodyFont: bodyFont,
-                taskParagraphs: taskParagraphs, tableLayout: cache.tableLayout
+                taskParagraphs: taskParagraphs, tableLayout: cache.tableLayout,
+                compact: MarkdownLivePreview.snapshot(for: textView).mode == .livePreview
+                    ? blockIDParagraphs(in: presentation.result, source: source) : []
             )
         }
         attributes[.paragraphStyle] = style
@@ -1095,6 +1100,7 @@ enum MarkdownPresentation {
                 desired.addAttribute(.obliqueness, value: 0.18, range: localRange)
             }
         }
+        let compact = livePreview ? blockIDParagraphs(in: result, source: text as NSString) : []
         if livePreview {
             let markerFont = PlatformFont.monospacedSystemFont(
                 ofSize: bodyFont.pointSize, weight: .regular
@@ -1103,6 +1109,21 @@ enum MarkdownPresentation {
                 guard case .taskMarker = span.role,
                       let localRange = local(span.range) else { continue }
                 desired.addAttribute(.font, value: markerFont, range: localRange)
+            }
+            // A block ID is for links, not for reading: small, at the end
+            // of its line, with the blank lines around it small too.
+            let idFont = fontWithSize(bodyFont, size: (bodyFont.pointSize * 0.7).rounded())
+            let gapFont = fontWithSize(bodyFont, size: (bodyFont.pointSize * 0.45).rounded())
+            for span in result.spans where span.role == .blockID {
+                guard let localRange = local(span.range) else { continue }
+                desired.addAttribute(.font, value: idFont, range: localRange)
+            }
+            for start in compact {
+                let line = (text as NSString).lineRange(for: NSRange(location: start, length: 0))
+                guard (text as NSString).substring(with: line)
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let localLine = local(line) else { continue }
+                desired.addAttribute(.font, value: gapFont, range: localLine)
             }
         }
         let source = text as NSString
@@ -1122,6 +1143,18 @@ enum MarkdownPresentation {
                 value: style,
                 range: localRange
             )
+        }
+        let idLines = Set(result.spans.filter { $0.role == .blockID }
+            .map { source.lineRange(for: $0.range).location })
+        for start in compact {
+            guard let localLine = local(source.lineRange(for: NSRange(location: start, length: 0))),
+                  let current = desired.attribute(
+                      .paragraphStyle, at: localLine.location, effectiveRange: nil
+                  ) as? NSParagraphStyle,
+                  let style = current.mutableCopy() as? NSMutableParagraphStyle else { continue }
+            style.paragraphSpacing = 0
+            if idLines.contains(start) { style.alignment = .right }
+            desired.addAttribute(.paragraphStyle, value: style, range: localLine)
         }
         for span in result.spans where span.role == .strikethrough {
             guard let localRange = local(span.range) else { continue }
@@ -1195,7 +1228,7 @@ enum MarkdownPresentation {
         applyLeadingParagraphGaps(
             to: desired, sourceRange: range, source: source,
             result: result, bodyFont: bodyFont,
-            taskParagraphs: taskParagraphs, tableLayout: tableLayout
+            taskParagraphs: taskParagraphs, tableLayout: tableLayout, compact: compact
         )
         #endif
         var changes: [AttributeChange] = []
@@ -1750,7 +1783,7 @@ enum MarkdownPresentation {
             return [
                 .foregroundColor: primaryTextColor,
             ]
-        case .blockquoteMarker:
+        case .blockquoteMarker, .blockID:
             return [.foregroundColor: tertiaryTextColor]
         case .heading, .strong, .emphasis:
             return [:]
@@ -1784,7 +1817,7 @@ enum MarkdownPresentation {
         })
     }
 
-    #if os(iOS)
+    /// The paragraphs around an edit, whose gaps the edit can change.
     private static func paragraphGapLayoutRange(
         _ range: NSRange, in text: String
     ) -> NSRange {
@@ -1810,14 +1843,42 @@ enum MarkdownPresentation {
         return paragraphs
     }
 
+    /// In live preview a block ID line and the blank lines around it sit
+    /// close to the block above, so a highlight and its ID read as one.
+    /// Returns where those paragraphs start.
+    static func blockIDParagraphs(in result: MarkdownSyntaxResult, source: NSString) -> Set<Int> {
+        var starts = Set<Int>()
+        for span in result.spans where span.role == .blockID {
+            let line = source.lineRange(for: span.range)
+            starts.insert(line.location)
+            var neighbours: [NSRange] = []
+            if line.location > 0 {
+                neighbours.append(source.lineRange(for: NSRange(location: line.location - 1, length: 0)))
+            }
+            if NSMaxRange(line) < source.length {
+                neighbours.append(source.lineRange(for: NSRange(location: NSMaxRange(line), length: 0)))
+            }
+            for neighbour in neighbours where source.substring(with: neighbour)
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                starts.insert(neighbour.location)
+            }
+        }
+        return starts
+    }
+
+    #if os(iOS)
     private static func originalParagraphSpacing(
         at position: Int,
         source: NSString,
         result: MarkdownSyntaxResult,
         bodyFont: PlatformFont,
         taskParagraphs: Set<Int>,
-        tableLayout: MarkdownTableLayout?
+        tableLayout: MarkdownTableLayout?,
+        compact: Set<Int> = []
     ) -> CGFloat {
+        if compact.contains(source.paragraphRange(for: NSRange(location: position, length: 0)).location) {
+            return 0
+        }
         if let tableLayout,
            tableLayout.rows.contains(where: {
                NSLocationInRange(position, $0.range)
@@ -1842,7 +1903,8 @@ enum MarkdownPresentation {
         result: MarkdownSyntaxResult,
         bodyFont: PlatformFont,
         taskParagraphs: Set<Int>,
-        tableLayout: MarkdownTableLayout?
+        tableLayout: MarkdownTableLayout?,
+        compact: Set<Int>
     ) {
         var previousSpacing: CGFloat = 0
         if sourceRange.location > 0 {
@@ -1854,7 +1916,7 @@ enum MarkdownPresentation {
             previousSpacing = originalParagraphSpacing(
                 at: previous.location, source: source, result: result,
                 bodyFont: bodyFont, taskParagraphs: taskParagraphs,
-                tableLayout: tableLayout
+                tableLayout: tableLayout, compact: compact
             )
         }
         var cursor = sourceRange.location
@@ -2400,7 +2462,7 @@ struct MarkdownRenderingPresentation {
             case .link: 4
             case .listMarker, .taskMarker, .rule, .escape: 5
             case .blockquote: 6
-            case .blockquoteMarker: 7
+            case .blockquoteMarker, .blockID: 7
             case .heading, .strong, .emphasis: nil
             }
         }

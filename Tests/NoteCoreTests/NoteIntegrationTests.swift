@@ -130,6 +130,17 @@ final class NoteIntegrationTests: XCTestCase {
         XCTAssertEqual(try note.text, "# Book\n\n> one")
     }
 
+    func testOwnedRangesCoverHighlightsButNotTheHeaderOrYourText() throws {
+        let note = try created(["# Book", "> one 😀", "> two"])
+        try note.replaceAll(with: "# Book\n\nMine\n\n> one 😀\n\n> two", at: date)
+        let text = try note.text as NSString
+        let owned = try note.integrationTextRanges().map { text.substring(with: $0) }
+        XCTAssertEqual(owned.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }, ["> one 😀", "> two"])
+        XCTAssertFalse(owned.contains { $0.contains("Mine") || $0.contains("# Book") })
+        XCTAssertEqual(try NoteDocument(text: "plain", metadata: .now(date)).integrationTextRanges(), [])
+    }
+
     func testAnotherLinkIsRefused() throws {
         let note = try created(["# Book"])
         let other = NotebookIntegrationLink(connection: UUID(), item: "book-1")

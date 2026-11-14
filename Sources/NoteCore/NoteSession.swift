@@ -39,7 +39,11 @@ public final class NoteSession {
 
     public private(set) var isPermanentlyDeleted = false
     public private(set) var isEditingSuspended = false
-    public private(set) var text = ""
+    public private(set) var text = "" {
+        didSet { integrationRanges = (try? document?.integrationTextRanges(in: text)) ?? [] }
+    }
+    /// Text an integration owns and replaces on its next update.
+    public private(set) var integrationRanges: [NSRange] = []
     public private(set) var status: Status = .loading
     public private(set) var recoveryErrorMessage: String?
     public private(set) var persistedSnapshot: NoteSnapshot?

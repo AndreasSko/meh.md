@@ -11,6 +11,7 @@ struct NotebookSettingsView: View {
     let beforeExport: () async throws -> Void
     var onOpenNote: ((UUID) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(NotebookReadwise.enabledKey) private var readwiseLabs = false
     @State private var path: [NotebookSettingsRoute]
     @State private var exporting = false
 
@@ -37,6 +38,16 @@ struct NotebookSettingsView: View {
                     .accessibilityIdentifier("notebook-sync-backups-settings")
                 }
                 NotebookWritingSection(replica: replica, onOpenNote: onOpenNote)
+                if readwiseLabs {
+                    Section {
+                        NavigationLink {
+                            NotebookReadwiseView(readwise: workspace.readwise, onOpenNote: onOpenNote)
+                        } label: {
+                            Label("Readwise", systemImage: "highlighter")
+                        }
+                        .accessibilityIdentifier("notebook-readwise-settings")
+                    }
+                }
                 NotebookAppearanceSection()
                 NotebookFeedbackSection(
                     log: workspace.syncEventLog, storage: workspace.syncStorage
@@ -79,7 +90,7 @@ struct NotebookSettingsView: View {
 
 #if os(macOS)
 enum NotebookSettingsTab: Hashable {
-    case general, appearance, syncBackups, labs
+    case general, appearance, syncBackups, readwise, labs
 }
 
 /// The tab the Settings window shows. Notebook windows set it before they
@@ -100,6 +111,7 @@ enum NotebookSettingsTab: Hashable {
 struct NotebookMacSettingsView: View {
     let workspace: NotebookWorkspace
     @Bindable private var selection = NotebookSettingsSelection.shared
+    @AppStorage(NotebookReadwise.enabledKey) private var readwiseLabs = false
     @Environment(\.openWindow) private var openWindow
     @State private var exporting = false
 
@@ -160,6 +172,13 @@ struct NotebookMacSettingsView: View {
                         beforeExport: { try await replica.flushOpenNotes() },
                         onOpenNote: openNote
                     )
+                }
+            }
+            if readwiseLabs {
+                Tab("Readwise", systemImage: "highlighter", value: .readwise) {
+                    NavigationStack {
+                        NotebookReadwiseView(readwise: workspace.readwise, onOpenNote: openNote)
+                    }
                 }
             }
             Tab("Labs", systemImage: "flask", value: .labs) {
@@ -360,6 +379,7 @@ private struct NotebookSettingsSignature: View {
 private struct NotebookLabsView: View {
     @AppStorage(MarkdownTimeCalculator.enabledKey, store: NotebookEditorPreferences.store)
     private var timeCalculator = false
+    @AppStorage(NotebookReadwise.enabledKey) private var readwise = false
 
     var body: some View {
         Form {
@@ -378,6 +398,14 @@ private struct NotebookLabsView: View {
                 NotebookTimeCalculatorSample()
             } footer: {
                 Text("End a line with = to add up the times above it. Turn it on for a note in … › Editor Display.")
+            }
+            Section {
+                Toggle(isOn: $readwise) {
+                    Label("Readwise", systemImage: "highlighter")
+                }
+                .accessibilityIdentifier("notebook-labs-readwise")
+            } footer: {
+                Text("Keep your Readwise highlights as notes that stay up to date. Set it up in Settings › Readwise.")
             }
         }
         .formStyle(.grouped)

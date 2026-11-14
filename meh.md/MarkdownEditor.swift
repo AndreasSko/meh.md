@@ -345,6 +345,18 @@ final class MarkdownTextView: NSTextView {
             redrawMarkdownDecorations()
         }
     }
+    /// Text an integration owns, marked in the margin.
+    var markdownOwnedRanges: [NSRange] = [] {
+        didSet {
+            guard markdownOwnedRanges != oldValue else { return }
+            // The margin needs a wider drawing surface only when the line
+            // appears or goes; moving ranges just redraws.
+            if markdownOwnedRanges.isEmpty != oldValue.isEmpty, let layoutManager = textLayoutManager {
+                layoutManager.invalidateLayout(for: layoutManager.documentRange)
+            }
+            redrawMarkdownDecorations()
+        }
+    }
     fileprivate var markdownLayoutDelegate: MarkdownLayoutManagerDelegate?
     /// Whether this note shows time calculator results.
     var markdownTimeCalculator = false {
@@ -881,6 +893,8 @@ struct MarkdownEditor: NSViewRepresentable {
     /// different. Nil leaves all links alike.
     var knownLinkNames: Set<String>?
     var historyChanges: NoteHistoryChanges
+    /// Text an integration owns, marked in the margin.
+    var ownedRanges: [NSRange]
     var timeCalculator: Bool
     @AppStorage(EditorLineWidth.key, store: NotebookEditorPreferences.store)
     private var lineWidth = EditorLineWidth.standard
@@ -907,6 +921,7 @@ struct MarkdownEditor: NSViewRepresentable {
         palette: MehPalette = MehStyle.palette,
         knownLinkNames: Set<String>? = nil,
         historyChanges: NoteHistoryChanges = .none,
+        ownedRanges: [NSRange] = [],
         timeCalculator: Bool = false
     ) {
         _text = text
@@ -926,6 +941,7 @@ struct MarkdownEditor: NSViewRepresentable {
         self.palette = palette
         self.knownLinkNames = knownLinkNames
         self.historyChanges = historyChanges
+        self.ownedRanges = ownedRanges
         self.timeCalculator = timeCalculator
     }
 
@@ -980,6 +996,7 @@ struct MarkdownEditor: NSViewRepresentable {
         )
         context.coordinator.observeUndoAndRedo(for: textView)
         textView.markdownHistoryChanges = historyChanges
+        textView.markdownOwnedRanges = ownedRanges
         textView.markdownTimeCalculator = timeCalculator
         if isReadOnly { context.coordinator.observeViewport(of: scrollView) }
 
@@ -1187,6 +1204,7 @@ struct MarkdownEditor: NSViewRepresentable {
         func update(parent: MarkdownEditor, textView: NSTextView) {
             self.parent = parent
             (textView as? MarkdownTextView)?.markdownHistoryChanges = parent.historyChanges
+            (textView as? MarkdownTextView)?.markdownOwnedRanges = parent.ownedRanges
             if let nativeView = textView as? MarkdownTextView,
                nativeView.markdownTimeCalculator != parent.timeCalculator {
                 // Underline headings come and go with the calculator.
@@ -2248,6 +2266,22 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         }
     }
 
+    /// Text an integration owns, marked in the margin.
+    var markdownOwnedRanges: [NSRange] {
+        get { markdownState.ownedRanges }
+        set {
+            guard newValue != markdownState.ownedRanges else { return }
+            let appearsOrGoes = newValue.isEmpty != markdownState.ownedRanges.isEmpty
+            markdownState.ownedRanges = newValue
+            // The margin needs a wider drawing surface only when the line
+            // appears or goes; moving ranges just redraws.
+            if appearsOrGoes, let layoutManager = textLayoutManager {
+                layoutManager.invalidateLayout(for: layoutManager.documentRange)
+            }
+            redrawMarkdownDecorations()
+        }
+    }
+
     /// Whether this note shows time calculator results.
     var markdownTimeCalculator: Bool {
         get { markdownState.timeCalculator }
@@ -2635,6 +2669,7 @@ private final class MarkdownTextViewState: NSObject {
     var tappedLink: NotebookLinkOccurrence?
     var tappedRemoval: MarkdownHistoryMarks.Ring?
     var historyChanges = NoteHistoryChanges.none
+    var ownedRanges: [NSRange] = []
     var timeCalculator = false
     var timeSums: [MarkdownTimeSum] = []
     var linkPointer: UIPointerInteraction?
@@ -2672,6 +2707,8 @@ struct MarkdownEditor: UIViewRepresentable {
     /// different. Nil leaves all links alike.
     var knownLinkNames: Set<String>?
     var historyChanges: NoteHistoryChanges
+    /// Text an integration owns, marked in the margin.
+    var ownedRanges: [NSRange]
     var timeCalculator: Bool
     var initialPreviewPosition: MarkdownEditorPosition?
     var initialPreviewInsets: UIEdgeInsets?
@@ -2701,6 +2738,7 @@ struct MarkdownEditor: UIViewRepresentable {
         palette: MehPalette = MehStyle.palette,
         knownLinkNames: Set<String>? = nil,
         historyChanges: NoteHistoryChanges = .none,
+        ownedRanges: [NSRange] = [],
         timeCalculator: Bool = false,
         initialPreviewPosition: MarkdownEditorPosition? = nil,
         initialPreviewInsets: UIEdgeInsets? = nil,
@@ -2723,6 +2761,7 @@ struct MarkdownEditor: UIViewRepresentable {
         self.palette = palette
         self.knownLinkNames = knownLinkNames
         self.historyChanges = historyChanges
+        self.ownedRanges = ownedRanges
         self.timeCalculator = timeCalculator
         self.initialPreviewPosition = initialPreviewPosition
         self.initialPreviewInsets = initialPreviewInsets
@@ -2779,6 +2818,7 @@ struct MarkdownEditor: UIViewRepresentable {
         )
 
         textView.markdownHistoryChanges = historyChanges
+        textView.markdownOwnedRanges = ownedRanges
         textView.markdownTimeCalculator = timeCalculator
         context.coordinator.attachNavigation(to: textView)
         textView.updateMarkdownTitle(title, height: titleHeight)
@@ -3027,6 +3067,7 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             self.parent = parent
             (textView as? MarkdownTextView)?.markdownHistoryChanges = parent.historyChanges
+            (textView as? MarkdownTextView)?.markdownOwnedRanges = parent.ownedRanges
             if let nativeView = textView as? MarkdownTextView,
                nativeView.markdownTimeCalculator != parent.timeCalculator {
                 // Underline headings come and go with the calculator.
@@ -3852,6 +3893,7 @@ nonisolated private final class MarkdownTextLayoutFragment:
 #endif
             let verticalPadding = lineHeight * 0.3
             let marksExtension = textView.markdownHistoryChanges.isEmpty
+                && textView.markdownOwnedRanges.isEmpty
                 ? 0 : MarkdownHistoryMarks.surfaceExtension
             let panelBounds = CGRect(
                 x: -fragmentFrame.minX - 3 - marksExtension,
@@ -3879,6 +3921,12 @@ nonisolated private final class MarkdownTextLayoutFragment:
                     context: drawingContext.value
                 )
                 MarkdownHistoryMarks.draw(
+                    in: fragment.value,
+                    textView: textView,
+                    at: point,
+                    context: drawingContext.value
+                )
+                MarkdownHistoryMarks.drawOwned(
                     in: fragment.value,
                     textView: textView,
                     at: point,

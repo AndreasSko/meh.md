@@ -30,6 +30,15 @@ final class MarkdownBlockSyntaxTests: XCTestCase {
         XCTAssertEqual(roles(in: "---\ntitle", MarkdownSyntax.parse("---\ntitle")), ["rule=---"])
     }
 
+    func testBlockIDsAloneOnTheirLine() {
+        let text = "> Quote\n\n^rw-1001\n\nSee ^rw-2 here\n\n```\n^rw-3\n```\n  ^abc  "
+        let ids = roles(in: text, MarkdownSyntax.parse(text)).filter { $0.hasPrefix("blockID=") }
+        XCTAssertEqual(ids, ["blockID=^rw-1001", "blockID=^abc"])
+        let frontmatter = "---\n^abc\n---\n\n^rw-1"
+        XCTAssertEqual(roles(in: frontmatter, MarkdownSyntax.parse(frontmatter))
+            .filter { $0.hasPrefix("blockID=") }, ["blockID=^rw-1"])
+    }
+
     func testTimeCalculatorKeepsEqualsLinesAsText() {
         // Calculator notes have no underline headings; `---` stays a rule.
         let text = "Travel\n1h\n=\nNotes\n---\nDay\n==="

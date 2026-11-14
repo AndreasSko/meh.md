@@ -166,6 +166,37 @@ enum MarkdownHistoryMarks {
         ), context: context)
     }
 
+    /// A faint line beside text an integration owns, so the person sees
+    /// where an update replaces text. History's marks take the margin
+    /// while they show.
+    static func drawOwned(
+        in fragment: NSTextLayoutFragment,
+        textView: MarkdownTextView,
+        at point: CGPoint,
+        context: CGContext
+    ) {
+        let owned = textView.markdownOwnedRanges
+        guard !owned.isEmpty, textView.markdownHistoryChanges.isEmpty,
+              let layoutManager = fragment.textLayoutManager,
+              let range = nsRange(of: fragment, in: layoutManager),
+              owned.contains(where: { NSIntersectionRange($0, range).length > 0 }) else { return }
+        let frame = fragment.layoutFragmentFrame
+        let bar = CGRect(
+            x: point.x - frame.minX - offset - ownedWidth / 2, y: point.y,
+            width: ownedWidth, height: frame.height)
+        #if os(macOS)
+        let color = NSColor.separatorColor.cgColor
+        #else
+        let color = UIColor.separator.cgColor
+        #endif
+        context.saveGState()
+        context.setFillColor(color)
+        context.fill(bar)
+        context.restoreGState()
+    }
+
+    static let ownedWidth: CGFloat = 2
+
     static func nsRange(
         of fragment: NSTextLayoutFragment,
         in layoutManager: NSTextLayoutManager
