@@ -146,6 +146,8 @@ public final class NotebookReplica {
     @ObservationIgnored private var loaded = false
     @ObservationIgnored private var writingCatalog = false
     @ObservationIgnored private var writeWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Writes waiting for their turn, for tests that need a known order.
+    var catalogWriteWaiterCount: Int { writeWaiters.count }
     @ObservationIgnored var importFaultInjector: ((NotebookImportStage) throws -> Void)?
     @ObservationIgnored var deletionFaultInjector: ((NotebookDeletionStage) throws -> Void)?
     @ObservationIgnored var linkLocationFaultInjector: ((NotebookLinkLocationStage) throws -> Void)?
@@ -651,6 +653,34 @@ public final class NotebookReplica {
             try next.setTimeCalculator(id, enabled: enabled)
             try await self.persistCatalog(next)
         }
+    }
+
+    // MARK: Integrations
+
+    /// The catalog as integration code reads it; nil before joining.
+    func integrationCatalog() -> NotebookCatalogDocument? { catalog }
+
+    /// One catalog write for integration changes. `body` gets a fork of the
+    /// catalog and may save note bodies before referencing them.
+    func integrationCatalogWrite<T>(
+        _ body: @MainActor (NotebookCatalogDocument) async throws -> T
+    ) async throws -> T {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            let result = try await body(next)
+            try await self.persistCatalog(next)
+            return result
+        }
+    }
+
+    /// The note's current document, including unsaved editor text, or nil
+    /// while its body has not downloaded or cannot be read.
+    func integrationNote(_ id: UUID) async throws -> NoteDocument? {
+        if let session = sessions[id], session.isEditingEnabled { try await session.flush() }
+        guard case .current(let snapshot) = await noteStorage(id).load(reusing: nil).result
+        else { return nil }
+        return try NoteDocument(snapshot: snapshot)
     }
 
     /// Read the latest source body without opening or flushing an editor.
@@ -1826,13 +1856,66 @@ public final class NotebookReplica {
             record.notebookID == catalog.notebookID
         else { throw SyncError.identityConflict }
         if record.kind == .catalog {
+            let known = (try? integrationNoteIDs()) ?? []
             try await acceptSeed(record)
+            // A note's text can arrive before the catalog lists it, for
+            // example when an import ran during an exchange. Notes the
+            // catalog now lists for the first time are cleaned up here;
+            // notes whose text has not arrived are cleaned up when it does.
+            for id in ((try? integrationNoteIDs()) ?? []).subtracting(known).sorted(by: {
+                $0.uuidString < $1.uuidString
+            }) {
+                try? await reconcileIntegrationNote(id)
+            }
             return
         }
         let id = record.snapshot.noteID
         if try catalog.items().contains(where: { $0.id == id && $0.kind != .note }) {
             throw SyncError.identityConflict
         }
+        try await mergeNote(record.snapshot)
+        // Integration cleanup never fails iCloud sync; the next change or
+        // integration update tries again.
+        if (try? integrationNoteIDs().contains(id)) == true {
+            try? await reconcileIntegrationNote(id)
+        }
+    }
+
+    @ObservationIgnored private var integrationNotesCache: (heads: Set<String>, ids: Set<UUID>)?
+
+    /// Notes created by an integration, including losing duplicates.
+    private func integrationNoteIDs() throws -> Set<UUID> {
+        guard let catalog, let heads = catalogSnapshot?.heads else { return [] }
+        if let cache = integrationNotesCache, cache.heads == heads { return cache.ids }
+        var ids = Set<UUID>()
+        for connection in catalog.integrationConnectionIDs() {
+            for values in try catalog.integrationRecords(connection).values {
+                for record in values {
+                    ids.insert(record.note)
+                    ids.formUnion(record.duplicates)
+                }
+            }
+        }
+        integrationNotesCache = (heads, ids)
+        return ids
+    }
+
+    /// Typing can arrive late inside a highlight copy another device has
+    /// replaced. The service may not change that item again for a long
+    /// time, so the copy is removed when the change arrives.
+    private func reconcileIntegrationNote(_ id: UUID) async throws {
+        guard let note = try await integrationNote(id),
+              try note.reconcileIntegrationCopies(at: Date()) else { return }
+        try await mergeNote(note.snapshot())
+    }
+
+    /// Merges a note's snapshot into local storage and any open editor.
+    /// Incoming iCloud changes and integration updates both come here.
+    /// `check` runs right before the note is written, inside the catalog's
+    /// serialized writer, so a catalog change it depends on cannot land
+    /// between the check and the write.
+    func mergeNote(_ snapshot: NoteSnapshot, check: (@MainActor () throws -> Void)? = nil) async throws {
+        let id = snapshot.noteID
         if try deletedIDs.contains(id) { return }
         if let session = sessions[id] {
             if let load = sessionLoads[id] { await load.value }
@@ -1842,12 +1925,13 @@ public final class NotebookReplica {
             if sessions[id] === session {
                 if session.isWaitingForRemoteBody {
                     try await withCatalogWrite {
+                        try check?()
                         if session.isWaitingForRemoteBody {
-                            try await session.installFirstRemoteBody(record.snapshot)
+                            try await session.installFirstRemoteBody(snapshot)
                         } else if session.isEditingEnabled {
                             // Another receiver installed the first body while
                             // we waited for the serialized writer.
-                            try session.mergeRemote(record.snapshot)
+                            try session.mergeRemote(snapshot)
                             try await session.flush()
                         } else {
                             throw NotebookReplicaError.noteUnavailable(id)
@@ -1857,8 +1941,9 @@ public final class NotebookReplica {
                     // An open note that could not be loaded is repaired like
                     // an unopened one, then shown again.
                     let repaired = try await withCatalogWrite {
-                        try await session.repair(from: record.snapshot) {
-                            try await self.noteStorage(id).merge(record.snapshot)
+                        try check?()
+                        return try await session.repair(from: snapshot) {
+                            try await self.noteStorage(id).merge(snapshot)
                         }
                     }
                     guard repaired else { throw NotebookReplicaError.noteUnavailable(id) }
@@ -1867,7 +1952,14 @@ public final class NotebookReplica {
                     guard session.isEditingEnabled else {
                         throw NotebookReplicaError.noteUnavailable(id)
                     }
-                    try session.mergeRemote(record.snapshot)
+                    if let check {
+                        try await withCatalogWrite {
+                            try check()
+                            try session.mergeRemote(snapshot)
+                        }
+                    } else {
+                        try session.mergeRemote(snapshot)
+                    }
                     try await session.flush()
                 }
                 return
@@ -1877,7 +1969,8 @@ public final class NotebookReplica {
         // download. A single MainActor operation guard serializes this path;
         // the merge itself runs on the note's storage actor.
         try await withCatalogWrite {
-            guard try await self.noteStorage(id).merge(record.snapshot) else {
+            try check?()
+            guard try await self.noteStorage(id).merge(snapshot) else {
                 throw NotebookReplicaError.noteUnavailable(id)
             }
         }
