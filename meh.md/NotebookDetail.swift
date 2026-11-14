@@ -227,6 +227,10 @@ struct NotebookDetail: View {
                         scene.restoreEditorPosition(noteID: selectedID, session: session)
                     }
                     .toolbar { toolbar(session: session, selectedID: selectedID) }
+                    .readwiseResetDialog(
+                        scene.workspace?.readwise, noteID: selectedID,
+                        noteName: scene.selectedPlacement
+                            .map { NotebookNoteName.title(from: $0.displayName) } ?? "")
                 } else if scene.isLibraryEmpty {
                     NotebookEmptyLibraryView(scene: scene)
                         .disabled(scene.busy)
@@ -338,6 +342,9 @@ struct NotebookDetail: View {
                     }
                     .controlGroupStyle(.compactMenu)
                     backlinksButton(session: session)
+                    if let readwise = scene.workspace?.readwise {
+                        NotebookReadwiseNoteActions(readwise: readwise, noteID: selectedID)
+                    }
                     #else
                     shareButton(session: session)
                     Divider()
@@ -351,6 +358,9 @@ struct NotebookDetail: View {
                         Divider()
                     }
                     backlinksButton(session: session)
+                    if let readwise = scene.workspace?.readwise {
+                        NotebookReadwiseNoteActions(readwise: readwise, noteID: selectedID)
+                    }
                     findButton(session: session, title: "Find in Note…")
                     historyButton(session: session, title: "Version History")
                     #endif
@@ -444,6 +454,9 @@ struct NotebookDetailTitle: View {
             title
             if !isEditing, let notice = NotebookPlacementNotice(placement) {
                 NotebookNoticeMark(scene: scene, placement: placement, notice: notice)
+            }
+            if let readwise = scene.workspace?.readwise {
+                NotebookReadwiseHint(readwise: readwise, noteID: placement.item.id)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
