@@ -128,6 +128,9 @@ final class NotebookWorkspace {
 
     private(set) var replica: NotebookReplica?
     private(set) var sync: NotebookSyncCoordinator?
+    /// The Readwise Labs experiment; it syncs after iCloud.
+    @ObservationIgnored private(set) lazy var readwise = NotebookReadwise(
+        workspace: self, usesKeychain: !isPreview)
     /// Progress while saved sync state opens, before a coordinator exists.
     private(set) var preparationProgress: NotebookSyncProgress?
     private var preparationID: UUID?
@@ -1270,6 +1273,7 @@ final class NotebookWorkspace {
                 ])
         }
         if changed, !newForeground { cancelSnapshotMaintenance() }
+        if changed { newForeground ? readwise.appDidBecomeActive() : readwise.appDidResignActive() }
         if changed, newForeground, !isResetPending, !automaticSync,
            manualSnapshotCleanupRequested {
             // A requested cleanup remains authorized across suspension even
@@ -1474,6 +1478,7 @@ final class NotebookWorkspace {
                     persistLastSuccessfulSync(
                         date, scope: notebookTransport.scope, notebookID: notebookID
                     )
+                    readwise.iCloudDidSync()
                 }
                 if case .failed(let message) = coordinator.status {
                     if !hasBinding { errorMessage = message }
