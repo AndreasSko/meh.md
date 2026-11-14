@@ -323,10 +323,13 @@ private struct NotebookFolderList<Header: View>: View {
     #if os(iOS)
     @State private var drop: NotebookPageListDrop
     #endif
+    /// Rows swiped to Trash leave at once, as the swipe expects, rather than
+    /// springing back until the move finishes.
+    @State private var trashing: Set<UUID> = []
     let scene: NotebookSceneState
     let folderID: UUID
     let isCompact: Bool
-    let children: [NotebookPlacement]
+    let allChildren: [NotebookPlacement]
     let header: Header
     @Binding var selection: Set<UUID>
     let isSelecting: Bool
@@ -340,7 +343,7 @@ private struct NotebookFolderList<Header: View>: View {
         self.scene = scene
         self.folderID = folderID
         self.isCompact = isCompact
-        self.children = children
+        self.allChildren = children
         self.header = header
         _selection = selection
         self.isSelecting = isSelecting
@@ -397,10 +400,11 @@ private struct NotebookFolderList<Header: View>: View {
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             if !isSelecting, scene.editingID == nil {
                                 Button(role: .destructive) {
-                                    scene.trashItems([placement.item.id])
+                                    trash(placement.item.id)
                                 } label: {
-                                    Label("Trash", systemImage: "trash")
+                                    Image(systemName: "trash")
                                 }
+                                .accessibilityLabel("Move to Trash")
                             }
                         }
                 }
@@ -453,8 +457,20 @@ private struct NotebookFolderList<Header: View>: View {
         #endif
     }
 
+    private var children: [NotebookPlacement] {
+        trashing.isEmpty ? allChildren : allChildren.filter { !trashing.contains($0.item.id) }
+    }
+
     private var noteCount: Int {
         children.count { $0.item.kind == .note }
+    }
+
+    private func trash(_ id: UUID) {
+        withAnimation { _ = trashing.insert(id) }
+        // Once trashed the row is gone anyway; if trashing failed it returns.
+        scene.trashItems([id]) { _ in
+            withAnimation { _ = trashing.remove(id) }
+        }
     }
 
     /// Rows start where Cards do. The List ignores content margins beside
