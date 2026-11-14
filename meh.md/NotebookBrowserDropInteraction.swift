@@ -11,7 +11,7 @@ typealias NotebookRowAnchorView = UIView
 #endif
 
 extension UTType {
-    static let mehNotebookItem = UTType(exportedAs: "de.andreas-sk.meh-md.browser-item")
+    nonisolated static let mehNotebookItem = UTType(exportedAs: "de.andreas-sk.meh-md.browser-item")
 }
 
 @MainActor @Observable
@@ -71,6 +71,11 @@ final class NotebookBrowserDragState {
         }
         return rowFrames[itemID]
         #endif
+    }
+
+    /// The row whose cell is under the point, among rows with an anchor.
+    func rowID(at point: CGPoint) -> UUID? {
+        rowAnchors.keys.first { rowFrame(for: $0)?.contains(point) == true }
     }
 
     func begin(_ drag: NotebookBrowserDrag) -> NSItemProvider {

@@ -64,7 +64,9 @@
         "FolderPagesUITests/testIPhoneNamesANewFolderOnACardsPage",
         "FolderPagesUITests/testIPhoneShowInFilesLeavesThePages",
         "FolderPagesUITests/testIPhoneRotationMovesThePageIntoFiles",
-        "FolderPagesUITests/testIPhoneBackReturnsToWherePagesWereOpened"
+        "FolderPagesUITests/testIPhoneBackReturnsToWherePagesWereOpened",
+        "FolderPagesUITests/testDraggingSelectedRowsOntoAFolderOfThePageMovesThem",
+        "FolderPagesUITests/testDraggingSelectedCardsOntoAFolderOfThePageMovesThem"
       ]
     }
   ],

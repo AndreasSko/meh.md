@@ -59,10 +59,29 @@ final class FolderPagesUITests: XCTestCase {
         XCTAssertTrue(card.waitForExistence(timeout: 5))
         capture(app, name: "Cards")
 
-        openFolderPage(named: "Areas", in: app)
+        // Switching between Cards and List leaves the title in place. Beside
+        // iPad's Files a List row reports its frame from the column, not the
+        // screen.
+        let title = app.staticTexts["notebook-folder-page-title"]
+        let cardsTitle = title.frame
+        chooseView("List", in: app)
         let row = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "notebook-folder-page-note-"
         )).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertFalse(card.exists)
+        let checksX = !isIPadBesideFiles(app)
+        let inPlace = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            abs(title.frame.minY - cardsTitle.minY) <= 1
+                && (!checksX || abs(title.frame.minX - cardsTitle.minX) <= 1)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter().wait(for: [inPlace], timeout: 5), .completed,
+                       "Title moved from \(cardsTitle) to \(title.frame)")
+        capture(app, name: "List")
+        chooseView("Cards", in: app)
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+
+        openFolderPage(named: "Areas", in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 5))
         XCTAssertFalse(card.exists)
 
@@ -197,6 +216,62 @@ final class FolderPagesUITests: XCTestCase {
         XCTAssertEqual(source.text, "2 items")
         #else
         throw XCTSkip("⌘-click selects rows on the Mac")
+        #endif
+    }
+
+    func testDraggingSelectedRowsOntoAFolderOfThePageMovesThem() throws {
+        try dragSelectedNotesOntoAFolder(view: "List")
+    }
+
+    func testDraggingSelectedCardsOntoAFolderOfThePageMovesThem() throws {
+        try dragSelectedNotesOntoAFolder(view: "Cards")
+    }
+
+    /// On iPhone the page covers Files, so its own folders take the drop.
+    private func dragSelectedNotesOntoAFolder(view: String) throws {
+        #if os(iOS)
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        app.revealNotebookSidebar(timeout: 30)
+        let templates = itemID(named: "Templates", in: app, expanding: "Resources")
+        openFolderPage(named: "Resources", in: app)
+        chooseView(view, in: app)
+
+        func pageNote(_ name: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(
+                format: "(identifier BEGINSWITH %@ OR identifier BEGINSWITH %@) AND label BEGINSWITH %@",
+                "notebook-folder-page-note-", "notebook-folder-page-card-", name
+            )).firstMatch
+        }
+        let actions = app.buttons["notebook-folder-page-actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 5))
+        actions.tap()
+        let select = app.buttons["notebook-folder-page-select"]
+        XCTAssertTrue(select.waitForExistence(timeout: 5))
+        select.tap()
+        let packing = pageNote("Packing list")
+        let book = pageNote("Book notes")
+        XCTAssertTrue(packing.waitForExistence(timeout: 5))
+        packing.tap()
+        book.tap()
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
+
+        let folder = app.descendants(matching: .any)["notebook-folder-page-folder-" + templates]
+        XCTAssertTrue(folder.waitForExistence(timeout: 5))
+        book.press(
+            forDuration: 1.0, thenDragTo: folder, withVelocity: .slow,
+            thenHoldForDuration: 0.8)
+        XCTAssertTrue(book.waitForNonExistence(timeout: 10), "Book notes stayed on the page")
+        XCTAssertFalse(packing.exists, "The other selected note stayed")
+
+        app.buttons["notebook-folder-page-done"].tap()
+        folder.tap()
+        waitForPageTitle("Templates", in: app)
+        XCTAssertTrue(pageNote("Book notes").waitForExistence(timeout: 5))
+        XCTAssertTrue(pageNote("Packing list").exists)
+        #else
+        throw XCTSkip("The Mac drags with AppKit")
         #endif
     }
 
@@ -391,6 +466,14 @@ final class FolderPagesUITests: XCTestCase {
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchArguments += ["-editor.mode", "source", "-AppleLanguages", "(en)"]
         return app
+    }
+
+    private func isIPadBesideFiles(_ app: XCUIApplication) -> Bool {
+        #if os(macOS)
+        false
+        #else
+        !isCompact(app)
+        #endif
     }
 
     private func isCompact(_ app: XCUIApplication) -> Bool {

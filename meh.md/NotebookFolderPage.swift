@@ -1,6 +1,7 @@
 import Foundation
 import NoteCore
 import SwiftUI
+import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
 #endif
@@ -71,6 +72,10 @@ struct NotebookFolderPage: View {
             )
         }
     }
+
+    /// Where the title and the content start, in List and in Cards alike,
+    /// so switching between the two moves nothing.
+    static func margin(isCompact: Bool) -> CGFloat { isCompact ? 20 : 32 }
 
     private func header(_ folder: NotebookPlacement) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -315,6 +320,9 @@ struct NotebookPathLine: View {
 
 /// A folder's notes and folders as rows, notes with their first words.
 private struct NotebookFolderList<Header: View>: View {
+    #if os(iOS)
+    @State private var drop: NotebookPageListDrop
+    #endif
     let scene: NotebookSceneState
     let folderID: UUID
     let isCompact: Bool
@@ -324,21 +332,51 @@ private struct NotebookFolderList<Header: View>: View {
     let isSelecting: Bool
     let open: (NotebookPlacement) -> Void
 
+    init(
+        scene: NotebookSceneState, folderID: UUID, isCompact: Bool,
+        children: [NotebookPlacement], header: Header, selection: Binding<Set<UUID>>,
+        isSelecting: Bool, open: @escaping (NotebookPlacement) -> Void
+    ) {
+        self.scene = scene
+        self.folderID = folderID
+        self.isCompact = isCompact
+        self.children = children
+        self.header = header
+        _selection = selection
+        self.isSelecting = isSelecting
+        self.open = open
+        #if os(iOS)
+        _drop = State(initialValue: NotebookPageListDrop(scene: scene))
+        #endif
+    }
+
     var body: some View {
         List(selection: $selection) {
             header
+                .listRowInsets(.vertical, 0)
+                .listRowInsets(.horizontal, rowInset)
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)
                 .selectionDisabled()
                 .padding(.bottom, 8)
             if children.isEmpty {
                 NotebookFolderEmpty()
+                    .listRowInsets(.horizontal, rowInset)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .selectionDisabled()
             } else {
                 ForEach(children, id: \.item.id) { placement in
                     NotebookFolderRow(scene: scene, placement: placement, isCompact: isCompact)
+                        #if os(iOS)
+                        .background {
+                            if placement.item.kind == .folder {
+                                NotebookBrowserUIKitSharedDropReader(coordinator: drop.reader)
+                            }
+                        }
+                        .notebookBrowserRowGeometry(
+                            itemID: placement.item.id, state: drop.rows)
+                        #endif
                         #if os(macOS)
                         // As in Files, a plain click opens; ⌘ and ⇧ select.
                         .simultaneousGesture(TapGesture().onEnded {
@@ -351,8 +389,11 @@ private struct NotebookFolderList<Header: View>: View {
                             scene.beginBrowserDrag(placement.item.id, selection: Array(selection))
                         }
                         .tag(placement.item.id)
+                        .listRowInsets(.horizontal, rowInset)
                         .listRowSeparator(.hidden)
-                        .listRowBackground(rowBackground(placement.item.id))
+                        .listRowBackground(
+                            rowBackground(placement.item.id)
+                                .padding(.horizontal, highlightInset))
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             if !isSelecting, scene.editingID == nil {
                                 Button(role: .destructive) {
@@ -364,6 +405,7 @@ private struct NotebookFolderList<Header: View>: View {
                         }
                 }
                 NotebookLibraryFooter(noteCount: noteCount) { _ in }
+                    .listRowInsets(.horizontal, rowInset)
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .selectionDisabled()
@@ -371,7 +413,11 @@ private struct NotebookFolderList<Header: View>: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .contentMargins(.horizontal, isCompact ? 8 : 24, for: .scrollContent)
+        .notebookPageEdgeEffect()
+        .notebookPageDragSession(scene)
+        #if os(iOS)
+        .onDisappear { drop.reader.detach() }
+        #endif
         #if os(macOS)
         // As in Files, AppKit tracks the drag; the header is the first row.
         .overlay(NotebookPageDragReader(
@@ -411,6 +457,26 @@ private struct NotebookFolderList<Header: View>: View {
         children.count { $0.item.kind == .note }
     }
 
+    /// Rows start where Cards do. The List ignores content margins beside
+    /// Files, so rows take the whole margin as inset; the Mac's table keeps
+    /// 8 points of its own.
+    private var rowInset: CGFloat {
+        #if os(iOS)
+        NotebookFolderPage.margin(isCompact: isCompact)
+        #else
+        NotebookFolderPage.margin(isCompact: isCompact) - 8
+        #endif
+    }
+
+    /// iOS rows draw their highlight clear of the edges.
+    private var highlightInset: CGFloat {
+        #if os(iOS)
+        isCompact ? 8 : 24
+        #else
+        0
+        #endif
+    }
+
     /// A ⌘- or ⇧-click, which selects rows rather than opening one. The
     /// click's own flags count, not only keys held down right now.
     private static var isSelectingClick: Bool {
@@ -423,7 +489,11 @@ private struct NotebookFolderList<Header: View>: View {
     }
 
     private func rowBackground(_ id: UUID) -> Color {
-        id == scene.selectedID && !isSelecting && isCompact == false
+        if let target = scene.browserDrag.target, target.position == .into,
+           target.rowID == id {
+            return Color.accentColor.opacity(0.16)
+        }
+        return id == scene.selectedID && !isSelecting && isCompact == false
             ? NotebookSidebarPalette.openNote : .clear
     }
 }
@@ -540,9 +610,9 @@ private struct NotebookFolderCards<Header: View>: View {
                                     open(folder)
                                 }
                             }
-                            .notebookDragSource(enabled: scene.editingID == nil) {
-                                scene.beginBrowserDrag(folder.item.id, selection: Array(selection))
-                            }
+                            .notebookCardDragSource(folder.item.id, enabled: scene.editingID == nil)
+                            .notebookPageDropTarget(
+                                scene: scene, folderID: folder.item.id, isFolder: true)
                             .notebookCardFrame(folder.item.id, in: frames)
                         }
                     }
@@ -566,9 +636,7 @@ private struct NotebookFolderCards<Header: View>: View {
                                 open(note)
                             }
                         }
-                        .notebookDragSource(enabled: scene.editingID == nil) {
-                            scene.beginBrowserDrag(note.item.id, selection: Array(selection))
-                        }
+                        .notebookCardDragSource(note.item.id, enabled: scene.editingID == nil)
                         .notebookCardFrame(note.item.id, in: frames)
                         .contextMenu {
                             if !isSelecting {
@@ -582,10 +650,28 @@ private struct NotebookFolderCards<Header: View>: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            .padding(.horizontal, isCompact ? 20 : 32)
+            .padding(.horizontal, NotebookFolderPage.margin(isCompact: isCompact))
             .padding(.bottom, 24)
+            #if os(iOS)
+            // Selected cards lift together, as selected rows do in List.
+            .dragContainer(for: NotebookPageDragItem.self) { (ids: [UUID]) -> [NotebookPageDragItem] in
+                // A rejected begin leaves another drag's token in place.
+                guard let first = ids.first,
+                      scene.beginBrowserDrag(first, selection: ids)
+                          .hasItemConformingToTypeIdentifier(UTType.mehNotebookItem.identifier),
+                      let token = scene.browserDrag.drag?.token else { return [] }
+                return ids.map { NotebookPageDragItem(id: $0, token: token) }
+            }
+            .dragContainerSelection(
+                isSelecting ? children.map(\.item.id).filter(selection.contains) : [])
+            .dragConfiguration(DragConfiguration(
+                operationsWithinApp: .init(allowMove: true),
+                operationsOutsideApp: .init(allowCopy: false)))
+            #endif
         }
         .scrollContentBackground(.hidden)
+        .notebookPageEdgeEffect()
+        .notebookPageDragSession(scene)
         #if os(macOS)
         .overlay(NotebookPageDragReader(
             scene: scene, selection: $selection,
@@ -949,3 +1035,125 @@ private struct NotebookPageButton<Label: View>: View {
         #endif
     }
 }
+
+private extension View {
+    /// The hard edge effect lays a white strip under the bottom bar, as in
+    /// Files.
+    func notebookPageEdgeEffect() -> some View {
+        scrollEdgeEffectStyle(.soft, for: .all)
+    }
+
+    @ViewBuilder
+    func notebookCardDragSource(_ id: UUID, enabled: Bool) -> some View {
+        #if os(iOS)
+        if enabled { draggable(containerItemID: id) } else { self }
+        #else
+        self
+        #endif
+    }
+
+    @ViewBuilder
+    func notebookPageDropTarget(
+        scene: NotebookSceneState, folderID: UUID, isFolder: Bool
+    ) -> some View {
+        #if os(iOS)
+        if isFolder {
+            modifier(NotebookPageDropTarget(scene: scene, folderID: folderID))
+        } else { self }
+        #else
+        self
+        #endif
+    }
+
+    /// As in Files, a drag that ends without a drop leaves nothing behind.
+    func notebookPageDragSession(_ scene: NotebookSceneState) -> some View {
+        #if os(iOS)
+        onDragSessionUpdated { session in
+            switch session.phase {
+            case .initial, .active: scene.browserDrag.isSessionActive = true
+            case .ended, .dataTransferCompleted: scene.browserDrag.reset()
+            default: break
+            }
+        }
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(iOS)
+/// A card in a drag carries only the drag's token, as rows do.
+private struct NotebookPageDragItem: Transferable, Identifiable {
+    let id: UUID
+    let token: UUID
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(exportedContentType: .mehNotebookItem) {
+            Data($0.token.uuidString.utf8)
+        }
+        .visibility(.ownProcess)
+    }
+}
+
+/// List owns drops on its rows, so a page's list takes them as Files does,
+/// only into its folders.
+@MainActor
+private final class NotebookPageListDrop {
+    /// Finds rows from their cells, which UIKit can move without the rows
+    /// noticing, as in Files. Kept apart from Files' own rows, which show
+    /// the same folders beside the page on iPad.
+    let rows = NotebookBrowserDragState()
+    let reader: NotebookBrowserUIKitDropReader.Coordinator
+
+    init(scene: NotebookSceneState) {
+        let rows = rows
+        reader = NotebookBrowserUIKitDropReader.Coordinator(
+            interaction: NotebookBrowserDropInteraction(
+                state: scene.browserDrag,
+                resolve: { point in rows.rowID(at: point).flatMap(scene.pageDropTarget) },
+                expand: { _ in },
+                commit: { scene.commitBrowserDrop($0, to: $1) }),
+            tapEmptySpace: { _ in })
+    }
+}
+
+/// A folder on a page takes notes and folders dragged onto it.
+private struct NotebookPageDropTarget: ViewModifier {
+    let scene: NotebookSceneState
+    let folderID: UUID
+    @State private var isTargeted = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                Color.accentColor.opacity(isTargeted ? 0.18 : 0),
+                in: .rect(cornerRadius: 12))
+            .onDrop(of: [.mehNotebookItem], delegate: Delegate(
+                scene: scene, folderID: folderID, isTargeted: $isTargeted))
+    }
+
+    private struct Delegate: DropDelegate {
+        let scene: NotebookSceneState
+        let folderID: UUID
+        @Binding var isTargeted: Bool
+
+        func validateDrop(info: DropInfo) -> Bool {
+            scene.pageDropTarget(folderID) != nil
+        }
+
+        func dropEntered(info: DropInfo) { isTargeted = true }
+
+        func dropExited(info: DropInfo) { isTargeted = false }
+
+        func dropUpdated(info: DropInfo) -> DropProposal? {
+            DropProposal(operation: .move)
+        }
+
+        func performDrop(info: DropInfo) -> Bool {
+            isTargeted = false
+            return scene.dropOnPageFolder(
+                folderID, providers: info.itemProviders(for: [.mehNotebookItem]))
+        }
+    }
+}
+#endif

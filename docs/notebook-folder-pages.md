@@ -39,12 +39,15 @@ with a preview line. Folders open their own page. Cards show notes as
 small sheets with their first lines (headings, list items and tasks
 without the Markdown signs) and the date they last changed, with the
 folder's folders as tiles on top. Each folder keeps its choice on this
-device; the list is the default. The choice does not sync.
+device; the list is the default. The choice does not sync. Both start
+the title and the content at the same margin, so switching between
+them moves nothing.
 
 Select, in the ⋯ menu, picks rows or cards for Move… or Trash; on the
-Mac, ⌘-click selects rows too. On iPad and Mac a row or card can be
-dragged onto a folder in the sidebar; a selected one takes the other
-selected items with it. Swiping a row trashes it, and touching and
+Mac, ⌘-click selects rows too. A row or card can be dragged onto a
+folder on the page, on iPhone and iPad, or onto a folder in the sidebar
+on iPad and Mac; a selected one takes the other selected items with it.
+Swiping a row trashes it, and touching and
 holding shows the same actions as in Files.
 
 ## How it works
@@ -65,6 +68,13 @@ list, unless it is already in it, which goes back to it. A page whose
 folder disappears drops out of the list. Beside Files, the page is an
 overlay on the note's screen, which keeps the bars' safe area while the
 note's own geometry stays put.
+
+On iOS, List hands drops on its rows to its collection view, so the
+page's list takes them with Files' collection view drop delegate, which
+here only resolves the folder row under the finger. All folder rows
+share one delegate, so it survives rows that scroll away. Selected cards
+lift together through SwiftUI's drag container, each item carrying the
+drag's token like a row does; folder tiles take drops with `onDrop`.
 
 On the Mac, Files' own AppKit drag tracker also watches the page: it
 finds a list row by its table row and a card by its frame. Cards there
