@@ -429,6 +429,28 @@ final class NotebookCatalogDocument {
             value: .String(value))
     }
 
+    /// An integration register's value for another catalog. Concurrent
+    /// values resolve as the engine reads them: an item's records merge,
+    /// keeping every duplicate, and the renderer keeps its highest version.
+    func resolvedIntegrationValue(forKey key: String) throws -> ScalarValue? {
+        guard case .Scalar(let winner)? = try document.get(obj: .ROOT, key: key) else { return nil }
+        let values = try integrationValues(key)
+        guard values.count > 1 else { return winner }
+        if key.hasPrefix("integrationItem.") {
+            let records = values.compactMap {
+                try? JSONDecoder().decode(NotebookIntegrationRecord.self, from: Data($0.utf8))
+            }
+            guard let merged = NotebookIntegrationUpdates.merged(records) else { return winner }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            return .String(String(decoding: try encoder.encode(merged), as: UTF8.self))
+        }
+        if key.hasPrefix("integration.renderer.") {
+            return values.compactMap(Int.init).max().map { .String(String($0)) } ?? winner
+        }
+        return winner
+    }
+
     static func integrationItemKey(_ item: String, connection: UUID) -> String {
         let digest = SHA256.hash(data: Data(item.utf8)).prefix(16)
             .map { String(format: "%02x", $0) }.joined()
@@ -858,8 +880,18 @@ final class NotebookCatalogDocument {
                 || key.hasPrefix("integration.") || key.hasPrefix("integrationItem.")
         {
             if omittedKeys.contains(where: key.contains) { continue }
-            guard case .Scalar(let value) = try local.document.get(obj: .ROOT, key: key)
-            else { throw NotebookCatalogError.invalidDocument }
+            let value: ScalarValue
+            if key.hasPrefix("integration.") || key.hasPrefix("integrationItem.") {
+                guard let resolved = try local.resolvedIntegrationValue(forKey: key) else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+                value = resolved
+            } else {
+                guard case .Scalar(let scalar)? = try local.document.get(obj: .ROOT, key: key) else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+                value = scalar
+            }
             if key != "newNoteParent", let existing = try candidate.document.get(obj: .ROOT, key: key),
                existing != .Scalar(value) { throw SyncError.identityConflict }
             try candidate.document.put(obj: .ROOT, key: key, value: value)
@@ -923,7 +955,7 @@ final class NotebookCatalogDocument {
             key.hasPrefix("integration.") || key.hasPrefix("integrationItem.")
         {
             guard try candidate.document.get(obj: .ROOT, key: key) == nil,
-                  case .Scalar(let value) = try other.document.get(obj: .ROOT, key: key)
+                  let value = try other.resolvedIntegrationValue(forKey: key)
             else { continue }
             try candidate.document.put(obj: .ROOT, key: key, value: value)
         }
