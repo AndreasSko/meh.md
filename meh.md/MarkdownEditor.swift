@@ -1927,7 +1927,16 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             width: textContainer.size.width - 2 * textContainer.lineFragmentPadding
         )
         updateMarkdownTableScrollOverlays()
-        markdownState.linkPointer?.invalidate()
+        // Showing a link highlight adds its preview to the editor, which lays
+        // it out again. Refreshing the regions then would restart the effect
+        // in a loop, so only refresh them when they can have moved.
+        let pointerGeometry = [bounds, CGRect(origin: .zero, size: contentSize)]
+        if markdownState.linkPointerGeometry != pointerGeometry
+            || markdownState.linkPointerInsets != textContainerInset {
+            markdownState.linkPointerGeometry = pointerGeometry
+            markdownState.linkPointerInsets = textContainerInset
+            refreshMarkdownLinkPointer()
+        }
         markdownState.didLayout?()
     }
 
@@ -1941,7 +1950,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         if accepted, !wasFirstResponder {
             markdownState.pendingKeyboardSelectionReveal = true
         }
-        markdownState.linkPointer?.invalidate()
+        refreshMarkdownLinkPointer()
         return accepted
     }
 
@@ -1951,7 +1960,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             markdownState.pendingKeyboardSelectionReveal = false
             markdownState.offsetBeforeDeactivation = nil
         }
-        markdownState.linkPointer?.invalidate()
+        refreshMarkdownLinkPointer()
         return accepted
     }
 
@@ -2283,10 +2292,10 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             markdownState.linkNavigation?.linkActivationChanged = nil
             markdownState.linkNavigation = newValue
             newValue?.linkActivationChanged = { [weak self] in
-                self?.markdownState.linkPointer?.invalidate()
+                self?.refreshMarkdownLinkPointer()
             }
             installMarkdownLinkPointer()
-            markdownState.linkPointer?.invalidate()
+            refreshMarkdownLinkPointer()
         }
     }
 
@@ -2295,6 +2304,24 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         let interaction = UIPointerInteraction(delegate: self)
         addInteraction(interaction)
         markdownState.linkPointer = interaction
+        // Synced text or a new presentation can move links without changing
+        // the editor's size, which layout watches.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(markdownTextStorageDidProcessEditing),
+            name: NSTextStorage.didProcessEditingNotification, object: textStorage)
+    }
+
+    @objc private func markdownTextStorageDidProcessEditing() {
+        refreshMarkdownLinkPointer()
+    }
+
+    /// How often link regions were refreshed, for tests.
+    var markdownLinkPointerRefreshes: Int { markdownState.linkPointerRefreshes }
+
+    private func refreshMarkdownLinkPointer() {
+        guard let pointer = markdownState.linkPointer else { return }
+        markdownState.linkPointerRefreshes += 1
+        pointer.invalidate()
     }
 
     private func passiveNoteLink(at point: CGPoint,
@@ -2345,11 +2372,22 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
               let current = noteLinkPointerRegion(at: CGPoint(x: region.rect.midX,
                                                               y: region.rect.midY)),
               current.identifier == region.identifier else { return nil }
-        let parameters = UIPreviewParameters(textLineRects: [NSValue(cgRect: region.rect)])
+        return UIPointerStyle(effect: .highlight(noteLinkPointerPreview(for: region.rect)),
+                              shape: .roundedRect(region.rect, radius: 4))
+    }
+
+    /// With the editor itself as the preview, the whole note vanished while
+    /// the pointer rested on a link, leaving only a misplaced fragment. An
+    /// empty view over the link gives the highlight its place instead, and
+    /// the link itself stays in the text.
+    func noteLinkPointerPreview(for rect: CGRect) -> UITargetedPreview {
+        let parameters = UIPreviewParameters()
         parameters.backgroundColor = .clear
-        let preview = UITargetedPreview(view: self, parameters: parameters)
-        return UIPointerStyle(effect: .highlight(preview), shape: .roundedRect(
-            convert(region.rect, to: preview.target.container), radius: 4))
+        return UITargetedPreview(
+            view: UIView(frame: CGRect(origin: .zero, size: rect.size)),
+            parameters: parameters,
+            target: UIPreviewTarget(container: self,
+                                    center: CGPoint(x: rect.midX, y: rect.midY)))
     }
 
     func insertNoteLink(_ change: MarkdownEditingChange, expected: String) -> Bool {
@@ -2449,7 +2487,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
 
     func installMarkdownTaskTap() {
         installMarkdownLinkPointer()
-        defer { markdownState.linkPointer?.invalidate() }
+        defer { refreshMarkdownLinkPointer() }
         guard markdownState.taskTap == nil else { return }
         let tap = UITapGestureRecognizer(
             target: self, action: #selector(tappedMarkdownTask(_:))
@@ -2638,6 +2676,9 @@ private final class MarkdownTextViewState: NSObject {
     var timeCalculator = false
     var timeSums: [MarkdownTimeSum] = []
     var linkPointer: UIPointerInteraction?
+    var linkPointerGeometry: [CGRect] = []
+    var linkPointerInsets = UIEdgeInsets.zero
+    var linkPointerRefreshes = 0
     weak var linkNavigation: MarkdownEditorNavigation?
     var layoutDelegate: MarkdownLayoutManagerDelegate?
     var titleHost: UIHostingController<AnyView>?
