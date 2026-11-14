@@ -367,6 +367,93 @@ final class NotebookCatalogDocument {
                          value: .Boolean(enabled))
     }
 
+    // MARK: Integrations
+
+    /// One flat register per setting of a connection, so concurrent changes
+    /// to different settings merge. Values are strings. Keys that do not
+    /// parse are skipped rather than rejected: a newer version may write
+    /// settings this one does not know.
+    func integrationSettings(_ connection: UUID) throws -> [String: [String]] {
+        var result: [String: [String]] = [:]
+        let suffix = ".\(connection.uuidString)"
+        for key in document.keys(obj: .ROOT)
+            where key.hasPrefix("integration.") && key.hasSuffix(suffix)
+        {
+            let field = String(key.dropFirst("integration.".count).dropLast(suffix.count))
+            guard Self.isIntegrationField(field) else { continue }
+            result[field] = try integrationValues(key)
+        }
+        return result
+    }
+
+    func setIntegrationSetting(_ field: String, _ value: String?, connection: UUID) throws {
+        guard Self.isIntegrationField(field) else { throw NotebookCatalogError.invalidDocument }
+        let key = "integration.\(field).\(connection.uuidString)"
+        if let value {
+            try document.put(obj: .ROOT, key: key, value: .String(value))
+        } else if try document.get(obj: .ROOT, key: key) != nil {
+            try document.delete(obj: .ROOT, key: key)
+        }
+    }
+
+    func integrationConnectionIDs() -> Set<UUID> {
+        Set(document.keys(obj: .ROOT).compactMap { key -> UUID? in
+            guard key.hasPrefix("integration.") else { return nil }
+            return key.split(separator: ".").last.flatMap { UUID(uuidString: String($0)) }
+        })
+    }
+
+    /// Every value of each item's register, the winning value first.
+    /// Concurrent values mean two devices created a note for one item.
+    func integrationRecords(_ connection: UUID) throws -> [String: [NotebookIntegrationRecord]] {
+        var result: [String: [NotebookIntegrationRecord]] = [:]
+        let prefix = "integrationItem.\(connection.uuidString)."
+        for key in document.keys(obj: .ROOT) where key.hasPrefix(prefix) {
+            let records = try integrationValues(key).compactMap { value in
+                try? JSONDecoder().decode(NotebookIntegrationRecord.self, from: Data(value.utf8))
+            }
+            guard let first = records.first,
+                  key == Self.integrationItemKey(first.item, connection: connection)
+            else { continue }
+            result[first.item] = records.filter { $0.item == first.item }
+        }
+        return result
+    }
+
+    func setIntegrationRecord(_ record: NotebookIntegrationRecord, connection: UUID) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let value = String(decoding: try encoder.encode(record), as: UTF8.self)
+        try document.put(
+            obj: .ROOT, key: Self.integrationItemKey(record.item, connection: connection),
+            value: .String(value))
+    }
+
+    static func integrationItemKey(_ item: String, connection: UUID) -> String {
+        let digest = SHA256.hash(data: Data(item.utf8)).prefix(16)
+            .map { String(format: "%02x", $0) }.joined()
+        return "integrationItem.\(connection.uuidString).\(digest)"
+    }
+
+    private static func isIntegrationField(_ field: String) -> Bool {
+        !field.isEmpty && field.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0) && $0.isASCII || $0 == "-"
+        }
+    }
+
+    private func integrationValues(_ key: String) throws -> [String] {
+        var values = try document.getAll(obj: .ROOT, key: key).compactMap { value -> String? in
+            guard case .Scalar(.String(let text)) = value else { return nil }
+            return text
+        }
+        if case .Scalar(.String(let winner))? = try document.get(obj: .ROOT, key: key),
+           let index = values.firstIndex(of: winner)
+        {
+            values.insert(values.remove(at: index), at: 0)
+        }
+        return values
+    }
+
     func setTemplateSettings(_ settings: NotebookTemplateSettings, for id: UUID) throws {
         guard let item = try placements().first(where: {
             $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
@@ -768,6 +855,7 @@ final class NotebookCatalogDocument {
                 || key.hasPrefix("snippet.") || key.hasPrefix("timeCalculator.")
                 || key.hasPrefix("recentsHidden.")
                 || key.hasPrefix("linkLocation.") || key == "newNoteParent"
+                || key.hasPrefix("integration.") || key.hasPrefix("integrationItem.")
         {
             if omittedKeys.contains(where: key.contains) { continue }
             guard case .Scalar(let value) = try local.document.get(obj: .ROOT, key: key)
@@ -824,6 +912,17 @@ final class NotebookCatalogDocument {
         {
             guard incomingIDs.contains(where: { key.contains($0.uuidString) }),
                   try candidate.document.get(obj: .ROOT, key: key) == nil,
+                  case .Scalar(let value) = try other.document.get(obj: .ROOT, key: key)
+            else { continue }
+            try candidate.document.put(obj: .ROOT, key: key, value: value)
+        }
+        // Integration settings and records are named by connection, not by
+        // item. The other notebook's connections come along unless this one
+        // already has the same keys.
+        for key in other.document.keys(obj: .ROOT) where
+            key.hasPrefix("integration.") || key.hasPrefix("integrationItem.")
+        {
+            guard try candidate.document.get(obj: .ROOT, key: key) == nil,
                   case .Scalar(let value) = try other.document.get(obj: .ROOT, key: key)
             else { continue }
             try candidate.document.put(obj: .ROOT, key: key, value: value)
@@ -893,7 +992,6 @@ final class NotebookCatalogDocument {
         return id
     }
 
-    #if DEBUG
     /// Appends many new items like repeated `add` calls, but reads each
     /// parent's siblings once instead of once per item.
     func add(_ items: [(id: UUID, kind: NotebookItemKind, name: String, parentID: UUID?)]) throws {
@@ -932,7 +1030,6 @@ final class NotebookCatalogDocument {
             }
         }
     }
-    #endif
 
     /// Builds an import on an isolated fork after validating the complete
     /// tree. This avoids recomputing placements after every inserted item.
