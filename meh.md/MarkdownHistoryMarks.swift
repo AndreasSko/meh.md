@@ -166,6 +166,48 @@ enum MarkdownHistoryMarks {
         ), context: context)
     }
 
+    /// A faint line beside text an integration owns, so the person sees
+    /// where an update replaces text. History's marks take the margin
+    /// while they show.
+    static func drawOwned(
+        in fragment: NSTextLayoutFragment,
+        textView: MarkdownTextView,
+        at point: CGPoint,
+        context: CGContext
+    ) {
+        let owned = textView.markdownOwnedRanges
+        guard !owned.isEmpty, textView.markdownHistoryChanges.isEmpty,
+              let layoutManager = fragment.textLayoutManager,
+              let range = nsRange(of: fragment, in: layoutManager),
+              owned.contains(where: { NSIntersectionRange($0, range).length > 0 }) else { return }
+        let frame = fragment.layoutFragmentFrame
+        // Within one owned block the line reaches up to the line above, so
+        // paragraph spacing does not break it into pieces.
+        var gap: CGFloat = 0
+        if range.location > 0,
+           owned.contains(where: { NSLocationInRange(range.location - 1, $0) }),
+           let contentManager = layoutManager.textContentManager,
+           let previous = contentManager.location(
+               contentManager.documentRange.location, offsetBy: range.location - 1),
+           let above = layoutManager.textLayoutFragment(for: previous) {
+            gap = max(0, frame.minY - above.layoutFragmentFrame.maxY)
+        }
+        let bar = CGRect(
+            x: point.x - frame.minX - offset - ownedWidth / 2, y: point.y - gap,
+            width: ownedWidth, height: frame.height + gap)
+        #if os(macOS)
+        let color = NSColor.separatorColor.cgColor
+        #else
+        let color = UIColor.separator.cgColor
+        #endif
+        context.saveGState()
+        context.setFillColor(color)
+        context.fill(bar)
+        context.restoreGState()
+    }
+
+    static let ownedWidth: CGFloat = 2
+
     static func nsRange(
         of fragment: NSTextLayoutFragment,
         in layoutManager: NSTextLayoutManager

@@ -17,6 +17,9 @@ enum MarkdownStyleRole: Equatable {
     case rule
     /// The backslash before an escaped punctuation character.
     case escape
+    /// A block ID alone on its line, such as `^rw-123`, which Obsidian-style
+    /// links use to point at the block above.
+    case blockID
 }
 
 struct MarkdownStyleSpan: Equatable {
@@ -141,6 +144,8 @@ enum MarkdownSyntax {
         appendEscapeSpans(
             in: source, excluding: [codeRanges, linkContext.ranges, addresses], spans: &spans
         )
+        appendBlockIDSpans(in: source, lines: lines, excluding: codeRanges + linkContext.ranges,
+                           spans: &spans)
         let emphasis = appendEmphasisSpans(
             in: source,
             excluding: codeRanges,
@@ -950,6 +955,30 @@ enum MarkdownSyntax {
         return (ranges, owned)
     }
 
+    /// Lines that hold only a block ID, such as `^rw-123`.
+    private static func appendBlockIDSpans(
+        in source: NSString,
+        lines: [NSRange],
+        excluding code: [NSRange],
+        spans: inout [MarkdownStyleSpan]
+    ) {
+        for line in lines {
+            var start = line.location
+            var end = NSMaxRange(line)
+            while end > start, [ASCII.lineFeed, 13, 32, 9].contains(source.character(at: end - 1)) { end -= 1 }
+            while start < end, [32, 9].contains(source.character(at: start)) { start += 1 }
+            guard end - start >= 2, source.character(at: start) == 94 else { continue }
+            let isID = (start + 1 ..< end).allSatisfy {
+                let character = source.character(at: $0)
+                return character == 45 || (48...57).contains(character)
+                    || (65...90).contains(character) || (97...122).contains(character)
+            }
+            let range = NSRange(location: start, length: end - start)
+            guard isID, !code.contains(where: { NSIntersectionRange($0, range).length > 0 }) else { continue }
+            spans.append(MarkdownStyleSpan(range: range, role: .blockID))
+        }
+    }
+
     /// Each list in `excluded` is sorted and free of overlaps.
     private static func appendEscapeSpans(
         in source: NSString,
@@ -1202,7 +1231,7 @@ enum MarkdownSyntax {
             case .heading, .strong, .emphasis, .code:
                 return true
             case .highlight, .strikethrough, .link, .listMarker, .taskMarker,
-                    .blockquote, .blockquoteMarker, .rule, .escape:
+                    .blockquote, .blockquoteMarker, .rule, .escape, .blockID:
                 return false
             }
         }
@@ -1281,7 +1310,7 @@ enum MarkdownSyntax {
             case .code:
                 traits.insert(.monospaced)
             case .highlight, .strikethrough, .link, .listMarker, .taskMarker,
-                    .blockquote, .blockquoteMarker, .rule, .escape:
+                    .blockquote, .blockquoteMarker, .rule, .escape, .blockID:
                 break
             }
         }
