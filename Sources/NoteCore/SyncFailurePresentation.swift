@@ -127,7 +127,9 @@ public struct SyncFailurePresentation: Equatable, Sendable {
             }
             return Failure(
                 "A note can't be read", message,
-                actionHint: "Open the note to restore its last saved version, or delete it."
+                // Not "delete it": a deletion syncs and would also remove
+                // the good copy another device may still have.
+                actionHint: "Open the note to restore its last saved version. If another device has the note, sync repairs it."
             )
         }
 

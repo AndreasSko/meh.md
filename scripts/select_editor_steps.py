@@ -73,7 +73,9 @@ INDEX_VERSION = 1
 STEPS = {
     "formatting": {
         "platform": "mac",
-        "filter": "EditorMacFormattingScrollTests|EditorRenderingTests",
+        # NativeEditorIntegrationTests holds tests that only build on the
+        # Mac; the native suite runs the rest on an iPhone simulator.
+        "filter": "EditorMacFormattingScrollTests|EditorRenderingTests|NativeEditorIntegrationTests",
         "anchor": "Tests/NativeEditorTests/EditorMacFormattingScrollTests.swift",
         "paths": [],
     },

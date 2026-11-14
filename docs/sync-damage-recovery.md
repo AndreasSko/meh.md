@@ -19,7 +19,9 @@ See [notebook format upgrades](notebook-upgrade-safety.md).
 - **The gate allows this app.** The record is damaged. The device skips
   it, remembers its name, and keeps syncing everything else.
 - **The record's downloaded file could not be read.** That says nothing
-  about the record. The fetch fails and is tried again.
+  about the record. The fetch fails and is tried again. If the file is
+  still missing on the next try, the record is skipped like a damaged one,
+  so a file that never arrives can't stop sync for good.
 - **The canonical record itself is unreadable.** It carries the notebook
   identity and the gate, so it is never skipped. Sync stops.
 
@@ -28,7 +30,15 @@ an app update that understands them picks them up. A remembered record
 that has since been deleted is forgotten. In S3 a record read again stays
 remembered until the page that carried it was applied, so a crash in
 between reads it again. A retry that fails, for example offline, is
-repeated on the next exchange.
+repeated on the next exchange. In iCloud the records are read 100 at a
+time and each batch is saved, so after a format change that rewrote many
+notes a failed request repeats only its batch, and the rest of the
+exchange goes on. A single record that iCloud refuses for a lasting
+reason stays skipped until the next launch.
+
+Settings › Sync shows how many records this device skipped, when there
+are any, and the sync event log notes the count, so a support request
+can tell that a note is out of date for this reason.
 
 This only works when **every format change raises the gate**: a new note
 schema version, catalog fields that older versions reject, or an

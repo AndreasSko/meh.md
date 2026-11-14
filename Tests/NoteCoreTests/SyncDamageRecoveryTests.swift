@@ -35,6 +35,8 @@ final class SyncDamageRecoveryTests: XCTestCase {
         let received = try await fetchAll(reader)
         XCTAssertEqual(Set(received.map(\.id)), Set(notes.map(\.id) + [catalog.id]))
         XCTAssertEqual(try unreadableRecordIDs("reader"), [damaged])
+        let status = try await reader.snapshotMaintenanceStatus(notebookID: notebookID)
+        XCTAssertEqual(status?.skippedRecordCount, 1)
         let halt = await reader.haltStatus()
         XCTAssertNil(halt)
         // The device still uploads.
@@ -83,6 +85,132 @@ final class SyncDamageRecoveryTests: XCTestCase {
         XCTAssertEqual(try unreadableRecordIDs("reader"), [])
         let halt = await reader.haltStatus()
         XCTAssertNil(halt, "Its removal needs no proof of a covering copy")
+    }
+
+    func testSkippedRecordsAreReadAgainInBatchesAndAFailedBatchOnlyRepeatsItself() async throws {
+        let catalog = try makeCatalog()
+        let notes = try (0..<150).map { try makeNote("readable after an update \($0)") }
+        let names = notes.map(\.id).sorted()
+        let writer = try await open("writer")
+        _ = try await writer.bootstrap(proposing: catalog)
+        _ = try await writer.publishBatch(notes)
+        for name in names { server.setAssetDamaged(true, ofRecordNamed: name) }
+        let reader = try await open("reader")
+        _ = try await reader.bootstrap(proposing: catalog)
+        let first = try await fetchAll(reader, after: nil)
+        XCTAssertEqual(try unreadableRecordIDs("reader"), Set(names))
+
+        // Readable now, as records from a newer app are after an update.
+        // Nothing changed in iCloud, so only the retry delivers them.
+        for name in names { server.setAssetDamaged(false, ofRecordNamed: name) }
+        await reader.retire()
+        let relaunched = try await open("reader")
+        server.inject(.failBatchRead(containing: names[120]))
+        let readsBefore = server.batchRecordReads.count
+        var received = try await fetchAll(relaunched, after: first.cursor)
+        XCTAssertEqual(server.batchRecordReads.count - readsBefore, 2)
+        XCTAssertEqual(received.records.count, 100, "The failed batch doesn't stop the exchange")
+        XCTAssertEqual(Set(received.records.map(\.id)), Set(names[..<100]))
+        XCTAssertEqual(try unreadableRecordIDs("reader"), Set(names[100...]))
+
+        let retryStart = server.batchRecordReads.count
+        received = try await fetchAll(relaunched, after: received.cursor)
+        let reread = server.batchRecordReads[retryStart...].flatMap { $0 }
+        XCTAssertEqual(reread, Array(names[100...]), "Only the failed batch is read again")
+        XCTAssertEqual(Set(received.records.map(\.id)), Set(names[100...]))
+        XCTAssertEqual(try unreadableRecordIDs("reader"), [])
+        let halt = await relaunched.haltStatus()
+        XCTAssertNil(halt)
+    }
+
+    func testRateLimitOnOneSkippedRecordDelaysTheNextRetry() async throws {
+        let catalog = try makeCatalog()
+        let note = try makeNote("rate limited")
+        let writer = try await open("writer")
+        _ = try await writer.bootstrap(proposing: catalog)
+        _ = try await writer.publishBatch([note])
+        server.setAssetDamaged(true, ofRecordNamed: note.id)
+        let reader = try await open("reader")
+        _ = try await reader.bootstrap(proposing: catalog)
+        let cursor = try await fetchAll(reader, after: nil).cursor
+        XCTAssertEqual(try unreadableRecordIDs("reader"), [note.id])
+
+        server.setAssetDamaged(false, ofRecordNamed: note.id)
+        server.losesPushes = true
+        await reader.retire()
+        let relaunched = try await open("reader")
+        server.inject(.failBatchRecord(note.id, CKError(
+            .requestRateLimited, userInfo: [CKErrorRetryAfterKey: 30]
+        )))
+        // The batch itself succeeds; only that record reports the limit.
+        _ = try await fetchAll(relaunched, after: cursor)
+        let notBefore = await relaunched.retryNotBefore()
+        XCTAssertGreaterThan(try XCTUnwrap(notBefore).timeIntervalSinceNow, 20)
+        XCTAssertEqual(try unreadableRecordIDs("reader"), [note.id])
+    }
+
+    func testSkippedRecordThatCantBeReadIsNotReadAgainThisLaunch() async throws {
+        let catalog = try makeCatalog()
+        let note = try makeNote("no access")
+        let writer = try await open("writer")
+        _ = try await writer.bootstrap(proposing: catalog)
+        _ = try await writer.publishBatch([note])
+        server.setAssetDamaged(true, ofRecordNamed: note.id)
+        let reader = try await open("reader")
+        _ = try await reader.bootstrap(proposing: catalog)
+        let cursor = try await fetchAll(reader, after: nil).cursor
+
+        server.setAssetDamaged(false, ofRecordNamed: note.id)
+        server.losesPushes = true
+        await reader.retire()
+        let relaunched = try await open("reader")
+        server.inject(.failBatchRecord(note.id, CKError(.permissionFailure)))
+        let readsBefore = server.batchRecordReads.count
+        _ = try await fetchAll(relaunched, after: cursor)
+        _ = try await fetchAll(relaunched, after: cursor)
+        let reads = server.batchRecordReads[readsBefore...].flatMap { $0 }
+        XCTAssertEqual(reads.filter { $0 == note.id }.count, 1)
+        XCTAssertEqual(try unreadableRecordIDs("reader"), [note.id])
+    }
+
+    func testFileThatIsStillMissingOnTheNextTryIsSkipped() async throws {
+        let catalog = try makeCatalog()
+        let note = try makeNote("its file keeps going missing")
+        let other = try makeNote("arrives regardless")
+        let writer = try await open("writer")
+        _ = try await writer.bootstrap(proposing: catalog)
+        _ = try await writer.publishBatch([note, other])
+        server.setAssetLost(true, ofRecordNamed: note.id)
+
+        // Usually a short glitch, so the first try fails and is retried.
+        let reader = try await open("reader")
+        _ = try await reader.bootstrap(proposing: catalog)
+        do {
+            _ = try await fetchAll(reader)
+            XCTFail("A missing file is retried at first")
+        } catch {
+            XCTAssertEqual(error as? CloudKitSyncTransportError, .assetUnavailable)
+        }
+        XCTAssertEqual(try stateSet("reader", "unavailableAssetRecordIDs"), [note.id])
+        XCTAssertEqual(try unreadableRecordIDs("reader"), [])
+
+        // The failure halted the transport, which the app builds again.
+        await reader.retire()
+        let rebuilt = try await open("reader")
+        var received = try await fetchAll(rebuilt, after: nil)
+        XCTAssertTrue(received.records.contains(other))
+        XCTAssertFalse(received.records.contains(note))
+        XCTAssertEqual(try unreadableRecordIDs("reader"), [note.id])
+        let halt = await rebuilt.haltStatus()
+        XCTAssertNil(halt)
+
+        // Read again after the next launch, like any skipped record.
+        server.setAssetLost(false, ofRecordNamed: note.id)
+        await rebuilt.retire()
+        received = try await fetchAll(try await open("reader"), after: received.cursor)
+        XCTAssertEqual(received.records, [note])
+        XCTAssertEqual(try unreadableRecordIDs("reader"), [])
+        XCTAssertEqual(try stateSet("reader", "unavailableAssetRecordIDs"), [])
     }
 
     func testMissingAssetFileIsRetriedInsteadOfSkipped() throws {
@@ -362,19 +490,29 @@ final class SyncDamageRecoveryTests: XCTestCase {
     }
 
     private func unreadableRecordIDs(_ device: String) throws -> Set<String> {
+        try stateSet(device, "unreadableRecordIDs")
+    }
+
+    private func stateSet(_ device: String, _ key: String) throws -> Set<String> {
         let state = try XCTUnwrap(JSONSerialization.jsonObject(
             with: Data(contentsOf: stateURL(device))) as? [String: Any])
-        return Set(state["unreadableRecordIDs"] as? [String] ?? [])
+        return Set(state[key] as? [String] ?? [])
     }
 
     private func fetchAll(_ transport: CloudKitSyncTransport) async throws -> [SyncRecord] {
-        var cursor: String?
+        try await fetchAll(transport, after: nil).records
+    }
+
+    private func fetchAll(
+        _ transport: CloudKitSyncTransport, after start: String?
+    ) async throws -> (records: [SyncRecord], cursor: String) {
+        var cursor = start
         var records: [SyncRecord] = []
         while true {
             let page = try await transport.fetch(after: cursor)
             records += page.records
             cursor = page.cursor
-            if !page.hasMore { return records }
+            if !page.hasMore { return (records, page.cursor) }
         }
     }
 

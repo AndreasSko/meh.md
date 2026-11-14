@@ -9,6 +9,11 @@ final class WelcomeNoteUITests: XCTestCase {
         app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
         app.launchEnvironment["MEH_WELCOME_NOTE"] = "1"
         app.launchArguments += ["-editor.mode", "source"]
+        #if os(macOS)
+        // As with "Close windows when quitting an app" turned off: AppKit
+        // keeps the window, and its scene storage, when the app quits.
+        app.launchArguments += ["-NSQuitAlwaysKeepsWindows", "YES"]
+        #endif
         app.launch()
 
         let editor = app.textViews["markdown-editor"]
@@ -18,7 +23,9 @@ final class WelcomeNoteUITests: XCTestCase {
 
         // A relaunch opens the existing notebook and restores the note.
         // The window's identity is scene storage, which iOS saves when the
-        // app leaves the foreground, so quit the way a user would.
+        // app leaves the foreground and the Mac when the app quits, so quit
+        // the way a user would. Terminating the Mac app outright lost it
+        // whenever AppKit had not saved the window yet.
         #if os(iOS)
         XCUIDevice.shared.press(.home)
         let deadline = Date().addingTimeInterval(10)
@@ -26,8 +33,11 @@ final class WelcomeNoteUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         XCTAssertNotEqual(app.state, .runningForeground)
-        #endif
         app.terminate()
+        #else
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
+        #endif
         app.launch()
         XCTAssertTrue(editor.waitForExistence(timeout: 30))
         XCTAssertTrue(waitForSource(editor) { $0.hasPrefix("I'm your first note.") })

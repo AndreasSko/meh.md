@@ -26,6 +26,12 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
         case omitDeleteResult(matching: @Sendable (CKRecord.ID) -> Bool)
         case crashAfterServerDelete
         case failNextRead
+        /// The next batched read that asks for this record fails with
+        /// `networkFailure`.
+        case failBatchRead(containing: String)
+        /// The next batched read of this record returns this error for it
+        /// alone, as CloudKit reports per-record failures.
+        case failBatchRecord(String, CKError)
         /// Fail the next zone result rather than the enclosing request.
         case failNextZoneResult(CKError.Code, retryAfter: TimeInterval)
         /// Remove a record after fetched events, just before a direct read.
@@ -71,6 +77,9 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
     private var fetchedCount = 0
     private var fetchedBytes = 0
     private var directReads: [String] = []
+    private var batchReads: [[String]] = []
+    private var lostAssetNames = Set<String>()
+    private var damagedAssetNames = Set<String>()
     private var zoneChangeReads = 0
     private var pushesLost = false
     private var zoneChangesPage: Int?
@@ -134,6 +143,22 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
 
     func inject(_ fault: Fault) { locked { faults.append(fault) } }
 
+    /// Hands out this record with an asset whose file is missing, as when
+    /// CloudKit purged its staged download, until restored.
+    func setAssetLost(_ lost: Bool, ofRecordNamed name: String) {
+        locked {
+            if lost { lostAssetNames.insert(name) } else { lostAssetNames.remove(name) }
+        }
+    }
+
+    /// Hands out this record with unreadable content, without a change a
+    /// fetch would report, until restored. A device sees it as damaged.
+    func setAssetDamaged(_ damaged: Bool, ofRecordNamed name: String) {
+        locked {
+            if damaged { damagedAssetNames.insert(name) } else { damagedAssetNames.remove(name) }
+        }
+    }
+
     func clearFaults() { locked { faults = [] } }
 
     func switchAccount() {
@@ -166,6 +191,8 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
 
     var deletedRecordNames: [String] { locked { deletedNames } }
     var directRecordReads: [String] { locked { directReads } }
+    /// The record names of each batched read, in order.
+    var batchRecordReads: [[String]] { locked { batchReads } }
     var mutationCount: Int { locked { cloudMutationCount } }
 
     var fetchMeasurements: (records: Int, assetBytes: Int) {
@@ -222,6 +249,37 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
                 throw CKError(.unknownItem)
             }
             return try serverCopy(of: record)
+        }
+    }
+
+    func records(
+        for ids: [CKRecord.ID]
+    ) async throws -> [CKRecord.ID: Result<CKRecord, any Error>] {
+        let names = ids.map(\.recordName)
+        locked { batchReads.append(names) }
+        try checkReachable()
+        if takeFault(where: {
+            if case let .failBatchRead(name) = $0 { return names.contains(name) }
+            return false
+        }) != nil {
+            throw CKError(.networkFailure)
+        }
+        return try locked {
+            guard zoneExists else { throw CKError(.zoneNotFound) }
+            var results: [CKRecord.ID: Result<CKRecord, any Error>] = [:]
+            for id in ids {
+                if let index = faults.firstIndex(where: {
+                    if case let .failBatchRecord(name, _) = $0 { return name == id.recordName }
+                    return false
+                }), case let .failBatchRecord(_, error) = faults.remove(at: index) {
+                    results[id] = .failure(error)
+                    continue
+                }
+                results[id] = records[id].map { record in
+                    Result { try serverCopy(of: record) }
+                } ?? .failure(CKError(.unknownItem))
+            }
+            return results
         }
     }
 
@@ -576,7 +634,18 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
 
     /// CloudKit hands out fresh objects whose assets are temporary files.
     private func serverCopy(of record: CKRecord) throws -> CKRecord {
-        try retainAssets(of: record)
+        let copy = try retainAssets(of: record)
+        let name = record.recordID.recordName
+        if lostAssetNames.contains(name) || damagedAssetNames.contains(name) {
+            for key in copy.allKeys() where copy[key] is CKAsset {
+                let file = assetDirectory.appending(path: "replaced-\(UUID().uuidString)")
+                if damagedAssetNames.contains(name) {
+                    try Data("not an Automerge document".utf8).write(to: file)
+                }
+                copy[key] = CKAsset(fileURL: file)
+            }
+        }
+        return copy
     }
 
     private func locked<T>(_ body: () throws -> T) rethrows -> T {

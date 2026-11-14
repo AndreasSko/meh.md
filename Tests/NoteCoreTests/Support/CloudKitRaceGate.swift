@@ -92,6 +92,12 @@ struct CloudKitRaceDatabase: CloudKitDatabaseClient {
         return frozen
     }
 
+    func records(
+        for ids: [CKRecord.ID]
+    ) async throws -> [CKRecord.ID: Result<CKRecord, any Error>] {
+        try await base.records(for: ids)
+    }
+
     func save(_ record: CKRecord) async throws -> CKRecord {
         try await base.save(record)
     }

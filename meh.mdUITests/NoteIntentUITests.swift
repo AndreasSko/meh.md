@@ -18,7 +18,9 @@ final class NoteIntentUITests: XCTestCase {
         continueAfterFailure = false
         let app = launchPreview()
 
-        try await definitions.intents["NewNoteIntent"].makeIntent().run()
+        try await skippingUnavailableIntentTesting {
+            try await definitions.intents["NewNoteIntent"].makeIntent().run()
+        }
 
         let titleField = app.textFields["title-field"]
         XCTAssertTrue(titleField.waitForExistence(timeout: 10),
@@ -33,9 +35,9 @@ final class NoteIntentUITests: XCTestCase {
         let app = launchPreview()
         let createNote = definitions.intents["CreateNoteIntent"]
 
-        let named = try await createNote.makeIntent(
-            text: "Milk\nEggs", name: "Groceries"
-        ).run()
+        let named = try await skippingUnavailableIntentTesting {
+            try await createNote.makeIntent(text: "Milk\nEggs", name: "Groceries").run()
+        }
         try await createNote.makeIntent(text: "Call Sam").run()
 
         app.revealNotebookSidebar()
@@ -60,6 +62,21 @@ final class NoteIntentUITests: XCTestCase {
                 "\(error)".contains("Names cannot contain"),
                 "Shortcuts must show why the name failed, got \(error)"
             )
+        }
+    }
+
+    /// The simulator runtime on CI refuses AppIntentsTesting with "Unable to
+    /// run internal tests on a Customer build". Skip there instead of
+    /// failing; the tests still run wherever the framework is allowed.
+    @MainActor
+    private func skippingUnavailableIntentTesting<T>(
+        _ body: () async throws -> T
+    ) async throws -> T {
+        do {
+            return try await body()
+        } catch let error as NSError
+            where error.domain == "AppIntentsServicesSecurityErrorDomain" && error.code == 803 {
+            throw XCTSkip("AppIntentsTesting can't run here: \(error.localizedDescription)")
         }
     }
 

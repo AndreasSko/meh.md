@@ -669,6 +669,9 @@ final class S3SyncTransportTests: XCTestCase {
         let page = try await reader.fetch(after: nil)
         XCTAssertEqual(Set(page.records.map(\.id)), [fixture.catalog.id, fixture.notes[1].id])
         XCTAssertFalse(page.hasMore)
+        let status = try await reader.snapshotMaintenanceStatus(
+            notebookID: try XCTUnwrap(fixture.catalog.notebookID))
+        XCTAssertEqual(status?.skippedRecordCount, 1)
 
         // Readable now, as a record from a newer app is after an update.
         server.setObject(intact, bucket: "notes", key: key)
@@ -688,6 +691,28 @@ final class S3SyncTransportTests: XCTestCase {
         let afterRelaunch = try await transport(server, device: "reader", root: root)
             .fetch(after: last.cursor)
         XCTAssertEqual(afterRelaunch.records, [])
+    }
+
+    func testReplayFromTheStartDeliversThisDevicesOwnUploads() async throws {
+        let server = FakeS3Server()
+        let fixture = try Fixture()
+        let device = transport(server)
+        _ = try await device.bootstrap(proposing: fixture.catalog)
+        let first = try await device.fetch(after: nil)
+        try await device.publishBatch(fixture.notes).error.map { throw $0 }
+        // A later page leaves out what this device just stored.
+        let next = try await device.fetch(after: first.cursor)
+        XCTAssertEqual(next.records, [])
+        // A replay repairs a damaged note from this device's latest upload.
+        let replay = try await device.fetch(after: nil)
+        XCTAssertEqual(
+            Set(replay.records.map(\.id)),
+            Set(([fixture.catalog] + fixture.notes).map(\.id))
+        )
+        // Offered again, it is stored again rather than assumed present.
+        let result = try await device.publishBatch(fixture.notes)
+        XCTAssertNil(result.error)
+        XCTAssertEqual(result.acknowledgedIDs, Set(fixture.notes.map(\.id)))
     }
 
     func testFailedRetryOfAnUnreadableRecordIsTriedAgainWithoutARelaunch() async throws {

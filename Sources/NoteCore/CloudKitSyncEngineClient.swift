@@ -12,6 +12,12 @@ protocol CloudKitAccountClient: Sendable {
 
 protocol CloudKitDatabaseClient: Sendable {
     func record(for recordID: CKRecord.ID) async throws -> CKRecord
+    /// Reads several records in one request. CloudKit's `limitExceeded`
+    /// documentation names about 400 items per request, so callers send
+    /// fewer.
+    func records(
+        for recordIDs: [CKRecord.ID]
+    ) async throws -> [CKRecord.ID: Result<CKRecord, any Error>]
     func save(_ record: CKRecord) async throws -> CKRecord
     func modifyRecords(
         saving recordsToSave: [CKRecord],
@@ -86,6 +92,12 @@ struct CloudKitServices: Sendable {
 extension CKContainer: CloudKitAccountClient {}
 
 extension CKDatabase: CloudKitDatabaseClient {
+    func records(
+        for recordIDs: [CKRecord.ID]
+    ) async throws -> [CKRecord.ID: Result<CKRecord, any Error>] {
+        try await records(for: recordIDs, desiredKeys: nil)
+    }
+
     func zoneChanges(
         in zoneID: CKRecordZone.ID, since token: Data?, withFields: Bool
     ) async throws -> CloudKitZoneChanges {

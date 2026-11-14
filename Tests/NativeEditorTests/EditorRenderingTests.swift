@@ -138,6 +138,72 @@ final class EditorRenderingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(check(harness, fixture, "history marks"), 4)
     }
 
+    /// Each line draws its slice of a code or quote panel in a layer of
+    /// its own. An edge partway through a pixel row leaves a thin light line
+    /// on screen, which this harness can't see because it draws every line
+    /// into one image. So check that slice edges land on whole pixels, and
+    /// that two slices sharing an edge still share it, wherever the line is.
+    func testPanelSlicesEndOnWholePixels() throws {
+        for scale: CGFloat in [1, 2, 3] {
+            for offset: CGFloat in [0, 0.17, 0.5, 0.83, 1.4] {
+                let context = try XCTUnwrap(CGContext(
+                    data: nil, width: 400, height: 400, bitsPerComponent: 8,
+                    bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ))
+                context.scaleBy(x: scale, y: scale)
+                context.translateBy(x: 0, y: offset)
+                let upper = MarkdownPresentation.pixelRows(
+                    of: CGRect(x: 0, y: 10.3, width: 100, height: 20.45), in: context)
+                let lower = MarkdownPresentation.pixelRows(
+                    of: CGRect(x: 0, y: 30.75, width: 100, height: 18.2), in: context)
+                XCTAssertEqual(upper.maxY, lower.minY, accuracy: 0.0001,
+                               "@\(scale)x, offset \(offset): slices must meet")
+                for y in [upper.minY, upper.maxY, lower.maxY] {
+                    let device = context.convertToDeviceSpace(CGPoint(x: 0, y: y)).y
+                    XCTAssertEqual(device, device.rounded(), accuracy: 0.0001,
+                                   "@\(scale)x, offset \(offset): edge between pixels")
+                }
+                XCTAssertEqual(upper.height, 20.45, accuracy: 1 / scale)
+                // A quote's accent bar keeps the moved panel's edges.
+                let quote = MarkdownPresentation.BlockDecoration(
+                    kind: .blockquote, rect: CGRect(x: 20, y: 10.3, width: 80, height: 20.45))
+                let accent = try XCTUnwrap(MarkdownPresentation.accentRect(of: quote, in: upper))
+                XCTAssertEqual(accent.minY, upper.minY, accuracy: 0.0001)
+                XCTAssertEqual(accent.maxY, upper.maxY, accuracy: 0.0001)
+            }
+        }
+    }
+
+    func testEachLineCoversWholePixelRowsOfItsPanel() throws {
+        let fixture = EditorRenderingFixture.showcase
+        let harness = try EditorRenderingHarness(
+            source: fixture.source, options: .init(size: CGSize(width: 420, height: 400))
+        )
+        defer { harness.tearDown() }
+        // An uneven scroll puts the lines' edges between pixels.
+        harness.scroll(toY: 200.37)
+        let text = harness.text as NSString
+        for start in ["Patient", "continues", "let lantern", "print("] {
+            let location = text.range(of: start).location
+            let line = try XCTUnwrap(harness.lineRect(at: location))
+            // Right of the text, where the panel shows nothing else.
+            let x = harness.textColumn.upperBound - 2
+            for scale: CGFloat in [2, 3] {
+                let image = try harness.renderLine(at: location, scale: scale)
+                let column = image.pixelX(x)
+                let rows = image.pixels(in: line.insetBy(dx: 0, dy: -12)).y
+                let covered = rows.map { image.alpha(x: column, y: $0) }.filter { $0 > 0 }
+                XCTAssertFalse(covered.isEmpty, "\(start) @\(scale)x: no panel")
+                // A partly covered row shows as a seam once lines are composited.
+                XCTAssertLessThanOrEqual(
+                    (covered.max() ?? 0) - (covered.min() ?? 0), 1,
+                    "\(start) @\(scale)x: panel edge between pixels: \(covered)"
+                )
+            }
+        }
+    }
+
     func testPaletteChangesRedrawEveryVisibleLine() throws {
         let fixture = EditorRenderingFixture.showcase
         let harness = try EditorRenderingHarness(

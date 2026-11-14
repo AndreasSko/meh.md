@@ -71,6 +71,11 @@ final class NotebookMacMenuUITests: XCTestCase {
         app.typeKey(",", modifierFlags: .command)
         XCTAssertTrue(card.waitForExistence(timeout: 10))
         app.closeNotebookSettings()
+        // Like any Mac text field, the title stays in editing while another
+        // window has focus, and keeps what was typed. Return commits it.
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        XCTAssertEqual(titleField.value as? String, shortcutTitle)
+        titleField.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(noteTitle.waitForExistence(timeout: 5))
         XCTAssertEqual(noteTitle.label, shortcutTitle)
         XCTAssertEqual(sidebarNoteCount(in: app), 2)

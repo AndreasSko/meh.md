@@ -486,6 +486,15 @@ private struct NotebookCloudCleanupRows: View {
             }
         }
         .accessibilityIdentifier("notebook-storage-last-cleanup")
+        if let skipped = workspace.snapshotMaintenanceStatus?.skippedRecordCount, skipped > 0 {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("^[\(skipped) synced copy](inflect: true) couldn’t be read")
+                Text("This device skips what it can’t read and syncs the rest of the notebook.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("notebook-sync-skipped-copies")
+        }
         if let error = workspace.cloudCleanupError {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Couldn’t Clean Up \(workspace.syncStorageName) Copies")

@@ -187,6 +187,9 @@ public actor S3SyncTransport: SyncTransport {
 
     public func fetch(after cursorValue: String?) async throws -> SyncPage {
         try await checkFormat()
+        // A replay from the start means this device lost history, such as
+        // a damaged note, so its own uploads are needed again too.
+        if cursorValue == nil { publishedIDs = [] }
         var cursor = try decodeCursor(cursorValue)
         var records: [SyncRecord] = []
         var delivered = Set<String>()
@@ -514,7 +517,8 @@ public actor S3SyncTransport: SyncTransport {
             maximumSnapshotsPerDocument: maximum,
             retainedSnapshotBytes: state.retainedBytes,
             hasPendingCleanup: maximum > 1,
-            hasNewSnapshotsSinceLastCleanup: state.hasNewSnapshots
+            hasNewSnapshotsSinceLastCleanup: state.hasNewSnapshots,
+            skippedRecordCount: state.unreadable.count + state.unreadableLogs.count
         )
     }
 

@@ -314,6 +314,17 @@ final class SyncFailurePresentationTests: XCTestCase {
         )
     }
 
+    func testDamagedNoteHintDoesNotSuggestDeletingIt() throws {
+        let presentation = SyncFailurePresentation(
+            error: NotebookUnreadableNotes(noteIDs: [UUID()], names: ["Plans"]),
+            retryWillOccurAutomatically: false
+        )
+        let hint = String(localized: try XCTUnwrap(presentation.actionHint))
+        // A deletion syncs, so it would remove the copy another device has.
+        XCTAssertFalse(hint.localizedCaseInsensitiveContains("delete"))
+        XCTAssertTrue(hint.localizedCaseInsensitiveContains("restore"))
+    }
+
     func testSignedOutAccountIsMarkedAsSignedOut() {
         for error: any Error in [
             CloudKitSyncTransportError.signedOut, CKError(.notAuthenticated),
