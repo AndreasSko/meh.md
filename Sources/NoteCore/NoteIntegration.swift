@@ -155,6 +155,33 @@ extension NoteDocument {
         return true
     }
 
+    /// The text an integration owns, in UTF-16 ranges, for the editor to
+    /// show where an update would replace text. The header is left out.
+    public func integrationTextRanges(in text: String? = nil) throws -> [NSRange] {
+        guard integrationLink != nil else { return [] }
+        var scalarRanges: [Range<UInt64>] = []
+        for mark in try document.marks(obj: textObject) where mark.name == Self.integrationMark {
+            guard mark.end > mark.start, case .String(let value) = mark.value,
+                  !value.hasPrefix(NotebookIntegrationBlock.headerKey + "|") else { continue }
+            scalarRanges.append(mark.start..<mark.end)
+        }
+        guard !scalarRanges.isEmpty else { return [] }
+        var offsets: [UInt64: Int] = [:]
+        let wanted = Set(scalarRanges.flatMap { [$0.lowerBound, $0.upperBound] })
+        var utf16 = 0
+        var index: UInt64 = 0
+        for scalar in try (text ?? self.text).unicodeScalars {
+            if wanted.contains(index) { offsets[index] = utf16 }
+            utf16 += scalar.utf16.count
+            index += 1
+        }
+        if wanted.contains(index) { offsets[index] = utf16 }
+        return scalarRanges.compactMap { range in
+            guard let start = offsets[range.lowerBound], let end = offsets[range.upperBound] else { return nil }
+            return NSRange(location: start, length: end - start)
+        }.sorted { $0.location < $1.location }
+    }
+
     /// Removes copies the note's map does not name: the losing copy when
     /// two devices wrote the same block, and typing that arrived late inside
     /// a copy that was already replaced. It only deletes integration text,
