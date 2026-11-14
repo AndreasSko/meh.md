@@ -47,6 +47,95 @@ final class MarkdownLinkPointerTests: XCTestCase {
         }
     }
 
+    func testLinkHighlightKeepsTheNoteVisible() throws {
+        let fixture = makeTextView(source: "Intro\n\n[[Target.md|label]]\n\nOutside")
+        defer { fixture.window.isHidden = true }
+        let view = fixture.view
+        let navigation = MarkdownEditorNavigation()
+        navigation.openLink = { _ in }
+        view.markdownLinkNavigation = navigation
+        let region = try XCTUnwrap(view.noteLinkPointerRegion(
+            at: try labelPoints("label", in: view)[0]))
+        // Previewing the editor itself made the whole note disappear while
+        // the pointer rested on the link.
+        let preview = view.noteLinkPointerPreview(for: region.rect)
+        XCTAssertFalse(preview.view === view)
+        XCTAssertFalse(view.isDescendant(of: preview.view))
+        XCTAssertEqual(preview.size.width, region.rect.width, accuracy: 0.5)
+        XCTAssertEqual(preview.size.height, region.rect.height, accuracy: 0.5)
+        XCTAssertTrue(preview.target.container === view)
+        XCTAssertEqual(preview.target.center.x, region.rect.midX, accuracy: 0.5)
+        XCTAssertEqual(preview.target.center.y, region.rect.midY, accuracy: 0.5)
+    }
+
+    func testLayoutRefreshesLinkRegionsOnlyWhenTheyCanMove() throws {
+        let source = "Intro\n\n[[Target.md|label]]\n\nOutside"
+        let fixture = makeTextView(source: source)
+        defer { fixture.window.isHidden = true }
+        let view = fixture.view
+        let navigation = MarkdownEditorNavigation()
+        navigation.openLink = { _ in }
+        view.markdownLinkNavigation = navigation
+        view.layoutIfNeeded()
+
+        // Showing the highlight adds its preview to the editor. Refreshing
+        // the regions on that layout restarted the highlight endlessly.
+        var refreshes = view.markdownLinkPointerRefreshes
+        for _ in 0..<3 {
+            let preview = UIView(frame: CGRect(x: 0, y: 0, width: 40, height: 20))
+            view.addSubview(preview)
+            view.layoutIfNeeded()
+            preview.removeFromSuperview()
+            view.layoutIfNeeded()
+        }
+        XCTAssertEqual(view.markdownLinkPointerRefreshes, refreshes)
+
+        view.frame.size.width -= 40
+        view.layoutIfNeeded()
+        XCTAssertGreaterThan(view.markdownLinkPointerRefreshes, refreshes)
+
+        // Synced text of the same length can still move the link.
+        refreshes = view.markdownLinkPointerRefreshes
+        view.textStorage.replaceCharacters(
+            in: NSRange(location: 0, length: (source as NSString).length),
+            with: "Intra\n\n[[Target.md|label]]\n\nOutside")
+        XCTAssertGreaterThan(view.markdownLinkPointerRefreshes, refreshes)
+    }
+
+    func testTextWidthChangeRefreshesLinkRegionsWithoutResizing() throws {
+        let fixture = makeTextView(
+            source: "Intro\n\n[[Target.md|label]]\n\nOutside", width: 1024)
+        defer { fixture.window.isHidden = true }
+        let view = fixture.view
+        let navigation = MarkdownEditorNavigation()
+        navigation.openLink = { _ in }
+        view.markdownLinkNavigation = navigation
+        view.markdownMaxTextWidth = 800
+        view.layoutIfNeeded()
+
+        let bounds = view.bounds
+        let contentSize = view.contentSize
+        let insets = view.textContainerInset
+        let point = try labelPoints("label", in: view)[0]
+        let refreshes = view.markdownLinkPointerRefreshes
+
+        view.markdownMaxTextWidth = 600
+        view.layoutIfNeeded()
+
+        XCTAssertEqual(view.bounds, bounds)
+        XCTAssertEqual(view.contentSize, contentSize)
+        XCTAssertNotEqual(view.textContainerInset, insets)
+        let movedPoint = try labelPoints("label", in: view)[0]
+        XCTAssertNotEqual(movedPoint.x, point.x)
+        XCTAssertNotNil(view.noteLinkPointerRegion(at: movedPoint))
+        XCTAssertGreaterThan(view.markdownLinkPointerRefreshes, refreshes)
+
+        let settledRefreshes = view.markdownLinkPointerRefreshes
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        XCTAssertEqual(view.markdownLinkPointerRefreshes, settledRefreshes)
+    }
+
     func testWrappedLabelsUseSeparatePointerRegionsWithoutBlankLineTargets() throws {
         let label = "A fictional observatory project with a long label across several lines"
         let fixture = makeTextView(source: "[\(label)](Target.md)\n\nOutside", width: 160)
