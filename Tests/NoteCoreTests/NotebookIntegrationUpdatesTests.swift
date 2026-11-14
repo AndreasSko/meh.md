@@ -23,6 +23,26 @@ final class NotebookIntegrationUpdatesTests: XCTestCase {
         XCTAssertEqual(NotebookIntegrationItem.noteName(for: " / "), "Untitled.md")
     }
 
+    func testAKeptNoteIsReusedAndOnlyRemadeWhenGone() async throws {
+        let (replica, updates) = try await connected()
+        let folder = try XCTUnwrap(updates.settings()["folder"].flatMap(UUID.init))
+        let first = try await updates.keptNote("templateNote", name: "Template.md", text: "one")
+        XCTAssertTrue(first.isNew)
+        let again = try await updates.keptNote("templateNote", name: "Template.md", text: "two")
+        XCTAssertEqual(again.id, first.id)
+        XCTAssertFalse(again.isNew)
+
+        // Gone to Trash, it is made again; a note of the person's that
+        // already has the name keeps it.
+        try await replica.setTrashed(first.id, true)
+        _ = try await replica.createNote(name: "Template.md", parentID: folder)
+        let remade = try await updates.keptNote("templateNote", name: "Template.md", text: "three")
+        XCTAssertTrue(remade.isNew)
+        XCTAssertNotEqual(remade.id, first.id)
+        XCTAssertEqual(replica.placements.first { $0.item.id == remade.id }?.item.name,
+                       "Template (2).md")
+    }
+
     func testTheFirstSyncCreatesFoldersAndNotes() async throws {
         let (replica, updates) = try await connected()
         let report = try await updates.apply([book("1", "Atomic Habits", ["> one", "> two"])], at: date)
@@ -353,6 +373,30 @@ final class NotebookIntegrationUpdatesTests: XCTestCase {
         } catch is Stopped {}
         let shown = try await text(replica, id)
         XCTAssertFalse(shown.contains("> two"), shown)
+    }
+
+    func testABatchStopsBeforeWritingWhenAskedTo() async throws {
+        struct Paused: Error {}
+        let (replica, updates) = try await connected()
+        updates.beforeWrite = { throw Paused() }
+        await assertThrows { _ = try await updates.apply([book("1", "Book", ["> one"])], at: self.date) }
+        let notes = try XCTUnwrap(replica.integrationCatalog()).placements().filter { $0.item.kind == .note }
+        XCTAssertEqual(notes.count, 0)
+    }
+
+    func testAPauseDuringABatchStopsItBeforeTheCatalogWrite() async throws {
+        struct Paused: Error {}
+        let (replica, updates) = try await connected()
+        var paused = false
+        updates.beforeWrite = { if paused { throw Paused() } }
+        updates.afterNotes = { paused = true }
+        await assertThrows { _ = try await updates.apply([book("1", "Book", ["> one"])], at: self.date) }
+        let notes = try XCTUnwrap(replica.integrationCatalog()).placements().filter { $0.item.kind == .note }
+        XCTAssertEqual(notes.count, 0)
+        updates.afterNotes = nil
+        paused = false
+        let report = try await updates.apply([book("1", "Book", ["> one"])], at: date)
+        XCTAssertEqual(report.created.count, 1)
     }
 
     func testABatchCannotStartAnotherForTheSameNotebook() async throws {

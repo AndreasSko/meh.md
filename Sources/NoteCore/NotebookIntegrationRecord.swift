@@ -19,10 +19,11 @@ public struct NotebookIntegrationRecord: Codable, Equatable, Sendable {
     public var state: String
     /// Notes created for the same item that lost to `note`.
     public var duplicates: [UUID]
+    public var url: URL?
 
     public init(
         item: String, note: UUID, hash: String?, name: String?, folder: UUID?,
-        state: String, duplicates: [UUID] = []
+        state: String, duplicates: [UUID] = [], url: URL? = nil
     ) {
         self.item = item
         self.note = note
@@ -31,6 +32,7 @@ public struct NotebookIntegrationRecord: Codable, Equatable, Sendable {
         self.folder = folder
         self.state = state
         self.duplicates = duplicates
+        self.url = url
     }
 
     public init(from decoder: Decoder) throws {
@@ -42,5 +44,6 @@ public struct NotebookIntegrationRecord: Codable, Equatable, Sendable {
         folder = try container.decodeIfPresent(UUID.self, forKey: .folder)
         state = try container.decode(String.self, forKey: .state)
         duplicates = try container.decodeIfPresent([UUID].self, forKey: .duplicates) ?? []
+        url = try? container.decodeIfPresent(URL.self, forKey: .url)
     }
 }

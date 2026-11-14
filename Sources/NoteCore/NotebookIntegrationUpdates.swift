@@ -21,16 +21,19 @@ public struct NotebookIntegrationItem: Equatable, Sendable {
     public let blocks: [NotebookIntegrationBlock]
     /// Removed in the service. The note stays and stops updating.
     public let isRemoved: Bool
+    /// The item in the service, for Open in Readwise.
+    public let url: URL?
 
     public init(
         key: String, name: String, folder: Folder?,
-        blocks: [NotebookIntegrationBlock], isRemoved: Bool = false
+        blocks: [NotebookIntegrationBlock], isRemoved: Bool = false, url: URL? = nil
     ) {
         self.key = key
         self.name = name
         self.folder = folder
         self.blocks = blocks
         self.isRemoved = isRemoved
+        self.url = url
     }
 
     /// A valid note name for a title: path separators and control
@@ -111,6 +114,9 @@ public final class NotebookIntegrationUpdates {
     public let rendererVersion: Int
     /// Runs between saving notes and the catalog write, for tests.
     var afterNotes: (@MainActor () async throws -> Void)?
+    /// Runs once a batch has its turn and before each write; throwing
+    /// stops it. The app uses it to stop while iCloud sync is paused.
+    public var beforeWrite: (@MainActor () throws -> Void)?
 
     public init(
         replica: NotebookReplica, connection: UUID,
@@ -136,10 +142,9 @@ public final class NotebookIntegrationUpdates {
     /// that sets it up syncs it.
     public static func connect(
         replica: NotebookReplica, service: String, folderName: String,
-        device: NotebookIntegrationDevice, rendererVersion: Int
+        device: NotebookIntegrationDevice, rendererVersion: Int, id connection: UUID = UUID()
     ) async throws -> UUID {
         try NotebookName.validate(folderName)
-        let connection = UUID()
         try await replica.integrationCatalogWrite { next in
             let folder = try next.add(kind: .folder, name: folderName)
             for (field, value) in [
@@ -173,6 +178,72 @@ public final class NotebookIntegrationUpdates {
         }
     }
 
+    /// The connection's settings by name, the winning value of each.
+    public func settings() throws -> [String: String] {
+        try replica.integrationCatalog()?.integrationSettings(connection)
+            .compactMapValues(\.first) ?? [:]
+    }
+
+    /// Stores a setting every device sees, such as the template note.
+    public func setSetting(_ field: String, _ value: String?) async throws {
+        try await replica.integrationCatalogWrite { next in
+            try next.setIntegrationSetting(field, value, connection: connection)
+        }
+    }
+
+    /// A note the integration keeps in its folder, such as a template,
+    /// remembered under `field`. While that note exists outside Trash it is
+    /// returned again, so it is never copied; otherwise a new one is made
+    /// under a name no other note in the folder has.
+    public func keptNote(
+        _ field: String, name: String, text: String
+    ) async throws -> (id: UUID, isNew: Bool) {
+        let settings = try settings()
+        guard let folder = settings["folder"].flatMap(UUID.init) else {
+            throw NotebookIntegrationError.notConnected
+        }
+        let live = replica.placements.filter { !$0.isInTrash && !$0.item.isPermanentlyDeleted }
+        if let kept = settings[field].flatMap(UUID.init), live.contains(where: { $0.item.id == kept }) {
+            return (kept, false)
+        }
+        let taken = live.filter { $0.parentID == folder }.flatMap { [$0.item.name, $0.displayName] }
+        let id = try await replica.createNote(
+            name: NotebookTemplateFilename.unique(name, existing: taken), text: text, parentID: folder)
+        try await setSetting(field, id.uuidString)
+        return (id, true)
+    }
+
+    /// Items whose notes the person deleted, for Bring Back Deleted Notes:
+    /// recorded as deleted, or deleted for good since the last update.
+    public func deletedItems() throws -> [String] {
+        guard let catalog = replica.integrationCatalog() else { return [] }
+        let placements = Dictionary(
+            try catalog.placements().map { ($0.item.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return try catalog.integrationRecords(connection).compactMap { key, values in
+            guard let record = Self.merged(values) else { return nil }
+            switch record.state {
+            case NotebookIntegrationRecord.deleted:
+                return key
+            case Self.activeState, NotebookIntegrationRecord.removed:
+                let placement = placements[record.note]
+                return placement == nil || placement!.item.isPermanentlyDeleted ? key : nil
+            default:
+                return nil
+            }
+        }.sorted()
+    }
+
+    /// How many items have a note that is kept up to date.
+    public func activeCount() throws -> Int {
+        try (replica.integrationCatalog()?.integrationRecords(connection) ?? [:]).values
+            .filter { Self.merged($0)?.state == NotebookIntegrationRecord.active }.count
+    }
+
+    public func record(forItem key: String) throws -> NotebookIntegrationRecord? {
+        try replica.integrationCatalog()?.integrationRecords(connection)[key]
+            .flatMap(Self.merged)
+    }
+
     /// The integration item a note belongs to, also for a losing duplicate.
     public func record(forNote id: UUID) throws -> (record: NotebookIntegrationRecord, isDuplicate: Bool)? {
         guard let catalog = replica.integrationCatalog() else { return nil }
@@ -201,7 +272,8 @@ public final class NotebookIntegrationUpdates {
         // Batches for one notebook run one at a time: two overlapping
         // batches could both see an item without a note and create two.
         try await IntegrationBatches.gate(for: replica).run {
-            try await self.applyBatch(
+            try self.beforeWrite?()
+            return try await self.applyBatch(
                 items, bringingBack: bringingBack, message: message, force: force, at: date)
         }
     }
@@ -269,7 +341,11 @@ public final class NotebookIntegrationUpdates {
                 continue
             }
             if placement!.isInTrash {
-                if conflicted { plans.append(.record(record, observed: observed)) }
+                if bringingBack.contains(item.key), !item.isRemoved {
+                    plans.append(.create(item))
+                } else if conflicted {
+                    plans.append(.record(record, observed: observed))
+                }
                 continue
             }
             if item.isRemoved {
@@ -288,10 +364,12 @@ public final class NotebookIntegrationUpdates {
             if let applied = try await Self.applied(
                 item.blocks, to: current, link: link(item.key), at: date, message: message)
             {
-                // The batch suspends between writes, so the connection may
-                // have been disconnected or taken over meanwhile. The check
-                // runs with the write, so a disconnect cannot land between.
+                // Checked with the write: the batch suspends between writes,
+                // so the connection may have been disconnected or taken over,
+                // or the app may have paused. A stopped batch is applied
+                // again next time.
                 try await replica.mergeNote(applied) {
+                    try self.beforeWrite?()
                     guard let current = self.replica.integrationCatalog() else { return }
                     try self.checkStillWriting(try current.integrationSettings(self.connection))
                 }
@@ -313,6 +391,7 @@ public final class NotebookIntegrationUpdates {
         try await afterNotes?()
         // Then one catalog write for everything else.
         try await replica.integrationCatalogWrite { next in
+            try self.beforeWrite?()
             try self.checkStillWriting(try next.integrationSettings(self.connection))
             let root = try self.folder(field: "folder", name: settings["folderName"]?.first
                 ?? "Integration", parent: nil, in: next)
@@ -355,7 +434,8 @@ public final class NotebookIntegrationUpdates {
                     added.append((snapshot.noteID, .note, item.name, parent))
                     try next.setIntegrationRecord(NotebookIntegrationRecord(
                         item: item.key, note: snapshot.noteID, hash: Self.hash(item), name: item.name,
-                        folder: parent, state: Self.activeState), connection: self.connection)
+                        folder: parent, state: Self.activeState, url: item.url),
+                        connection: self.connection)
                     report.created.append(snapshot.noteID)
                 case .record(let planned, let observed):
                     guard var record = Self.rebased(planned, observed: observed, on: records) else {
@@ -386,6 +466,7 @@ public final class NotebookIntegrationUpdates {
                     record.hash = hash
                     record.name = item.name
                     record.folder = target
+                    record.url = item.url
                     try next.setIntegrationRecord(record, connection: self.connection)
                 }
             }
@@ -490,7 +571,7 @@ public final class NotebookIntegrationUpdates {
     }
 
     static func hash(_ item: NotebookIntegrationItem) -> String {
-        var parts = [item.name, item.folder?.key ?? ""]
+        var parts = [item.name, item.folder?.key ?? "", item.url?.absoluteString ?? ""]
         for block in item.blocks { parts += [block.key, block.text] }
         return NoteDocument.integrationHash(parts.joined(separator: "\u{0}"))
     }
