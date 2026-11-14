@@ -12,7 +12,6 @@ private struct EditorAttachmentID: Hashable {
 struct NotebookDetail: View {
     @Bindable var scene: NotebookSceneState
     let isCompact: Bool
-    @Environment(\.mehPalette) private var palette
     @AppStorage("editor.fontSize", store: NotebookEditorPreferences.store)
     private var editorFontSize = 17.0
     @AppStorage("editor.fontFamily", store: NotebookEditorPreferences.store)
@@ -233,26 +232,15 @@ struct NotebookDetail: View {
                         .disabled(scene.busy)
                 } else {
                     ContentUnavailableView {
-                        Label {
-                            Text("Select a note")
-                        } icon: {
-                            MehFace(mood: .neutral)
-                        }
+                        MehFace(mood: .neutral)
                     } description: {
                         if let message = scene.navigationState.restorationMessage {
                             Text(message)
                         }
-                    } actions: {
-                        // The highlighter marks the main action, as on the
-                        // New Note button in the sidebar.
-                        Button("New Note") { scene.createDefaultNote() }
-                            .buttonStyle(.borderedProminent)
-                            .buttonBorderShape(.capsule)
-                            .tint(palette.highlighterColor)
-                            .foregroundStyle(MehStyle.onHighlighterColor)
-                            .disabled(scene.busy)
-                            .accessibilityIdentifier("notebook-empty-detail-new-note")
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("No note selected")
+                    .accessibilityIdentifier("notebook-empty-detail")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

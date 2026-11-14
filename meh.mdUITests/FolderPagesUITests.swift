@@ -362,7 +362,7 @@ final class FolderPagesUITests: XCTestCase {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Rotates an iPhone")
         let app = makeApp()
         let editor = app.textViews["markdown-editor"]
-        let placeholder = app.staticTexts["Select a note"]
+        let placeholder = app.descendants(matching: .any)["notebook-empty-detail"]
         let recent = app.buttons.matching(NSPredicate(
             format: "label BEGINSWITH %@", "Weekly review 2026-10-24")).firstMatch
         // Recents would push Files below the short landscape screen.
