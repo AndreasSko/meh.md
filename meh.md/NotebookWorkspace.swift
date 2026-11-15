@@ -2282,6 +2282,9 @@ final class NotebookWorkspace {
             )
             copiesURL = output.appending(path: "Markdown")
             copyError = nil
+        } catch SyncError.localSaveRequired {
+            // A note is still saving. The next publication after sync
+            // includes it, and there's nothing the user could do meanwhile.
         } catch { copyError = error.localizedDescription }
     }
 }

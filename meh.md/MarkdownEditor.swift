@@ -2793,9 +2793,6 @@ struct MarkdownEditor: UIViewRepresentable {
         if textView.keyboardDismissMode != dismissMode {
             textView.keyboardDismissMode = dismissMode
         }
-        if textView.topEdgeEffect.isHidden == isCompact {
-            textView.topEdgeEffect.isHidden = !isCompact
-        }
         context.coordinator.update(parent: self, textView: textView)
         (textView as? MarkdownTextView)?.markdownMaxTextWidth = maxTextWidth
         (textView as? MarkdownTextView)?.updateMarkdownTitle(
