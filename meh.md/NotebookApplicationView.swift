@@ -73,6 +73,9 @@ struct NotebookApplicationView: View {
         .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         #endif
         .mehAppearance()
+        #if os(iOS)
+        .overlay(alignment: .top) { NotebookStatusBarStrip() }
+        #endif
         .overlay {
             if incomingImports.readingCount > 0 {
                 ProgressView("Reading Markdown…")
@@ -147,3 +150,30 @@ private struct NotebookOpeningView: View {
             .ignoresSafeArea()
     }
 }
+
+#if os(iOS)
+/// On iPad, a paper-tinted blur behind the status bar keeps the clock
+/// readable over scrolled content. It fades out within the status bar,
+/// so the buttons below stay sharp.
+private struct NotebookStatusBarStrip: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    var body: some View {
+        if sizeClass == .regular {
+            Color.clear.frame(height: 0)
+                .background {
+                    // Paper tint instead of the material's grey.
+                    Rectangle().fill(.ultraThinMaterial)
+                        .overlay(MehStyle.paperColor.opacity(0.7))
+                        .mask(LinearGradient(
+                            stops: [.init(color: .black, location: 0.5),
+                                    .init(color: .clear, location: 1)],
+                            startPoint: .top, endPoint: .bottom
+                        ))
+                        .ignoresSafeArea(edges: .top)
+                }
+                .allowsHitTesting(false)
+        }
+    }
+}
+#endif

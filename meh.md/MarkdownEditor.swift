@@ -2793,6 +2793,12 @@ struct MarkdownEditor: UIViewRepresentable {
         if textView.keyboardDismissMode != dismissMode {
             textView.keyboardDismissMode = dismissMode
         }
+        // iPad keeps only the status bar clear (see NotebookStatusBarStrip);
+        // the edge effect would also cover the floating buttons.
+        let hidesTopEdge = !isCompact
+        if textView.topEdgeEffect.isHidden != hidesTopEdge {
+            textView.topEdgeEffect.isHidden = hidesTopEdge
+        }
         context.coordinator.update(parent: self, textView: textView)
         (textView as? MarkdownTextView)?.markdownMaxTextWidth = maxTextWidth
         (textView as? MarkdownTextView)?.updateMarkdownTitle(
