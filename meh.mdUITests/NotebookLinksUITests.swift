@@ -135,6 +135,41 @@ final class NotebookLinksUITests: XCTestCase {
         followFixtureLink(in: app)
         assertTitle("Fictional Project", in: app)
     }
+
+    func testEditorStaysEditableAfterLinkBack() throws {
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        createNote(in: app, title: "Fictional Project",
+                   body: "# Next steps\n\nReview the sample plan.")
+        let body = "See [[Fictional Project#Next steps|the project]].\n"
+        createNote(in: app, title: "Fictional Meeting", body: body)
+        // Reopen the note unfocused, as after switching notes.
+        activate(app.buttons["notebook-note-actions"])
+        activate(app.buttons["notebook-show-in-files"])
+        let meeting = fileRow("Fictional Meeting", in: app)
+        XCTAssertTrue(meeting.waitForExistence(timeout: 10))
+        activate(meeting)
+        app.terminate()
+        app.launch()
+        assertTitle("Fictional Meeting", in: app)
+        followFixtureLink(in: app)
+        assertTitle("Fictional Project", in: app)
+        goBack(from: app, returningTo: "Fictional Meeting")
+        assertTitle("Fictional Meeting", in: app)
+
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)).tap()
+        editor.typeText("More")
+        let typed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value CONTAINS %@", "More"), object: editor)
+        XCTAssertEqual(XCTWaiter.wait(for: [typed], timeout: 5), .completed,
+                       "Typing should edit the returned note; value was "
+                           + "\(editor.value as? String ?? "<unavailable>")")
+        followFixtureLink(in: app)
+        assertTitle("Fictional Project", in: app)
+    }
 #endif
 
     func testCompactBackTransitionKeepsNoteContent() throws {

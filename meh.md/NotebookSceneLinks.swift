@@ -537,14 +537,29 @@ extension NotebookSceneState {
                 incoming.hasExplicitVisitDestination = true
                 #if os(iOS)
                 let restorationRouteID = restoringLinkRouteID
+                if restorationRouteID != nil {
+                    // The preview covers the editor and takes no input.
+                    // A lost restore must never leave the note locked. A
+                    // later visit has its own navigation and its own timer.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        [weak self, weak incoming] in
+                        guard let self, let incoming, incoming === editorNavigation,
+                              restoringLinkRouteID == restorationRouteID else { return }
+                        restoringLinkRouteID = nil
+                    }
+                }
                 #endif
                 incoming.whenAttached { [weak self, weak incoming] in
                     guard let self, let incoming, selectedID == target.noteID else { return }
                     let finishRestoration: () -> Void = { [self] in
                         #if os(iOS)
-                        guard incoming === editorNavigation, linkJourneyID == journeyID,
-                              restoringLinkRouteID == restorationRouteID else { return }
-                        restoringLinkRouteID = nil
+                        guard incoming === editorNavigation, linkJourneyID == journeyID
+                        else { return }
+                        // The timeout may have released the preview already;
+                        // `onReturn` still waits for the restored selection.
+                        if restoringLinkRouteID == restorationRouteID {
+                            restoringLinkRouteID = nil
+                        }
                         #endif
                         onReturn?()
                     }

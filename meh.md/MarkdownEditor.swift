@@ -1172,7 +1172,9 @@ struct MarkdownEditor: NSViewRepresentable {
             }
             parent.navigation?.restorePositionAndNotify = {
                 [weak self, weak textView] position, completion in
-                guard let self, let textView else { return }
+                // SwiftUI can replace this editor before a visit restores it.
+                // The caller still waits for the call to release its preview.
+                guard let self, let textView else { return completion() }
                 self.schedulePositionRestore(position, in: textView, completion: completion)
             }
             textView.markdownLinkNavigation = navigation
@@ -2814,6 +2816,14 @@ struct MarkdownEditor: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
+        isolated deinit {
+            // A replaced editor still owes its pending restore an answer,
+            // which releases a link visit's preview. Answer after teardown.
+            if let completion = pendingPositionCompletion {
+                Task { @MainActor in completion() }
+            }
+        }
+
         var parent: MarkdownEditor
         private var displayedText: String
         private var displayedRevision: Data?
@@ -2999,7 +3009,9 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             parent.navigation?.restorePositionAndNotify = {
                 [weak self, weak textView] position, completion in
-                guard let self, let textView else { return }
+                // SwiftUI can replace this editor before a visit restores it.
+                // The caller still waits for the call to release its preview.
+                guard let self, let textView else { return completion() }
                 self.schedulePositionRestore(position, in: textView, completion: completion)
             }
             parent.navigation?.captureViewportInsets = { [weak textView] in
