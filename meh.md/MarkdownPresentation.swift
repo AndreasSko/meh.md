@@ -1,4 +1,5 @@
 import Foundation
+import CoreText
 import NoteCore
 import ObjectiveC
 
@@ -454,7 +455,12 @@ enum MarkdownPresentation {
                 result: presentation.result, bodyFont: bodyFont,
                 taskParagraphs: taskParagraphs, tableLayout: cache.tableLayout,
                 compact: MarkdownLivePreview.snapshot(for: textView).mode == .livePreview
-                    ? blockIDParagraphs(in: presentation.result, source: source) : []
+                    ? compactParagraphs(
+                        in: presentation.result, source: source,
+                        frontMatter: MarkdownLivePreview.renderedFrontMatter(
+                            in: source, collapsed: presentation.previewRanges.collapsed
+                        )?.frontMatter)
+                    : []
             )
         }
         attributes[.paragraphStyle] = style
@@ -542,7 +548,8 @@ enum MarkdownPresentation {
                 visibleRange: fragmentRange,
                 spanIndices: presentation.spanCandidateIndices(
                     intersecting: fragmentRange
-                )
+                ),
+                collapsed: presentation.previewRanges.collapsed
             ),
             offset: drawingOffset,
             dirtyRect: surfaceBounds,
@@ -579,6 +586,12 @@ enum MarkdownPresentation {
             offset: drawingOffset,
             dirtyRect: surfaceBounds,
             context: context
+        )
+        drawFrontMatter(
+            in: fragment, fragmentRange: fragmentRange, text: text,
+            collapsed: presentation.previewRanges.collapsed, textStorage: textStorage,
+            layoutManager: layoutManager, contentManager: contentManager,
+            point: point, offset: drawingOffset, context: context
         )
     }
 
@@ -735,7 +748,8 @@ enum MarkdownPresentation {
         layoutManager: NSTextLayoutManager,
         snapshot: MarkdownLivePreviewSnapshot,
         visibleRange: NSRange? = nil,
-        spanIndices: Range<Int>? = nil
+        spanIndices: Range<Int>? = nil,
+        collapsed: [NSRange] = []
     ) -> [ListBulletDecoration] {
         guard let contentManager = layoutManager.textContentManager else {
             return []
@@ -762,6 +776,10 @@ enum MarkdownPresentation {
             }
             guard span.role == .listMarker, span.range.length == 1,
                   !taskLines.contains(source.lineRange(for: span.range).location),
+                  // A hidden marker, as in front matter rows, has no bullet.
+                  !collapsed.contains(where: {
+                      NSIntersectionRange($0, span.range) == span.range
+                  }),
                   MarkdownLivePreview.conceals(
                       span.range,
                       in: source,
@@ -1100,7 +1118,12 @@ enum MarkdownPresentation {
                 desired.addAttribute(.obliqueness, value: 0.18, range: localRange)
             }
         }
-        let compact = livePreview ? blockIDParagraphs(in: result, source: text as NSString) : []
+        let rendered = livePreview
+            ? MarkdownLivePreview.renderedFrontMatter(in: text as NSString, collapsed: hiddenRanges)
+            : nil
+        let frontMatter = rendered?.frontMatter
+        let compact = livePreview
+            ? compactParagraphs(in: result, source: text as NSString, frontMatter: frontMatter) : []
         if livePreview {
             let markerFont = PlatformFont.monospacedSystemFont(
                 ofSize: bodyFont.pointSize, weight: .regular
@@ -1130,6 +1153,11 @@ enum MarkdownPresentation {
                       let localLine = local(line) else { continue }
                 desired.addAttribute(.font, value: idStarts.contains(NSMaxRange(line)) ? tightFont : gapFont,
                                      range: localLine)
+            }
+            if let rendered {
+                applyFrontMatterFonts(rendered.frontMatter, isCollapsed: rendered.isCollapsed,
+                                      to: desired, source: text as NSString,
+                                      bodyFont: bodyFont, local: local)
             }
         }
         let source = text as NSString
@@ -1161,6 +1189,11 @@ enum MarkdownPresentation {
             style.paragraphSpacing = 0
             if idLines.contains(start) { style.alignment = .right }
             desired.addAttribute(.paragraphStyle, value: style, range: localLine)
+        }
+        if let rendered {
+            applyFrontMatterIndents(rendered.frontMatter, isCollapsed: rendered.isCollapsed,
+                                    to: desired, source: source,
+                                    bodyFont: bodyFont, local: local)
         }
         for span in result.spans where span.role == .strikethrough {
             guard let localRange = local(span.range) else { continue }
@@ -1847,6 +1880,371 @@ enum MarkdownPresentation {
             paragraphs = NSUnionRange(paragraphs, next)
         }
         return paragraphs
+    }
+
+    /// Paragraphs live preview sets without gaps: block IDs with the blank
+    /// lines around them, and front matter rows.
+    static func compactParagraphs(
+        in result: MarkdownSyntaxResult,
+        source: NSString,
+        frontMatter: MarkdownFrontMatter?
+    ) -> Set<Int> {
+        var starts = blockIDParagraphs(in: result, source: source)
+        if let frontMatter {
+            starts.insert(frontMatter.opening.location)
+            for property in frontMatter.properties {
+                starts.insert(property.lines.location)
+                starts.formUnion(property.itemLines.map(\.location))
+            }
+        }
+        return starts
+    }
+
+    // MARK: Front matter rows
+
+    /// Front matter rows are smaller than the text, like a caption.
+    static func frontMatterFont(for bodyFont: PlatformFont) -> PlatformFont {
+        fontWithSize(bodyFont, size: (bodyFont.pointSize * 0.82).rounded())
+    }
+
+    /// Where values start: after the widest label and a gap.
+    static func frontMatterColumn(_ frontMatter: MarkdownFrontMatter, font: PlatformFont) -> CGFloat {
+        let widest = frontMatter.properties.map { textWidth($0.label, font: font) }.max() ?? 0
+        return (widest + font.pointSize * 1.2).rounded(.up)
+    }
+
+    static let frontMatterChevronRoom: CGFloat = 28
+
+    static func frontMatterPillPadding(_ font: PlatformFont) -> CGFloat {
+        (font.pointSize * 0.45).rounded()
+    }
+
+    private static func textWidth(_ text: String, font: PlatformFont) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: font]).width
+    }
+
+    /// The hidden key keeps its place for the caret; spacing after it moves
+    /// the value to the column, where the drawn label ends before it.
+    private static func applyFrontMatterFonts(
+        _ frontMatter: MarkdownFrontMatter,
+        isCollapsed: Bool,
+        to desired: NSMutableAttributedString,
+        source: NSString,
+        bodyFont: PlatformFont,
+        local: (NSRange) -> NSRange?
+    ) {
+        let font = frontMatterFont(for: bodyFont)
+        if isCollapsed {
+            // The opening line holds the drawn summary; the rest is hidden.
+            if let range = local(frontMatter.opening) {
+                desired.addAttribute(.font, value: font, range: range)
+            }
+            return
+        }
+        let column = frontMatterColumn(frontMatter, font: font)
+        let padding = frontMatterPillPadding(font)
+        for property in frontMatter.properties {
+            if let range = local(property.lines) {
+                desired.addAttribute(.font, value: font, range: range)
+            }
+            if property.itemLines.isEmpty, property.keyRange.length > 0,
+               NSMaxRange(property.keyRange) < NSMaxRange(property.lines),
+               let last = local(NSRange(location: NSMaxRange(property.keyRange) - 1, length: 1)) {
+                // A pill's edge, not its text, lines up with the values.
+                let inset = property.value == nil ? padding : 0
+                let keyWidth = textWidth(source.substring(with: property.keyRange), font: font)
+                desired.addAttribute(.kern, value: max(0, column + inset - keyWidth), range: last)
+            }
+            // On the comma: TextKit draws a character's extra space as part
+            // of the next character, here the separator's space, not a pill.
+            for separator in property.separators {
+                guard let last = local(NSRange(location: separator.location, length: 1))
+                else { continue }
+                let width = textWidth(source.substring(with: separator), font: font)
+                desired.addAttribute(.kern, value: max(0, 2 * padding + 5 - width), range: last)
+            }
+        }
+    }
+
+    /// A long value wraps under itself, and a block list's items line up
+    /// with the values.
+    private static func applyFrontMatterIndents(
+        _ frontMatter: MarkdownFrontMatter,
+        isCollapsed: Bool,
+        to desired: NSMutableAttributedString,
+        source: NSString,
+        bodyFont: PlatformFont,
+        local: (NSRange) -> NSRange?
+    ) {
+        let font = frontMatterFont(for: bodyFont)
+        let column = frontMatterColumn(frontMatter, font: font)
+        let padding = frontMatterPillPadding(font)
+        let lines = frontMatter.properties.flatMap { property in
+            [(source.lineRange(for: property.keyRange), false)]
+                + property.itemLines.map { (source.lineRange(for: $0), true) }
+        }
+        for (line, isItem) in lines {
+            guard let localLine = local(line),
+                  let current = desired.attribute(
+                      .paragraphStyle, at: localLine.location, effectiveRange: nil
+                  ) as? NSParagraphStyle,
+                  let style = current.mutableCopy() as? NSMutableParagraphStyle else { continue }
+            if isCollapsed {
+                // Hidden lines add no space below the summary.
+                style.lineSpacing = 0
+            } else {
+                style.headIndent = isItem ? column + padding : column
+                if isItem { style.firstLineHeadIndent = column + padding }
+                style.lineSpacing = (font.pointSize * 0.35).rounded()
+                // Room for the collapse chevron beside the first row.
+                if MarkdownLivePreview.canCollapse(frontMatter),
+                   line.location == frontMatterFirstRow(frontMatter)?.line {
+                    style.tailIndent = -frontMatterChevronRoom
+                }
+            }
+            desired.addAttribute(.paragraphStyle, value: style, range: localLine)
+        }
+    }
+
+    /// Draws each row's label in place of its hidden key, and a pill behind
+    /// each list item.
+    private static func drawFrontMatter(
+        in fragment: NSTextLayoutFragment,
+        fragmentRange: NSRange,
+        text: String,
+        collapsed: [NSRange],
+        textStorage: NSTextStorage,
+        layoutManager: NSTextLayoutManager,
+        contentManager: NSTextContentManager,
+        point: CGPoint,
+        offset: CGPoint,
+        context: CGContext
+    ) {
+        let source = text as NSString
+        guard let rendered = MarkdownLivePreview.renderedFrontMatter(
+                  in: source, collapsed: collapsed),
+              NSIntersectionRange(fragmentRange, rendered.frontMatter.range).length > 0,
+              NSMaxRange(rendered.frontMatter.range) <= textStorage.length else { return }
+        let frontMatter = rendered.frontMatter
+        let width = layoutManager.textContainer.map {
+            $0.size.width - $0.lineFragmentPadding
+        } ?? 0
+        if rendered.isCollapsed {
+            guard NSLocationInRange(frontMatter.opening.location, fragmentRange),
+                  let font = textStorage.attribute(
+                      .font, at: frontMatter.opening.location, effectiveRange: nil
+                  ) as? PlatformFont,
+                  let origin = glyphPoint(at: frontMatter.opening.location, in: fragment,
+                                          fragmentStart: fragmentRange.location) else { return }
+            let summary = frontMatterSummary(frontMatter)
+            let baseline = CGPoint(x: point.x + origin.x, y: point.y + origin.y)
+            drawLabel(summary, font: font, color: secondaryTextColor,
+                      baseline: baseline, context: context)
+            drawChevron(pointingDown: false, font: font, color: secondaryTextColor,
+                        at: CGPoint(x: baseline.x + textWidth(summary, font: font) + 9,
+                                    y: baseline.y), context: context)
+            return
+        }
+        if MarkdownLivePreview.canCollapse(frontMatter),
+           let first = frontMatterFirstRow(frontMatter),
+           NSLocationInRange(first.line, fragmentRange),
+           let font = textStorage.attribute(.font, at: first.font, effectiveRange: nil)
+               as? PlatformFont,
+           let origin = glyphPoint(at: first.line, in: fragment,
+                                   fragmentStart: fragmentRange.location) {
+            drawChevron(pointingDown: true, font: font, color: tertiaryTextColor,
+                        at: CGPoint(x: point.x - fragment.layoutFragmentFrame.minX + width - 8,
+                                    y: point.y + origin.y), context: context)
+        }
+        for property in frontMatter.properties {
+            // A list below its key shows its label beside the first item;
+            // the key's own line is hidden.
+            let firstItemLine = property.items.isEmpty ? nil : property.itemLines.first
+            let labelStart = firstItemLine?.location ?? property.keyRange.location
+            let fontLocation = firstItemLine == nil ? labelStart : property.items[0].location
+            if NSLocationInRange(labelStart, fragmentRange),
+               let font = textStorage.attribute(.font, at: fontLocation, effectiveRange: nil)
+                   as? PlatformFont,
+               var origin = glyphPoint(at: labelStart, in: fragment, fragmentStart: fragmentRange.location) {
+                if firstItemLine != nil {
+                    origin.x -= frontMatterColumn(frontMatter, font: font) + frontMatterPillPadding(font)
+                }
+                drawLabel(property.label, font: font, color: secondaryTextColor,
+                          baseline: CGPoint(x: point.x + origin.x, y: point.y + origin.y),
+                          context: context)
+            }
+            for item in property.items where item.length > 0
+                && NSLocationInRange(item.location, fragmentRange) {
+                let frames = textSegmentFrames(
+                    for: item, layoutManager: layoutManager, contentManager: contentManager)
+                guard frames.count == 1, let frame = frames.first,
+                      let font = textStorage.attribute(.font, at: item.location, effectiveRange: nil)
+                        as? PlatformFont,
+                      let start = glyphPoint(at: item.location, in: fragment,
+                                             fragmentStart: fragmentRange.location) else { continue }
+                let padding = frontMatterPillPadding(font)
+                let rect = CGRect(
+                    x: frame.minX + offset.x - padding,
+                    y: point.y + start.y - font.ascender - 2,
+                    width: frame.width + 2 * padding,
+                    height: font.ascender - font.descender + 4
+                )
+                context.saveGState()
+                context.setFillColor(secondaryTextColor.withAlphaComponent(0.12).cgColor)
+                context.addPath(CGPath(roundedRect: rect, cornerWidth: 5, cornerHeight: 5, transform: nil))
+                context.fillPath()
+                context.restoreGState()
+            }
+        }
+    }
+
+    /// The baseline point before the character at `location`, in the
+    /// fragment's coordinates.
+    private static func glyphPoint(
+        at location: Int,
+        in fragment: NSTextLayoutFragment,
+        fragmentStart: Int
+    ) -> CGPoint? {
+        let index = location - fragmentStart
+        for line in fragment.textLineFragments {
+            let range = line.characterRange
+            guard index >= range.location, index < NSMaxRange(range) else { continue }
+            let bounds = line.typographicBounds
+            return CGPoint(x: bounds.minX + line.locationForCharacter(at: index).x,
+                           y: bounds.minY + line.glyphOrigin.y)
+        }
+        return nil
+    }
+
+    /// Where the first row starts, and a character with its font: a list
+    /// below its key starts at its first item, since the key line is hidden.
+    static func frontMatterFirstRow(_ frontMatter: MarkdownFrontMatter) -> (line: Int, font: Int)? {
+        guard let first = frontMatter.properties.first else { return nil }
+        if let line = first.itemLines.first, let item = first.items.first {
+            return (line.location, item.location)
+        }
+        return (first.keyRange.location, first.keyRange.location)
+    }
+
+    private static func renderedFrontMatter(
+        in textView: MarkdownTextView
+    ) -> (frontMatter: MarkdownFrontMatter, isCollapsed: Bool, storage: NSTextStorage)? {
+#if os(macOS)
+        guard let textStorage = textView.textStorage else { return nil }
+        let source = textView.string as NSString
+#else
+        let textStorage = textView.textStorage
+        let source = (textView.text ?? "") as NSString
+#endif
+        let presentation = presentationForDrawing(
+            in: textStorage, syntaxCache: textView.markdownSyntaxCache,
+            snapshot: MarkdownLivePreview.snapshot(for: textView)
+        )
+        guard let rendered = MarkdownLivePreview.renderedFrontMatter(
+            in: source, collapsed: presentation.previewRanges.collapsed) else { return nil }
+        return (rendered.frontMatter, rendered.isCollapsed, textStorage)
+    }
+
+    /// Whether a tap at `point`, in the text view's coordinates, hits the
+    /// collapsed summary or the chevron that collapses the rows.
+    static func hitsFrontMatterToggle(at point: CGPoint, in textView: MarkdownTextView) -> Bool {
+        guard let layoutManager = textView.textLayoutManager,
+              let contentManager = layoutManager.textContentManager,
+              let container = layoutManager.textContainer,
+              let rendered = renderedFrontMatter(in: textView),
+              MarkdownLivePreview.canCollapse(rendered.frontMatter),
+              let location = rendered.isCollapsed ? rendered.frontMatter.opening.location
+                  : frontMatterFirstRow(rendered.frontMatter)?.font,
+              let frame = textSegmentFrames(
+                  for: NSRange(location: location, length: 1),
+                  layoutManager: layoutManager, contentManager: contentManager
+              ).first else { return false }
+#if os(macOS)
+        let origin = textView.textContainerOrigin
+        let minimumHeight: CGFloat = 24
+#else
+        let origin = CGPoint(x: textView.textContainerInset.left, y: textView.textContainerInset.top)
+        let minimumHeight: CGFloat = 44
+#endif
+        let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+        guard abs(local.y - frame.midY) <= max(frame.height, minimumHeight) / 2 else { return false }
+        if rendered.isCollapsed {
+            let font = rendered.storage.attribute(.font, at: location, effectiveRange: nil) as? PlatformFont
+            let summary = font.map { textWidth(frontMatterSummary(rendered.frontMatter), font: $0) } ?? 0
+            return local.x <= container.lineFragmentPadding + summary + 30
+        }
+        return local.x >= container.size.width - max(frontMatterChevronRoom, minimumHeight)
+    }
+
+    /// The name of the accessibility action that collapses or expands the
+    /// front matter, while it shows as rows or collapsed.
+    static func frontMatterToggleName(in textView: MarkdownTextView) -> String? {
+        guard let rendered = renderedFrontMatter(in: textView),
+              MarkdownLivePreview.canCollapse(rendered.frontMatter) else { return nil }
+        return rendered.isCollapsed ? String(localized: "Expand Properties")
+            : String(localized: "Collapse Properties")
+    }
+
+    /// Collapses or expands front matter in every note on this device.
+    static func toggleFrontMatterCollapsed(in textView: MarkdownTextView) {
+        let key = MarkdownLivePreview.propertiesCollapsedKey
+        UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: key), forKey: key)
+        textView.markdownSyntaxCache.tableRefresh?()
+    }
+
+    /// "3 Properties", shown while front matter is collapsed.
+    static func frontMatterSummary(_ frontMatter: MarkdownFrontMatter) -> String {
+        let count = frontMatter.properties.count
+        return count == 1 ? String(localized: "1 Property")
+            : String(localized: "\(count) Properties")
+    }
+
+    /// A small disclosure chevron centred on the x-height above `baseline`.
+    private static func drawChevron(
+        pointingDown: Bool,
+        font: PlatformFont,
+        color: PlatformColor,
+        at baseline: CGPoint,
+        context: CGContext
+    ) {
+        let size = (font.pointSize * 0.32).rounded()
+        let center = CGPoint(x: baseline.x, y: baseline.y - font.xHeight / 2)
+        context.saveGState()
+        context.setStrokeColor(color.cgColor)
+        context.setLineWidth(1.5)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        if pointingDown {
+            context.move(to: CGPoint(x: center.x - size, y: center.y - size / 2))
+            context.addLine(to: CGPoint(x: center.x, y: center.y + size / 2))
+            context.addLine(to: CGPoint(x: center.x + size, y: center.y - size / 2))
+        } else {
+            context.move(to: CGPoint(x: center.x - size / 2, y: center.y - size))
+            context.addLine(to: CGPoint(x: center.x + size / 2, y: center.y))
+            context.addLine(to: CGPoint(x: center.x - size / 2, y: center.y + size))
+        }
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    private static func drawLabel(
+        _ label: String,
+        font: PlatformFont,
+        color: PlatformColor,
+        baseline: CGPoint,
+        context: CGContext
+    ) {
+        let attributed = NSAttributedString(string: label, attributes: [
+            .font: font,
+            NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
+        ])
+        let line = CTLineCreateWithAttributedString(attributed)
+        context.saveGState()
+        context.setFillColor(color.cgColor)
+        context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+        context.textPosition = baseline
+        CTLineDraw(line, context)
+        context.restoreGState()
     }
 
     /// In live preview a block ID line and the blank lines around it sit
