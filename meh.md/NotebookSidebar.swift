@@ -284,6 +284,23 @@ struct NotebookSidebar: View {
         }
     }
 
+    // The Mac open panel takes files and folders at once; iOS pickers need
+    // the choice up front, so it expands in place instead of a dialog.
+    @ViewBuilder private var importMenu: some View {
+        #if os(iOS)
+        Menu {
+            Button("Import Files…") { scene.showImport(choosingFolder: false) }
+            Button("Import Folder…") { scene.showImport(choosingFolder: true) }
+        } label: {
+            Label("Import Markdown", systemImage: "square.and.arrow.down")
+        }
+        #else
+        Button { scene.requestImport() } label: {
+            Label("Import Markdown…", systemImage: "square.and.arrow.down")
+        }
+        #endif
+    }
+
     private var applicationMenu: some View {
         Menu {
             Button {
@@ -299,10 +316,8 @@ struct NotebookSidebar: View {
             .accessibilityIdentifier("notebook-select-items")
             NotebookSortMenu(scene: scene, parentID: nil)
                 .accessibilityIdentifier("notebook-sort-root")
-            Button { scene.requestImport() } label: {
-                Label("Import Markdown…", systemImage: "square.and.arrow.down")
-            }
-            .accessibilityIdentifier("notebook-import-browser")
+            importMenu
+                .accessibilityIdentifier("notebook-import-browser")
             Divider()
             browserUndoActions
             // Window management comes after the everyday notebook actions.
