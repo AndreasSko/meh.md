@@ -100,9 +100,20 @@ enum MarkdownTableEditing {
         case .tableDeleteRow:
             guard position.row > 0 else { return nil }
             let row = position.table.rows[position.row - 1]
+            // Without a row below, the caret moves to the row above instead
+            // of leaving the table.
+            guard position.row == position.table.rows.count else {
+                return MarkdownEditingChange(
+                    range: row.range, replacement: "",
+                    selection: NSRange(location: row.range.location, length: 0)
+                )
+            }
+            let above = position.row == 1
+                ? position.table.header : position.table.rows[position.row - 2]
+            let cell = above.cells[min(position.column, above.cells.count - 1)]
             return MarkdownEditingChange(
                 range: row.range, replacement: "",
-                selection: NSRange(location: row.range.location, length: 0)
+                selection: NSRange(location: cell.location, length: 0)
             )
         case .tableDeleteColumn:
             guard position.table.header.cells.count > 1 else { return nil }

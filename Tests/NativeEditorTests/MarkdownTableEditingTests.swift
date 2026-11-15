@@ -88,6 +88,23 @@ final class MarkdownTableEditingTests: XCTestCase {
         ))
     }
 
+    /// Deleting the last row keeps the caret in the table, on the row above.
+    func testDeletingLastRowKeepsCaretInRowAbove() throws {
+        let text = "| A | B |\n| --- | --- |\n| x | y |\n| z | w |\n\nAfter"
+        let last = (text as NSString).range(of: "w")
+        let deleted = try XCTUnwrap(MarkdownTableEditing.change(
+            for: .tableDeleteRow, text: text, selection: last
+        ))
+        let updated = apply(deleted, to: text)
+        XCTAssertEqual(updated, "| A | B |\n| --- | --- |\n| x | y |\n\nAfter")
+        XCTAssertEqual(deleted.selection.location, (updated as NSString).range(of: "y").location)
+        let only = "| A | B |\n| --- | --- |\n| x | y |"
+        let single = try XCTUnwrap(MarkdownTableEditing.change(
+            for: .tableDeleteRow, text: only, selection: (only as NSString).range(of: "x")
+        ))
+        XCTAssertEqual(single.selection.location, 2)
+    }
+
     func testColumnsPreserveUnicodeEscapesAndAlignments() throws {
         let cell = (source as NSString).range(of: "🪐")
         let added = try XCTUnwrap(MarkdownTableEditing.change(
