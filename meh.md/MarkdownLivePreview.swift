@@ -292,7 +292,7 @@ enum MarkdownLivePreview {
             return linkMarkerRanges(for: span.range, in: source)
         case .escape:
             return [span.range]
-        case .listMarker, .taskMarker, .blockquote, .blockquoteMarker, .rule:
+        case .listMarker, .taskMarker, .blockquote, .blockquoteMarker, .rule, .blockID:
             return []
         }
     }
