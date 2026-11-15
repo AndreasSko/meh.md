@@ -279,11 +279,17 @@ struct MarkdownTableLayout {
         )
     }
 
-    /// iOS puts the gap before a table into the header's fragment, above
-    /// its line. A row's box sits at the bottom of its fragment, so the
-    /// header still meets the first row.
-    static func rowMinY(in fragmentFrame: CGRect, row: Row) -> CGFloat {
-        fragmentFrame.maxY - row.height
+    /// A row's box sits on its fragment's first line. iOS puts the gap
+    /// before a table above the header's line, and the note's last
+    /// fragment also holds the empty line after a final line break. Both
+    /// stay outside the box, so rows meet whether or not the table ends
+    /// the note.
+    static func rowMinY(in fragment: NSTextLayoutFragment, row: Row) -> CGFloat {
+        let frame = fragment.layoutFragmentFrame
+        guard let line = fragment.textLineFragments.first else {
+            return frame.maxY - row.height
+        }
+        return frame.minY + line.typographicBounds.maxY - row.height
     }
 
     func draw(
@@ -303,7 +309,7 @@ struct MarkdownTableLayout {
         guard let row = rows.first(where: { $0.range.location == location }) else { return }
         let rect = CGRect(
             x: origin.x + lineFragmentPadding,
-            y: origin.y + Self.rowMinY(in: fragment.layoutFragmentFrame, row: row),
+            y: origin.y + Self.rowMinY(in: fragment, row: row),
             width: width, height: row.height
         )
         context.saveGState()

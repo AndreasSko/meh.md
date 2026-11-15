@@ -9,9 +9,16 @@ import UIKit
 final class MarkdownTableRowSpacingTests: XCTestCase {
     /// The hidden `| --- |` line sits between the header and the first row.
     /// It must not leave a visible gap between their drawn boxes.
+    /// The note's last fragment also holds the empty line after the final
+    /// line break, so a table that ends the note checks its last row too.
     func testHeaderMeetsFirstRow() throws {
-        let source = "Before\n\n| Day | What |\n| --- | --- |\n| Thu | Tram |\n| Fri | Belém |\n\nAfter"
-        for size in [13.0, 17.0, 24.0] {
+        let table = "| Day | What |\n| --- | --- |\n| Thu | Tram |\n| Fri | Belém |\n"
+        for (source, size) in [
+            ("Before\n\n" + table + "\nAfter", 13.0),
+            ("Before\n\n" + table + "\nAfter", 17.0),
+            ("Before\n\n" + table + "\nAfter", 24.0),
+            ("Before\n\n" + table, 17.0),
+        ] {
             let view = MarkdownTextView(usingTextLayoutManager: true)
             view.frame = CGRect(x: 0, y: 0, width: 402, height: 600)
             view.text = source
@@ -33,13 +40,13 @@ final class MarkdownTableRowSpacingTests: XCTestCase {
             )
             XCTAssertEqual(layout.rows.count, 3)
 
-            var frames: [Int: CGRect] = [:]
+            var frames: [Int: NSTextLayoutFragment] = [:]
             manager.enumerateTextLayoutFragments(
                 from: content.documentRange.location, options: [.ensuresLayout]
             ) { fragment in
                 let start = content.offset(from: content.documentRange.location,
                                            to: fragment.rangeInElement.location)
-                frames[start] = fragment.layoutFragmentFrame
+                frames[start] = fragment
                 return true
             }
             let header = layout.rows[0], first = layout.rows[1], second = layout.rows[2]
@@ -56,7 +63,8 @@ final class MarkdownTableRowSpacingTests: XCTestCase {
             XCTAssertEqual(headerTop + header.height, firstTop,
                            accuracy: tolerance, "header at \(size) pt")
             // The gap before the table stays above the header box.
-            XCTAssertGreaterThan(headerTop, headerFrame.minY, "gap at \(size) pt")
+            XCTAssertGreaterThan(headerTop, headerFrame.layoutFragmentFrame.minY,
+                                 "gap at \(size) pt")
         }
     }
 }
