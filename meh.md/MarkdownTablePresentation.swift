@@ -317,12 +317,16 @@ struct MarkdownTableLayout {
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
         defer { NSGraphicsContext.restoreGraphicsState() }
         let border = NSColor.separatorColor
-        let fill = NSColor.quaternaryLabelColor.withAlphaComponent(0.08)
+        // A shade of the text color, so the header reads as part of the paper.
+        let fill = NSColor.textColor.withAlphaComponent(0.045)
+        let accent = NSColor.controlAccentColor
 #else
         UIGraphicsPushContext(context)
         defer { UIGraphicsPopContext() }
         let border = UIColor.separator
-        let fill = UIColor.secondarySystemBackground
+        // A shade of the text color, so the header reads as part of the paper.
+        let fill = UIColor.label.withAlphaComponent(0.045)
+        let accent = UIColor.tintColor
 #endif
         let contentWidth = row.contentWidth
         let maximumOffset = contentWidth > width + 0.5 ? contentWidth - width : 0
@@ -342,6 +346,7 @@ struct MarkdownTableLayout {
         context.setLineWidth(0.5)
         context.stroke(contentRect.insetBy(dx: 0.25, dy: 0.25))
         var columnX = contentRect.minX
+        var activeRect: CGRect?
         for (index, cell) in row.cells.enumerated() {
             let x = columnX
             let columnWidth = row.columnWidths[index]
@@ -353,6 +358,9 @@ struct MarkdownTableLayout {
             let cellRect = CGRect(x: x + padding, y: rect.minY + padding,
                                   width: columnWidth - 2 * padding,
                                   height: row.height - 2 * padding - indicatorHeight)
+            if activeCell?.rowRange == row.range, activeCell?.column == index {
+                activeRect = CGRect(x: x, y: rect.minY, width: columnWidth, height: row.height)
+            }
             context.saveGState()
             context.clip(to: cellRect)
             if activeCell?.rowRange != row.range || activeCell?.column != index {
@@ -360,6 +368,14 @@ struct MarkdownTableLayout {
             }
             context.restoreGState()
             columnX += columnWidth
+        }
+        if let activeRect {
+            // The edited cell is outlined on top of the grid, as in Numbers.
+            context.setFillColor(accent.withAlphaComponent(0.08).cgColor)
+            context.fill(activeRect)
+            context.setStrokeColor(accent.cgColor)
+            context.setLineWidth(1.5)
+            context.stroke(activeRect.insetBy(dx: 0.75, dy: 0.75))
         }
     }
 }
