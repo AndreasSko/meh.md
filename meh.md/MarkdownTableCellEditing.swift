@@ -121,8 +121,19 @@ enum MarkdownTableCellEditing {
                                      row: priorTarget.row,
                                      column: priorTarget.column)
         else { return nil }
-        let prefix = priorTarget.insertionPrefix.utf16.count
         let replacement = change.replacement as NSString
+        // A change that replaced an empty cell's spaces added one on each side.
+        // In `||` there are no spaces, so the change range alone can't tell;
+        // only padded text ends right at the closing pipe.
+        let end = change.range.location + replacement.length
+        let padded = priorTarget.insertionPrefix.isEmpty
+            && (change.range != priorTarget.contentRange
+                || priorTarget.contentRange.length == 0
+                    && replacement.length >= 2
+                    && replacement.hasPrefix(" ") && replacement.hasSuffix(" ")
+                    && end < (source as NSString).length
+                    && (source as NSString).character(at: end) == 124)
+        let prefix = padded ? 1 : priorTarget.insertionPrefix.utf16.count
         // Preserve normalization padding in ordinary cells. A trailing space
         // after a backslash may also have been explicitly typed by the user.
         let suffix = prefix > 0 ? 1 : 0
@@ -150,6 +161,20 @@ enum MarkdownTableCellEditing {
                 target.contentRange, in: parsedTarget, text: text
               ) == target else { return nil }
         let normalized = normalize(replacement, selection: selection)
+        // An empty cell's parsed range sits just before its closing pipe.
+        // Text typed there replaces the cell's spaces, so it reads
+        // `| text |`. A range kept from earlier typing keeps its spaces.
+        if parsedTarget == target, target.insertionPrefix.isEmpty,
+           target.contentRange.length == 0, !normalized.text.isEmpty,
+           let raw = rawCellRange(target, source: source) {
+            return MarkdownEditingChange(
+                range: raw,
+                replacement: " " + normalized.text + " ",
+                selection: NSRange(location: raw.location + 1
+                                    + normalized.selection.location,
+                                   length: normalized.selection.length)
+            )
+        }
         let prefix = target.insertionPrefix
         let end = NSMaxRange(target.contentRange)
         let normalizedSource = normalized.text as NSString

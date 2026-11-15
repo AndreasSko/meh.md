@@ -41,7 +41,9 @@ final class MarkdownTableCellEditingTests: XCTestCase {
         XCTAssertEqual(MarkdownSyntax.parse(updated).tables.count, 1)
     }
 
-    func testEmptyCellInsertsWithoutRemovingWhitespace() throws {
+    /// Text typed into an empty cell replaces its spaces, so the source
+    /// reads `| value |` rather than `|   value|`.
+    func testEmptyCellInsertsBetweenSingleSpaces() throws {
         let target = try cell(text, row: 1, column: 2)
         XCTAssertEqual(target.contentRange.length, 0)
         XCTAssertEqual(MarkdownTableCellEditing.target(
@@ -51,8 +53,42 @@ final class MarkdownTableCellEditingTests: XCTestCase {
             text: text, target: target, replacement: "value",
             selection: NSRange(location: 5, length: 0)
         ))
-        XCTAssertEqual(applying(change, to: text),
-                       text.replacingOccurrences(of: "|   |", with: "|   value|"))
+        let updated = applying(change, to: text)
+        XCTAssertEqual(updated,
+                       text.replacingOccurrences(of: "|   |", with: "| value |"))
+        let next = try XCTUnwrap(MarkdownTableCellEditing.targetAfter(
+            change: change, priorTarget: target, source: updated
+        ))
+        XCTAssertEqual(MarkdownTableCellEditing.text(in: updated, target: next),
+                       "value")
+        XCTAssertEqual(change.selection.location, NSMaxRange(next.contentRange))
+    }
+
+    /// `||` has no spaces to replace, and the padding still stays out of
+    /// the cell's text, also after the next edit.
+    func testCellWithoutSpacesInsertsBetweenSingleSpaces() throws {
+        let source = "| A | B |\n| --- | --- |\n||x|\n"
+        let target = try cell(source, row: 1, column: 0)
+        let change = try XCTUnwrap(MarkdownTableCellEditing.change(
+            text: source, target: target, replacement: "a",
+            selection: NSRange(location: 1, length: 0)
+        ))
+        let updated = applying(change, to: source)
+        XCTAssertEqual(updated, "| A | B |\n| --- | --- |\n| a |x|\n")
+        let next = try XCTUnwrap(MarkdownTableCellEditing.targetAfter(
+            change: change, priorTarget: target, source: updated
+        ))
+        XCTAssertEqual(MarkdownTableCellEditing.text(in: updated, target: next), "a")
+        let second = try XCTUnwrap(MarkdownTableCellEditing.change(
+            text: updated, target: next, replacement: "ab",
+            selection: NSRange(location: 2, length: 0)
+        ))
+        let final = applying(second, to: updated)
+        XCTAssertEqual(final, "| A | B |\n| --- | --- |\n| ab |x|\n")
+        let last = try XCTUnwrap(MarkdownTableCellEditing.targetAfter(
+            change: second, priorTarget: next, source: final
+        ))
+        XCTAssertEqual(MarkdownTableCellEditing.text(in: final, target: last), "ab")
     }
 
     func testRaggedCellMaterializesOnlyMissingSeparators() throws {
