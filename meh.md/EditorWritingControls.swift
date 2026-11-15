@@ -1172,13 +1172,27 @@ struct EditorKeyboardToolbar: View {
         }
         // iPad shows every command when the editor column has room; the
         // bar still never reaches past the column (see alignWithEditor).
-        .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? .infinity : 520)
+        .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad
+               ? KeyboardToolbarLayout.contentWidth : 520)
         .frame(height: 50)
         .background {
             Capsule().fill(.clear).glassEffect(.regular, in: .capsule)
         }
         .padding(.horizontal, 8)
         .modifier(TableDeletionConfirmation(pending: $pendingDeletion))
+    }
+}
+
+private enum KeyboardToolbarLayout {
+    static let itemWidth: CGFloat = 44
+    // Horizontal flow layouts space columns by line spacing.
+    static let spacing: CGFloat = 10
+    static let inset: CGFloat = 12
+
+    /// Every command at once, so a wide editor doesn't stretch the bar.
+    static var contentWidth: CGFloat {
+        let count = CGFloat(KeyboardCommandDefinition.all.count)
+        return count * itemWidth + (count - 1) * spacing + 2 * inset
     }
 }
 
@@ -1197,10 +1211,13 @@ private struct KeyboardToolbarCollection: UIViewRepresentable {
     func makeUIView(context: Context) -> UICollectionView {
         let layout = UICollectionViewFlowLayout()
         layout.scrollDirection = .horizontal
-        layout.itemSize = CGSize(width: 44, height: 44)
-        layout.minimumLineSpacing = 10
+        layout.itemSize = CGSize(width: KeyboardToolbarLayout.itemWidth, height: 44)
+        layout.minimumLineSpacing = KeyboardToolbarLayout.spacing
         layout.minimumInteritemSpacing = 12
-        layout.sectionInset = UIEdgeInsets(top: 3, left: 12, bottom: 3, right: 12)
+        layout.sectionInset = UIEdgeInsets(
+            top: 3, left: KeyboardToolbarLayout.inset,
+            bottom: 3, right: KeyboardToolbarLayout.inset
+        )
 
         let view = KeyboardToolbarCollectionView(
             frame: .zero, collectionViewLayout: layout
