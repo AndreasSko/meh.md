@@ -40,8 +40,7 @@ struct MarkdownTableLayout {
         hiddenRanges: [NSRange],
         bodyFont: PlatformFont,
         width: CGFloat,
-        activeCell: MarkdownTableCellEditing.Target? = nil,
-        activeColumnWidths: [CGFloat]? = nil
+        activeCell: MarkdownTableCellEditing.Target? = nil
     ) -> MarkdownTableLayout {
         let source = text as NSString
         let presentation = MarkdownRenderingPresentation(result: result, hiddenRanges: [])
@@ -80,13 +79,11 @@ struct MarkdownTableLayout {
                     )
                 }
             }
-            let calculatedWidths = widths(
+            // Columns follow the active cell's text as it is typed.
+            let columnWidths = widths(
                 for: styledRows, viewportWidth: viewportWidth,
                 fontSize: bodyFont.pointSize, padding: padding
             )
-            let columnWidths = activeCell?.tableRange == table.range
-                && activeColumnWidths?.count == calculatedWidths.count
-                ? activeColumnWidths! : calculatedWidths
             let contentWidth = columnWidths.reduce(0, +)
             let overflows = contentWidth > viewportWidth + 0.5
             for (index, row) in sourceRows.enumerated() {
@@ -279,11 +276,23 @@ struct MarkdownTableLayout {
         )
     }
 
-    /// iOS puts the gap before a table into the header's fragment, above
-    /// its line. A row's box sits at the bottom of its fragment, so the
-    /// header still meets the first row.
-    static func rowMinY(in fragmentFrame: CGRect, row: Row) -> CGFloat {
-        fragmentFrame.maxY - row.height
+    /// A row's box sits on its fragment's first line. iOS puts the gap
+    /// before a table above the header's line, and the note's last
+    /// fragment also holds the empty line after a final line break. Both
+    /// stay outside the box, so rows meet whether or not the table ends
+    /// the note.
+    /// The grid starts one cell padding left of the text, so cell text
+    /// lines up with the body text around the table.
+    func leadingX(lineFragmentPadding: CGFloat) -> CGFloat {
+        lineFragmentPadding - padding
+    }
+
+    static func rowMinY(in fragment: NSTextLayoutFragment, row: Row) -> CGFloat {
+        let frame = fragment.layoutFragmentFrame
+        guard let line = fragment.textLineFragments.first else {
+            return frame.maxY - row.height
+        }
+        return frame.minY + line.typographicBounds.maxY - row.height
     }
 
     func draw(
@@ -302,8 +311,8 @@ struct MarkdownTableLayout {
         )
         guard let row = rows.first(where: { $0.range.location == location }) else { return }
         let rect = CGRect(
-            x: origin.x + lineFragmentPadding,
-            y: origin.y + Self.rowMinY(in: fragment.layoutFragmentFrame, row: row),
+            x: origin.x + leadingX(lineFragmentPadding: lineFragmentPadding),
+            y: origin.y + Self.rowMinY(in: fragment, row: row),
             width: width, height: row.height
         )
         context.saveGState()
@@ -314,12 +323,16 @@ struct MarkdownTableLayout {
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
         defer { NSGraphicsContext.restoreGraphicsState() }
         let border = NSColor.separatorColor
-        let fill = NSColor.quaternaryLabelColor.withAlphaComponent(0.08)
+        // A shade of the text color, so the header reads as part of the paper.
+        let fill = NSColor.textColor.withAlphaComponent(0.045)
+        let accent = NSColor.controlAccentColor
 #else
         UIGraphicsPushContext(context)
         defer { UIGraphicsPopContext() }
         let border = UIColor.separator
-        let fill = UIColor.secondarySystemBackground
+        // A shade of the text color, so the header reads as part of the paper.
+        let fill = UIColor.label.withAlphaComponent(0.045)
+        let accent = UIColor.tintColor
 #endif
         let contentWidth = row.contentWidth
         let maximumOffset = contentWidth > width + 0.5 ? contentWidth - width : 0
@@ -339,6 +352,7 @@ struct MarkdownTableLayout {
         context.setLineWidth(0.5)
         context.stroke(contentRect.insetBy(dx: 0.25, dy: 0.25))
         var columnX = contentRect.minX
+        var activeRect: CGRect?
         for (index, cell) in row.cells.enumerated() {
             let x = columnX
             let columnWidth = row.columnWidths[index]
@@ -350,6 +364,9 @@ struct MarkdownTableLayout {
             let cellRect = CGRect(x: x + padding, y: rect.minY + padding,
                                   width: columnWidth - 2 * padding,
                                   height: row.height - 2 * padding - indicatorHeight)
+            if activeCell?.rowRange == row.range, activeCell?.column == index {
+                activeRect = CGRect(x: x, y: rect.minY, width: columnWidth, height: row.height)
+            }
             context.saveGState()
             context.clip(to: cellRect)
             if activeCell?.rowRange != row.range || activeCell?.column != index {
@@ -357,6 +374,14 @@ struct MarkdownTableLayout {
             }
             context.restoreGState()
             columnX += columnWidth
+        }
+        if let activeRect {
+            // The edited cell is outlined on top of the grid, as in Numbers.
+            context.setFillColor(accent.withAlphaComponent(0.08).cgColor)
+            context.fill(activeRect)
+            context.setStrokeColor(accent.cgColor)
+            context.setLineWidth(1.5)
+            context.stroke(activeRect.insetBy(dx: 0.75, dy: 0.75))
         }
     }
 }

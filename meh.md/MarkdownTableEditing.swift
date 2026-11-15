@@ -13,14 +13,16 @@ enum MarkdownTableEditing {
     static func availableCommands(
         text: String,
         selection: NSRange,
-        syntax: MarkdownSyntaxResult? = nil
+        syntax: MarkdownSyntaxResult? = nil,
+        column: Int? = nil
     ) -> Set<MarkdownEditingCommand> {
         let source = text as NSString
         let selection = MarkdownEditingRules.tableSafeSelection(selection,
                                                                 in: source)
         let parsed = syntax ?? MarkdownSyntax.parse(text)
         guard let position = position(
-            selection, source: source, tables: parsed.tables
+            selection, source: source, tables: parsed.tables,
+            column: column
         ) else {
             return canInsert(at: selection, source: source, syntax: parsed)
                 ? [.insertTable] : []
@@ -45,7 +47,8 @@ enum MarkdownTableEditing {
     static func currentAlignment(
         text: String,
         selection: NSRange,
-        syntax: MarkdownSyntaxResult? = nil
+        syntax: MarkdownSyntaxResult? = nil,
+        column: Int? = nil
     ) -> MarkdownTableAlignment? {
         let source = text as NSString
         let safeSelection = MarkdownEditingRules.tableSafeSelection(
@@ -53,7 +56,8 @@ enum MarkdownTableEditing {
         )
         let parsed = syntax ?? MarkdownSyntax.parse(text)
         guard let position = position(
-            safeSelection, source: source, tables: parsed.tables
+            safeSelection, source: source, tables: parsed.tables,
+            column: column
         ) else { return nil }
         return position.table.alignments[position.column]
     }
@@ -61,7 +65,8 @@ enum MarkdownTableEditing {
     static func change(
         for command: MarkdownEditingCommand,
         text: String,
-        selection: NSRange
+        selection: NSRange,
+        column: Int? = nil
     ) -> MarkdownEditingChange? {
         let source = text as NSString
         let selection = MarkdownEditingRules.tableSafeSelection(selection,
@@ -74,7 +79,8 @@ enum MarkdownTableEditing {
             return insertTable(in: source, selection: selection)
         }
         guard let position = position(
-            selection, source: source, tables: parsed.tables
+            selection, source: source, tables: parsed.tables,
+            column: column
         ) else { return nil }
         switch command {
         case .tableRowAbove:
@@ -94,9 +100,20 @@ enum MarkdownTableEditing {
         case .tableDeleteRow:
             guard position.row > 0 else { return nil }
             let row = position.table.rows[position.row - 1]
+            // Without a row below, the caret moves to the row above instead
+            // of leaving the table.
+            guard position.row == position.table.rows.count else {
+                return MarkdownEditingChange(
+                    range: row.range, replacement: "",
+                    selection: NSRange(location: row.range.location, length: 0)
+                )
+            }
+            let above = position.row == 1
+                ? position.table.header : position.table.rows[position.row - 2]
+            let cell = above.cells[min(position.column, above.cells.count - 1)]
             return MarkdownEditingChange(
                 range: row.range, replacement: "",
-                selection: NSRange(location: row.range.location, length: 0)
+                selection: NSRange(location: cell.location, length: 0)
             )
         case .tableDeleteColumn:
             guard position.table.header.cells.count > 1 else { return nil }
@@ -115,11 +132,12 @@ enum MarkdownTableEditing {
     private static func position(
         _ selection: NSRange,
         source: NSString,
-        tables: [MarkdownTable]
+        tables: [MarkdownTable],
+        column override: Int? = nil
     ) -> Position? {
         for table in tables {
             let count = table.header.cells.count
-            guard count > 0,
+            guard count > 0, (override ?? 0) < count,
                   selection.location >= table.range.location,
                   NSMaxRange(selection) <= NSMaxRange(table.range),
                   (selection.location < NSMaxRange(table.range)
@@ -140,7 +158,8 @@ enum MarkdownTableEditing {
                             && NSMaxRange(selection) <= NSMaxRange($0)
                     }), column < count else { return nil }
                     return Position(table: table, row: rowIndex,
-                                    column: column, selection: selection)
+                                    column: override ?? column,
+                                    selection: selection)
                 }
                 let caret = selection.location
                 // Separators and whitespace belong to the preceding cell.
@@ -150,7 +169,7 @@ enum MarkdownTableEditing {
                 })?.offset ?? 0
                 guard column < count else { return nil }
                 return Position(table: table, row: rowIndex,
-                                column: column,
+                                column: override ?? column,
                                 selection: selection)
             }
         }

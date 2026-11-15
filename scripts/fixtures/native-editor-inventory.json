@@ -144,7 +144,7 @@
     "MarkdownTableAccessibilityTests/testModelExposesRenderedTextHeadersAndCellGeometry()",
     "MarkdownTableCellEditingTests/testCellReplacementPreservesPaddingCRLFAndUntouchedBytes()",
     "MarkdownTableCellEditingTests/testCrossCellSelectionAndStaleTargetsAreRejected()",
-    "MarkdownTableCellEditingTests/testEmptyCellInsertsWithoutRemovingWhitespace()",
+    "MarkdownTableCellEditingTests/testEmptyCellInsertsBetweenSingleSpaces()",
     "MarkdownTableCellEditingTests/testMissingCellWithoutOuterPipesPreservesLineEnding()",
     "MarkdownTableCellEditingTests/testPasteEscapesBarePipesAndFlattensEachLineBreak()",
     "MarkdownTableCellEditingTests/testRaggedCellMaterializesOnlyMissingSeparators()",

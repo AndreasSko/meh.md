@@ -204,7 +204,7 @@ private final class MarkdownTableOverlayController: NSObject {
             y: textView.textContainerInset.top
         )
 #endif
-        let x = origin.x + container.lineFragmentPadding
+        let x = origin.x + layout.leadingX(lineFragmentPadding: container.lineFragmentPadding)
         let rowByLocation = Dictionary(
             uniqueKeysWithValues: layout.rows.map { ($0.range.location, $0) }
         )
@@ -221,7 +221,7 @@ private final class MarkdownTableOverlayController: NSObject {
                 framesByTable[row.tableRange, default: [:]][location] = CGRect(
                     x: x,
                     y: origin.y + MarkdownTableLayout.rowMinY(
-                        in: fragment.layoutFragmentFrame, row: row
+                        in: fragment, row: row
                     ),
                     width: layout.width,
                     height: row.height

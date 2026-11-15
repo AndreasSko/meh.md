@@ -62,7 +62,7 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
         capture(app, name: "Edited cell with table still rendered")
     }
 
-    func testTableMenuLabelsCancelDeletionAndKeepCellFocus() throws {
+    func testTableMenuLabelsDeleteAndKeepCellFocus() throws {
         let (app, editor) = launchFixture()
         let cellEditor = activateFirstBodyCell(in: app)
         let menu = toolbarButton("editor-table-menu", in: app)
@@ -79,32 +79,16 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
         }
         capture(app, name: "Readable column alignment choices")
         menuAction("Align Left", in: app).tap()
-        tableCommand("editor-command-table-delete-row", in: app).tap()
-        let rowPrompt = app.sheets["Delete row?"].firstMatch
-        XCTAssertTrue(rowPrompt.waitForExistence(timeout: 5))
         XCTAssertEqual(editor.value as? String, source)
-        capture(app, name: "Delete table row requires confirmation")
-        cancelDeletion(in: app, prompt: rowPrompt)
-        XCTAssertEqual(editor.value as? String, source)
-        XCTAssertTrue(cellEditor.isHittable)
-        XCTAssertTrue(app.keyboards.firstMatch.exists)
         cellEditor.typeText("!")
         XCTAssertTrue(waitForSource(editor) {
             $0 != self.source && $0.replacingOccurrences(of: "!", with: "") == self.source
         })
-        let beforeColumnCancel = editor.value as? String
-        tableCommand("editor-command-table-delete-column", in: app).tap()
-        let columnPrompt = app.sheets["Delete column?"].firstMatch
-        XCTAssertTrue(columnPrompt.waitForExistence(timeout: 5))
-        cancelDeletion(in: app, prompt: columnPrompt)
-        XCTAssertTrue(cellEditor.isHittable)
         let beforeRowDeletion = try XCTUnwrap(editor.value as? String)
-        XCTAssertEqual(beforeRowDeletion, beforeColumnCancel)
 
+        // Deleting needs no confirmation; Undo brings the row back.
         tableCommand("editor-command-table-delete-row", in: app).tap()
-        let delete = app.buttons["Delete Row"].firstMatch
-        XCTAssertTrue(delete.waitForExistence(timeout: 5))
-        delete.tap()
+        XCTAssertFalse(app.sheets.firstMatch.exists)
         var expectedLines = beforeRowDeletion.components(separatedBy: "\n")
         expectedLines.remove(at: 2)
         let expected = expectedLines.joined(separator: "\n")
@@ -380,20 +364,6 @@ final class MarkdownRenderedTableEditingUITests: XCTestCase {
             menuAction("Column Alignment", in: app).tap()
         }
         return menuAction(titles[identifier] ?? identifier, in: app)
-    }
-
-    private func cancelDeletion(in app: XCUIApplication, prompt: XCUIElement) {
-        let cancel = app.buttons["Cancel"].firstMatch
-        if cancel.exists { cancel.tap() }
-        else {
-            // UIKit presents this confirmation as a popover on iOS 27.
-            // Its native cancellation is a tap on the surrounding backdrop.
-            let point = app.coordinate(withNormalizedOffset: .zero).withOffset(
-                CGVector(dx: app.frame.midX, dy: max(app.frame.minY + 20, prompt.frame.minY - 30))
-            )
-            point.tap()
-        }
-        XCTAssertTrue(prompt.waitForNonExistence(timeout: 5))
     }
 
     private func menuAction(_ title: String, in app: XCUIApplication) -> XCUIElement {

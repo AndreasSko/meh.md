@@ -72,7 +72,8 @@ enum MarkdownEditingRules {
         for command: MarkdownEditingCommand,
         text: String,
         selection: NSRange,
-        syntaxResult: MarkdownSyntaxResult? = nil
+        syntaxResult: MarkdownSyntaxResult? = nil,
+        tableColumn: Int? = nil
     ) -> MarkdownEditingChange? {
         let source = text as NSString
         let selection = safeSelection(selection, in: source)
@@ -153,7 +154,8 @@ enum MarkdownEditingRules {
              .tableDeleteColumn, .tableAlignLeft, .tableAlignCenter,
              .tableAlignRight, .tableNextCell, .tablePreviousCell:
             return MarkdownTableEditing.change(
-                for: command, text: text, selection: selection
+                for: command, text: text, selection: selection,
+                column: tableColumn
             )
         }
     }

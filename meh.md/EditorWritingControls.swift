@@ -939,62 +939,16 @@ private struct TableCommandDefinition: Identifiable {
             .init(title: "Next Cell", image: "chevron.right", command: .tableNextCell),
         ],
         [
-            .init(title: "Delete Row…", image: "trash", command: .tableDeleteRow),
-            .init(title: "Delete Column…", image: "trash", command: .tableDeleteColumn),
+            .init(title: "Delete Row", image: "trash", command: .tableDeleteRow),
+            .init(title: "Delete Column", image: "trash", command: .tableDeleteColumn),
         ],
     ]
-}
-
-private struct PendingTableDeletion {
-    let command: MarkdownEditingCommand
-    let action: () -> Void
-
-    var title: LocalizedStringResource {
-        command == .tableDeleteColumn ? "Delete column?" : "Delete row?"
-    }
-
-    var buttonTitle: LocalizedStringResource {
-        command == .tableDeleteColumn ? "Delete Column" : "Delete Row"
-    }
-
-    var message: LocalizedStringResource {
-        command == .tableDeleteColumn
-            ? "The selected column and its contents will be removed."
-            : "The selected row and its contents will be removed."
-    }
-}
-
-private struct TableDeletionConfirmation: ViewModifier {
-    @Binding var pending: PendingTableDeletion?
-
-    func body(content: Content) -> some View {
-        let deletion = pending
-        content.confirmationDialog(
-            String(localized: deletion?.title ?? "Delete row?"),
-            isPresented: Binding(
-                get: { pending != nil },
-                set: { if !$0 { pending = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button(role: .destructive) {
-                deletion?.action()
-                pending = nil
-            } label: {
-                Text(deletion?.buttonTitle ?? "Delete Row")
-            }
-            Button("Cancel", role: .cancel) { pending = nil }
-        } message: {
-            Text(deletion?.message ?? "")
-        }
-    }
 }
 
 private struct EditorTableMenu: View {
     let navigation: MarkdownEditorNavigation
     var didCommit: (() -> Void)?
     var labelSize: CGSize?
-    @State private var pendingDeletion: PendingTableDeletion?
 
     var body: some View {
         Menu {
@@ -1002,20 +956,10 @@ private struct EditorTableMenu: View {
             ForEach(TableCommandDefinition.groups, id: \.first!.id) { group in
                 Section {
                     ForEach(group) { item in
+                        // Deleting needs no confirmation; Undo brings it back.
                         Button(role: item.isDestructive ? .destructive : nil) {
-                            if item.isDestructive {
-                                if let action = navigation.prepareCommand?(item.command) {
-                                    pendingDeletion = PendingTableDeletion(
-                                        command: item.command, action: {
-                                            action()
-                                            didCommit?()
-                                        }
-                                    )
-                                }
-                            } else {
-                                navigation.performCommand?(item.command)
-                                didCommit?()
-                            }
+                            navigation.performCommand?(item.command)
+                            didCommit?()
                         } label: {
                             Label {
                                 Text(item.title)
@@ -1038,7 +982,6 @@ private struct EditorTableMenu: View {
                 .frame(width: labelSize?.width, height: labelSize?.height)
         }
         .accessibilityIdentifier("editor-table-menu")
-        .modifier(TableDeletionConfirmation(pending: $pendingDeletion))
     }
 }
 
@@ -1149,7 +1092,6 @@ private nonisolated struct SymbolDragPreviewShape: Shape {
 
 struct EditorKeyboardToolbar: View {
     let navigation: MarkdownEditorNavigation
-    @State private var pendingDeletion: PendingTableDeletion?
 
     var body: some View {
         KeyboardToolbarCollection(
@@ -1159,16 +1101,7 @@ struct EditorKeyboardToolbar: View {
             snippetEntries: navigation.snippetMenu.entries,
             snippetsEnabled: navigation.snippetMenu.isEnabled
         ) { definition in
-            guard let action = navigation.prepareCommand?(definition.command) else {
-                return
-            }
-            if definition.isDestructive {
-                pendingDeletion = PendingTableDeletion(
-                    command: definition.command, action: action
-                )
-            } else {
-                action()
-            }
+            navigation.prepareCommand?(definition.command)?()
         }
         // iPad shows every command when the editor column has room; the
         // bar still never reaches past the column (see alignWithEditor).
@@ -1179,7 +1112,6 @@ struct EditorKeyboardToolbar: View {
             Capsule().fill(.clear).glassEffect(.regular, in: .capsule)
         }
         .padding(.horizontal, 8)
-        .modifier(TableDeletionConfirmation(pending: $pendingDeletion))
     }
 }
 

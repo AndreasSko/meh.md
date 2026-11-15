@@ -179,8 +179,7 @@ enum MarkdownPresentation {
         if let tableRange = syntaxCache.prepareTables(
             text: text, presentation: presentation,
             bodyFont: bodyFont, width: tableWidth,
-            activeCell: (textView as? MarkdownTextView)?.markdownCellController.target,
-            activeColumnWidths: (textView as? MarkdownTextView)?.markdownCellController.fixedColumnWidths
+            activeCell: (textView as? MarkdownTextView)?.markdownCellController.target
         ) {
             layoutRange = layoutRange.length == 0 ? tableRange
                 : NSUnionRange(layoutRange, tableRange)
@@ -347,8 +346,7 @@ enum MarkdownPresentation {
         if let tableRange = syntaxCache.prepareTables(
             text: text, presentation: presentation,
             bodyFont: bodyFont, width: tableWidth,
-            activeCell: (textView as? MarkdownTextView)?.markdownCellController.target,
-            activeColumnWidths: (textView as? MarkdownTextView)?.markdownCellController.fixedColumnWidths
+            activeCell: (textView as? MarkdownTextView)?.markdownCellController.target
         ) {
             layoutRange = layoutRange.length == 0 ? tableRange
                 : NSUnionRange(layoutRange, tableRange)
@@ -2592,8 +2590,7 @@ final class MarkdownSyntaxCache: NSObject {
     func prepareTables(
         text: String, presentation: MarkdownRenderingPresentation,
         bodyFont: PlatformFont, width: CGFloat,
-        activeCell: MarkdownTableCellEditing.Target? = nil,
-        activeColumnWidths: [CGFloat]? = nil
+        activeCell: MarkdownTableCellEditing.Target? = nil
     ) -> NSRange? {
         guard !presentation.result.tables.isEmpty || tableLayout != nil else {
             return nil
@@ -2649,7 +2646,7 @@ final class MarkdownSyntaxCache: NSObject {
         tableLayout = presentation.result.tables.isEmpty ? nil : MarkdownTableLayout.make(
             text: text, result: presentation.result,
             hiddenRanges: tableHiddenRanges, bodyFont: bodyFont, width: width,
-            activeCell: activeCell, activeColumnWidths: activeColumnWidths
+            activeCell: activeCell
         )
         tableHorizontalOffsets = retainedOffsets
         // A wider viewport can make the previous offset exceed the new limit.

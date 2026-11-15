@@ -174,14 +174,159 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         XCTAssertEqual(cell.target?.row, 2)
         XCTAssertEqual(cell.target?.column, 0)
         XCTAssertEqual(editor.string, "Star")
+        XCTAssertTrue(cell.perform(.tableNextCell))
         cell.nextRow()
         refresh(owner)
+        // Return from the last row's second cell starts the new row.
         XCTAssertEqual(cell.target?.row, 3)
         XCTAssertEqual(cell.target?.column, 0)
         XCTAssertEqual(editor.string, "")
         XCTAssertEqual(MarkdownSyntax.parse(owner.string).tables.first?.rows.count, 3)
         XCTAssertEqual(mounted.document.text, owner.string)
         XCTAssertNotNil(owner.markdownSyntaxCache.tableLayout)
+    }
+
+    /// The edited cell's row and column get handles on the grid's edges.
+    /// Their menus and the cell's context menu run table commands.
+    func testHandlesFollowTheEditedCellAndOpenTableMenus() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let cell = owner.markdownCellController
+        func handle(_ id: String) throws -> NSView {
+            try XCTUnwrap(owner.subviews.first { $0.accessibilityIdentifier() == id })
+        }
+        try begin(cell, owner: owner, row: 1, column: 1)
+        let row = try handle("markdown-table-row-handle")
+        let column = try handle("markdown-table-column-handle")
+        XCTAssertFalse(row.isHidden)
+        XCTAssertFalse(column.isHidden)
+        let table = try XCTUnwrap(owner.markdownTableScrollOverlays.first)
+        XCTAssertLessThan(row.frame.minX, table.frame.minX)
+        XCTAssertGreaterThan(row.frame.midY, table.frame.minY + table.rowFrames[1].minY)
+        XCTAssertLessThan(row.frame.midY, table.frame.minY + table.rowFrames[1].maxY)
+        let widths = table.tableRows[1].columnWidths
+        XCTAssertEqual(column.frame.midX, table.frame.minX + widths[0] + widths[1] / 2, accuracy: 1)
+        XCTAssertLessThan(column.frame.minY, table.frame.minY)
+
+        let rowMenu = cell.menu(for: .row).flatMap { $0 }
+        XCTAssertEqual(rowMenu.map(\.command), [.tableRowAbove, .tableRowBelow, .tableDeleteRow])
+        XCTAssertTrue(rowMenu.allSatisfy(\.isEnabled))
+        let columnMenu = cell.menu(for: .column).flatMap { $0 }
+        XCTAssertTrue(columnMenu.contains { $0.command == .tableAlignCenter })
+
+        let context = try XCTUnwrap(cell.editor.menu(for: NSEvent.mouseEvent(
+            with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: mounted.window.windowNumber, context: nil, eventNumber: 0,
+            clickCount: 1, pressure: 1)!))
+        let addBelow = try XCTUnwrap(context.items.first { $0.title == "Add Row Below" })
+        XCTAssertEqual(context.items.first?.title, "Add Row Above")
+        _ = (addBelow.target as? NSObject)?.perform(addBelow.action)
+        refresh(owner)
+        XCTAssertEqual(MarkdownSyntax.parse(owner.string).tables.first?.rows.count, 3)
+        XCTAssertEqual(cell.target?.row, 2)
+
+        try begin(cell, owner: owner, row: 0, column: 0)
+        XCTAssertFalse(cell.menu(for: .row).flatMap { $0 }
+            .first { $0.command == .tableDeleteRow }!.isEnabled)
+        cell.end()
+        XCTAssertTrue(row.isHidden)
+        XCTAssertTrue(column.isHidden)
+    }
+
+    /// A cell past a short row's end has no source of its own, so its
+    /// handle menus act on its column rather than the row's last cell.
+    func testHandleMenusInAShortRowUseTheEditedColumn() throws {
+        let mounted = try mount("| A | B |\n| :-- | --: |\n| short |\n")
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let cell = owner.markdownCellController
+        try begin(cell, owner: owner, row: 1, column: 1)
+        let handle = try XCTUnwrap(owner.subviews.first {
+            $0.accessibilityIdentifier() == "markdown-table-column-handle"
+        } as? NSButton)
+        XCTAssertNotNil(handle.action, "VoiceOver presses the handle")
+        let checked = cell.menu(for: .column).flatMap { $0 }.filter(\.isChecked)
+        XCTAssertEqual(checked.map(\.command), [.tableAlignRight])
+        XCTAssertTrue(cell.perform(.tableDeleteColumn))
+        refresh(owner)
+        let table = try XCTUnwrap(MarkdownSyntax.parse(owner.string).tables.first)
+        let source = owner.string as NSString
+        XCTAssertEqual(table.header.cells.map { source.substring(with: $0) }, ["A"])
+        XCTAssertEqual(table.rows.first?.cells.map { source.substring(with: $0) }, ["short"])
+    }
+
+    /// A table at the start or end of a note still lets the arrow keys
+    /// leave it: onto an existing empty last line, or onto a new line.
+    func testArrowKeysLeaveATableAtTheNoteEdges() throws {
+        let table = "| A | B |\n| --- | --- |\n| x | y |"
+        for (initial, expected, caret) in [
+            (table, table + "\n", (table as NSString).length + 1),
+            (table + "\n", table + "\n", (table as NSString).length + 1),
+        ] {
+            let mounted = try mount(initial)
+            defer { mounted.window.orderOut(nil) }
+            let cell = mounted.owner.markdownCellController
+            try begin(cell, owner: mounted.owner, row: 1, column: 0)
+            cell.editor.moveDown(nil)
+            XCTAssertFalse(cell.isActive)
+            XCTAssertEqual(mounted.owner.string, expected)
+            XCTAssertEqual(mounted.owner.selectedRange(), NSRange(location: caret, length: 0))
+            drainMainQueue()
+            XCTAssertFalse(cell.isActive)
+        }
+        let mounted = try mount(table + "\n\nAfter")
+        defer { mounted.window.orderOut(nil) }
+        let cell = mounted.owner.markdownCellController
+        try begin(cell, owner: mounted.owner, row: 0, column: 1)
+        cell.editor.moveUp(nil)
+        XCTAssertFalse(cell.isActive)
+        XCTAssertEqual(mounted.owner.string, "\n" + table + "\n\nAfter")
+        XCTAssertEqual(mounted.owner.selectedRange(), NSRange(location: 0, length: 0))
+        mounted.owner.undoManager?.undo()
+        XCTAssertEqual(mounted.owner.string, table + "\n\nAfter")
+    }
+
+    /// Arrow keys move between cells instead of showing the table as
+    /// Markdown, and leave it on the lines around it.
+    func testArrowKeysMoveBetweenCellsAndLeaveTheTable() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let cell = owner.markdownCellController
+        try begin(cell, owner: owner, row: 1, column: 0)
+        let editor = cell.editor
+        editor.moveDown(nil)
+        XCTAssertEqual(cell.target?.row, 2)
+        XCTAssertEqual(editor.string, "Star")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 0))
+        editor.moveLeft(nil)
+        XCTAssertEqual(cell.target?.column, 0)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 3, length: 0))
+        editor.moveRight(nil)
+        editor.moveRight(nil)
+        XCTAssertEqual(cell.target?.column, 1)
+        XCTAssertEqual(editor.string, "Meadow")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 0))
+        editor.moveLeft(nil)
+        XCTAssertEqual(cell.target?.column, 0)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 0))
+        editor.moveUp(nil)
+        editor.moveUp(nil)
+        XCTAssertEqual(cell.target?.row, 0)
+        XCTAssertEqual(editor.string, "Name")
+        editor.moveUp(nil)
+        XCTAssertFalse(cell.isActive)
+        XCTAssertEqual(owner.selectedRange(), NSRange(location: 6, length: 0))
+        drainMainQueue()
+        XCTAssertFalse(cell.isActive)
+        XCTAssertNotNil(owner.markdownSyntaxCache.tableLayout)
+        try begin(cell, owner: owner, row: 2, column: 1)
+        cell.editor.moveDown(nil)
+        XCTAssertFalse(cell.isActive)
+        let closing = (owner.string as NSString).range(of: "Closing")
+        XCTAssertEqual(owner.selectedRange(), NSRange(location: closing.location - 1, length: 0))
+        XCTAssertEqual(owner.string, source)
     }
 
     func testInactiveCellDoesNotHandleShortcutsFromAnotherField() throws {
@@ -507,6 +652,55 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         owner.unmarkText()
     }
 
+    /// A tap beside a row puts the caret on its leading pipe. That edits
+    /// the row's first cell instead of showing the table as Markdown.
+    func testCaretOnRowStartEditsFirstCell() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let table = try XCTUnwrap(MarkdownSyntax.parse(owner.string).tables.first)
+        owner.setSelectedRange(NSRange(location: table.rows[1].range.location, length: 0))
+        drainMainQueue()
+        refresh(owner)
+        let cell = owner.markdownCellController
+        XCTAssertTrue(cell.isActive)
+        XCTAssertEqual(cell.renderedTableRange, table.range)
+        XCTAssertEqual(owner.markdownSyntaxCache.tableLayout?.rows.count, 3)
+        XCTAssertEqual(owner.string, source)
+    }
+
+    /// Columns follow the active cell while typing instead of jumping to
+    /// their new widths when the cell is left.
+    func testActiveColumnWidensWhileTyping() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let cell = owner.markdownCellController
+        try begin(cell, owner: owner, row: 1, column: 0)
+        let before = try XCTUnwrap(owner.markdownSyntaxCache.tableLayout?.rows.first?.columnWidths)
+        cell.replaceLocal(range: NSRange(location: 4, length: 0), replacement: " and stars")
+        refresh(owner)
+        XCTAssertTrue(cell.isActive)
+        let after = try XCTUnwrap(owner.markdownSyntaxCache.tableLayout?.rows.first?.columnWidths)
+        XCTAssertGreaterThan(after[0], before[0])
+        let padding = try XCTUnwrap(owner.markdownSyntaxCache.tableLayout?.padding)
+        XCTAssertEqual(cell.editor.frame.width, after[0] - 2 * padding, accuracy: 1)
+    }
+
+    /// A selection across rows covers more than one cell, so it keeps
+    /// the source selection instead of opening a cell editor.
+    func testSelectionAcrossRowsDoesNotEditACell() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let table = try XCTUnwrap(MarkdownSyntax.parse(owner.string).tables.first)
+        let selection = NSUnionRange(table.rows[0].range, table.rows[1].range)
+        owner.setSelectedRange(selection)
+        drainMainQueue()
+        XCTAssertFalse(owner.markdownCellController.isActive)
+        XCTAssertEqual(owner.selectedRange(), selection)
+    }
+
     func testReadOnlyParentImmediatelyEndsUnmarkedActiveCell() throws {
         let mounted = try mount()
         defer { mounted.window.orderOut(nil) }
@@ -614,6 +808,12 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         let table = try XCTUnwrap(MarkdownSyntax.parse(owner.string).tables.first)
         XCTAssertTrue(cell.begin(tableRange: table.range, row: row, column: column))
         refresh(owner)
+    }
+
+    private func drainMainQueue() {
+        let drained = expectation(description: "Main queue drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 10)
     }
 
     private func refresh(_ owner: MarkdownTextView) {

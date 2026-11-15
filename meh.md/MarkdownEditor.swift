@@ -664,7 +664,8 @@ final class MarkdownTextView: NSTextView {
     }
 
     @discardableResult
-    func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
+    func performMarkdownCommand(_ command: MarkdownEditingCommand,
+                                tableColumn: Int? = nil) -> Bool {
         if markdownCellController.isActive, !markdownCellController.forwarding {
             return markdownCellController.perform(command)
         }
@@ -677,7 +678,7 @@ final class MarkdownTextView: NSTextView {
             ? markdownSyntaxCache.result(for: string) : nil
         guard let change = MarkdownEditingRules.change(
             for: command, text: string, selection: selectedRange(),
-            syntaxResult: syntaxResult
+            syntaxResult: syntaxResult, tableColumn: tableColumn
         ) else { return false }
         let expected = (string as NSString).replacingCharacters(
             in: change.range, with: change.replacement
@@ -1313,6 +1314,8 @@ struct MarkdownEditor: NSViewRepresentable {
             refreshTableCommands(in: textView)
             reportLinkSelection(in: textView)
             if parent.mode == .livePreview {
+                (textView as? MarkdownTextView)?.markdownCellController
+                    .activateRenderedTableSelection()
                 schedulePresentationRefresh(for: textView)
             }
             schedulePendingSearchMatchReveal(in: textView)
@@ -2392,7 +2395,8 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     }
 
     @discardableResult
-    func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
+    func performMarkdownCommand(_ command: MarkdownEditingCommand,
+                                tableColumn: Int? = nil) -> Bool {
         if markdownCellController.isActive, !markdownCellController.forwarding {
             return markdownCellController.perform(command)
         }
@@ -2407,7 +2411,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             ? markdownSyntaxCache.result(for: source) : nil
         guard let change = MarkdownEditingRules.change(
             for: command, text: source, selection: selectedRange,
-            syntaxResult: syntaxResult
+            syntaxResult: syntaxResult, tableColumn: tableColumn
         ) else { return false }
         let expected = ((text ?? "") as NSString).replacingCharacters(
             in: change.range, with: change.replacement
@@ -3135,6 +3139,8 @@ struct MarkdownEditor: UIViewRepresentable {
             refreshTableCommands(in: textView)
             reportLinkSelection(in: textView)
             if parent.mode == .livePreview {
+                (textView as? MarkdownTextView)?.markdownCellController
+                    .activateRenderedTableSelection()
                 schedulePresentationRefresh(for: textView)
             }
             schedulePendingSearchMatchReveal(in: textView)
@@ -3874,11 +3880,13 @@ nonisolated private final class MarkdownTextLayoutFragment:
             let verticalPadding = lineHeight * 0.3
             let marksExtension = textView.markdownHistoryChanges.isEmpty
                 ? 0 : MarkdownHistoryMarks.surfaceExtension
+            // Tables start a cell padding left of the text.
+            let leading = max(3, textView.markdownSyntaxCache.tableLayout?.padding ?? 0)
             let panelBounds = CGRect(
-                x: -fragmentFrame.minX - 3 - marksExtension,
+                x: -fragmentFrame.minX - leading - marksExtension,
                 y: -verticalPadding,
                 width: (fragment.value.textLayoutManager?.textContainer?.size.width ?? 0)
-                    + 3 + marksExtension,
+                    + leading + marksExtension,
                 height: fragmentFrame.height + 2 * verticalPadding
             )
             let sumBounds = MarkdownTimeCalculator.surfaceBounds(
