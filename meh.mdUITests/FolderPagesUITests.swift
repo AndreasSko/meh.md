@@ -188,6 +188,44 @@ final class FolderPagesUITests: XCTestCase {
         #endif
     }
 
+    /// Empty space in Files closes the page as it closes a note: first the
+    /// page, back to the note under it, then the note.
+    func testEmptySpaceClosesThePageThenTheNote() throws {
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        app.revealNotebookSidebar(timeout: 30)
+        try XCTSkipIf(isCompact(app), "Beside Files only")
+
+        let review = itemID(named: "Weekly review 2026-10-24", in: app, expanding: "Areas")
+        activate(app.staticTexts["notebook-sidebar-title-" + review])
+        XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 10))
+        // The page has a footer of its own, so find Files' one first.
+        let footer = app.descendants(matching: .any)["notebook-library-footer"]
+        XCTAssertTrue(footer.waitForExistence(timeout: 5))
+        let emptySpace = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: footer.frame.midX, dy: footer.frame.maxY + 40))
+        openFolderPage(named: "Inbox", in: app)
+        func clickEmptySpace() {
+            #if os(macOS)
+            emptySpace.click()
+            #else
+            emptySpace.tap()
+            #endif
+        }
+
+        clickEmptySpace()
+        XCTAssertTrue(app.descendants(matching: .any)["notebook-folder-page"]
+            .waitForNonExistence(timeout: 5), "A click on empty space kept the page open")
+        XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.openNoteTitle, "Weekly review 2026-10-24")
+        capture(app, name: "Page closed from empty space")
+
+        clickEmptySpace()
+        XCTAssertTrue(app.descendants(matching: .any)["notebook-empty-detail"]
+            .waitForExistence(timeout: 5))
+    }
+
     func testMacCommandClickSelectsPageRowsWithoutOpeningThem() throws {
         #if os(macOS)
         continueAfterFailure = false

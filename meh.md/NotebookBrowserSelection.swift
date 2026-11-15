@@ -97,13 +97,13 @@ nonisolated struct NotebookBrowserSelection: Equatable, Sendable {
     }
 
     /// Works like Finder: a click on empty space first drops a selection of
-    /// other rows. Returns true once only the open note is left, when the
-    /// click should close that note.
-    mutating func clickEmptySpace(openNoteID: UUID?) -> Bool {
-        let openNote: Set<UUID> = openNoteID.map { [$0] } ?? []
-        let clearsOthers = !isEmpty && selectedIDs != openNote
+    /// other rows. Returns true once only the current row is left, when the
+    /// click should close what it shows.
+    mutating func clickEmptySpace(currentID: UUID?) -> Bool {
+        let current: Set<UUID> = currentID.map { [$0] } ?? []
+        let clearsOthers = !isEmpty && selectedIDs != current
         clear()
-        return !clearsOthers && openNoteID != nil
+        return !clearsOthers && currentID != nil
     }
 
     enum Highlight: Equatable, Sendable { case none, open, selected }
