@@ -524,6 +524,24 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         XCTAssertEqual(owner.string, source)
     }
 
+    /// Columns follow the active cell while typing instead of jumping to
+    /// their new widths when the cell is left.
+    func testActiveColumnWidensWhileTyping() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let cell = owner.markdownCellController
+        try begin(cell, owner: owner, row: 1, column: 0)
+        let before = try XCTUnwrap(owner.markdownSyntaxCache.tableLayout?.rows.first?.columnWidths)
+        cell.replaceLocal(range: NSRange(location: 4, length: 0), replacement: " and stars")
+        refresh(owner)
+        XCTAssertTrue(cell.isActive)
+        let after = try XCTUnwrap(owner.markdownSyntaxCache.tableLayout?.rows.first?.columnWidths)
+        XCTAssertGreaterThan(after[0], before[0])
+        let padding = try XCTUnwrap(owner.markdownSyntaxCache.tableLayout?.padding)
+        XCTAssertEqual(cell.editor.frame.width, after[0] - 2 * padding, accuracy: 1)
+    }
+
     /// A selection across rows covers more than one cell, so it keeps
     /// the source selection instead of opening a cell editor.
     func testSelectionAcrossRowsDoesNotEditACell() throws {

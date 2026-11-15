@@ -88,7 +88,6 @@ final class MarkdownTableCellEditorController: NSObject {
     private var activationPending = false
     var onCompositionEnded: (() -> Void)?
     private var horizontalOffset: CGFloat = 0
-    private var widths: [CGFloat]?
 #if os(macOS)
     let editor = MarkdownTableNativeCellEditor(usingTextLayoutManager: true)
 #else
@@ -181,9 +180,6 @@ final class MarkdownTableCellEditorController: NSObject {
                 text: owner.markdownCellSource, table: table, row: row, column: column
               ) else { return false }
         horizontalOffset = owner.markdownTableDrawingOffsets[tableRange, default: 0]
-        widths = owner.markdownSyntaxCache.tableLayout?.rows.first(where: {
-            $0.tableRange == tableRange
-        })?.columnWidths
         target = next
         sourceSnapshot = owner.markdownCellSource
         if clip.superview == nil { owner.addSubview(clip) }
@@ -278,7 +274,6 @@ final class MarkdownTableCellEditorController: NSObject {
     func end(focusSource: Bool = false) {
         guard isActive else { return }
         target = nil
-        widths = nil
         clip.isHidden = true
         DispatchQueue.main.async { [weak owner] in
             owner?.markdownSyntaxCache.tableRefresh?()
@@ -314,7 +309,6 @@ final class MarkdownTableCellEditorController: NSObject {
     }
 
     var renderedTableRange: NSRange? { target?.tableRange }
-    var fixedColumnWidths: [CGFloat]? { isActive ? widths : nil }
 
     func synchronizeSelection() {
         guard !updating, let owner, let target, !hasMarkedText else { return }
@@ -442,7 +436,6 @@ final class MarkdownTableCellEditorController: NSObject {
         ) {
             target = next
             sourceSnapshot = owner.markdownCellSource
-            widths = nil // A structural command may change the column count.
             installText(selection: MarkdownTableCellEditing.localSelection(
                 owner.markdownCellSourceSelection, in: next
             ))

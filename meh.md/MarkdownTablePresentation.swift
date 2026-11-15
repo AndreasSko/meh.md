@@ -40,8 +40,7 @@ struct MarkdownTableLayout {
         hiddenRanges: [NSRange],
         bodyFont: PlatformFont,
         width: CGFloat,
-        activeCell: MarkdownTableCellEditing.Target? = nil,
-        activeColumnWidths: [CGFloat]? = nil
+        activeCell: MarkdownTableCellEditing.Target? = nil
     ) -> MarkdownTableLayout {
         let source = text as NSString
         let presentation = MarkdownRenderingPresentation(result: result, hiddenRanges: [])
@@ -80,13 +79,11 @@ struct MarkdownTableLayout {
                     )
                 }
             }
-            let calculatedWidths = widths(
+            // Columns follow the active cell's text as it is typed.
+            let columnWidths = widths(
                 for: styledRows, viewportWidth: viewportWidth,
                 fontSize: bodyFont.pointSize, padding: padding
             )
-            let columnWidths = activeCell?.tableRange == table.range
-                && activeColumnWidths?.count == calculatedWidths.count
-                ? activeColumnWidths! : calculatedWidths
             let contentWidth = columnWidths.reduce(0, +)
             let overflows = contentWidth > viewportWidth + 0.5
             for (index, row) in sourceRows.enumerated() {
