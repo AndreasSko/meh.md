@@ -202,15 +202,15 @@ final class NotebookBrowserSelectionTests: XCTestCase {
     func testEmptySpaceClearsOtherRowsBeforeClosingTheNote() {
         var selection = NotebookBrowserSelection()
         selection.selectAll([first, second])
-        XCTAssertFalse(selection.clickEmptySpace(openNoteID: first))
+        XCTAssertFalse(selection.clickEmptySpace(currentID: first))
         XCTAssertTrue(selection.isEmpty)
-        XCTAssertTrue(selection.clickEmptySpace(openNoteID: first))
+        XCTAssertTrue(selection.clickEmptySpace(currentID: first))
 
         selection.selectOnly(first)
-        XCTAssertTrue(selection.clickEmptySpace(openNoteID: first))
+        XCTAssertTrue(selection.clickEmptySpace(currentID: first))
         XCTAssertTrue(selection.isEmpty)
 
-        XCTAssertFalse(selection.clickEmptySpace(openNoteID: nil))
+        XCTAssertFalse(selection.clickEmptySpace(currentID: nil))
     }
 
     func testHighlightShowsTheOpenNoteUnlessItIsSelected() {

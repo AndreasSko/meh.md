@@ -465,11 +465,16 @@ extension NotebookSceneState {
     }
 
     /// Works like Finder: a click on empty space first drops a selection of
-    /// other rows, and once only the open note is left, closes that note.
+    /// other rows. Once only the current row is left, it closes what the big
+    /// side shows: a folder's page, back to the note under it, or the note.
     func clickBrowserEmptySpace() {
         guard !busy, !isCompact, !selectingItems, editingID == nil,
               !search.isPresented, !browserDrag.isSessionActive else { return }
-        guard browserSelection.clickEmptySpace(openNoteID: selectedID) else { return }
+        guard browserSelection.clickEmptySpace(currentID: currentSidebarID) else { return }
+        if pageFolderID != nil {
+            closeFolderPage()
+            return
+        }
         perform { [self] in
             try await flushEditor()
             closeSelectedNote()
