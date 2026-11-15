@@ -120,6 +120,23 @@ final class NotebookLinksUITests: XCTestCase {
         activate(app.buttons["Done"])
     }
 
+#if os(iOS)
+    func testFocusedEditorFollowsRenderedLink() throws {
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        createNote(in: app, title: "Fictional Project",
+                   body: "# Next steps\n\nReview the sample plan.")
+        // The caret ends on the next line, so the link stays rendered while
+        // the keyboard is up, as right after inserting it.
+        createNote(in: app, title: "Fictional Meeting",
+                   body: "See [[Fictional Project#Next steps|the project]].\n")
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        followFixtureLink(in: app)
+        assertTitle("Fictional Project", in: app)
+    }
+#endif
+
     func testCompactBackTransitionKeepsNoteContent() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone)
         continueAfterFailure = false

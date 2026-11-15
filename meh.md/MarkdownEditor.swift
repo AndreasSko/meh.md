@@ -2297,13 +2297,19 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         markdownState.linkPointer = interaction
     }
 
+    /// Like the Mac: a rendered link opens even while editing. A link shown
+    /// as source on the edited line takes the caret; Command opens it anyway.
     private func passiveNoteLink(at point: CGPoint,
                                  modifiers: UIKeyModifierFlags = []) -> NotebookLinkOccurrence? {
-        guard !isFirstResponder, markedTextRange == nil,
-              markdownLinkNavigation?.openLink != nil,
-              modifiers.intersection([.command, .shift, .alternate, .control]).isEmpty,
-              MarkdownLivePreview.snapshot(for: self).mode == .livePreview else { return nil }
-        return noteLink(at: point)
+        let flags = modifiers.intersection([.command, .shift, .alternate, .control])
+        guard markedTextRange == nil, markdownLinkNavigation?.openLink != nil,
+              flags.isEmpty || flags == .command,
+              let link = noteLink(at: point) else { return nil }
+        if flags == .command { return link }
+        return MarkdownLivePreview.conceals(
+            link.range, in: (text ?? "") as NSString,
+            snapshot: MarkdownLivePreview.snapshot(for: self)
+        ) ? link : nil
     }
 
     /// Match the pointer to the visible label segment under it, including
