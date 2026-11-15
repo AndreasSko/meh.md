@@ -1172,7 +1172,9 @@ struct MarkdownEditor: NSViewRepresentable {
             }
             parent.navigation?.restorePositionAndNotify = {
                 [weak self, weak textView] position, completion in
-                guard let self, let textView else { return }
+                // SwiftUI can replace this editor before a visit restores it.
+                // The caller still waits for the call to release its preview.
+                guard let self, let textView else { return completion() }
                 self.schedulePositionRestore(position, in: textView, completion: completion)
             }
             textView.markdownLinkNavigation = navigation
@@ -2297,13 +2299,19 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         markdownState.linkPointer = interaction
     }
 
+    /// Like the Mac: a rendered link opens even while editing. A link shown
+    /// as source on the edited line takes the caret; Command opens it anyway.
     private func passiveNoteLink(at point: CGPoint,
                                  modifiers: UIKeyModifierFlags = []) -> NotebookLinkOccurrence? {
-        guard !isFirstResponder, markedTextRange == nil,
-              markdownLinkNavigation?.openLink != nil,
-              modifiers.intersection([.command, .shift, .alternate, .control]).isEmpty,
-              MarkdownLivePreview.snapshot(for: self).mode == .livePreview else { return nil }
-        return noteLink(at: point)
+        let flags = modifiers.intersection([.command, .shift, .alternate, .control])
+        guard markedTextRange == nil, markdownLinkNavigation?.openLink != nil,
+              flags.isEmpty || flags == .command,
+              let link = noteLink(at: point) else { return nil }
+        if flags == .command { return link }
+        return MarkdownLivePreview.conceals(
+            link.range, in: (text ?? "") as NSString,
+            snapshot: MarkdownLivePreview.snapshot(for: self)
+        ) ? link : nil
     }
 
     /// Match the pointer to the visible label segment under it, including
@@ -2814,6 +2822,14 @@ struct MarkdownEditor: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
+        isolated deinit {
+            // A replaced editor still owes its pending restore an answer,
+            // which releases a link visit's preview. Answer after teardown.
+            if let completion = pendingPositionCompletion {
+                Task { @MainActor in completion() }
+            }
+        }
+
         var parent: MarkdownEditor
         private var displayedText: String
         private var displayedRevision: Data?
@@ -2999,7 +3015,9 @@ struct MarkdownEditor: UIViewRepresentable {
             }
             parent.navigation?.restorePositionAndNotify = {
                 [weak self, weak textView] position, completion in
-                guard let self, let textView else { return }
+                // SwiftUI can replace this editor before a visit restores it.
+                // The caller still waits for the call to release its preview.
+                guard let self, let textView else { return completion() }
                 self.schedulePositionRestore(position, in: textView, completion: completion)
             }
             parent.navigation?.captureViewportInsets = { [weak textView] in
