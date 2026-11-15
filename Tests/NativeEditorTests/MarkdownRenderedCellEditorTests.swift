@@ -507,6 +507,37 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         owner.unmarkText()
     }
 
+    /// A tap beside a row puts the caret on its leading pipe. That edits
+    /// the row's first cell instead of showing the table as Markdown.
+    func testCaretOnRowStartEditsFirstCell() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let table = try XCTUnwrap(MarkdownSyntax.parse(owner.string).tables.first)
+        owner.setSelectedRange(NSRange(location: table.rows[1].range.location, length: 0))
+        drainMainQueue()
+        refresh(owner)
+        let cell = owner.markdownCellController
+        XCTAssertTrue(cell.isActive)
+        XCTAssertEqual(cell.renderedTableRange, table.range)
+        XCTAssertEqual(owner.markdownSyntaxCache.tableLayout?.rows.count, 3)
+        XCTAssertEqual(owner.string, source)
+    }
+
+    /// A selection across rows covers more than one cell, so it keeps
+    /// the source selection instead of opening a cell editor.
+    func testSelectionAcrossRowsDoesNotEditACell() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let table = try XCTUnwrap(MarkdownSyntax.parse(owner.string).tables.first)
+        let selection = NSUnionRange(table.rows[0].range, table.rows[1].range)
+        owner.setSelectedRange(selection)
+        drainMainQueue()
+        XCTAssertFalse(owner.markdownCellController.isActive)
+        XCTAssertEqual(owner.selectedRange(), selection)
+    }
+
     func testReadOnlyParentImmediatelyEndsUnmarkedActiveCell() throws {
         let mounted = try mount()
         defer { mounted.window.orderOut(nil) }
@@ -614,6 +645,12 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         let table = try XCTUnwrap(MarkdownSyntax.parse(owner.string).tables.first)
         XCTAssertTrue(cell.begin(tableRange: table.range, row: row, column: column))
         refresh(owner)
+    }
+
+    private func drainMainQueue() {
+        let drained = expectation(description: "Main queue drained")
+        DispatchQueue.main.async { drained.fulfill() }
+        wait(for: [drained], timeout: 10)
     }
 
     private func refresh(_ owner: MarkdownTextView) {

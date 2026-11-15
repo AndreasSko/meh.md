@@ -230,7 +230,9 @@ final class MarkdownTableCellEditorController: NSObject {
         return true
     }
 
-    func activateSourceSelection() {
+    /// With `renderedSelection`, activation is dropped if the caret moved
+    /// on, such as into a table shown as Markdown, before it runs.
+    func activateSourceSelection(renderedSelection: NSRange? = nil) {
         guard !activationPending, !isActive else { return }
         activationPending = true
         DispatchQueue.main.async { [weak self] in
@@ -245,6 +247,7 @@ final class MarkdownTableCellEditorController: NSObject {
             guard owner.isFirstResponder else { return }
 #endif
             let selection = owner.markdownCellSourceSelection
+            if let renderedSelection, selection != renderedSelection { return }
             guard let target = MarkdownTableCellEditing.target(
                 text: owner.markdownCellSource, selection: selection
             ), self.begin(tableRange: target.tableRange, row: target.row, column: target.column)
@@ -253,6 +256,23 @@ final class MarkdownTableCellEditorController: NSObject {
             self.synchronizeSelection()
             self.revealEditingSelection()
         }
+    }
+
+    /// A caret that lands in a rendered table, such as after a tap beside
+    /// a row, edits that cell. Otherwise the whole table would turn into
+    /// Markdown. A table already shown as Markdown stays that way.
+    func activateRenderedTableSelection() {
+        guard !updating, !isActive, let owner else { return }
+        let selection = owner.markdownCellSourceSelection
+        guard inRenderedTable(selection) else { return }
+        activateSourceSelection(renderedSelection: selection)
+    }
+
+    private func inRenderedTable(_ selection: NSRange) -> Bool {
+        selection.length == 0
+            && owner?.markdownSyntaxCache.tableLayout?.rows.contains(where: {
+                NSLocationInRange(selection.location, $0.tableRange)
+            }) == true
     }
 
     func end(focusSource: Bool = false) {

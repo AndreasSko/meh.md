@@ -1311,6 +1311,8 @@ struct MarkdownEditor: NSViewRepresentable {
             refreshTableCommands(in: textView)
             reportLinkSelection(in: textView)
             if parent.mode == .livePreview {
+                (textView as? MarkdownTextView)?.markdownCellController
+                    .activateRenderedTableSelection()
                 schedulePresentationRefresh(for: textView)
             }
             schedulePendingSearchMatchReveal(in: textView)
@@ -3117,6 +3119,8 @@ struct MarkdownEditor: UIViewRepresentable {
             refreshTableCommands(in: textView)
             reportLinkSelection(in: textView)
             if parent.mode == .livePreview {
+                (textView as? MarkdownTextView)?.markdownCellController
+                    .activateRenderedTableSelection()
                 schedulePresentationRefresh(for: textView)
             }
             schedulePendingSearchMatchReveal(in: textView)
