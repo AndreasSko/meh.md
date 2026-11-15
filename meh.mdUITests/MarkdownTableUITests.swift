@@ -68,9 +68,6 @@ final class MarkdownTableUITests: XCTestCase {
         let beforeDelete = try XCTUnwrap(editor.value as? String)
 
         toolbarCommand("editor-command-table-delete-column", in: app).tap()
-        let delete = app.buttons["Delete Column"].firstMatch
-        XCTAssertTrue(delete.waitForExistence(timeout: 5))
-        delete.tap()
         XCTAssertTrue(waitForSource(editor) { $0 != beforeDelete })
         let finalSource = try XCTUnwrap(editor.value as? String)
         XCTAssertTrue(finalSource.hasPrefix("A fictional coastal itinerary."))
@@ -103,8 +100,8 @@ final class MarkdownTableUITests: XCTestCase {
             "editor-command-table-column-after": "Add Column Right",
             "editor-command-table-next-cell": "Next Cell",
             "editor-command-table-previous-cell": "Previous Cell",
-            "editor-command-table-delete-row": "Delete Row…",
-            "editor-command-table-delete-column": "Delete Column…",
+            "editor-command-table-delete-row": "Delete Row",
+            "editor-command-table-delete-column": "Delete Column",
             "editor-command-table-align-left": "Align Left",
             "editor-command-table-align-center": "Align Center",
             "editor-command-table-align-right": "Align Right",
