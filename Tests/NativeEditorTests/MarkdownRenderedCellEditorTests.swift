@@ -174,8 +174,10 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         XCTAssertEqual(cell.target?.row, 2)
         XCTAssertEqual(cell.target?.column, 0)
         XCTAssertEqual(editor.string, "Star")
+        XCTAssertTrue(cell.perform(.tableNextCell))
         cell.nextRow()
         refresh(owner)
+        // Return from the last row's second cell starts the new row.
         XCTAssertEqual(cell.target?.row, 3)
         XCTAssertEqual(cell.target?.column, 0)
         XCTAssertEqual(editor.string, "")

@@ -471,9 +471,10 @@ final class MarkdownTableCellEditorController: NSObject {
             guard perform(.tableRowBelow), let updated = target else { return }
             let latest = owner.markdownSyntaxCache.result(for: owner.markdownCellSource).tables
                 .first(where: { $0.range == updated.tableRange })
+            // A new row is typed from its start, like a new list item.
             if let latest {
                 _ = begin(tableRange: latest.range, row: min(current.row + 1, latest.rows.count),
-                          column: current.column)
+                          column: 0)
             }
         } else {
             _ = begin(tableRange: table.range, row: current.row + 1, column: current.column)
