@@ -664,7 +664,8 @@ final class MarkdownTextView: NSTextView {
     }
 
     @discardableResult
-    func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
+    func performMarkdownCommand(_ command: MarkdownEditingCommand,
+                                tableColumn: Int? = nil) -> Bool {
         if markdownCellController.isActive, !markdownCellController.forwarding {
             return markdownCellController.perform(command)
         }
@@ -677,7 +678,7 @@ final class MarkdownTextView: NSTextView {
             ? markdownSyntaxCache.result(for: string) : nil
         guard let change = MarkdownEditingRules.change(
             for: command, text: string, selection: selectedRange(),
-            syntaxResult: syntaxResult
+            syntaxResult: syntaxResult, tableColumn: tableColumn
         ) else { return false }
         let expected = (string as NSString).replacingCharacters(
             in: change.range, with: change.replacement
@@ -2386,7 +2387,8 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     }
 
     @discardableResult
-    func performMarkdownCommand(_ command: MarkdownEditingCommand) -> Bool {
+    func performMarkdownCommand(_ command: MarkdownEditingCommand,
+                                tableColumn: Int? = nil) -> Bool {
         if markdownCellController.isActive, !markdownCellController.forwarding {
             return markdownCellController.perform(command)
         }
@@ -2401,7 +2403,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             ? markdownSyntaxCache.result(for: source) : nil
         guard let change = MarkdownEditingRules.change(
             for: command, text: source, selection: selectedRange,
-            syntaxResult: syntaxResult
+            syntaxResult: syntaxResult, tableColumn: tableColumn
         ) else { return false }
         let expected = ((text ?? "") as NSString).replacingCharacters(
             in: change.range, with: change.replacement

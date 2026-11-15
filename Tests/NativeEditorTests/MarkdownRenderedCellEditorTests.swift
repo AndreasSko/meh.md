@@ -186,6 +186,76 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         XCTAssertNotNil(owner.markdownSyntaxCache.tableLayout)
     }
 
+    /// The edited cell's row and column get handles on the grid's edges.
+    /// Their menus and the cell's context menu run table commands.
+    func testHandlesFollowTheEditedCellAndOpenTableMenus() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let cell = owner.markdownCellController
+        func handle(_ id: String) throws -> NSView {
+            try XCTUnwrap(owner.subviews.first { $0.accessibilityIdentifier() == id })
+        }
+        try begin(cell, owner: owner, row: 1, column: 1)
+        let row = try handle("markdown-table-row-handle")
+        let column = try handle("markdown-table-column-handle")
+        XCTAssertFalse(row.isHidden)
+        XCTAssertFalse(column.isHidden)
+        let table = try XCTUnwrap(owner.markdownTableScrollOverlays.first)
+        XCTAssertLessThan(row.frame.minX, table.frame.minX)
+        XCTAssertGreaterThan(row.frame.midY, table.frame.minY + table.rowFrames[1].minY)
+        XCTAssertLessThan(row.frame.midY, table.frame.minY + table.rowFrames[1].maxY)
+        let widths = table.tableRows[1].columnWidths
+        XCTAssertEqual(column.frame.midX, table.frame.minX + widths[0] + widths[1] / 2, accuracy: 1)
+        XCTAssertLessThan(column.frame.minY, table.frame.minY)
+
+        let rowMenu = cell.menu(for: .row).flatMap { $0 }
+        XCTAssertEqual(rowMenu.map(\.command), [.tableRowAbove, .tableRowBelow, .tableDeleteRow])
+        XCTAssertTrue(rowMenu.allSatisfy(\.isEnabled))
+        let columnMenu = cell.menu(for: .column).flatMap { $0 }
+        XCTAssertTrue(columnMenu.contains { $0.command == .tableAlignCenter })
+
+        let context = try XCTUnwrap(cell.editor.menu(for: NSEvent.mouseEvent(
+            with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: mounted.window.windowNumber, context: nil, eventNumber: 0,
+            clickCount: 1, pressure: 1)!))
+        let addBelow = try XCTUnwrap(context.items.first { $0.title == "Add Row Below" })
+        XCTAssertEqual(context.items.first?.title, "Add Row Above")
+        _ = (addBelow.target as? NSObject)?.perform(addBelow.action)
+        refresh(owner)
+        XCTAssertEqual(MarkdownSyntax.parse(owner.string).tables.first?.rows.count, 3)
+        XCTAssertEqual(cell.target?.row, 2)
+
+        try begin(cell, owner: owner, row: 0, column: 0)
+        XCTAssertFalse(cell.menu(for: .row).flatMap { $0 }
+            .first { $0.command == .tableDeleteRow }!.isEnabled)
+        cell.end()
+        XCTAssertTrue(row.isHidden)
+        XCTAssertTrue(column.isHidden)
+    }
+
+    /// A cell past a short row's end has no source of its own, so its
+    /// handle menus act on its column rather than the row's last cell.
+    func testHandleMenusInAShortRowUseTheEditedColumn() throws {
+        let mounted = try mount("| A | B |\n| :-- | --: |\n| short |\n")
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let cell = owner.markdownCellController
+        try begin(cell, owner: owner, row: 1, column: 1)
+        let handle = try XCTUnwrap(owner.subviews.first {
+            $0.accessibilityIdentifier() == "markdown-table-column-handle"
+        } as? NSButton)
+        XCTAssertNotNil(handle.action, "VoiceOver presses the handle")
+        let checked = cell.menu(for: .column).flatMap { $0 }.filter(\.isChecked)
+        XCTAssertEqual(checked.map(\.command), [.tableAlignRight])
+        XCTAssertTrue(cell.perform(.tableDeleteColumn))
+        refresh(owner)
+        let table = try XCTUnwrap(MarkdownSyntax.parse(owner.string).tables.first)
+        let source = owner.string as NSString
+        XCTAssertEqual(table.header.cells.map { source.substring(with: $0) }, ["A"])
+        XCTAssertEqual(table.rows.first?.cells.map { source.substring(with: $0) }, ["short"])
+    }
+
     /// A table at the start or end of a note still lets the arrow keys
     /// leave it: onto an existing empty last line, or onto a new line.
     func testArrowKeysLeaveATableAtTheNoteEdges() throws {

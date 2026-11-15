@@ -98,6 +98,10 @@ final class MarkdownTableCellEditorController: NSObject {
 #else
     private let clip = UIView(frame: .zero)
 #endif
+    /// Notes-style handles on the edited cell's row and column. Each opens
+    /// that row's or column's menu.
+    private let rowHandle = MarkdownTableHandle(axis: .row)
+    private let columnHandle = MarkdownTableHandle(axis: .column)
 
     init(owner: MarkdownTextView) {
         self.owner = owner
@@ -125,6 +129,10 @@ final class MarkdownTableCellEditorController: NSObject {
 #endif
         clip.addSubview(editor)
         clip.isHidden = true
+        for handle in [rowHandle, columnHandle] {
+            handle.controller = self
+            handle.isHidden = true
+        }
     }
 
     var isActive: Bool { target != nil }
@@ -184,6 +192,9 @@ final class MarkdownTableCellEditorController: NSObject {
         sourceSnapshot = owner.markdownCellSource
         if clip.superview == nil { owner.addSubview(clip) }
         clip.isHidden = false
+        for handle in [rowHandle, columnHandle] where handle.superview == nil {
+            owner.addSubview(handle)
+        }
         installText(selection: NSRange(location: next.contentRange.length, length: 0))
         synchronizeSelection()
         owner.markdownSyntaxCache.tableRefresh?()
@@ -275,6 +286,8 @@ final class MarkdownTableCellEditorController: NSObject {
         guard isActive else { return }
         target = nil
         clip.isHidden = true
+        rowHandle.isHidden = true
+        columnHandle.isHidden = true
         DispatchQueue.main.async { [weak owner] in
             owner?.markdownSyntaxCache.tableRefresh?()
         }
@@ -428,7 +441,8 @@ final class MarkdownTableCellEditorController: NSObject {
         guard let owner, isActive, !hasMarkedText else { return false }
         synchronizeSelection()
         forwarding = true
-        let performed = owner.performMarkdownCommand(command)
+        // A cell past a short row's end has no source position of its own.
+        let performed = owner.performMarkdownCommand(command, tableColumn: target?.column)
         forwarding = false
         guard performed else { return false }
         if let next = MarkdownTableCellEditing.target(
@@ -608,11 +622,41 @@ final class MarkdownTableCellEditorController: NSObject {
         let visible = full.intersection(viewport)
         let clippedFrame = visible.isNull ? .zero : visible
         if clip.frame != clippedFrame { clip.frame = clippedFrame }
+        // The handles sit on the grid's top and left edges, mostly outside
+        // it, so they don't cover the cells' text.
+        let columnMidX = overlay.frame.minX + x - offset + contentRect.width / 2
+        let top = overlay.frame.minY + (overlay.rowFrames.first?.minY ?? 0)
+        let columnFrame = CGRect(x: columnMidX - 22, y: top - 20, width: 44, height: 26)
+        let rowFrame = CGRect(x: overlay.frame.minX - 20, y: overlay.frame.minY + contentRect.midY - 22,
+                              width: 26, height: 44)
+        if columnHandle.frame != columnFrame { columnHandle.frame = columnFrame }
+        if rowHandle.frame != rowFrame { rowHandle.frame = rowFrame }
+        columnHandle.isHidden = columnMidX < overlay.frame.minX || columnMidX > overlay.frame.maxX
+        rowHandle.isHidden = false
+        // Reordering subviews lays the text view out again, which updates
+        // this geometry, so only reorder when the editor is behind a table.
 #if os(macOS)
-        owner.addSubview(clip, positioned: .above, relativeTo: nil)
+        let front: [NSView] = [clip, rowHandle, columnHandle]
 #else
-        owner.bringSubviewToFront(clip)
+        let front: [UIView] = [clip, rowHandle, columnHandle]
 #endif
+        // A handle's open menu adds its own view in front, so only compare
+        // with the table overlays.
+        let subviews = owner.subviews
+        let order = front.compactMap { view in subviews.firstIndex { $0 === view } }
+        let overlays = owner.markdownTableScrollOverlays.compactMap { overlay in
+            subviews.firstIndex { $0 === overlay }
+        }
+        if order.count != front.count || order != order.sorted()
+            || order[0] < (overlays.max() ?? -1) {
+            for view in front {
+#if os(macOS)
+                owner.addSubview(view, positioned: .above, relativeTo: nil)
+#else
+                owner.bringSubviewToFront(view)
+#endif
+            }
+        }
         let editorFrame = CGRect(x: full.minX - clip.frame.minX, y: 0,
                                  width: full.width, height: full.height)
         if editor.frame != editorFrame { editor.frame = editorFrame }
@@ -645,6 +689,51 @@ final class MarkdownTableCellEditorController: NSObject {
         let header = overlay.tableRows.first?.cells[target.column].string ?? ""
         editor.accessibilityLabel = String(localized: "\(header), row \(target.row + 1), column \(target.column + 1)")
 #endif
+    }
+
+    struct MenuItem {
+        let title: String
+        let image: String
+        let command: MarkdownEditingCommand
+        var isEnabled = true
+        var isChecked = false
+        var isDestructive: Bool { command == .tableDeleteRow || command == .tableDeleteColumn }
+    }
+
+    /// The edited cell's row or column actions, in groups.
+    func menu(for axis: MarkdownTableHandle.Axis) -> [[MenuItem]] {
+        guard let owner, isActive else { return [] }
+        let text = owner.markdownCellSource
+        let selection = owner.markdownCellSourceSelection
+        let available = MarkdownTableEditing.availableCommands(
+            text: text, selection: selection, column: target?.column)
+        let alignment = MarkdownTableEditing.currentAlignment(
+            text: text, selection: selection, column: target?.column)
+        func item(_ title: String, _ image: String, _ command: MarkdownEditingCommand,
+                  checked: Bool = false) -> MenuItem {
+            MenuItem(title: title, image: image, command: command,
+                     isEnabled: available.contains(command), isChecked: checked)
+        }
+        switch axis {
+        case .row:
+            return [
+                [item(String(localized: "Add Row Above"), "arrow.up", .tableRowAbove),
+                 item(String(localized: "Add Row Below"), "arrow.down", .tableRowBelow)],
+                [item(String(localized: "Delete Row"), "trash", .tableDeleteRow)],
+            ]
+        case .column:
+            return [
+                [item(String(localized: "Add Column Left"), "arrow.left", .tableColumnBefore),
+                 item(String(localized: "Add Column Right"), "arrow.right", .tableColumnAfter)],
+                [item(String(localized: "Align Left"), "text.alignleft", .tableAlignLeft,
+                      checked: alignment == .left),
+                 item(String(localized: "Align Center"), "text.aligncenter", .tableAlignCenter,
+                      checked: alignment == .center),
+                 item(String(localized: "Align Right"), "text.alignright", .tableAlignRight,
+                      checked: alignment == .right)],
+                [item(String(localized: "Delete Column"), "trash", .tableDeleteColumn)],
+            ]
+        }
     }
 
     func didScroll(offset: CGFloat, tableRange: NSRange) {
@@ -715,6 +804,18 @@ final class MarkdownTableNativeCellEditor: NSTextView {
     override func cancelOperation(_ sender: Any?) {
         controller?.end(focusSource: true)
     }
+    /// A right-click on the cell offers its row and column actions first.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        guard let controller, controller.isActive else { return menu }
+        let table = MarkdownTableHandle.menu(controller.menu(for: .row) + controller.menu(for: .column),
+                                             controller: controller)
+        let items = table.items
+        table.removeAllItems()
+        for (index, item) in items.enumerated() { menu.insertItem(item, at: index) }
+        menu.insertItem(.separator(), at: items.count)
+        return menu
+    }
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         composing = true
         mutateComposition {
@@ -741,6 +842,17 @@ extension MarkdownTableCellEditorController: UITextViewDelegate {
         return false
     }
     func textViewDidChangeSelection(_ textView: UITextView) { synchronizeSelection() }
+
+    /// A long-press on the cell also offers its row and column actions.
+    func textView(_ textView: UITextView, editMenuForTextIn range: NSRange,
+                  suggestedActions: [UIMenuElement]) -> UIMenu? {
+        let table = MarkdownTableHandle.menuElements(menu(for: .row) + menu(for: .column), controller: self)
+        guard !table.isEmpty else { return nil }
+        return UIMenu(children: suggestedActions + [
+            UIMenu(title: String(localized: "Table"), image: UIImage(systemName: "tablecells"),
+                   children: table),
+        ])
+    }
 }
 final class MarkdownTableNativeCellEditor: UITextView, UIAccessibilityContainerDataTableCell {
     weak var controller: MarkdownTableCellEditorController?
@@ -886,3 +998,149 @@ private extension MarkdownTableNativeCellEditor {
         }
     }
 }
+
+/// A small capsule with three dots on the edited cell's row or column, as
+/// in Notes. Its tap area is larger than the capsule.
+final class MarkdownTableHandle: PlatformButton {
+    enum Axis { case row, column }
+    let axis: Axis
+    weak var controller: MarkdownTableCellEditorController?
+
+    init(axis: Axis) {
+        self.axis = axis
+        super.init(frame: .zero)
+        let label = axis == .row ? String(localized: "Row Actions") : String(localized: "Column Actions")
+        let identifier = axis == .row ? "markdown-table-row-handle" : "markdown-table-column-handle"
+#if os(macOS)
+        isBordered = false
+        title = ""
+        refusesFirstResponder = true
+        setAccessibilityLabel(label)
+        setAccessibilityIdentifier(identifier)
+        // VoiceOver presses the button instead of clicking it.
+        target = self
+        action = #selector(showMenu)
+#else
+        accessibilityLabel = label
+        accessibilityIdentifier = identifier
+        showsMenuAsPrimaryAction = true
+        menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+            completion(self?.menuElements() ?? [])
+        }])
+        isOpaque = false
+        backgroundColor = .clear
+        contentMode = .redraw
+#endif
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    /// The capsule sits just outside the grid's edge, so it doesn't cross
+    /// the edited cell's outline. The tap area reaches a little into the grid.
+    private var capsule: CGRect {
+        let size = axis == .row ? CGSize(width: 12, height: 22) : CGSize(width: 22, height: 12)
+        let center = axis == .row
+            ? CGPoint(x: 12, y: bounds.midY)
+            : CGPoint(x: bounds.midX, y: 12)
+        return CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
+                      width: size.width, height: size.height)
+    }
+
+    override func draw(_ dirtyRect: CGRect) {
+#if os(macOS)
+        let fill = NSColor.labelColor.withAlphaComponent(0.16)
+        let dot = NSColor.labelColor.withAlphaComponent(0.7)
+        let capsule = NSBezierPath(roundedRect: self.capsule, xRadius: 6, yRadius: 6)
+#else
+        let fill = UIColor.label.withAlphaComponent(0.16)
+        let dot = UIColor.label.withAlphaComponent(0.7)
+        let capsule = UIBezierPath(roundedRect: self.capsule, cornerRadius: 6)
+#endif
+        fill.setFill()
+        capsule.fill()
+        dot.setFill()
+        let rect = self.capsule
+        for index in -1...1 {
+            let offset = CGFloat(index) * 4.5
+            let center = axis == .row
+                ? CGPoint(x: rect.midX, y: rect.midY + offset)
+                : CGPoint(x: rect.midX + offset, y: rect.midY)
+            let dotRect = CGRect(x: center.x - 1.25, y: center.y - 1.25, width: 2.5, height: 2.5)
+#if os(macOS)
+            NSBezierPath(ovalIn: dotRect).fill()
+#else
+            UIBezierPath(ovalIn: dotRect).fill()
+#endif
+        }
+    }
+
+#if os(macOS)
+    override var isFlipped: Bool { true }
+
+    override func mouseDown(with event: NSEvent) { showMenu() }
+
+    @objc private func showMenu() {
+        guard let controller else { return }
+        let menu = MarkdownTableHandle.menu(controller.menu(for: axis), controller: controller)
+        menu.popUp(positioning: nil, at: NSPoint(x: capsule.minX, y: capsule.maxY + 4), in: self)
+    }
+
+    static func menu(_ groups: [[MarkdownTableCellEditorController.MenuItem]],
+                     controller: MarkdownTableCellEditorController) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for (index, group) in groups.enumerated() {
+            if index > 0 { menu.addItem(.separator()) }
+            for item in group {
+                let action = MarkdownTableMenuAction { [weak controller] in
+                    _ = controller?.perform(item.command)
+                }
+                let entry = NSMenuItem(title: item.title,
+                                       action: #selector(MarkdownTableMenuAction.run), keyEquivalent: "")
+                entry.target = action
+                entry.representedObject = action
+                action.isEnabled = item.isEnabled
+                entry.isEnabled = item.isEnabled
+                entry.state = item.isChecked ? .on : .off
+                menu.addItem(entry)
+            }
+        }
+        return menu
+    }
+#else
+    private func menuElements() -> [UIMenuElement] {
+        guard let controller else { return [] }
+        return Self.menuElements(controller.menu(for: axis), controller: controller)
+    }
+
+    static func menuElements(_ groups: [[MarkdownTableCellEditorController.MenuItem]],
+                             controller: MarkdownTableCellEditorController) -> [UIMenuElement] {
+        groups.map { group in
+            UIMenu(options: .displayInline, children: group.map { item in
+                var attributes: UIMenuElement.Attributes = []
+                if item.isDestructive { attributes.insert(.destructive) }
+                if !item.isEnabled { attributes.insert(.disabled) }
+                return UIAction(title: item.title, image: UIImage(systemName: item.image),
+                                attributes: attributes, state: item.isChecked ? .on : .off) {
+                    [weak controller] _ in _ = controller?.perform(item.command)
+                }
+            })
+        }
+    }
+#endif
+}
+
+#if os(macOS)
+typealias PlatformButton = NSButton
+
+/// Keeps a menu item's action alive for as long as the item.
+final class MarkdownTableMenuAction: NSObject, NSMenuItemValidation {
+    private let action: () -> Void
+    var isEnabled = true
+    init(_ action: @escaping () -> Void) { self.action = action }
+    @objc func run() { action() }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { isEnabled }
+}
+#else
+typealias PlatformButton = UIButton
+#endif
