@@ -112,11 +112,11 @@ final class UIReleasePolishUITests: XCTestCase {
             XCTAssertTrue(importBrowser.isHittable)
             capture("After - import is reachable from notebook actions")
             importBrowser.tap()
-            for action in ["notebook-import-files", "notebook-import-folder"] {
+            for action in ["Import Files…", "Import Folder…"] {
                 XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 5))
             }
             capture("After - import file and folder actions")
-            app.buttons["notebook-import-files"].firstMatch.tap()
+            app.buttons["Import Files…"].firstMatch.tap()
             let cancel = app.buttons.matching(NSPredicate(
                 format: "label IN %@", ["Cancel", "Abbrechen"]
             )).firstMatch
