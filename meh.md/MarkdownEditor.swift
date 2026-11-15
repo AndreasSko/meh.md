@@ -3860,11 +3860,13 @@ nonisolated private final class MarkdownTextLayoutFragment:
             let verticalPadding = lineHeight * 0.3
             let marksExtension = textView.markdownHistoryChanges.isEmpty
                 ? 0 : MarkdownHistoryMarks.surfaceExtension
+            // Tables start a cell padding left of the text.
+            let leading = max(3, textView.markdownSyntaxCache.tableLayout?.padding ?? 0)
             let panelBounds = CGRect(
-                x: -fragmentFrame.minX - 3 - marksExtension,
+                x: -fragmentFrame.minX - leading - marksExtension,
                 y: -verticalPadding,
                 width: (fragment.value.textLayoutManager?.textContainer?.size.width ?? 0)
-                    + 3 + marksExtension,
+                    + leading + marksExtension,
                 height: fragmentFrame.height + 2 * verticalPadding
             )
             let sumBounds = MarkdownTimeCalculator.surfaceBounds(

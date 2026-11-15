@@ -204,7 +204,7 @@ private final class MarkdownTableOverlayController: NSObject {
             y: textView.textContainerInset.top
         )
 #endif
-        let x = origin.x + container.lineFragmentPadding
+        let x = origin.x + layout.leadingX(lineFragmentPadding: container.lineFragmentPadding)
         let rowByLocation = Dictionary(
             uniqueKeysWithValues: layout.rows.map { ($0.range.location, $0) }
         )

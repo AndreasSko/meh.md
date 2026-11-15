@@ -281,6 +281,12 @@ struct MarkdownTableLayout {
     /// fragment also holds the empty line after a final line break. Both
     /// stay outside the box, so rows meet whether or not the table ends
     /// the note.
+    /// The grid starts one cell padding left of the text, so cell text
+    /// lines up with the body text around the table.
+    func leadingX(lineFragmentPadding: CGFloat) -> CGFloat {
+        lineFragmentPadding - padding
+    }
+
     static func rowMinY(in fragment: NSTextLayoutFragment, row: Row) -> CGFloat {
         let frame = fragment.layoutFragmentFrame
         guard let line = fragment.textLineFragments.first else {
@@ -305,7 +311,7 @@ struct MarkdownTableLayout {
         )
         guard let row = rows.first(where: { $0.range.location == location }) else { return }
         let rect = CGRect(
-            x: origin.x + lineFragmentPadding,
+            x: origin.x + leadingX(lineFragmentPadding: lineFragmentPadding),
             y: origin.y + Self.rowMinY(in: fragment, row: row),
             width: width, height: row.height
         )
