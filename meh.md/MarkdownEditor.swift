@@ -333,6 +333,20 @@ final class MarkdownEditorScrollView: NSScrollView {
 
 final class MarkdownTextView: NSTextView {
     let markdownSyntaxCache = MarkdownSyntaxCache()
+
+    /// Front matter's collapse control is drawn, so VoiceOver gets it as an
+    /// action on the editor.
+    override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
+        var actions = super.accessibilityCustomActions() ?? []
+        if let name = MarkdownPresentation.frontMatterToggleName(in: self) {
+            actions.append(NSAccessibilityCustomAction(name: name) { [weak self] in
+                guard let self else { return false }
+                MarkdownPresentation.toggleFrontMatterCollapsed(in: self)
+                return true
+            })
+        }
+        return actions
+    }
     var markdownDidBeginEditing: (() -> Void)?
     var markdownDidLayout: (() -> Void)?
     /// History's preview marks the lines this version changed.
@@ -590,6 +604,7 @@ final class MarkdownTextView: NSTextView {
             : (flags == .command ? sourceLinkCursorRects : [])
         if !hasMarkedText(),
            MarkdownPresentation.taskCheckbox(at: point, in: self) != nil
+            || MarkdownPresentation.hitsFrontMatterToggle(at: point, in: self)
             || (markdownLinkNavigation?.openLink != nil
                 && rects.contains(where: { $0.contains(point) })) {
             NSCursor.pointingHand.set()
@@ -745,6 +760,10 @@ final class MarkdownTextView: NSTextView {
                 rect.origin.y = scrollView.bounds.height - rect.maxY
             }
             tapped(ring.removal, rect)
+            return
+        }
+        if MarkdownPresentation.hitsFrontMatterToggle(at: point, in: self) {
+            MarkdownPresentation.toggleFrontMatterCollapsed(in: self)
             return
         }
         if let checkbox = MarkdownPresentation.taskCheckbox(at: point, in: self) {
@@ -1812,6 +1831,23 @@ nonisolated(unsafe) private var markdownTextViewStateKey: UInt8 = 0
 // Keep editor state in a normally initialized object attached to the view.
 final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
     UIPointerInteractionDelegate {
+    /// Front matter's collapse control is drawn, so VoiceOver gets it as an
+    /// action on the editor.
+    override var accessibilityCustomActions: [UIAccessibilityCustomAction]? {
+        get {
+            var actions = super.accessibilityCustomActions ?? []
+            if let name = MarkdownPresentation.frontMatterToggleName(in: self) {
+                actions.append(UIAccessibilityCustomAction(name: name) { [weak self] _ in
+                    guard let self else { return false }
+                    MarkdownPresentation.toggleFrontMatterCollapsed(in: self)
+                    return true
+                })
+            }
+            return actions
+        }
+        set { super.accessibilityCustomActions = newValue }
+    }
+
     override var contentSize: CGSize {
         get { super.contentSize }
         set {
@@ -2521,6 +2557,10 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             markdownLinkNavigation?.openLink?(link)
             return
         }
+        if MarkdownPresentation.hitsFrontMatterToggle(at: point, in: self) {
+            MarkdownPresentation.toggleFrontMatterCollapsed(in: self)
+            return
+        }
         guard let checkbox = MarkdownPresentation.taskCheckbox(
             at: point, in: self
         ) else { return }
@@ -2638,6 +2678,7 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
             ? nil : historyRemoval(at: point)
         markdownState.tappedLink = passiveNoteLink(at: point, modifiers: tap.modifierFlags)
         return MarkdownPresentation.taskCheckbox(at: point, in: self) != nil
+            || MarkdownPresentation.hitsFrontMatterToggle(at: point, in: self)
             || markdownState.tappedLink != nil
             || markdownState.tappedRemoval != nil
     }

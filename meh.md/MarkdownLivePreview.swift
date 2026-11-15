@@ -22,6 +22,8 @@ struct MarkdownLivePreviewSnapshot: Equatable {
     let tableWidth: CGFloat
     let fontSize: CGFloat
     let renderedTableRange: NSRange?
+    /// Front matter shows as one "3 Properties" line instead of rows.
+    let propertiesCollapsed: Bool
 
     init(
         mode: MarkdownEditorMode,
@@ -29,7 +31,8 @@ struct MarkdownLivePreviewSnapshot: Equatable {
         isEditing: Bool = true,
         tableWidth: CGFloat = .greatestFiniteMagnitude,
         fontSize: CGFloat = 17,
-        renderedTableRange: NSRange? = nil
+        renderedTableRange: NSRange? = nil,
+        propertiesCollapsed: Bool = false
     ) {
         self.mode = mode
         self.selection = selection
@@ -37,6 +40,7 @@ struct MarkdownLivePreviewSnapshot: Equatable {
         self.tableWidth = tableWidth
         self.fontSize = fontSize
         self.renderedTableRange = renderedTableRange
+        self.propertiesCollapsed = propertiesCollapsed
     }
 }
 
@@ -56,6 +60,8 @@ nonisolated(unsafe) private var markdownLivePreviewStateKey: UInt8 = 0
 
 enum MarkdownLivePreview {
     static let collapsedFontSize: CGFloat = 0.001
+    /// The person's choice, on this device, to collapse front matter.
+    static let propertiesCollapsedKey = "editor.propertiesCollapsed"
 
     static func update(
         _ textView: MarkdownNativeTextView,
@@ -81,7 +87,8 @@ enum MarkdownLivePreview {
             tableWidth: width,
             fontSize: fontSize,
             renderedTableRange: (textView as? MarkdownTextView)?
-                .markdownCellController.renderedTableRange
+                .markdownCellController.renderedTableRange,
+            propertiesCollapsed: UserDefaults.standard.bool(forKey: propertiesCollapsedKey)
         )
         if mode == .livePreview, previousMode != mode, isEditing {
             (textView as? MarkdownTextView)?.markdownCellController.activateSourceSelection()
@@ -179,6 +186,30 @@ enum MarkdownLivePreview {
                 collapsed.removeAll { intersects($0, table.range) }
             }
         }
+        // Front matter is one editing unit too: quiet rows while the caret
+        // is elsewhere, and the YAML as written while it is inside.
+        if let frontMatter = MarkdownFrontMatter.parse(source) {
+            if let active = activeRange, intersects(frontMatter.range, active) {
+                activeRange = NSUnionRange(active, frontMatter.range)
+            } else if snapshot.propertiesCollapsed, canCollapse(frontMatter) {
+                // The opening line keeps its height for the summary.
+                transparent.append(NSRange(location: frontMatter.opening.location, length: 3))
+                let rest = NSMaxRange(frontMatter.opening)
+                collapsed.append(NSRange(location: rest, length: NSMaxRange(frontMatter.range) - rest))
+            } else {
+                collapsed += [frontMatter.opening, frontMatter.closing]
+                for property in frontMatter.properties {
+                    collapsed += property.syntax
+                    if property.items.isEmpty || property.itemLines.isEmpty {
+                        transparent.append(property.keyRange)
+                    } else {
+                        // The label moves beside the first `- item`.
+                        collapsed.append(source.lineRange(for: property.keyRange))
+                    }
+                    transparent += property.separators
+                }
+            }
+        }
         func concealed(_ candidates: [NSRange]) -> [NSRange] {
             let bounded = candidates.filter { candidate in
                 candidate.location >= 0 && candidate.length > 0
@@ -191,6 +222,26 @@ enum MarkdownLivePreview {
             collapsed: mergedRanges(concealed(collapsed) + taskBullets),
             transparent: mergedRanges(concealed(transparent) + taskMarkers)
         )
+    }
+
+    /// Collapsing pays off from three properties; fewer stay as rows.
+    static func canCollapse(_ frontMatter: MarkdownFrontMatter) -> Bool {
+        frontMatter.properties.count >= 3
+    }
+
+    /// The front matter while it shows as rows or as one collapsed line:
+    /// its closing line is hidden, and for rows its opening line too.
+    static func renderedFrontMatter(
+        in source: NSString,
+        collapsed: [NSRange]
+    ) -> (frontMatter: MarkdownFrontMatter, isCollapsed: Bool)? {
+        guard source.length > 0, source.character(at: 0) == 45,
+              let frontMatter = MarkdownFrontMatter.parse(source) else { return nil }
+        func hides(_ range: NSRange) -> Bool {
+            collapsed.contains { NSIntersectionRange($0, range) == range }
+        }
+        guard hides(frontMatter.closing) else { return nil }
+        return (frontMatter, !hides(frontMatter.opening))
     }
 
     static func canRender(
