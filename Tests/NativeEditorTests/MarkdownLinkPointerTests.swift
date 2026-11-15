@@ -31,10 +31,24 @@ final class MarkdownLinkPointerTests: XCTestCase {
             XCTAssertNil(view.noteLinkPointerRegion(at: CGPoint(x: view.bounds.maxX - 1,
                                                                y: point.y)))
 
+            // While editing another line, the link stays rendered and active.
             XCTAssertTrue(view.becomeFirstResponder())
-            XCTAssertNil(view.noteLinkPointerRegion(at: point))
-            XCTAssertNil(view.pointerInteraction(interaction, styleFor: region))
+            XCTAssertNotNil(view.noteLinkPointerRegion(at: point))
+            // On its own line the link shows source and takes the caret,
+            // unless Command asks to open it.
+            // The editor's coordinator records the edited line on selection.
+            view.selectedRange = NSRange(location: 1, length: 0)
+            MarkdownLivePreview.update(view, mode: .livePreview,
+                                       selection: view.selectedRange, isEditing: true)
+            view.layoutIfNeeded()
+            let sourcePoint = try labelPoints("label", in: view)[0]
+            XCTAssertNil(view.noteLinkPointerRegion(at: sourcePoint))
+            XCTAssertNotNil(view.noteLinkPointerRegion(at: sourcePoint, modifiers: .command))
+            view.selectedRange = (source as NSString).range(of: "Outside")
+            MarkdownLivePreview.update(view, mode: .livePreview,
+                                       selection: view.selectedRange, isEditing: false)
             XCTAssertTrue(view.resignFirstResponder())
+            view.layoutIfNeeded()
             XCTAssertNotNil(view.noteLinkPointerRegion(at: point))
 
             MarkdownPresentation.configure(view, mode: .source)
