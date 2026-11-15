@@ -186,6 +186,79 @@ final class MarkdownRenderedCellEditorTests: XCTestCase {
         XCTAssertNotNil(owner.markdownSyntaxCache.tableLayout)
     }
 
+    /// A table at the start or end of a note still lets the arrow keys
+    /// leave it: onto an existing empty last line, or onto a new line.
+    func testArrowKeysLeaveATableAtTheNoteEdges() throws {
+        let table = "| A | B |\n| --- | --- |\n| x | y |"
+        for (initial, expected, caret) in [
+            (table, table + "\n", (table as NSString).length + 1),
+            (table + "\n", table + "\n", (table as NSString).length + 1),
+        ] {
+            let mounted = try mount(initial)
+            defer { mounted.window.orderOut(nil) }
+            let cell = mounted.owner.markdownCellController
+            try begin(cell, owner: mounted.owner, row: 1, column: 0)
+            cell.editor.moveDown(nil)
+            XCTAssertFalse(cell.isActive)
+            XCTAssertEqual(mounted.owner.string, expected)
+            XCTAssertEqual(mounted.owner.selectedRange(), NSRange(location: caret, length: 0))
+            drainMainQueue()
+            XCTAssertFalse(cell.isActive)
+        }
+        let mounted = try mount(table + "\n\nAfter")
+        defer { mounted.window.orderOut(nil) }
+        let cell = mounted.owner.markdownCellController
+        try begin(cell, owner: mounted.owner, row: 0, column: 1)
+        cell.editor.moveUp(nil)
+        XCTAssertFalse(cell.isActive)
+        XCTAssertEqual(mounted.owner.string, "\n" + table + "\n\nAfter")
+        XCTAssertEqual(mounted.owner.selectedRange(), NSRange(location: 0, length: 0))
+        mounted.owner.undoManager?.undo()
+        XCTAssertEqual(mounted.owner.string, table + "\n\nAfter")
+    }
+
+    /// Arrow keys move between cells instead of showing the table as
+    /// Markdown, and leave it on the lines around it.
+    func testArrowKeysMoveBetweenCellsAndLeaveTheTable() throws {
+        let mounted = try mount()
+        defer { mounted.window.orderOut(nil) }
+        let owner = mounted.owner
+        let cell = owner.markdownCellController
+        try begin(cell, owner: owner, row: 1, column: 0)
+        let editor = cell.editor
+        editor.moveDown(nil)
+        XCTAssertEqual(cell.target?.row, 2)
+        XCTAssertEqual(editor.string, "Star")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 0))
+        editor.moveLeft(nil)
+        XCTAssertEqual(cell.target?.column, 0)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 3, length: 0))
+        editor.moveRight(nil)
+        editor.moveRight(nil)
+        XCTAssertEqual(cell.target?.column, 1)
+        XCTAssertEqual(editor.string, "Meadow")
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 0))
+        editor.moveLeft(nil)
+        XCTAssertEqual(cell.target?.column, 0)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 4, length: 0))
+        editor.moveUp(nil)
+        editor.moveUp(nil)
+        XCTAssertEqual(cell.target?.row, 0)
+        XCTAssertEqual(editor.string, "Name")
+        editor.moveUp(nil)
+        XCTAssertFalse(cell.isActive)
+        XCTAssertEqual(owner.selectedRange(), NSRange(location: 6, length: 0))
+        drainMainQueue()
+        XCTAssertFalse(cell.isActive)
+        XCTAssertNotNil(owner.markdownSyntaxCache.tableLayout)
+        try begin(cell, owner: owner, row: 2, column: 1)
+        cell.editor.moveDown(nil)
+        XCTAssertFalse(cell.isActive)
+        let closing = (owner.string as NSString).range(of: "Closing")
+        XCTAssertEqual(owner.selectedRange(), NSRange(location: closing.location - 1, length: 0))
+        XCTAssertEqual(owner.string, source)
+    }
+
     func testInactiveCellDoesNotHandleShortcutsFromAnotherField() throws {
         let mounted = try mount()
         defer { mounted.window.orderOut(nil) }

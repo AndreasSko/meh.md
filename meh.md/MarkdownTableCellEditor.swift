@@ -484,6 +484,69 @@ final class MarkdownTableCellEditorController: NSObject {
         revealEditingSelection()
     }
 
+    /// Up and Down move to the cell above or below, so the table stays a
+    /// grid. Past the first or last row the caret leaves the table.
+    func moveVertically(by delta: Int) {
+        guard let owner, let current = target, !hasMarkedText,
+              let table = owner.markdownSyntaxCache.result(for: owner.markdownCellSource)
+                .tables.first(where: { $0.range == current.tableRange }) else { return }
+        let row = current.row + delta
+        if row >= 0, row <= table.rows.count {
+            guard begin(tableRange: table.range, row: row, column: current.column) else { return }
+            localSelection = NSRange(location: delta < 0 ? 0 : (localText as NSString).length, length: 0)
+            synchronizeSelection()
+            return
+        }
+        // Land on the line before or after the table, never on its edge,
+        // where the caret would show the table as Markdown.
+        let source = owner.markdownCellSource as NSString
+        var location = delta < 0 ? table.range.location - 1 : NSMaxRange(table.range)
+        if delta > 0, location > 0, ![10, 13].contains(source.character(at: location - 1)) {
+            if location < source.length, source.character(at: location) == 13 { location += 1 }
+            if location < source.length, source.character(at: location) == 10 { location += 1 }
+        } else if delta < 0, location > 0, source.character(at: location) == 10,
+                  source.character(at: location - 1) == 13 {
+            location -= 1
+        }
+        let atEnd = location == source.length
+            && (location == 0 || [10, 13].contains(source.character(at: location - 1)))
+        if location >= 0, location < source.length || atEnd {
+            end(focusSource: true)
+            owner.markdownCellSourceSelection = NSRange(location: location, length: 0)
+            return
+        }
+        // The table starts or ends the note, so there is no line to move to.
+        // Add one, as an undoable edit.
+        let ending = source.range(of: "\r\n").location != NSNotFound ? "\r\n" : "\n"
+        let insertion = delta < 0 ? 0 : source.length
+        let caret = delta < 0 ? 0 : insertion + (ending as NSString).length
+        end(focusSource: true)
+        owner.applyMarkdownCellSourceChange(MarkdownEditingChange(
+            range: NSRange(location: insertion, length: 0), replacement: ending,
+            selection: NSRange(location: caret, length: 0)
+        ))
+    }
+
+    /// Left at a cell's start and Right at its end move to the neighbouring
+    /// cell in the row. Returns false when the caret should move in the cell.
+    func moveHorizontally(by delta: Int) -> Bool {
+        guard let current = target, !hasMarkedText else { return false }
+        let selection = localSelection
+        let length = (localText as NSString).length
+        guard selection.length == 0,
+              delta < 0 ? selection.location == 0 : selection.location == length
+        else { return false }
+        let column = current.column + delta
+        guard column >= 0, let owner,
+              let table = owner.markdownSyntaxCache.result(for: owner.markdownCellSource)
+                .tables.first(where: { $0.range == current.tableRange }),
+              column < table.header.cells.count else { return true }
+        guard begin(tableRange: table.range, row: current.row, column: column) else { return true }
+        localSelection = NSRange(location: delta < 0 ? (localText as NSString).length : 0, length: 0)
+        synchronizeSelection()
+        return true
+    }
+
     private func revealEditingSelection() {
 #if os(macOS)
         updateGeometry(reveal: true)
@@ -641,6 +704,14 @@ final class MarkdownTableNativeCellEditor: NSTextView {
     override func insertTab(_ sender: Any?) { _ = controller?.perform(.tableNextCell) }
     override func insertBacktab(_ sender: Any?) { _ = controller?.perform(.tablePreviousCell) }
     override func insertNewline(_ sender: Any?) { controller?.nextRow() }
+    override func moveUp(_ sender: Any?) { controller?.moveVertically(by: -1) }
+    override func moveDown(_ sender: Any?) { controller?.moveVertically(by: 1) }
+    override func moveLeft(_ sender: Any?) {
+        if controller?.moveHorizontally(by: -1) != true { super.moveLeft(sender) }
+    }
+    override func moveRight(_ sender: Any?) {
+        if controller?.moveHorizontally(by: 1) != true { super.moveRight(sender) }
+    }
     override func cancelOperation(_ sender: Any?) {
         controller?.end(focusSource: true)
     }
@@ -705,7 +776,8 @@ final class MarkdownTableNativeCellEditor: UITextView, UIAccessibilityContainerD
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         let commands: [Selector] = [#selector(nextCell(_:)), #selector(previousCell(_:)),
             #selector(nextRow(_:)), #selector(bold(_:)), #selector(italic(_:)), #selector(link(_:)),
-            #selector(code(_:)), #selector(findNote(_:)), #selector(done(_:))]
+            #selector(code(_:)), #selector(findNote(_:)), #selector(done(_:)),
+            #selector(cellAbove(_:)), #selector(cellBelow(_:)), #selector(left(_:)), #selector(right(_:))]
         if commands.contains(action) { return controller?.canEdit == true }
         if action == #selector(undoCell(_:)) {
             return controller?.canEdit == true && undoManager?.canUndo == true
@@ -728,6 +800,10 @@ final class MarkdownTableNativeCellEditor: UITextView, UIAccessibilityContainerD
             ("k", .command, #selector(link(_:))), ("c", [.command, .shift], #selector(code(_:))),
             ("f", .command, #selector(findNote(_:))),
             (UIKeyCommand.inputEscape, [], #selector(done(_:))),
+            (UIKeyCommand.inputUpArrow, [], #selector(cellAbove(_:))),
+            (UIKeyCommand.inputDownArrow, [], #selector(cellBelow(_:))),
+            (UIKeyCommand.inputLeftArrow, [], #selector(left(_:))),
+            (UIKeyCommand.inputRightArrow, [], #selector(right(_:))),
         ]
         let inherited = (super.keyCommands ?? []).filter { key in
             let duplicate = commands.contains { input, flags, _ in
@@ -759,6 +835,28 @@ final class MarkdownTableNativeCellEditor: UITextView, UIAccessibilityContainerD
     @objc private func code(_ sender: UIKeyCommand) { _ = controller?.perform(.inlineCode) }
     @objc private func findNote(_ sender: UIKeyCommand) { controller?.showFind() }
     @objc private func done(_ sender: UIKeyCommand) { controller?.end(focusSource: true) }
+    @objc private func cellAbove(_ sender: UIKeyCommand) { controller?.moveVertically(by: -1) }
+    @objc private func cellBelow(_ sender: UIKeyCommand) { controller?.moveVertically(by: 1) }
+    @objc private func left(_ sender: UIKeyCommand) { moveCaret(by: -1) }
+    @objc private func right(_ sender: UIKeyCommand) { moveCaret(by: 1) }
+    /// A key command can't fall through to the text view, so a caret that
+    /// stays in the cell is moved here.
+    private func moveCaret(by delta: Int) {
+        // During composition these key commands are off (see keyCommands
+        // and canPerformAction), so the input method gets the arrow keys.
+        guard controller?.hasMarkedText != true,
+              controller?.moveHorizontally(by: delta) != true else { return }
+        let text = (self.text ?? "") as NSString
+        let range = selectedRange
+        if range.length > 0 {
+            selectedRange = NSRange(location: delta < 0 ? range.location : NSMaxRange(range), length: 0)
+            return
+        }
+        let location = delta < 0
+            ? text.rangeOfComposedCharacterSequence(at: max(0, range.location - 1)).location
+            : NSMaxRange(text.rangeOfComposedCharacterSequence(at: min(range.location, text.length - 1)))
+        selectedRange = NSRange(location: min(max(0, location), text.length), length: 0)
+    }
     func alignmentForCell(_ cell: NSAttributedString) {
         let desired = (cell.length > 0 ? cell.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
             as? NSParagraphStyle : nil)?.alignment ?? .left
