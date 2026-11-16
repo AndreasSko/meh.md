@@ -1025,6 +1025,7 @@ struct MarkdownEditor: NSViewRepresentable {
         private var destinationHighlightRange: NSRange?
         private var destinationCenterGeometry: CGSize?
         private var handledFocusRequest: Int
+        private let textUndoManager = UndoManager()
 
         init(parent: MarkdownEditor) {
             self.parent = parent
@@ -1321,6 +1322,10 @@ struct MarkdownEditor: NSViewRepresentable {
             schedulePendingSearchMatchReveal(in: textView)
             schedulePendingPositionRestore(in: textView)
         }
+
+        /// The note keeps its own undo, as UITextView does on iOS. On the
+        /// window's, clearing it for a new note also dropped Undo Move.
+        func undoManager(for view: NSTextView) -> UndoManager? { textUndoManager }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else {

@@ -168,6 +168,8 @@ final class NotebookSceneState {
     var browserFocused = false
     var browserUndo: NotebookBrowserUndo?
     var browserRedo: NotebookBrowserUndo?
+    /// Offers the last move to ⌘Z and shaking.
+    @ObservationIgnored let moveUndo = NotebookMoveUndo()
     var fileRevealRequest: NotebookFileReveal?
     var highlightedFileID: UUID?
     #if os(iOS)

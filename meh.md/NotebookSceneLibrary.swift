@@ -1248,9 +1248,14 @@ extension NotebookSceneState {
             parentID, excluding: Set(movingIDs), byID: byID)
     }
 
-    func undoBrowserChange(redo: Bool) {
-        guard (redo ? browserRedo : browserUndo) != nil else { return }
-        perform { [self] in try await applyBrowserUndo(redo: redo) }
+    func undoBrowserChange(
+        redo: Bool, onCompletion: @escaping (Bool) -> Void = { _ in }
+    ) {
+        guard (redo ? browserRedo : browserUndo) != nil else {
+            onCompletion(false)
+            return
+        }
+        perform({ [self] in try await applyBrowserUndo(redo: redo) }, onCompletion: onCompletion)
     }
 
     private func applyBrowserUndo(redo: Bool) async throws {

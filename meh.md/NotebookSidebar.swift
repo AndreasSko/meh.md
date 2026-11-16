@@ -272,13 +272,13 @@ struct NotebookSidebar: View {
     private var browserUndoActions: some View {
         if scene.browserUndo?.action == .move {
             Button("Undo Move", systemImage: "arrow.uturn.backward") {
-                scene.undoBrowserChange(redo: false)
+                scene.moveUndo.perform(redo: false)
             }
                 .accessibilityIdentifier("notebook-browser-undo")
         }
         if scene.browserRedo?.action == .move {
             Button("Redo Move", systemImage: "arrow.uturn.forward") {
-                scene.undoBrowserChange(redo: true)
+                scene.moveUndo.perform(redo: true)
             }
                 .accessibilityIdentifier("notebook-browser-redo")
         }
@@ -1175,6 +1175,12 @@ private struct NotebookFileRow: View {
             }
     }
 
+    #if os(iOS)
+    private var isTinted: Bool {
+        !scene.isCompact && scene.browserSelection.contains(row.id)
+    }
+    #endif
+
     private func insertionLine(depth: Int) -> some View {
         Rectangle().fill(Color.accentColor).frame(height: 2)
             .padding(.leading, CGFloat(depth) * 16 + 20)
@@ -1185,7 +1191,7 @@ private struct NotebookFileRow: View {
         Image(systemName: expanded ? "chevron.down" : "chevron.right")
             .font(.caption)
             .frame(width: 10)
-            .foregroundStyle(Color.secondary)
+            .foregroundStyle(.secondary)
     }
 
     private var nameField: some View {
@@ -1278,6 +1284,10 @@ private struct NotebookFileRow: View {
             .padding(.leading, CGFloat(row.depth) * 16)
             .padding(.vertical, showsPreview && placement.item.kind == .note ? 4 : 0)
             .frame(minHeight: rowHeight)
+            #if os(iOS)
+            // The iPad paints selected rows with the dark tint.
+            .foregroundStyle(isTinted ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            #endif
             .contentShape(Rectangle())
             .onAppear {
                 if placement.item.kind == .note { scene.fileRowAppeared(row.id) }
