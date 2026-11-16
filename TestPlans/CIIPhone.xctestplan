@@ -64,7 +64,8 @@
         "FolderPagesUITests/testIPhoneRotationMovesThePageIntoFiles",
         "FolderPagesUITests/testIPhoneBackReturnsToWherePagesWereOpened",
         "FolderPagesUITests/testDraggingSelectedRowsOntoAFolderOfThePageMovesThem",
-        "FolderPagesUITests/testDraggingSelectedCardsOntoAFolderOfThePageMovesThem"
+        "FolderPagesUITests/testDraggingSelectedCardsOntoAFolderOfThePageMovesThem",
+        "FolderPagesUITests/testSwipeRightOnAPageRowStartsSelection"
       ]
     }
   ],

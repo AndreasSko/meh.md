@@ -493,7 +493,114 @@ final class FolderPagesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["notebook-tree-toggle"].waitForExistence(timeout: 5))
     }
 
+    /// As in Files, swiping a page's row to the right starts Select mode.
+    /// The swipe used to end as a tap that opened the note.
+    func testSwipeRightOnAPageRowStartsSelection() throws {
+        #if os(iOS)
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        app.revealNotebookSidebar(timeout: 30)
+        openFolderPage(named: "Resources", in: app)
+        let packing = pageItem("Packing list", in: app)
+        XCTAssertTrue(packing.waitForExistence(timeout: 5))
+
+        let start = packing.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: packing.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5)),
+            withVelocity: .slow, thenHoldForDuration: 0.2)
+        let selectAction = app.buttons["notebook-folder-page-swipe-select"]
+        XCTAssertTrue(selectAction.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["notebook-folder-page"].exists,
+                      "The swipe opened the note")
+        capture(app, name: "Swipe right reveals Select")
+        selectAction.tap()
+        XCTAssertTrue(app.staticTexts["1 selected"].waitForExistence(timeout: 5))
+        XCTAssertTrue(packing.isSelected)
+        pageItem("Book notes", in: app).tap()
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
+        app.buttons["notebook-folder-page-done"].tap()
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForNonExistence(timeout: 5))
+
+        // A full swipe selects without tapping the action. Beside Files the
+        // page's rows reach under the sidebar, so the swipe runs to the
+        // window's edge.
+        let book = pageItem("Book notes", in: app)
+        let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: book.frame.midY))
+        book.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).press(
+            forDuration: 0.05, thenDragTo: edge, withVelocity: .fast, thenHoldForDuration: 0)
+        XCTAssertTrue(app.staticTexts["1 selected"].waitForExistence(timeout: 5))
+        XCTAssertTrue(book.isSelected)
+        XCTAssertFalse(packing.isSelected)
+        #else
+        throw XCTSkip("The Mac has no swipe actions")
+        #endif
+    }
+
+    /// ⌘-click picks rows and cards in place, as in Files, starting with
+    /// the open note.
+    func testIPadCommandClickSelectsFromTheOpenNote() throws {
+        try commandClickSelectsFromTheOpenNote(view: "List")
+    }
+
+    func testIPadCommandClickSelectsCardsFromTheOpenNote() throws {
+        try commandClickSelectsFromTheOpenNote(view: "Cards")
+    }
+
+    private func commandClickSelectsFromTheOpenNote(view: String) throws {
+        #if os(macOS)
+        throw XCTSkip("testMacCommandClickSelectsPageRowsWithoutOpeningThem covers the Mac")
+        #else
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        app.revealNotebookSidebar(timeout: 30)
+        try XCTSkipIf(isCompact(app), "Beside Files only")
+
+        let packingID = itemID(named: "Packing list", in: app, expanding: "Resources")
+        activate(app.staticTexts["notebook-sidebar-title-" + packingID])
+        XCTAssertTrue(app.textViews["markdown-editor"].waitForExistence(timeout: 10))
+        openFolderPage(named: "Resources", in: app)
+        chooseView(view, in: app)
+        let page = app.descendants(matching: .any)["notebook-folder-page"]
+        let book = pageItem("Book notes", in: app)
+        XCTAssertTrue(book.waitForExistence(timeout: 5))
+
+        commandClick(book)
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5),
+                      "The open note didn't join the selection")
+        XCTAssertTrue(page.exists, "⌘-click opened the note")
+        XCTAssertTrue(pageItem("Packing list", in: app).isSelected)
+        XCTAssertTrue(book.isSelected)
+        capture(app, name: "⌘-click on a page (\(view))")
+
+        commandClick(book)
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(book.isSelected)
+        XCTAssertTrue(page.exists)
+
+        // A plain click opens the note and leaves the page.
+        activate(book)
+        XCTAssertTrue(page.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.openNoteTitle, "Book notes")
+        #endif
+    }
+
     // MARK: Helpers
+
+    private func pageItem(_ name: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "(identifier BEGINSWITH %@ OR identifier BEGINSWITH %@) "
+                + "AND (label BEGINSWITH %@ OR value BEGINSWITH %@)",
+            "notebook-folder-page-note-", "notebook-folder-page-card-", name, name
+        )).firstMatch
+    }
+
+    private func commandClick(_ element: XCUIElement) {
+        XCUIElement.perform(withKeyModifiers: .command) { element.click() }
+    }
 
     private func makeApp() -> XCUIApplication {
         let app = XCUIApplication()
