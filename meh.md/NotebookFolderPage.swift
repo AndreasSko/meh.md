@@ -468,7 +468,7 @@ private struct NotebookFolderList<Header: View>: View {
                     .selectionDisabled()
             }
         }
-        .listStyle(.plain)
+        .notebookPageListStyle(isCompact: isCompact)
         .scrollContentBackground(.hidden)
         .notebookPageEdgeEffect()
         .notebookPageDragSession(scene)
@@ -564,23 +564,27 @@ private struct NotebookFolderList<Header: View>: View {
         }
     }
 
-    /// Rows start where Cards do. The List ignores content margins beside
-    /// Files, so rows take the whole margin as inset; the Mac's table keeps
-    /// 8 points of its own.
+    /// Rows start where Cards do. On iPhone rows take the whole margin as
+    /// inset; beside Files the inset-grouped List keeps 20 points of its
+    /// own, as the Mac's table keeps 8.
     private var rowInset: CGFloat {
-        #if os(iOS)
-        NotebookFolderPage.margin(isCompact: isCompact)
-        #else
-        NotebookFolderPage.margin(isCompact: isCompact) - 8
-        #endif
+        NotebookFolderPage.margin(isCompact: isCompact) - listMargin
     }
 
     /// iOS rows draw their highlight clear of the edges.
     private var highlightInset: CGFloat {
         #if os(iOS)
-        isCompact ? 8 : 24
+        isCompact ? 8 : 24 - listMargin
         #else
         0
+        #endif
+    }
+
+    private var listMargin: CGFloat {
+        #if os(iOS)
+        isCompact ? 0 : 20
+        #else
+        8
         #endif
     }
 
@@ -1194,6 +1198,24 @@ private struct NotebookPageButton<Label: View>: View {
 }
 
 private extension View {
+    @ViewBuilder
+    func notebookPageListStyle(isCompact: Bool) -> some View {
+        #if os(iOS)
+        if isCompact {
+            listStyle(.plain)
+        } else {
+            // Beside Files a plain List reaches under the sidebar, and a
+            // swipe slid its row past the sidebar's width (FB19785883). An
+            // inset-grouped one keeps its rows beside the sidebar; its side
+            // margins must stay for that.
+            listStyle(.insetGrouped)
+                .contentMargins(.top, 0, for: .scrollContent)
+        }
+        #else
+        listStyle(.plain)
+        #endif
+    }
+
     /// The hard edge effect lays a white strip under the bottom bar, as in
     /// Files.
     func notebookPageEdgeEffect() -> some View {
