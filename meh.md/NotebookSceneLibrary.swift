@@ -61,6 +61,7 @@ final class NotebookBrowserScrollReference: NSObject {
     /// to a click that selected nothing, such as on a disclosure button.
     private var click: (kind: NotebookBrowserSelection.Click, location: CGPoint,
                         endedAt: ContinuousClock.Instant?)?
+    private var taken: (kind: NotebookBrowserSelection.Click, endedAt: ContinuousClock.Instant?)?
     /// The row last clicked or tapped, which shows no focus ring.
     private var quietCell: (cell: UICollectionViewCell, effect: UIFocusEffect?)?
     private lazy var clickRecorder = NotebookBrowserClickRecorder(
@@ -78,9 +79,17 @@ final class NotebookBrowserScrollReference: NSObject {
             let kind: NotebookBrowserSelection.Click = modifiers.contains(.shift) ? .shift
                 : modifiers.contains(.command) ? .command : .plain
             self?.click = (kind, location, nil)
+            self?.taken = nil
         },
         ended: { [weak self] cancelled in
-            if cancelled { self?.click = nil } else { self?.click?.endedAt = .now }
+            guard let self else { return }
+            if cancelled {
+                click = nil
+                taken = nil
+                return
+            }
+            click?.endedAt = .now
+            if taken?.endedAt == nil { taken?.endedAt = .now }
         }
     )
 
@@ -100,8 +109,23 @@ final class NotebookBrowserScrollReference: NSObject {
     }
 
     func takeClick() -> (kind: NotebookBrowserSelection.Click, location: CGPoint)? {
-        defer { click = nil }
+        defer {
+            if let click { taken = (click.kind, click.endedAt) }
+            click = nil
+        }
         return pendingClick
+    }
+
+    /// The kind of the latest click, even once its selection was applied.
+    /// Opening a row must not depend on whether the List reports the
+    /// selection or the open action first.
+    var recentClickKind: NotebookBrowserSelection.Click? {
+        if let pendingClick { return pendingClick.kind }
+        guard let taken else { return nil }
+        if let endedAt = taken.endedAt, endedAt.duration(to: .now) > .milliseconds(500) {
+            return nil
+        }
+        return taken.kind
     }
 
     /// A key press, such as an arrow, changes the selection on its own.

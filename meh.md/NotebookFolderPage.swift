@@ -17,7 +17,8 @@ struct NotebookFolderPage: View {
     let folderID: UUID
     /// A screen in iPhone's Files rather than the big side beside Files.
     let isCompact: Bool
-    @State private var selection: Set<UUID> = []
+    /// Picked in Select mode, or with ⌘- and ⇧-clicks outside it.
+    @State private var selection = NotebookBrowserSelection()
     @State private var isSelecting = false
 
     private var folder: NotebookPlacement? {
@@ -50,7 +51,7 @@ struct NotebookFolderPage: View {
         #endif
         .toolbar { toolbar }
         .onChange(of: children.map(\.item.id)) { _, ids in
-            selection.formIntersection(ids)
+            selection.prune(to: Set(ids))
         }
         .onChange(of: folderID) { _, _ in endSelecting() }
         .accessibilityIdentifier("notebook-folder-page")
@@ -68,7 +69,7 @@ struct NotebookFolderPage: View {
             NotebookFolderList(
                 scene: scene, folderID: folderID, isCompact: isCompact, children: children,
                 header: header(folder), selection: $selection, isSelecting: isSelecting,
-                open: open
+                open: open, select: beginSelecting
             )
         }
     }
@@ -112,23 +113,38 @@ struct NotebookFolderPage: View {
         }
     }
 
-    private func endSelecting() {
-        isSelecting = false
-        selection = []
+    private func beginSelecting(_ id: UUID? = nil) {
+        selection.clear()
+        if let id { selection.toggle(id) }
+        isSelecting = true
     }
 
+    private func endSelecting() {
+        isSelecting = false
+        selection.clear()
+    }
+
+    /// As in Files, several items picked with the pointer get the same bar
+    /// as Select mode, without its circles.
+    private var showsSelectionControls: Bool {
+        isSelecting || selection.count > 1
+    }
+
+    /// In the order shown: Cards put folders above notes.
     private var selectedIDs: [UUID] {
-        children.map(\.item.id).filter(selection.contains)
+        let shown = view == .cards ? NotebookFolderCards<EmptyView>.displayOrder(children)
+            : children.map(\.item.id)
+        return selection.orderedIDs(in: shown)
     }
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        if isSelecting {
+        if showsSelectionControls {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done", action: endSelecting)
+                    .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("notebook-folder-page-done")
             }
-            if !isCompact { ToolbarItem { closeButton } }
             #if os(iOS)
             ToolbarItem(placement: .bottomBar) { moveButton }
             ToolbarSpacer(.flexible, placement: .bottomBar)
@@ -205,10 +221,7 @@ struct NotebookFolderPage: View {
             }
             NotebookTemplateCreationButton(scene: scene)
             Divider()
-            Button("Select", systemImage: "checkmark.circle") {
-                selection = []
-                isSelecting = true
-            }
+            Button("Select", systemImage: "checkmark.circle") { beginSelecting() }
             .disabled(children.isEmpty)
             .accessibilityIdentifier("notebook-folder-page-select")
             NotebookSortMenu(scene: scene, parentID: folderID)
@@ -331,14 +344,21 @@ private struct NotebookFolderList<Header: View>: View {
     let isCompact: Bool
     let allChildren: [NotebookPlacement]
     let header: Header
-    @Binding var selection: Set<UUID>
+    @Binding var selection: NotebookBrowserSelection
     let isSelecting: Bool
     let open: (NotebookPlacement) -> Void
+    /// Starts Select mode with a row picked.
+    let select: (UUID) -> Void
+    #if os(iOS)
+    @State private var clicks: NotebookBrowserScrollReference
+    @Environment(\.mehPalette) private var palette
+    #endif
 
     init(
         scene: NotebookSceneState, folderID: UUID, isCompact: Bool,
-        children: [NotebookPlacement], header: Header, selection: Binding<Set<UUID>>,
-        isSelecting: Bool, open: @escaping (NotebookPlacement) -> Void
+        children: [NotebookPlacement], header: Header,
+        selection: Binding<NotebookBrowserSelection>, isSelecting: Bool,
+        open: @escaping (NotebookPlacement) -> Void, select: @escaping (UUID) -> Void
     ) {
         self.scene = scene
         self.folderID = folderID
@@ -348,13 +368,18 @@ private struct NotebookFolderList<Header: View>: View {
         _selection = selection
         self.isSelecting = isSelecting
         self.open = open
+        self.select = select
         #if os(iOS)
         _drop = State(initialValue: NotebookPageListDrop(scene: scene))
+        _clicks = State(initialValue: NotebookBrowserScrollReference())
         #endif
     }
 
     var body: some View {
-        List(selection: $selection) {
+        List(selection: Binding(
+            get: { selection.selectedIDs },
+            set: { setSelection($0) }
+        )) {
             header
                 .listRowInsets(.vertical, 0)
                 .listRowInsets(.horizontal, rowInset)
@@ -370,26 +395,34 @@ private struct NotebookFolderList<Header: View>: View {
                     .selectionDisabled()
             } else {
                 ForEach(children, id: \.item.id) { placement in
-                    NotebookFolderRow(scene: scene, placement: placement, isCompact: isCompact)
+                    NotebookFolderRow(
+                        scene: scene, placement: placement, isCompact: isCompact,
+                        isPicked: isPicked(placement.item.id))
                         #if os(iOS)
                         .background {
                             if placement.item.kind == .folder {
                                 NotebookBrowserUIKitSharedDropReader(coordinator: drop.reader)
                             }
                         }
+                        // Any row on screen finds the List for the click
+                        // reader. On the header it nudged the title off
+                        // where Cards shows it.
+                        .background(NotebookBrowserScrollReader(reference: clicks))
                         .notebookBrowserRowGeometry(
                             itemID: placement.item.id, state: drop.rows)
                         #endif
                         #if os(macOS)
                         // As in Files, a plain click opens; ⌘ and ⇧ select.
                         .simultaneousGesture(TapGesture().onEnded {
-                            guard !isSelecting, !NotebookFolderList.isSelectingClick else { return }
-                            selection = [placement.item.id]
+                            guard !isSelecting, NotebookPointerClick.current == .plain else { return }
+                            selection.selectOnly(placement.item.id)
                             open(placement)
                         })
                         #endif
                         .notebookDragSource(enabled: scene.editingID == nil) {
-                            scene.beginBrowserDrag(placement.item.id, selection: Array(selection))
+                            scene.beginBrowserDrag(
+                                placement.item.id,
+                                selection: selection.orderedIDs(in: children.map(\.item.id)))
                         }
                         .tag(placement.item.id)
                         .listRowInsets(.horizontal, rowInset)
@@ -407,6 +440,26 @@ private struct NotebookFolderList<Header: View>: View {
                                 .accessibilityLabel("Move to Trash")
                             }
                         }
+                        #if os(iOS)
+                        // As in Files, swiping right starts Select mode.
+                        // Without it, the swipe ended as a tap that opened
+                        // the row.
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            if !showsSelectionControls, scene.editingID == nil {
+                                Button {
+                                    // An open swipe can outlive a pointer
+                                    // selection.
+                                    guard !showsSelectionControls else { return }
+                                    select(placement.item.id)
+                                } label: {
+                                    Image(systemName: "checkmark.circle")
+                                }
+                                .tint(.accentColor)
+                                .accessibilityLabel("Select")
+                                .accessibilityIdentifier("notebook-folder-page-swipe-select")
+                            }
+                        }
+                        #endif
                 }
                 NotebookLibraryFooter(noteCount: noteCount) { _ in }
                     .listRowInsets(.horizontal, rowInset)
@@ -425,7 +478,7 @@ private struct NotebookFolderList<Header: View>: View {
         #if os(macOS)
         // As in Files, AppKit tracks the drag; the header is the first row.
         .overlay(NotebookPageDragReader(
-            scene: scene, selection: $selection,
+            scene: scene, selection: $selection, order: children.map(\.item.id),
             source: { row in
                 children.indices.contains(row - 1) ? children[row - 1].item.id : nil
             }))
@@ -443,17 +496,55 @@ private struct NotebookFolderList<Header: View>: View {
                 }
             }
         } primaryAction: { ids in
-            guard !isSelecting, !NotebookFolderList.isSelectingClick,
+            guard !isSelecting, clickKind == .plain,
                   ids.count == 1, let id = ids.first,
                   let placement = children.first(where: { $0.item.id == id }) else { return }
-            selection = []
+            selection.clear()
             open(placement)
         }
+    }
+
+    private var showsSelectionControls: Bool {
+        isSelecting || selection.count > 1
+    }
+
+    /// The pointer click the List is reporting. iPadOS List also opens a
+    /// ⌘- or ⇧-clicked row.
+    private var clickKind: NotebookBrowserSelection.Click {
         #if os(iOS)
-        // A plain tap opens the row; only Select keeps rows selected.
-        .onChange(of: selection) { _, ids in
-            if !isSelecting, !ids.isEmpty { selection = [] }
+        clicks.recentClickKind ?? .plain
+        #else
+        NotebookPointerClick.current
+        #endif
+    }
+
+    /// A plain tap opens its row; ⌘ and ⇧ pick rows in place, as in Files.
+    /// With nothing picked, the open note's row counts as picked.
+    private func setSelection(_ ids: Set<UUID>) {
+        let order = children.map(\.item.id)
+        let openNoteID = isCompact ? nil : scene.selectedID
+        if isSelecting {
+            selection.selectAll(Array(ids))
+            return
         }
+        #if os(iOS)
+        // iPadOS List replaces its selection on every click.
+        if let click = clicks.takeClick(), click.kind != .plain,
+           let id = drop.rows.rowID(at: click.location),
+           selection.click(id, click.kind, proposed: ids, in: order, openNoteID: openNoteID) {
+            return
+        }
+        selection.clear()
+        #else
+        // The Mac List extends its own selection, but can't know that the
+        // open note's row looks selected.
+        if selection.isEmpty, ids.count == 1, let id = ids.first,
+           NotebookPointerClick.current != .plain,
+           selection.click(id, NotebookPointerClick.current, proposed: ids, in: order,
+                           openNoteID: openNoteID) {
+            return
+        }
+        selection.selectAll(Array(ids))
         #endif
     }
 
@@ -493,12 +584,11 @@ private struct NotebookFolderList<Header: View>: View {
         #endif
     }
 
-    /// A ⌘- or ⇧-click, which selects rows rather than opening one. The
-    /// click's own flags count, not only keys held down right now.
-    private static var isSelectingClick: Bool {
-        #if os(macOS)
-        let flags = (NSApp.currentEvent?.modifierFlags ?? []).union(NSEvent.modifierFlags)
-        return !flags.intersection([.command, .shift]).isEmpty
+    /// Picked with ⌘ or ⇧. Select mode shows its circles instead; the Mac
+    /// List draws its own selection.
+    private func isPicked(_ id: UUID) -> Bool {
+        #if os(iOS)
+        !isSelecting && selection.contains(id)
         #else
         false
         #endif
@@ -509,6 +599,11 @@ private struct NotebookFolderList<Header: View>: View {
            target.rowID == id {
             return Color.accentColor.opacity(0.16)
         }
+        #if os(iOS)
+        // The custom background hides the List's own selected fill. As in
+        // Files, a picked row is filled with the tint, unlike the open note.
+        if isPicked(id) { return palette.accentColor ?? .accentColor }
+        #endif
         return id == scene.selectedID && !isSelecting && isCompact == false
             ? NotebookSidebarPalette.openNote : .clear
     }
@@ -518,6 +613,8 @@ private struct NotebookFolderRow: View {
     let scene: NotebookSceneState
     let placement: NotebookPlacement
     let isCompact: Bool
+    /// On the tint, so the row's words turn white.
+    var isPicked = false
 
     var body: some View {
         let id = placement.item.id
@@ -552,6 +649,7 @@ private struct NotebookFolderRow: View {
         }
         .padding(.vertical, isFolder ? 6 : 4)
         .frame(minHeight: 44)
+        .foregroundStyle(isPicked ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
         .contentShape(Rectangle())
         .onAppear { if !isFolder { scene.pageRowAppeared(id) } }
         .onDisappear { scene.pageRowDisappeared(id) }
@@ -597,9 +695,20 @@ private struct NotebookFolderCards<Header: View>: View {
     let isCompact: Bool
     let children: [NotebookPlacement]
     let header: Header
-    @Binding var selection: Set<UUID>
+    @Binding var selection: NotebookBrowserSelection
     let isSelecting: Bool
     let open: (NotebookPlacement) -> Void
+    #if os(iOS)
+    @State private var clicks = NotebookBrowserScrollReference()
+    #endif
+
+    private var displayOrder: [UUID] { Self.displayOrder(children) }
+
+    /// Folders show above notes, whatever their order in the folder.
+    static func displayOrder(_ children: [NotebookPlacement]) -> [UUID] {
+        (children.filter { $0.item.kind == .folder } + children.filter { $0.item.kind == .note })
+            .map(\.item.id)
+    }
 
     var body: some View {
         let folders = children.filter { $0.item.kind == .folder }
@@ -607,6 +716,9 @@ private struct NotebookFolderCards<Header: View>: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                    #if os(iOS)
+                    .background(NotebookBrowserScrollReader(reference: clicks))
+                    #endif
                 if children.isEmpty {
                     NotebookFolderEmpty()
                 }
@@ -617,15 +729,8 @@ private struct NotebookFolderCards<Header: View>: View {
                                 scene: scene, placement: folder, isCompact: isCompact,
                                 isSelected: selection.contains(folder.item.id),
                                 isSelecting: isSelecting
-                            ) {
-                                if isSelecting {
-                                    if !selection.insert(folder.item.id).inserted {
-                                        selection.remove(folder.item.id)
-                                    }
-                                } else {
-                                    open(folder)
-                                }
-                            }
+                            ) { tap(folder) }
+                            .contextMenu { menu(for: folder) }
                             .notebookCardDragSource(folder.item.id, enabled: scene.editingID == nil)
                             .notebookPageDropTarget(
                                 scene: scene, folderID: folder.item.id, isFolder: true)
@@ -643,22 +748,10 @@ private struct NotebookFolderCards<Header: View>: View {
                             isSelected: selection.contains(note.item.id),
                             isSelecting: isSelecting,
                             isOpen: !isCompact && note.item.id == scene.selectedID
-                        ) {
-                            if isSelecting {
-                                if !selection.insert(note.item.id).inserted {
-                                    selection.remove(note.item.id)
-                                }
-                            } else {
-                                open(note)
-                            }
-                        }
+                        ) { tap(note) }
                         .notebookCardDragSource(note.item.id, enabled: scene.editingID == nil)
                         .notebookCardFrame(note.item.id, in: frames)
-                        .contextMenu {
-                            if !isSelecting {
-                                NotebookItemActions(scene: scene, placement: note)
-                            }
-                        }
+                        .contextMenu { menu(for: note) }
                     }
                 }
                 if !notes.isEmpty {
@@ -678,8 +771,7 @@ private struct NotebookFolderCards<Header: View>: View {
                       let token = scene.browserDrag.drag?.token else { return [] }
                 return ids.map { NotebookPageDragItem(id: $0, token: token) }
             }
-            .dragContainerSelection(
-                isSelecting ? children.map(\.item.id).filter(selection.contains) : [])
+            .dragContainerSelection(selection.orderedIDs(in: displayOrder))
             .dragConfiguration(DragConfiguration(
                 operationsWithinApp: .init(allowMove: true),
                 operationsOutsideApp: .init(allowCopy: false)))
@@ -690,10 +782,45 @@ private struct NotebookFolderCards<Header: View>: View {
         .notebookPageDragSession(scene)
         #if os(macOS)
         .overlay(NotebookPageDragReader(
-            scene: scene, selection: $selection,
+            scene: scene, selection: $selection, order: displayOrder,
             source: { _ in nil },
             sourceAtPoint: { point in frames.items.first { $0.value.contains(point) }?.key }))
         #endif
+    }
+
+    /// Like a row: a tap opens, ⌘ and ⇧ pick in place, starting from the
+    /// open note's card.
+    private func tap(_ placement: NotebookPlacement) {
+        let id = placement.item.id
+        if isSelecting {
+            selection.toggle(id)
+            return
+        }
+        #if os(iOS)
+        let kind = clicks.pendingClick?.kind ?? .plain
+        #else
+        let kind = NotebookPointerClick.current
+        #endif
+        if kind != .plain {
+            selection.click(id, kind, proposed: [id], in: displayOrder,
+                            openNoteID: isCompact ? nil : scene.selectedID)
+            return
+        }
+        selection.clear()
+        open(placement)
+    }
+
+    @ViewBuilder
+    private func menu(for placement: NotebookPlacement) -> some View {
+        if !isSelecting {
+            if selection.count > 1, selection.contains(placement.item.id) {
+                let ids = selection.orderedIDs(in: displayOrder)
+                Button("Move Selected…") { scene.beginMoving(ids) }
+                Button("Trash Selected", role: .destructive) { scene.trashItems(ids) }
+            } else {
+                NotebookItemActions(scene: scene, placement: placement)
+            }
+        }
     }
 }
 
@@ -716,7 +843,9 @@ private struct NotebookFolderTile: View {
             isRenaming: isCompact && scene.editingID == id, action: action
         ) {
             HStack(spacing: 8) {
-                if isSelecting {
+                // A picked tile shows its check outside Select mode too, so
+                // it can't pass for the open note.
+                if isSelecting || isSelected {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 }
@@ -733,9 +862,6 @@ private struct NotebookFolderTile: View {
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(Color.accentColor, lineWidth: isSelected ? 2 : 0)
             }
-        }
-        .contextMenu {
-            if !isSelecting { NotebookItemActions(scene: scene, placement: placement) }
         }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         // Off while renamed; it would replace the name field's own.
@@ -766,7 +892,7 @@ private struct NotebookNoteCard: View {
                     scene: scene, placement: placement, isCompact: isCompact,
                     font: .subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
-                    .padding(.trailing, isSelecting ? 22 : 0)
+                    .padding(.trailing, isSelecting || isSelected ? 22 : 0)
                     .layoutPriority(1)
                 NotebookCardText(markdown: preview?.text ?? "")
                     .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity,
@@ -795,7 +921,9 @@ private struct NotebookNoteCard: View {
                         lineWidth: isSelected ? 2.5 : 1)
             }
             .overlay(alignment: .topTrailing) {
-                if isSelecting {
+                // A picked card shows its check outside Select mode too; its
+                // border alone is close to the open note's.
+                if isSelecting || isSelected {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
                         .foregroundStyle(isSelected ? Color.accentColor : .secondary)
@@ -992,7 +1120,9 @@ private extension View {
 /// rows: a selected item takes the page's other selected items along.
 private struct NotebookPageDragReader: View {
     let scene: NotebookSceneState
-    @Binding var selection: Set<UUID>
+    @Binding var selection: NotebookBrowserSelection
+    /// The page's items as shown, so a drag moves them in that order.
+    let order: [UUID]
     let source: (Int) -> UUID?
     var sourceAtPoint: ((CGPoint) -> UUID?)?
 
@@ -1002,13 +1132,24 @@ private struct NotebookPageDragReader: View {
             canBegin: { !scene.busy && scene.editingID == nil && !scene.search.isPresented },
             sourceAt: { sourceAtPoint?($0) },
             selectSource: { id in
-                if !selection.contains(id) { selection = [id] }
+                if !selection.contains(id) { selection.selectOnly(id) }
             },
-            begin: { scene.beginBrowserDrag($0, selection: Array(selection)) },
+            begin: { scene.beginBrowserDrag($0, selection: selection.orderedIDs(in: order)) },
             clickEmptySpace: { _ in },
             tracksOwnScrollView: true,
             sourceAtRow: sourceAtPoint == nil ? source : nil
         )
+    }
+}
+#endif
+
+#if os(macOS)
+/// The modifier of the Mac click being handled: ⌘ and ⇧ pick items rather
+/// than open one. The click's own flags count, not only keys held right now.
+enum NotebookPointerClick {
+    static var current: NotebookBrowserSelection.Click {
+        let flags = (NSApp.currentEvent?.modifierFlags ?? []).union(NSEvent.modifierFlags)
+        return flags.contains(.shift) ? .shift : flags.contains(.command) ? .command : .plain
     }
 }
 #endif

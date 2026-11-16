@@ -50,7 +50,10 @@
         "FolderPagesUITests/testPageBesideFilesClosesBackToTheNote",
         "FolderPagesUITests/testTrashingTheFolderClosesItsPage",
         "FolderPagesUITests/testDraggingSelectedRowsOntoAFolderOfThePageMovesThem",
-        "FolderPagesUITests/testDraggingSelectedCardsOntoAFolderOfThePageMovesThem"
+        "FolderPagesUITests/testDraggingSelectedCardsOntoAFolderOfThePageMovesThem",
+        "FolderPagesUITests/testSwipeRightOnAPageRowStartsSelection",
+        "FolderPagesUITests/testIPadCommandClickSelectsFromTheOpenNote",
+        "FolderPagesUITests/testIPadCommandClickSelectsCardsFromTheOpenNote"
       ]
     }
   ],

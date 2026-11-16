@@ -1680,7 +1680,7 @@ struct NotebookLibraryNewNote: View {
 
 #if os(iOS)
 /// Reads the Files header's enclosing list, without owning its scrolling.
-private struct NotebookBrowserScrollReader: UIViewRepresentable {
+struct NotebookBrowserScrollReader: UIViewRepresentable {
     let reference: NotebookBrowserScrollReference
 
     func makeUIView(context: Context) -> NotebookBrowserScrollProbe {
@@ -1716,7 +1716,7 @@ private final class NotebookNextFrame: NSObject {
     }
 }
 
-private final class NotebookBrowserScrollProbe: UIView {
+final class NotebookBrowserScrollProbe: UIView {
     var reference: NotebookBrowserScrollReference?
 
     override func didMoveToWindow() {
