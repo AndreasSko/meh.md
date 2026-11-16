@@ -1303,10 +1303,17 @@ private struct NotebookPageDropTarget: ViewModifier {
     @State private var isTargeted = false
 
     func body(content: Content) -> some View {
+        // Over the tile: its own fill hid a highlight behind it, so a drop
+        // landed without warning.
         content
-            .background(
-                Color.accentColor.opacity(isTargeted ? 0.18 : 0),
-                in: .rect(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.accentColor.opacity(isTargeted ? 0.16 : 0))
+                    .strokeBorder(Color.accentColor.opacity(isTargeted ? 1 : 0), lineWidth: 2)
+                    .allowsHitTesting(false)
+            }
+            .scaleEffect(isTargeted ? 1.06 : 1)
+            .animation(.snappy(duration: 0.2), value: isTargeted)
             .onDrop(of: [.mehNotebookItem], delegate: Delegate(
                 scene: scene, folderID: folderID, isTargeted: $isTargeted))
     }
