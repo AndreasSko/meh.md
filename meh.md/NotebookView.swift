@@ -66,6 +66,7 @@ struct NotebookView: View {
             .modifier(NotebookSnippetNavigation(scene: scene))
             .modifier(NotebookSearchNavigation(scene: scene))
             .modifier(NotebookScenePresentation(scene: scene))
+            .modifier(NotebookMoveUndoMirror(scene: scene))
             .onChange(of: isCompact, initial: true) { _, compact in
                 scene.isCompact = compact
             }

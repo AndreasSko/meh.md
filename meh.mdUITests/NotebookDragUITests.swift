@@ -62,6 +62,44 @@ final class NotebookDragUITests: XCTestCase {
         capture(app, "Manual sibling order and stable note source survive relaunch")
     }
 
+    /// As in Files and Finder, ⌘Z undoes a move and ⇧⌘Z redoes it, also
+    /// after Undo Move in ⋯.
+    func testCommandZUndoesAndRedoesMove() throws {
+        let app = launchNotebook(scenario: "drag-subtree")
+        let note = row(named: "Packing list", prefix: "notebook-sidebar-note-", in: app)
+        let destination = row(named: "Archive", prefix: "notebook-sidebar-folder-", in: app)
+        collapse(destination, in: app)
+        drag(note, to: destination, hold: 1.5)
+        collapse(destination, in: app)
+        XCTAssertTrue(note.waitForNonExistence(timeout: 5))
+
+        app.typeKey("z", modifierFlags: .command)
+        collapse(destination, in: app)
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        capture(app, "Command-Z puts the note back")
+
+        // Redo reveals the note in its folder again, so look with it closed.
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        expand(destination, in: app)
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        collapse(destination, in: app)
+        XCTAssertTrue(note.waitForNonExistence(timeout: 5))
+        capture(app, "Shift-Command-Z moves it again")
+
+        // Undo Move in ⋯ leaves Redo Move to ⇧⌘Z as well.
+        activate(appMenu(in: app))
+        let undo = app.descendants(matching: .any)["notebook-browser-undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        activate(undo)
+        collapse(destination, in: app)
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        app.typeKey("z", modifierFlags: [.command, .shift])
+        expand(destination, in: app)
+        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        collapse(destination, in: app)
+        XCTAssertTrue(note.waitForNonExistence(timeout: 5))
+    }
+
     func testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag() throws {
         let app = launchNotebook(scenario: "drag-subtree")
         let note = row(named: "Packing list", prefix: "notebook-sidebar-note-", in: app)

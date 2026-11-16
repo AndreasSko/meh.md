@@ -272,13 +272,13 @@ struct NotebookSidebar: View {
     private var browserUndoActions: some View {
         if scene.browserUndo?.action == .move {
             Button("Undo Move", systemImage: "arrow.uturn.backward") {
-                scene.undoBrowserChange(redo: false)
+                scene.moveUndo.perform(redo: false)
             }
                 .accessibilityIdentifier("notebook-browser-undo")
         }
         if scene.browserRedo?.action == .move {
             Button("Redo Move", systemImage: "arrow.uturn.forward") {
-                scene.undoBrowserChange(redo: true)
+                scene.moveUndo.perform(redo: true)
             }
                 .accessibilityIdentifier("notebook-browser-redo")
         }
