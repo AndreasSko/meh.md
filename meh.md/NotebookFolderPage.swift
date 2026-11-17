@@ -519,10 +519,9 @@ private struct NotebookFolderList<Header: View>: View {
     }
 
     /// A plain tap opens its row; ⌘ and ⇧ pick rows in place, as in Files.
-    /// With nothing picked, the open note's row counts as picked.
+    /// The note the page covers isn't shown as open, so picking never
+    /// starts from it.
     private func setSelection(_ ids: Set<UUID>) {
-        let order = children.map(\.item.id)
-        let openNoteID = isCompact ? nil : scene.selectedID
         if isSelecting {
             selection.selectAll(Array(ids))
             return
@@ -531,19 +530,11 @@ private struct NotebookFolderList<Header: View>: View {
         // iPadOS List replaces its selection on every click.
         if let click = clicks.takeClick(), click.kind != .plain,
            let id = drop.rows.rowID(at: click.location),
-           selection.click(id, click.kind, proposed: ids, in: order, openNoteID: openNoteID) {
+           selection.click(id, click.kind, proposed: ids, in: children.map(\.item.id)) {
             return
         }
         selection.clear()
         #else
-        // The Mac List extends its own selection, but can't know that the
-        // open note's row looks selected.
-        if selection.isEmpty, ids.count == 1, let id = ids.first,
-           NotebookPointerClick.current != .plain,
-           selection.click(id, NotebookPointerClick.current, proposed: ids, in: order,
-                           openNoteID: openNoteID) {
-            return
-        }
         selection.selectAll(Array(ids))
         #endif
     }
@@ -604,12 +595,11 @@ private struct NotebookFolderList<Header: View>: View {
             return Color.accentColor.opacity(0.16)
         }
         #if os(iOS)
-        // The custom background hides the List's own selected fill. As in
-        // Files, a picked row is filled with the tint, unlike the open note.
+        // The custom background hides the List's own selected fill, so a
+        // picked row is filled with the tint, as in Files.
         if isPicked(id) { return palette.accentColor ?? .accentColor }
         #endif
-        return id == scene.selectedID && !isSelecting && isCompact == false
-            ? NotebookSidebarPalette.openNote : .clear
+        return .clear
     }
 }
 
@@ -750,8 +740,7 @@ private struct NotebookFolderCards<Header: View>: View {
                         NotebookNoteCard(
                             scene: scene, placement: note, isCompact: isCompact,
                             isSelected: selection.contains(note.item.id),
-                            isSelecting: isSelecting,
-                            isOpen: !isCompact && note.item.id == scene.selectedID
+                            isSelecting: isSelecting
                         ) { tap(note) }
                         .notebookCardDragSource(note.item.id, enabled: scene.editingID == nil)
                         .notebookCardFrame(note.item.id, in: frames)
@@ -792,8 +781,7 @@ private struct NotebookFolderCards<Header: View>: View {
         #endif
     }
 
-    /// Like a row: a tap opens, ⌘ and ⇧ pick in place, starting from the
-    /// open note's card.
+    /// Like a row: a tap opens, ⌘ and ⇧ pick in place.
     private func tap(_ placement: NotebookPlacement) {
         let id = placement.item.id
         if isSelecting {
@@ -806,8 +794,7 @@ private struct NotebookFolderCards<Header: View>: View {
         let kind = NotebookPointerClick.current
         #endif
         if kind != .plain {
-            selection.click(id, kind, proposed: [id], in: displayOrder,
-                            openNoteID: isCompact ? nil : scene.selectedID)
+            selection.click(id, kind, proposed: [id], in: displayOrder)
             return
         }
         selection.clear()
@@ -847,8 +834,7 @@ private struct NotebookFolderTile: View {
             isRenaming: isCompact && scene.editingID == id, action: action
         ) {
             HStack(spacing: 8) {
-                // A picked tile shows its check outside Select mode too, so
-                // it can't pass for the open note.
+                // A picked tile shows its check outside Select mode too.
                 if isSelecting || isSelected {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .foregroundStyle(isSelected ? Color.accentColor : .secondary)
@@ -882,7 +868,6 @@ private struct NotebookNoteCard: View {
     let isCompact: Bool
     let isSelected: Bool
     let isSelecting: Bool
-    let isOpen: Bool
     let action: () -> Void
     @State private var preview: NotebookNotePreview?
 
@@ -920,13 +905,11 @@ private struct NotebookNoteCard: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 14)
                     .strokeBorder(
-                        isSelected ? Color.accentColor
-                            : isOpen ? Color.secondary.opacity(0.6) : Color.primary.opacity(0.08),
+                        isSelected ? Color.accentColor : Color.primary.opacity(0.08),
                         lineWidth: isSelected ? 2.5 : 1)
             }
             .overlay(alignment: .topTrailing) {
-                // A picked card shows its check outside Select mode too; its
-                // border alone is close to the open note's.
+                // A picked card shows its check outside Select mode too.
                 if isSelecting || isSelected {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
