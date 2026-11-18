@@ -2691,6 +2691,7 @@ final class MarkdownSyntaxCache: NSObject {
     private var parsedStorageRevision: UInt64?
     private(set) var snapshotCount = 0
     private var cachedResult: MarkdownSyntaxResult?
+    private var cachedLinkCodeBlocks: [MarkdownLinkCodeBlock] = []
     private var cachedPreviewSnapshot: MarkdownLivePreviewSnapshot?
     private var cachedPreviewRanges: MarkdownLivePreviewRanges?
     private var cachedRenderingPresentation: MarkdownRenderingPresentation?
@@ -2788,11 +2789,11 @@ final class MarkdownSyntaxCache: NSObject {
               let update = MarkdownSyntax.incrementallyParse(
                 text, previousText: cachedText, previousResult: cachedResult,
                 editedRange: edit.range, changeInLength: edit.delta,
-                timeSums: timeSums
+                timeSums: timeSums, previousLinkCodeBlocks: cachedLinkCodeBlocks
               ) else { return false }
         let oldPreview = appliedPreviewRanges
         let oldDirty = dirtyLayoutRange
-        install(update.result, for: text)
+        install(update.result, for: text, linkCodeBlocks: update.linkCodeBlocks)
         incrementalParseCount += 1
         // Native text storage already shifts the attributes after an edit.
         // Shift the matching concealment metadata before comparing it again.
@@ -2870,7 +2871,8 @@ final class MarkdownSyntaxCache: NSObject {
     func noteLinks(in textStorage: NSTextStorage) -> [NotebookLinkOccurrence] {
         let text = textSnapshot(in: textStorage)
         if let noteLinks, noteLinks.revision == characterRevision { return noteLinks.links }
-        let links = NotebookLinkParser.parse(text)
+        let blocks = parsedStorageRevision == characterRevision ? cachedLinkCodeBlocks : nil
+        let links = NotebookLinkParser.parseWithContext(text, codeBlocks: blocks).links
         noteLinks = (characterRevision, links)
         return links
     }
@@ -2902,26 +2904,30 @@ final class MarkdownSyntaxCache: NSObject {
             }
         }
         // Only the observed storage path can apply its pending edit range.
-        let result = MarkdownSyntax.parse(text, timeSums: timeSums)
-        parseCount += 1
-        install(result, for: text)
-        return result
+        return fullParse(for: text)
     }
 
     private func updateResult(for text: String) -> MarkdownSyntaxResult {
         if prepareIncrementally(for: text), let cachedResult {
             return cachedResult
         }
-        let result = MarkdownSyntax.parse(text, timeSums: timeSums)
-        parseCount += 1
-        install(result, for: text)
-        return result
+        return fullParse(for: text)
     }
 
-    private func install(_ result: MarkdownSyntaxResult, for text: String) {
+    private func fullParse(for text: String) -> MarkdownSyntaxResult {
+        let parsed = MarkdownSyntax.parseWithCodeBlocks(text, timeSums: timeSums)
+        parseCount += 1
+        install(parsed.result, for: text, linkCodeBlocks: parsed.linkCodeBlocks)
+        return parsed.result
+    }
+
+    private func install(
+        _ result: MarkdownSyntaxResult, for text: String, linkCodeBlocks: [MarkdownLinkCodeBlock]
+    ) {
         parsedStorageRevision = nil
         cachedText = text
         cachedResult = result
+        cachedLinkCodeBlocks = linkCodeBlocks
         cachedCharacterRevision = characterRevision
         characterEdit = nil
         dirtyLayoutRange = nil

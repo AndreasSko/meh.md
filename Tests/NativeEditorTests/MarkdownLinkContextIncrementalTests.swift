@@ -5,6 +5,79 @@ import XCTest
 
 @MainActor
 final class MarkdownLinkContextIncrementalTests: XCTestCase {
+    func testIndentedLinksFollowBlockContextWhenEditing() {
+        for (previous, target, replacement) in [
+            ("Heading\n    [Read](Map.md)\n", "Heading", "# Heading"),
+            ("# Heading\n    [Read](Map.md)\n", "# Heading", "Heading"),
+            ("- Root\n  - Section\n    - [Read](Map.md)\n", "Read", "Open"),
+            ("- Root\n  - Section\n    - [Read](Map.md)\n", "- Root\n  - Section", "# Heading"),
+            ("- Root\n  ```\n  [[Literal]]\nOutside [[Map]]\n", "  ```", "  Example"),
+            ("- Root\n  Example\n  [[Literal]]\nOutside [[Map]]\n", "  Example", "  ```"),
+        ] {
+            check(previous, replacing: target, with: replacement)
+        }
+    }
+
+    func testNestedLinksAndCodeHaveMatchingEditorStyles() {
+        let text = "- Root\n  - Section\n    - [Read](Map.md)\n"
+            + "      ```\n      [[Literal]]\n      ```\n"
+            + "      [Next](Next.md)\n"
+        let syntax = MarkdownSyntax.parse(text)
+        let links = syntax.spans.filter { $0.role == .link }
+        XCTAssertEqual(links.map { (text as NSString).substring(with: $0.range) },
+                       ["[Read](Map.md)", "[Next](Next.md)"])
+        XCTAssertEqual(syntax.paragraphRuns.filter { $0.kind == .codeBlock }.count, 3)
+    }
+
+    func testCachedCodeRangesShiftWithProseEdits() throws {
+        let previous = "    [[Before]]\n\nThe trail stays bright.\n\n"
+            + "```\n[[After]]\n```\n"
+        let parsed = MarkdownSyntax.parseWithCodeBlocks(previous)
+        let edit = (previous as NSString).range(of: "stays")
+        let replacement = "stays very"
+        let text = (previous as NSString).replacingCharacters(in: edit, with: replacement)
+        let update = try XCTUnwrap(MarkdownSyntax.incrementallyParse(
+            text, previousText: previous, previousResult: parsed.result,
+            editedRange: NSRange(location: edit.location, length: replacement.utf16.count),
+            changeInLength: replacement.utf16.count - edit.length,
+            previousLinkCodeBlocks: parsed.linkCodeBlocks
+        ))
+        let full = MarkdownSyntax.parseWithCodeBlocks(text)
+        XCTAssertEqual(update.result, full.result)
+        XCTAssertEqual(update.linkCodeBlocks, full.linkCodeBlocks)
+        XCTAssertLessThan(update.invalidatedRange.length, text.utf16.count)
+    }
+
+    func testAppendingTextAtTheEndOfCodeExpandsTheCachedRange() throws {
+        for previous in ["```\nhello", "    hello"] {
+            let parsed = MarkdownSyntax.parseWithCodeBlocks(previous)
+            let text = previous + "1á"
+            let update = try XCTUnwrap(MarkdownSyntax.incrementallyParse(
+                text, previousText: previous, previousResult: parsed.result,
+                editedRange: NSRange(location: previous.utf16.count, length: 2),
+                changeInLength: 2, previousLinkCodeBlocks: parsed.linkCodeBlocks
+            ))
+            let full = MarkdownSyntax.parseWithCodeBlocks(text)
+            XCTAssertEqual(update.result, full.result)
+            XCTAssertEqual(update.linkCodeBlocks, full.linkCodeBlocks)
+        }
+    }
+
+    func testFenceLikeInlineDelimiterEditReparsesAcrossHTMLLines() throws {
+        let previous = "<div>\n```\n[x](a.md)\n```\n</div>\n"
+        let edit = NSRange(location: "<div>\n".utf16.count, length: 1)
+        let text = (previous as NSString).replacingCharacters(
+            in: NSRange(location: edit.location, length: 0), with: "`"
+        )
+        let update = try XCTUnwrap(MarkdownSyntax.incrementallyParse(
+            text, previousText: previous, previousResult: MarkdownSyntax.parse(previous),
+            editedRange: edit, changeInLength: 1
+        ))
+        XCTAssertEqual(update.result, MarkdownSyntax.parse(text))
+        XCTAssertEqual(update.invalidatedRange, NSRange(location: 0, length: text.utf16.count))
+        check(previous, replacing: "a.md", with: "longer.md")
+    }
+
     func testLateFrontmatterClosersMatchFullParse() {
         for separator in ["\n", "\r\n", "\u{2028}"] {
             for closer in ["---", "..."] {

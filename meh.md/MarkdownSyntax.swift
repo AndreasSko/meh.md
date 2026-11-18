@@ -88,6 +88,7 @@ struct MarkdownSyntaxResult: Equatable {
 struct MarkdownSyntaxIncrementalResult: Equatable {
     let result: MarkdownSyntaxResult
     let invalidatedRange: NSRange
+    let linkCodeBlocks: [MarkdownLinkCodeBlock]
 }
 
 enum MarkdownSyntax {
@@ -96,9 +97,19 @@ enum MarkdownSyntax {
     static func parse(
         _ text: String, isDocumentStart: Bool = true, timeSums: Bool = false
     ) -> MarkdownSyntaxResult {
+        parseWithCodeBlocks(text, isDocumentStart: isDocumentStart, timeSums: timeSums).result
+    }
+
+    static func parseWithCodeBlocks(
+        _ text: String, isDocumentStart: Bool = true, timeSums: Bool = false,
+        linkCodeBlocks: [MarkdownLinkCodeBlock]? = nil
+    ) -> (result: MarkdownSyntaxResult, linkCodeBlocks: [MarkdownLinkCodeBlock]) {
         let source = contiguousSource(text)
-        let fences = fencedCodeRanges(in: source)
-        let fenced = fences.ranges
+        let linkContext = NotebookLinkParser.parseWithContext(
+            text, includingIncomplete: true, allowFrontmatter: isDocumentStart,
+            codeBlocks: linkCodeBlocks
+        )
+        let fenced = linkContext.codeBlocks.filter(\.isFenced).map(\.range)
         let inline = inlineCodeRanges(in: source, excluding: fenced)
         let codeRanges = (fenced + inline).sorted { left, right in
             if left.location == right.location {
@@ -120,9 +131,6 @@ enum MarkdownSyntax {
             lines: lines,
             source: source
         )
-        let linkContext = NotebookLinkParser.incrementalContext(
-            in: text, allowFrontmatter: isDocumentStart
-        )
         let rules = appendRuleSpans(
             in: source, lines: lines, fenced: fenced, tableLines: tableLines,
             context: linkContext.ranges, timeSums: timeSums,
@@ -136,8 +144,7 @@ enum MarkdownSyntax {
             spans: &spans,
             paragraphRuns: &paragraphRuns
         )
-        let addresses = appendLinkSpans(in: source, excluding: codeRanges, spans: &spans,
-                                        allowFrontmatter: isDocumentStart)
+        let addresses = appendLinkSpans(linkContext.links, excluding: codeRanges, spans: &spans)
         appendEscapeSpans(
             in: source, excluding: [codeRanges, linkContext.ranges, addresses], spans: &spans
         )
@@ -188,7 +195,8 @@ enum MarkdownSyntax {
             }
             return left.range.location < right.range.location
         }
-        let canRestartAtEnd = emphasis.atEnd && !fences.hasOpenFence
+        let canRestartAtEnd = emphasis.atEnd
+            && linkContext.codeBlocks.last?.isUnclosedAtEnd != true
             && !linkContext.hasOpenComment
         // Text above an underline belongs to its heading, so an incremental
         // parse must not restart inside one or at its first line.
@@ -218,7 +226,7 @@ enum MarkdownSyntax {
         )
         result.tables = tables
         result.linkContextRanges = linkContext.ranges
-        return result
+        return (result, linkContext.codeBlocks)
     }
 
     private static func contiguousSource(_ text: String) -> NSString {
@@ -236,7 +244,10 @@ enum MarkdownSyntax {
         let source = contiguousSource(text)
         let code = inlineCodeRanges(in: source, excluding: [])
         var spans = code.map { MarkdownStyleSpan(range: $0, role: .code) }
-        appendLinkSpans(in: source, excluding: code, spans: &spans, allowFrontmatter: false)
+        let links = NotebookLinkParser.parseWithContext(
+            text, includingIncomplete: true, allowFrontmatter: false, codeBlocks: []
+        ).links
+        appendLinkSpans(links, excluding: code, spans: &spans)
         _ = appendEmphasisSpans(
             in: source, excluding: code, blockBoundaries: [], spans: &spans
         )
@@ -265,7 +276,8 @@ enum MarkdownSyntax {
         previousResult: MarkdownSyntaxResult,
         editedRange: NSRange,
         changeInLength: Int,
-        timeSums: Bool = false
+        timeSums: Bool = false,
+        previousLinkCodeBlocks: [MarkdownLinkCodeBlock]? = nil
     ) -> MarkdownSyntaxIncrementalResult? {
         let source = text as NSString
         let previousSource = previousText as NSString
@@ -312,9 +324,34 @@ enum MarkdownSyntax {
         let oldAffected = syntaxLineRange(
             containing: previousEditedRange, in: previousSource
         )
+        // A slice cannot determine CommonMark list and paragraph indentation
+        // by itself. Resolve blocks in the whole note, then widen the slice
+        // if that classification changes any lines in the reused suffix.
+        let oldCode = previousLinkCodeBlocks ?? NotebookLinkParser.codeBlocks(in: previousText)
+        let newCode = codeBlocksAfterEdit(
+            oldCode, in: text, replacing: previousEditedRange, from: previousSource,
+            in: source, editedRange: editedRange
+        )
+        let newAffected = syntaxLineRange(containing: editedRange, in: source)
+        // The link parser also recognizes multiline inline code. In raw HTML
+        // or after invalid fence syntax, a fence-like line can be an inline
+        // delimiter and change links beyond this slice.
+        if hasUnmaskedFence(in: oldAffected, source: previousSource, blocks: oldCode)
+            || hasUnmaskedFence(in: newAffected, source: source, blocks: newCode) {
+            guard source.length <= 65_536 else { return nil }
+            let parsed = parseWithCodeBlocks(text, timeSums: timeSums, linkCodeBlocks: newCode)
+            return MarkdownSyntaxIncrementalResult(
+                result: parsed.result, invalidatedRange: NSRange(location: 0, length: source.length),
+                linkCodeBlocks: newCode
+            )
+        }
         let start = previousResult.restartOffsets.last(where: {
             $0 <= oldAffected.location
         }) ?? 0
+        let prefix = NSRange(location: 0, length: start)
+        guard codeBlocks(oldCode, in: prefix) == codeBlocks(newCode, in: prefix),
+              !fenceCrosses(start, in: oldCode),
+              !fenceCrosses(start, in: newCode) else { return nil }
         let ends = previousResult.restartOffsets.filter {
             $0 >= NSMaxRange(oldAffected) && $0 > start
         }
@@ -335,9 +372,20 @@ enum MarkdownSyntax {
             // Bound speculative work for edits affecting long-range context.
             // A full parse remains the correctness fallback for those cases.
             guard newEnd - start <= 65_536 else { return nil }
+            let oldSuffix = NSRange(location: oldEnd, length: previousSource.length - oldEnd)
+            let newSuffix = NSRange(location: newEnd, length: source.length - newEnd)
+            guard codeBlocks(oldCode, in: oldSuffix, shift: changeInLength)
+                    == codeBlocks(newCode, in: newSuffix),
+                  !fenceCrosses(oldEnd, in: oldCode),
+                  !fenceCrosses(newEnd, in: newCode) else {
+                minimumEnd = start + max(128, 2 * (oldEnd - start))
+                continue
+            }
             let region = NSRange(location: start, length: newEnd - start)
-            let local = parse(source.substring(with: region), isDocumentStart: start == 0,
-                              timeSums: timeSums)
+            let local = parseWithCodeBlocks(
+                source.substring(with: region), isDocumentStart: start == 0,
+                timeSums: timeSums, linkCodeBlocks: codeBlocks(newCode, in: region, shift: -start)
+            ).result
             // A distant fence edit can expose a table within this region.
             // Tables are not spliced into incremental results yet.
             guard local.tables.isEmpty else { return nil }
@@ -434,8 +482,107 @@ enum MarkdownSyntax {
         result.linkContextRanges.sort { $0.location < $1.location }
         return MarkdownSyntaxIncrementalResult(
             result: result,
-            invalidatedRange: line
+            invalidatedRange: line,
+            linkCodeBlocks: newCode
         )
+    }
+
+    private static func codeBlocksAfterEdit(
+        _ blocks: [MarkdownLinkCodeBlock], in text: String,
+        replacing oldRange: NSRange, from oldSource: NSString,
+        in source: NSString, editedRange: NSRange
+    ) -> [MarkdownLinkCodeBlock] {
+        // Editing words inside an existing plain line cannot introduce a
+        // container, fence, HTML terminator, or reference definition. Keep the
+        // full block pass off the ordinary typing path, even in long notes.
+        guard isInPlainLine(oldRange, in: oldSource), isInPlainLine(editedRange, in: source)
+        else { return NotebookLinkParser.codeBlocks(in: text) }
+
+        let delta = editedRange.length - oldRange.length
+        guard delta != 0 else { return blocks }
+        return blocks.map { block in
+            var range = block.range
+            if range.location >= NSMaxRange(oldRange) {
+                range.location += delta
+            } else if NSMaxRange(range) > oldRange.location
+                || NSMaxRange(range) == oldSource.length && oldRange.location == oldSource.length {
+                range.length += delta
+            }
+            return MarkdownLinkCodeBlock(
+                range: range, isFenced: block.isFenced, isUnclosedAtEnd: block.isUnclosedAtEnd
+            )
+        }
+    }
+
+    private static func isInPlainLine(_ edit: NSRange, in source: NSString) -> Bool {
+        let line = source.lineRange(for: NSRange(location: edit.location, length: 0))
+        guard line.length > 0, line.location < edit.location,
+              NSMaxRange(edit) <= NSMaxRange(line) else { return false }
+        let edited = source.substring(with: edit).unicodeScalars
+        guard edited.allSatisfy({
+            CharacterSet.alphanumerics.contains($0) || CharacterSet.nonBaseCharacters.contains($0)
+                || " ,.!?".unicodeScalars.contains($0)
+        }) else { return false }
+
+        var first = skipHorizontalWhitespace(from: line.location, before: edit.location, in: source)
+        if first < edit.location,
+           let marker = listMarker(at: first, lineEnd: edit.location, in: source) {
+            first = skipHorizontalWhitespace(from: NSMaxRange(marker), before: edit.location,
+                                             in: source)
+        }
+        guard first < edit.location, isASCIILetter(source.character(at: first)),
+              !(first..<NSMaxRange(line)).contains(where: { location in
+                  let unit = source.character(at: location)
+                  return unit == 60 || unit == 62 || unit == 93 // < > ]
+              }) else { return false }
+        if edited.contains(" ") {
+            // Keep an existing word separator and following letter. A single
+            // word may be a reference destination continued from above.
+            return (first..<(edit.location - 1)).contains {
+                source.character(at: $0) == ASCII.space
+                    && isASCIILetter(source.character(at: $0 + 1))
+            }
+        }
+        return true
+    }
+
+    private static func isASCIILetter(_ unit: unichar) -> Bool {
+        (65...90).contains(unit) || (97...122).contains(unit)
+    }
+
+    private static func hasUnmaskedFence(
+        in region: NSRange, source: NSString, blocks: [MarkdownLinkCodeBlock]
+    ) -> Bool {
+        var search = region
+        while search.length >= 3 {
+            let delimiter = source.range(of: "```", options: .literal, range: search)
+            guard delimiter.location != NSNotFound else { return false }
+            guard let block = blocks.first(where: {
+                NSLocationInRange(delimiter.location, $0.range)
+            }) else { return true }
+            let next = max(NSMaxRange(block.range), NSMaxRange(delimiter))
+            search = NSRange(location: next, length: max(0, NSMaxRange(region) - next))
+        }
+        return false
+    }
+
+    private static func fenceCrosses(_ position: Int, in blocks: [MarkdownLinkCodeBlock]) -> Bool {
+        blocks.contains { block in
+            block.isFenced && block.range.location < position && position < NSMaxRange(block.range)
+        }
+    }
+
+    private static func codeBlocks(
+        _ blocks: [MarkdownLinkCodeBlock], in region: NSRange, shift: Int = 0
+    ) -> [MarkdownLinkCodeBlock] {
+        blocks.compactMap { block in
+            let clipped = NSIntersectionRange(block.range, region)
+            guard clipped.length > 0 else { return nil }
+            return MarkdownLinkCodeBlock(
+                range: offset(clipped, by: shift), isFenced: block.isFenced,
+                isUnclosedAtEnd: block.isUnclosedAtEnd
+            )
+        }
     }
 
     /// An underline heading reaches across lines: a reparsed region next to
@@ -589,46 +736,6 @@ enum MarkdownSyntax {
         let rightIsCode = right.kind == .codeBlock
         if leftIsCode != rightIsCode { return leftIsCode }
         return left.range.location < right.range.location
-    }
-
-    private static func fencedCodeRanges(
-        in source: NSString
-    ) -> (ranges: [NSRange], hasOpenFence: Bool) {
-        let lines = lineRanges(in: source)
-        var ranges: [NSRange] = []
-        var hasOpenFence = false
-        var lineIndex = 0
-        while lineIndex < lines.count {
-            let line = lines[lineIndex]
-            guard let fence = openingFence(in: source, line: line) else {
-                lineIndex += 1
-                continue
-            }
-
-            var end = source.length
-            var closingLineIndex: Int?
-            if lineIndex + 1 < lines.count {
-                for candidateIndex in (lineIndex + 1)..<lines.count {
-                    let candidate = lines[candidateIndex]
-                    if isClosingFence(
-                        in: source,
-                        line: candidate,
-                        marker: fence.marker,
-                        minimumLength: fence.length
-                    ) {
-                        end = NSMaxRange(candidate)
-                        closingLineIndex = candidateIndex
-                        break
-                    }
-                }
-            }
-            ranges.append(
-                NSRange(location: line.location, length: end - line.location)
-            )
-            hasOpenFence = closingLineIndex == nil
-            lineIndex = (closingLineIndex ?? (lines.count - 1)) + 1
-        }
-        return (ranges, hasOpenFence)
     }
 
     private static func inlineCodeRanges(
@@ -1038,14 +1145,12 @@ enum MarkdownSyntax {
     /// Returns the plain addresses, whose backslashes stay literal.
     @discardableResult
     private static func appendLinkSpans(
-        in source: NSString,
+        _ links: [NotebookLinkOccurrence],
         excluding codeRanges: [NSRange],
-        spans: inout [MarkdownStyleSpan],
-        allowFrontmatter: Bool = true
+        spans: inout [MarkdownStyleSpan]
     ) -> [NSRange] {
         var addresses: [NSRange] = []
-        for link in NotebookLinkParser.parse(source as String, includingIncomplete: true,
-                                              allowFrontmatter: allowFrontmatter) where !link.isEmbed {
+        for link in links where !link.isEmbed {
             guard !codeRanges.contains(where: {
                 NSLocationInRange(link.range.location, $0)
             }) else { continue }
@@ -1589,52 +1694,6 @@ enum MarkdownSyntax {
             start = end + 1
         }
         return ranges
-    }
-
-    private static func openingFence(
-        in source: NSString,
-        line: NSRange
-    ) -> (marker: unichar, length: Int)? {
-        let end = contentEnd(for: line, in: source)
-        var location = line.location
-        while location < end,
-              source.character(at: location) == ASCII.space,
-              location - line.location < 4 {
-            location += 1
-        }
-        guard location - line.location <= 3, location < end else { return nil }
-        let marker = source.character(at: location)
-        guard marker == ASCII.backtick || marker == ASCII.tilde else {
-            return nil
-        }
-        let length = repeatedLength(of: marker, at: location, in: source)
-        guard length >= 3 else { return nil }
-        return (marker, length)
-    }
-
-    private static func isClosingFence(
-        in source: NSString,
-        line: NSRange,
-        marker: unichar,
-        minimumLength: Int
-    ) -> Bool {
-        let end = contentEnd(for: line, in: source)
-        var location = line.location
-        while location < end,
-              source.character(at: location) == ASCII.space,
-              location - line.location < 4 {
-            location += 1
-        }
-        let length = repeatedLength(of: marker, at: location, in: source)
-        guard location - line.location <= 3, length >= minimumLength else {
-            return false
-        }
-        location += length
-        while location < end,
-              isWhitespace(source.character(at: location)) {
-            location += 1
-        }
-        return location == end
     }
 
     private static func listMarker(

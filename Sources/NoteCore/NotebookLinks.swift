@@ -31,9 +31,27 @@ public struct NotebookLinkOccurrence: Sendable, Equatable {
 public enum NotebookLinkParser {
     public static func parse(_ text: String, includingIncomplete: Bool = false,
                              allowFrontmatter: Bool = true) -> [NotebookLinkOccurrence] {
+        parseWithContext(text, includingIncomplete: includingIncomplete,
+                         allowFrontmatter: allowFrontmatter).links
+    }
+
+    /// Exclusions shared by link activation and editor presentation. A
+    /// partial editor parse supplies code ranges resolved in the full note.
+    public static func parseWithContext(
+        _ text: String, includingIncomplete: Bool = false,
+        allowFrontmatter: Bool = true, codeBlocks knownCodeBlocks: [MarkdownLinkCodeBlock]? = nil
+    ) -> (links: [NotebookLinkOccurrence], ranges: [NSRange], hasOpenComment: Bool,
+          codeBlocks: [MarkdownLinkCodeBlock]) {
         let source = text as NSString
         let units = Array(text.utf16)
-        let blocked = excludedUnits(text, allowFrontmatter: allowFrontmatter)
+        let frontmatter = allowFrontmatter ? frontmatterRange(in: source) : nil
+        let codeBlocks = knownCodeBlocks ?? codeBlocks(in: text, after: frontmatter)
+        var contextRanges: [NSRange] = []
+        var hasOpenComment = false
+        let blocked = excludedUnits(
+            in: source, units: units, frontmatter: frontmatter, codeBlocks: codeBlocks,
+            contextRanges: &contextRanges, hasOpenComment: &hasOpenComment
+        )
         var result: [NotebookLinkOccurrence] = []
         var i = 0
         func escaped(_ offset: Int) -> Bool {
@@ -139,7 +157,7 @@ public enum NotebookLinkParser {
             ))
             i = upper
         }
-        return result
+        return (result, contextRanges, hasOpenComment, codeBlocks)
     }
 
     /// A CommonMark `<scheme:...>` or `<name@example.com>` autolink, or a
@@ -446,78 +464,50 @@ public enum NotebookLinkParser {
         return slug == destination.lowercased()
     }
 
-    /// Neutral boundaries for incremental editor parsing. A substring must
-    /// never restart inside frontmatter or a multiline HTML comment.
-    public static func incrementalContext(
-        in text: String, allowFrontmatter: Bool = true
-    ) -> (ranges: [NSRange], hasOpenComment: Bool) {
-        var ranges: [NSRange] = []
-        var open = false
-        _ = excludedUnits(text, allowFrontmatter: allowFrontmatter,
-                          contextRanges: &ranges, hasOpenComment: &open)
-        return (ranges, open)
+    static func frontmatterRange(in source: NSString) -> NSRange? {
+        let firstLine = source.lineRange(for: NSRange(location: 0, length: 0))
+        guard NSMaxRange(firstLine) < source.length,
+              source.substring(with: firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
+                == "---" else { return nil }
+        var frontmatter: NSRange?
+        let rest = NSRange(location: NSMaxRange(firstLine),
+                           length: source.length - NSMaxRange(firstLine))
+        source.enumerateSubstrings(in: rest, options: .byLines) { line, _, enclosing, stop in
+            let trimmed = line?.trimmingCharacters(in: .whitespaces)
+            if trimmed == "---" || trimmed == "..." {
+                frontmatter = NSRange(location: 0, length: NSMaxRange(enclosing))
+                stop.pointee = true
+            }
+        }
+        return frontmatter
     }
 
-    private static func excludedUnits(_ text: String, allowFrontmatter: Bool = true) -> [Bool] {
-        var ranges: [NSRange] = []
-        var open = false
-        return excludedUnits(text, allowFrontmatter: allowFrontmatter,
-                             contextRanges: &ranges, hasOpenComment: &open)
+    private static func excludedUnits(_ text: String) -> [Bool] {
+        let source = text as NSString
+        let frontmatter = frontmatterRange(in: source)
+        var contextRanges: [NSRange] = []
+        var hasOpenComment = false
+        return excludedUnits(
+            in: source, units: Array(text.utf16), frontmatter: frontmatter,
+            codeBlocks: codeBlocks(in: text, after: frontmatter),
+            contextRanges: &contextRanges, hasOpenComment: &hasOpenComment
+        )
     }
 
     private static func excludedUnits(
-        _ text: String, allowFrontmatter: Bool,
+        in source: NSString, units: [UInt16], frontmatter: NSRange?,
+        codeBlocks: [MarkdownLinkCodeBlock],
         contextRanges: inout [NSRange], hasOpenComment: inout Bool
     ) -> [Bool] {
-        let source = text as NSString
-        let units = Array(text.utf16)
         var blocked = Array(repeating: false, count: units.count)
         func mark(_ range: NSRange) {
             for offset in range.location..<min(NSMaxRange(range), blocked.count) { blocked[offset] = true }
         }
-        var fence: (Character, Int)?
-        var frontmatter = false
-        var firstLine = true
-        var frontmatterEnd = 0
-        let firstLineEnd = source.lineRange(for: NSRange(location: 0, length: 0)).length
-        let startsFrontmatter = allowFrontmatter && source.substring(to: firstLineEnd)
-            .trimmingCharacters(in: .whitespacesAndNewlines) == "---"
-        let remainder = startsFrontmatter && source.length > firstLineEnd
-            ? source.substring(from: firstLineEnd) : ""
-        let hasFrontmatterEnd = remainder.components(separatedBy: .newlines).contains {
-            let line = $0.trimmingCharacters(in: .whitespaces)
-            return line == "---" || line == "..."
+        if let frontmatter {
+            mark(frontmatter)
+            contextRanges.append(frontmatter)
         }
-        source.enumerateSubstrings(in: NSRange(location: 0, length: source.length), options: .byLines) { line, _, enclosing, _ in
-            let value = line ?? ""
-            let trimmed = value.trimmingCharacters(in: .whitespaces)
-            if allowFrontmatter && firstLine && trimmed == "---" && hasFrontmatterEnd { frontmatter = true; mark(enclosing); firstLine = false; return }
-            firstLine = false
-            if frontmatter {
-                mark(enclosing)
-                if trimmed == "---" || trimmed == "..." {
-                    frontmatter = false
-                    frontmatterEnd = NSMaxRange(enclosing)
-                }
-                return
-            }
-            let indentation = value.prefix(while: { $0 == " " }).count
-            let marker = trimmed.first
-            let run = marker.map { m in trimmed.prefix(while: { $0 == m }).count } ?? 0
-            if let open = fence {
-                mark(enclosing)
-                if indentation <= 3, marker == open.0, run >= open.1,
-                   trimmed.dropFirst(run).trimmingCharacters(in: .whitespaces).isEmpty { fence = nil }
-                return
-            }
-            if indentation <= 3, (marker == "`" || marker == "~"), run >= 3 {
-                fence = (marker!, run); mark(enclosing); return
-            }
-            if indentation >= 4 || value.hasPrefix("\t") { mark(enclosing) }
-        }
-        if frontmatterEnd > 0 {
-            contextRanges.append(NSRange(location: 0, length: frontmatterEnd))
-        }
+        for block in codeBlocks { mark(block.range) }
         // Scan inline code and comments together: comment examples in code
         // cannot hide subsequent prose, and backticks in comments are literal.
         func escaped(_ offset: Int) -> Bool {
@@ -544,12 +534,14 @@ public enum NotebookLinkParser {
             while cursor + run < units.count && units[cursor + run] == 96 { run += 1 }
             var end = cursor + run
             var found: Int?
+            var crossesLine = false
             while end < units.count && !blocked[end] {
                 // A code span cannot bridge separate paragraphs.
                 if units[end] == 10 {
                     var next = end + 1
                     while next < units.count && [UInt16(32), 9, 13].contains(units[next]) { next += 1 }
                     if next < units.count && units[next] == 10 { break }
+                    crossesLine = true
                 }
                 if units[end] == 96 {
                     var closingRun = 1
@@ -558,8 +550,12 @@ public enum NotebookLinkParser {
                     end += closingRun
                 } else { end += 1 }
             }
-            if let found { mark(NSRange(location: cursor, length: found - cursor)); cursor = found }
-            else { cursor += run }
+            if let found {
+                let range = NSRange(location: cursor, length: found - cursor)
+                if crossesLine { contextRanges.append(range) }
+                mark(range)
+                cursor = found
+            } else { cursor += run }
         }
         return blocked
     }

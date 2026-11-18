@@ -45,6 +45,54 @@ final class NotebookLinksTests: XCTestCase {
         XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination), ["Visible", "Visible.md"])
     }
 
+    func testCodeIndentIsRelativeToTheContainingBlock() {
+        let text = [
+            "    [literal](TopLevel.md)",
+            "\t[[Literal tab]]",
+            "",
+            "Café 🪐",
+            "    [paragraph continuation](Paragraph.md)",
+            "",
+            "- Project",
+            "  - Section",
+            "    - [nested item](Nested.md)",
+            "\t  [[Tab continuation]]",
+            "",
+            "          [list code](ListCode.md)",
+            "    - [next item](Next.md)",
+            "",
+            ">     [[Quoted code]]",
+        ].joined(separator: "\r\n")
+        let links = NotebookLinkParser.parse(text)
+        XCTAssertEqual(links.map(\.destination),
+                       ["Paragraph.md", "Nested.md", "Tab continuation", "Next.md"])
+        XCTAssertEqual(links.map { (text as NSString).substring(with: $0.destinationRange) },
+                       links.map(\.destination))
+    }
+
+    func testNestedFencesStopAtTheEndOfTheirContainers() {
+        let text = [
+            "- ```markdown",
+            "  [list fence](List.md)",
+            "  ```",
+            "> ~~~markdown",
+            "> [[Quoted fence]]",
+            "  [outside the unclosed quote](Visible.md)",
+            "",
+            "-     [code on the list marker line](Literal.md)",
+        ].joined(separator: "\n")
+        XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination), ["Visible.md"])
+    }
+
+    func testShorterFenceDoesNotCloseAnOpeningLongerThanAByte() {
+        for marker in ["`", "~"] {
+            let opener = String(repeating: marker, count: 256)
+            let shorter = String(repeating: marker, count: 255)
+            let text = "> \(opener)\n> \(shorter)\n> [[Literal]]\n> \(opener)\n[[Visible]]"
+            XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination), ["Visible"])
+        }
+    }
+
     func testEmbedsAreIdentifiedAndUnsupported() {
         let source = NotebookLinkNote(id: UUID(), name: "Source.md", path: "")
         for link in NotebookLinkParser.parse("![[Target]] ![picture](picture.png)") {

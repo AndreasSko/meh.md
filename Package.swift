@@ -21,12 +21,17 @@ let package = Package(
             url: "https://github.com/awslabs/aws-sdk-swift.git",
             exact: "1.8.19"
         ),
+        .package(
+            url: "https://github.com/swiftlang/swift-cmark.git",
+            exact: "0.7.0"
+        ),
     ],
     targets: [
         .target(
             name: "NoteCore",
             dependencies: [
                 .product(name: "Automerge", package: "automerge-swift"),
+                .product(name: "cmark-gfm", package: "swift-cmark"),
             ]
         ),
         // The AWS SDK lives apart from NoteCore, so code that only edits

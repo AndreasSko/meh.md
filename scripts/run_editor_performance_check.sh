@@ -182,6 +182,13 @@ if [[ "$cache_hit" == 0 ]]; then
       -I "$products/include" -L "$products" -luniffi_automerge
       "$products/NoteCore.o" "$products/Automerge.o"
       "$products/AutomergeUniffi.o" "$products/AutomergeUtilities.o")
+    # This probe links NoteCore's transitive dependencies without Xcode.
+    extra_arguments+=(-I "$repo_root/.build/checkouts/swift-cmark/src/include")
+    if [[ -f "$products/cmark-gfm.o" ]]; then
+      extra_arguments+=("$products/cmark-gfm.o")
+    else
+      extra_arguments+=("$products"/cmark-gfm.build/*.o)
+    fi
   fi
   if grep -rqs "import MehWidgetData" "$check_root/sources"; then
     build_args=(--package-path "$repo_root" -c release --product MehWidgetData
