@@ -39,8 +39,12 @@ APNs entitlements and the iOS remote-notification background mode.
   transport without a known cause is rebuilt with the same backoff.
 - Failed engine events update status without starting another exchange,
   avoiding feedback loops for errors that need intervention.
-- App retry timers stop on leaving the foreground. CloudKit owns background
-  transport scheduling; activation resumes app reconciliation and pending work.
+- App retry timers stop on leaving the foreground. On iPhone and iPad, a
+  scheduled app refresh can run an iCloud sync pass, including a direct check
+  for changes missed by silent pushes. The app requests a wake no earlier than
+  15 minutes for saved edits or an hour for a catch-up check. It preserves an
+  earlier request and respects retry deadlines. The Sync Log records requests,
+  wakes, expiration and outcomes alongside per-pass transfer counts.
 
 The cloud foreground polling timer is removed. The explicit loopback HTTP
 mode retains foreground polling because that test service has no push channel.

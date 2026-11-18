@@ -83,6 +83,34 @@ final class NotebookWorkspaceSchedulingTests: XCTestCase {
         }.count, 1)
     }
 
+    func testScheduledBackgroundSyncRunsItsOwnCheckAfterAnOverlappingPass() async throws {
+        let transport = RecordingTransport(scope: "background-overlap")
+        let workspace = makeWorkspace(transport: transport)
+        await workspace.start()
+        let baseline = await transport.fetchCount
+        await transport.pauseNextFetch()
+        let existing = Task { await workspace.refresh() }
+        try await waitUntil { await transport.isFetchPaused }
+        let background = Task {
+            await workspace.refresh(
+                scheduledBackground: true, trigger: "scheduled background sync"
+            )
+        }
+        try await waitUntil {
+            workspace.syncEventLog.entries.contains {
+                $0.event == "background sync waiting for active pass"
+            }
+        }
+        await transport.resumeFetch()
+        await existing.value
+        let result = await background.value
+        let fetches = await transport.fetchCount
+        XCTAssertEqual(result, .completed)
+        XCTAssertEqual(fetches, baseline + 2)
+        let maximumConcurrentFetches = await transport.maximumConcurrentFetches
+        XCTAssertEqual(maximumConcurrentFetches, 1)
+    }
+
     func testSavedEditsCoalesceIntoOneAutomaticExchange() async throws {
         let transport = RecordingTransport(scope: "coalesced")
         let workspace = makeWorkspace(transport: transport)
@@ -642,6 +670,8 @@ private actor RecordingTransport: HaltableSyncTransport {
     private(set) var bootstrapCount = 0
     private(set) var publishCount = 0
     private(set) var fetchCount = 0
+    private var activeFetchCount = 0
+    private(set) var maximumConcurrentFetches = 0
     private(set) var purgeCount = 0
     private var retryDeadline: Date?
     private var halt: SyncHaltStatus?
@@ -726,6 +756,9 @@ private actor RecordingTransport: HaltableSyncTransport {
 
     func fetch(after cursor: String?) async throws -> SyncPage {
         fetchCount += 1
+        activeFetchCount += 1
+        maximumConcurrentFetches = max(maximumConcurrentFetches, activeFetchCount)
+        defer { activeFetchCount -= 1 }
         maintenanceEvents.append("fetch")
         if shouldPauseFetch {
             shouldPauseFetch = false

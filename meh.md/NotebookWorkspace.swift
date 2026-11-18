@@ -813,14 +813,38 @@ final class NotebookWorkspace {
         }
     }
 
+    enum RefreshResult: String {
+        case completed, pending, failed, deferred, coalesced, skipped, cancelled
+    }
+
+    @ObservationIgnored private var startupWaiters:
+        [CheckedContinuation<RefreshResult, Never>] = []
+    @ObservationIgnored private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
+
     func start(manualRetry: Bool = false) async {
-        guard !isResetPending else { return }
-        guard !isLoading, replica == nil || manualRetry else { return }
+        _ = await start(manualRetry: manualRetry, scheduledBackground: false)
+    }
+
+    private func start(
+        manualRetry: Bool = false, scheduledBackground: Bool
+    ) async -> RefreshResult {
+        guard !isResetPending else { return .skipped }
+        if scheduledBackground, Task.isCancelled { return .cancelled }
+        if isLoading, scheduledBackground {
+            // A new transport checks the server on its first pass.
+            syncEventLog.record("background sync joined startup")
+            return await withCheckedContinuation { startupWaiters.append($0) }
+        }
+        guard !isLoading, replica == nil || manualRetry else { return .skipped }
         isLoading = true
+        var result = RefreshResult.skipped
 
         errorMessage = nil
         recoveryAction = nil
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            for waiter in takeStartupWaiters() { waiter.resume(returning: result) }
+        }
         do {
             // Reject malformed test requests before reset or disk/network work.
             if case .invalid = mode {
@@ -831,7 +855,7 @@ final class NotebookWorkspace {
                 do { try NotebookDirectoryLock.claim(directory) }
                 catch is NotebookDirectoryLock.InUse {
                     #if os(macOS)
-                    if Self.handOffToRunningCopy() { return }
+                    if Self.handOffToRunningCopy() { return .skipped }
                     #endif
                     throw NotebookDirectoryLock.InUse()
                 }
@@ -966,23 +990,53 @@ final class NotebookWorkspace {
                 recordUpdateRequirement(from: error)
             }
             #endif
-            // A local backup can succeed even when the following cloud
-            // exchange is delayed or unavailable.
-            await runDueBackup()
+            // Leave backups to their own task on an iCloud background launch.
+            var runStartupBackups = !scheduledBackground
+            #if os(iOS)
+            if allowsScheduledBackgroundSync, UIApplication.shared.applicationState == .background {
+                runStartupBackups = false
+            }
+            #endif
+            if runStartupBackups { await runDueBackup() }
             startConnectivityMonitoring()
             startAccountAvailabilityMonitoring()
-#if DEBUG
-            if !isPreviewSyncStatusFixture {
-                await refresh(whileLoading: true, manual: manualRetry, trigger: "startup")
+            #if DEBUG
+            if isPreviewSyncStatusFixture {
+                if runStartupBackups { await runDueBackup() }
+                return .skipped
             }
-#else
-            await refresh(whileLoading: true, manual: manualRetry, trigger: "startup")
-#endif
-            await runDueBackup()
+            #endif
+            result = await refresh(
+                whileLoading: true, manual: manualRetry, scheduledBackground: scheduledBackground,
+                trigger: scheduledBackground ? "scheduled background sync" : "startup"
+            )
+            if runStartupBackups { await runDueBackup() }
         } catch {
+            syncEventLog.record("workspace opening failed: " + NotebookSyncEventLog.errorCode(error))
             setRecoveryAction(for: error)
             errorMessage = error.localizedDescription
+            result = .failed
         }
+        return result
+    }
+
+    #if os(iOS)
+    var allowsScheduledBackgroundSync: Bool {
+        guard case .cloud = mode, syncStorage == .iCloud else { return false }
+        return automaticSync && !isResetPending
+    }
+
+    func runScheduledBackgroundSync() async -> RefreshResult {
+        guard allowsScheduledBackgroundSync, !Task.isCancelled else { return .skipped }
+        if isLoading || replica == nil { return await start(scheduledBackground: true) }
+        return await refresh(scheduledBackground: true, trigger: "scheduled background sync")
+    }
+    #endif
+
+    private func takeStartupWaiters() -> [CheckedContinuation<RefreshResult, Never>] {
+        let waiters = startupWaiters
+        startupWaiters.removeAll()
+        return waiters
     }
 
     func recoverCatalog() async {
@@ -1010,11 +1064,15 @@ final class NotebookWorkspace {
             recoveryAction = nil
             errorMessage = nil
             isLoading = false
-            await refresh()
+            let waiters = takeStartupWaiters()
+            if !waiters.isEmpty { pendingServerCheck = true }
+            let result = await refresh(scheduledBackground: false, trigger: "recovery")
+            for waiter in waiters { waiter.resume(returning: result) }
         } catch {
             isLoading = false
             setRecoveryAction(for: error)
             errorMessage = error.localizedDescription
+            for waiter in takeStartupWaiters() { waiter.resume(returning: .failed) }
         }
     }
 
@@ -1067,6 +1125,11 @@ final class NotebookWorkspace {
 
     func contentDidSave(trigger: String = "saved content or catalog update") {
         guard !isResetPending, !isPreview else { return }
+        #if os(iOS)
+        if self === Self.shared {
+            NotebookSyncBackgroundScheduler.schedule(hasLocalChanges: true)
+        }
+        #endif
         scheduleRefresh(trigger: trigger)
     }
 
@@ -1149,6 +1212,9 @@ final class NotebookWorkspace {
     func localStorageResetWasScheduled() {
         guard !isResetPending else { return }
         isResetPending = true
+        #if os(iOS)
+        if self === Self.shared { NotebookSyncBackgroundScheduler.schedule() }
+        #endif
         cancelSnapshotMaintenance()
         snapshotMaintenanceStatus = nil
         cloudCleanupError = nil
@@ -1277,6 +1343,9 @@ final class NotebookWorkspace {
             startRefresh { await self.refresh(manual: true, trigger: "resume requested cleanup") }
         }
         guard !isResetPending, automaticSync, changed else { return }
+        #if os(iOS)
+        if self === Self.shared { NotebookSyncBackgroundScheduler.schedule() }
+        #endif
         if newForeground {
             cancelSnapshotMaintenance()
             snapshotMaintenanceStatus = nil
@@ -1285,8 +1354,8 @@ final class NotebookWorkspace {
             pendingServerCheck = true
             requestAutomaticRefresh(trigger: "foreground activation")
         } else {
-            // The engine owns background scheduling. App retry timers resume
-            // at the next activation; their durable pending work stays saved.
+            // Foreground timers stop here. CloudKit and the scheduled
+            // background task can retry durable work independently.
             scheduledRefresh?.cancel()
             scheduledRefresh = nil
             storagePollTask?.cancel()
@@ -1295,7 +1364,14 @@ final class NotebookWorkspace {
                 startRefresh {
                     do { try await self.replica?.flushOpenNotes() }
                     catch { self.errorMessage = error.localizedDescription; return }
-                    await self.refresh(trigger: "background transition")
+                    let result = await self.refresh(
+                        scheduledBackground: false, trigger: "background transition"
+                    )
+                    #if os(iOS)
+                    if self === Self.shared, result == .pending || result == .failed {
+                        NotebookSyncBackgroundScheduler.schedule(hasLocalChanges: true)
+                    }
+                    #endif
                 }
             }
         }
@@ -1356,25 +1432,41 @@ final class NotebookWorkspace {
         if isForeground { requestAutomaticRefresh(trigger: "iCloud account availability changed") }
     }
 
+    func refresh(manual: Bool = false, trigger: String = "recovery") async {
+        _ = await refresh(manual: manual, scheduledBackground: false, trigger: trigger)
+    }
+
     func refresh(
-        whileLoading: Bool = false, manual: Bool = false, trigger: String = "recovery"
-    ) async {
-        guard !isResetPending, !isChangingStorage else { return }
-        guard whileLoading || !isLoading else { return }
-        guard let replica else { return }
+        whileLoading: Bool = false, manual: Bool = false, scheduledBackground: Bool,
+        trigger: String
+    ) async -> RefreshResult {
+        if scheduledBackground, Task.isCancelled { return .cancelled }
+        guard !isResetPending, !isChangingStorage, whileLoading || !isLoading,
+              let replica else { return .skipped }
         if manual { pendingServerCheck = true }
         // While the user decides about another notebook in the storage, only
         // a manual pass reads it again; each one lists the whole folder.
         if isSyncUpdateRequired || (!manual && storageMismatch != nil) {
+            if scheduledBackground { return .skipped }
             try? await replica.cleanupDeletedContent()
             await publishCopies()
-            return
+            return .skipped
         }
         await updateRetryDeadline()
-        if !manual, !whileLoading,
+        if scheduledBackground, Task.isCancelled { return .cancelled }
+        if !manual, (!whileLoading || scheduledBackground),
            let deadline = syncRetryNotBefore, deadline > syncClock.now() {
             if isForeground { scheduleRefresh(trigger: trigger, notBefore: deadline) }
-            return
+            return .deferred
+        }
+        if scheduledBackground, isRefreshing {
+            // The current pass may have already fetched. Keep this wake alive
+            // until it can run its own catch-up check.
+            syncEventLog.record("background sync waiting for active pass")
+            await withCheckedContinuation { refreshWaiters.append($0) }
+            return await refresh(
+                whileLoading: whileLoading, manual: manual, scheduledBackground: true, trigger: trigger
+            )
         }
         guard !isRefreshing else {
             if manual { showSyncCheck = true }
@@ -1382,7 +1474,7 @@ final class NotebookWorkspace {
             needsAnotherRefresh = true
             needsImmediateRefresh = needsImmediateRefresh || manual || !isForeground
             needsManualRefresh = needsManualRefresh || manual
-            return
+            return .coalesced
         }
         scheduledRefresh?.cancel()
         scheduledRefresh = nil
@@ -1392,18 +1484,28 @@ final class NotebookWorkspace {
         plannedRetryDate = nil
         plannedRetryUptime = nil
         plannedRetryDelay = nil
+        if scheduledBackground { pendingServerCheck = true }
         isRefreshing = true
+        defer {
+            for waiter in refreshWaiters { waiter.resume() }
+            refreshWaiters.removeAll()
+        }
         let maintenance = snapshotMaintenanceTask
         cancelSnapshotMaintenance()
         await maintenance?.value
-        guard !isResetPending else { isRefreshing = false; return }
+        if isResetPending || (scheduledBackground && Task.isCancelled) {
+            isRefreshing = false
+            armStoragePoll()
+            return isResetPending ? .skipped : .cancelled
+        }
         startedRefreshAt = syncClock.elapsed()
         // The app may enter the background after this exchange starts, so
         // acquire the lease for every refresh that owns the exchange.
-        beginBackgroundExecutionIfNeeded()
+        if !scheduledBackground { beginBackgroundExecutionIfNeeded() }
         var failure: (any Error)?
+        var result = RefreshResult.skipped
         defer {
-            endBackgroundExecution()
+            if !scheduledBackground { endBackgroundExecution() }
             isRefreshing = false
             startedRefreshAt = nil
             if !needsAnotherRefresh { scheduleSnapshotMaintenance() }
@@ -1417,7 +1519,7 @@ final class NotebookWorkspace {
                         await self.refresh(manual: manual, trigger: "coalesced follow-up")
                     }
                 } else {
-                    contentDidSave(trigger: "coalesced follow-up")
+                    if !isPreview { scheduleRefresh(trigger: "coalesced follow-up") }
                 }
             }
         }
@@ -1434,8 +1536,9 @@ final class NotebookWorkspace {
                                                    recheckAccount: recheckAccount)
                 guard !isResetPending else {
                     endSyncPresentation()
-                    return
+                    return .skipped
                 }
+                if scheduledBackground { try Task.checkCancellation() }
                 syncEventLog.record("notebook transport ready")
                 guard let notebookTransport else {
                     throw SyncError.unavailable(
@@ -1462,9 +1565,10 @@ final class NotebookWorkspace {
                 }
                 guard !isResetPending else {
                     endSyncPresentation()
-                    return
+                    return .skipped
                 }
                 syncSetupError = nil
+                if scheduledBackground { try Task.checkCancellation() }
                 await coordinator.synchronize()
                 failure = coordinator.lastError
                 hasBinding = (try? coordinator.hasDurableBinding()) == true
@@ -1480,11 +1584,19 @@ final class NotebookWorkspace {
                 } else { errorMessage = nil }
             } catch {
                 failure = error
-                syncEventLog.record("sync setup failed: " + NotebookSyncEventLog.errorCode(error))
-                syncSetupError = error.localizedDescription
-                setRecoveryAction(for: error)
-                if !hasBinding { errorMessage = error.localizedDescription }
+                if !scheduledBackground || !Task.isCancelled {
+                    syncEventLog.record("sync setup failed: " + NotebookSyncEventLog.errorCode(error))
+                    syncSetupError = error.localizedDescription
+                    setRecoveryAction(for: error)
+                    if !hasBinding { errorMessage = error.localizedDescription }
+                }
             }
+            if scheduledBackground, Task.isCancelled {
+                endSyncPresentation()
+                armStoragePoll()
+                return .cancelled
+            }
+            result = failure != nil ? .failed : (sync?.status == .pending ? .pending : .completed)
             await updateRetryDeadline()
             syncHalt = await (notebookTransport as? any HaltableSyncTransport)?.haltStatus()
             if syncHalt?.reason == .accountChanged {
@@ -1555,6 +1667,7 @@ final class NotebookWorkspace {
             }
         }
         await publishCopies()
+        return result
     }
 
     /// Starts a manual exchange only when the status control is idle and the
@@ -2107,6 +2220,9 @@ final class NotebookWorkspace {
         await retireTransports()
         let previous = syncStorage
         syncStorage = storage
+        #if os(iOS)
+        if self === Self.shared { NotebookSyncBackgroundScheduler.schedule() }
+        #endif
         if goingBack || movesS3Folder {
             // Going back, nothing reached the storage left. A new S3 folder
             // has no earlier storage to return to.

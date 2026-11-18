@@ -29,6 +29,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).markdown-backup</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).notebook-sync</string>
 	</array>
 	<key>UIApplicationShortcutItems</key>
 	<array>
@@ -66,6 +67,7 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>processing</string>
+		<string>fetch</string>
 		<string>remote-notification</string>
 	</array>
 	<key>UIFileSharingEnabled</key>

@@ -186,11 +186,13 @@ public final class NotebookSyncCoordinator {
             await diagnosticLog?.record(event, counts: counts)
         }
         do {
-            try await exchange()
+            let uploaded = try await exchange()
             let isPending = status == .pending
             diagnosticLog?.record(
                 "pass_end",
                 counts: [
+                    "uploadedRecords": uploaded,
+                    "receivedRecords": progress?.receivedRecords ?? 0,
                     "durationMilliseconds": Self.durationMilliseconds(since: startedAt),
                     "pending": isPending ? 1 : 0,
                 ]
@@ -307,7 +309,7 @@ public final class NotebookSyncCoordinator {
         return SyncBackends.naming(error, displayName: displayName)
     }
 
-    private func exchange() async throws {
+    private func exchange() async throws -> Int {
         try await replica.load()
         var state = try loadState()
         try replica.validateOfflineJoinScope(transport.scope)
@@ -661,6 +663,7 @@ public final class NotebookSyncCoordinator {
             current.allSatisfy { state.acknowledgedHeads[$0.documentKey] == $0.snapshot.heads }
             ? .exchanged(Date()) : .pending
         if case .exchanged = status { progressMeter.finish() }
+        return (progress?.completedNotes ?? 0) + (pendingCatalog == nil ? 0 : 1)
     }
 
     private func publish(
