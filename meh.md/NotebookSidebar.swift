@@ -401,7 +401,7 @@ private struct NotebookLibraryBrowser: View {
             NotebookMacRecentsExpansionHost(
                 items: scene.allRecentPlacements,
                 compactCount: scene.navigationState.recentNoteIDs.count,
-                selectedNoteID: scene.selectedID,
+                selectedNoteID: scene.shownNoteID,
                 isExpanded: Bindable(scene).browsingAllRecents,
                 onSelect: { id in scene.openFromRecents(id) },
                 onCollapse: collapseMacRecents,
@@ -1032,7 +1032,7 @@ private struct NotebookRecentNoteRow: View {
     var body: some View {
         let id = placement.item.id
         let replica = scene.replica
-        let isCurrent = showsCurrentNote && scene.selectedID == id
+        let isCurrent = showsCurrentNote && scene.shownNoteID == id
         let row = Button {
             scene.openFromRecents(id)
         } label: {

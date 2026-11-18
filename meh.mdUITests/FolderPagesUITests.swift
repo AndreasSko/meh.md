@@ -231,12 +231,19 @@ final class FolderPagesUITests: XCTestCase {
         continueAfterFailure = false
         let app = makeApp()
         app.launch()
-        openFolderPage(named: "Inbox", in: app)
         let rows = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "notebook-folder-page-note-"))
+        // The page covers a note of its own folder. Had that note joined the
+        // first ⌘-click, the second would drop it again, leaving 1 item.
+        openFolderPage(named: "Inbox", in: app)
         XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 5))
-        let first = rows.element(boundBy: 0)
-        let second = rows.element(boundBy: 1)
+        rows.element(boundBy: 0).click()
+        XCTAssertTrue(app.descendants(matching: .any)["notebook-folder-page"]
+            .waitForNonExistence(timeout: 5))
+        openFolderPage(named: "Inbox", in: app)
+        XCTAssertTrue(rows.element(boundBy: 1).waitForExistence(timeout: 5))
+        let first = rows.element(boundBy: 1)
+        let second = rows.element(boundBy: 0)
         XCUIElement.perform(withKeyModifiers: .command) { first.click() }
         XCUIElement.perform(withKeyModifiers: .command) { second.click() }
         // Opening a note would close the page.
@@ -539,17 +546,17 @@ final class FolderPagesUITests: XCTestCase {
         #endif
     }
 
-    /// ⌘-click picks rows and cards in place, as in Files, starting with
-    /// the open note.
-    func testIPadCommandClickSelectsFromTheOpenNote() throws {
-        try commandClickSelectsFromTheOpenNote(view: "List")
+    /// ⌘-click picks rows and cards in place, as in Files. The note the
+    /// page covers isn't shown as open, so it stays out of the selection.
+    func testIPadCommandClickSelectsWithoutTheCoveredNote() throws {
+        try commandClickSelectsWithoutTheCoveredNote(view: "List")
     }
 
-    func testIPadCommandClickSelectsCardsFromTheOpenNote() throws {
-        try commandClickSelectsFromTheOpenNote(view: "Cards")
+    func testIPadCommandClickSelectsCardsWithoutTheCoveredNote() throws {
+        try commandClickSelectsWithoutTheCoveredNote(view: "Cards")
     }
 
-    private func commandClickSelectsFromTheOpenNote(view: String) throws {
+    private func commandClickSelectsWithoutTheCoveredNote(view: String) throws {
         #if os(macOS)
         throw XCTSkip("testMacCommandClickSelectsPageRowsWithoutOpeningThem covers the Mac")
         #else
@@ -568,17 +575,15 @@ final class FolderPagesUITests: XCTestCase {
         let book = pageItem("Book notes", in: app)
         XCTAssertTrue(book.waitForExistence(timeout: 5))
 
+        // Had the covered note joined, this would read 1 or 3 selected.
         commandClick(book)
-        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5),
-                      "The open note didn't join the selection")
+        commandClick(pageItem("Packing list", in: app))
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
         XCTAssertTrue(page.exists, "⌘-click opened the note")
-        XCTAssertTrue(pageItem("Packing list", in: app).isSelected)
-        XCTAssertTrue(book.isSelected)
         capture(app, name: "⌘-click on a page (\(view))")
 
         commandClick(book)
         XCTAssertTrue(app.staticTexts["2 selected"].waitForNonExistence(timeout: 5))
-        XCTAssertFalse(book.isSelected)
         XCTAssertTrue(page.exists)
 
         // A plain click opens the note and leaves the page.

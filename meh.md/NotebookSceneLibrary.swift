@@ -310,6 +310,12 @@ extension NotebookSceneState {
             #endif
         } else if pageFolderID == nil {
             guard coverEditor() else { return }
+            // The click in Files that opened the note left it selected, or
+            // at least as the anchor of a ⇧-click range.
+            if browserSelection.isEmpty
+                || selectedID.map({ browserSelection.selectedIDs == [$0] }) == true {
+                browserSelection.clear()
+            }
         }
         if let index = pageFolderIDs.firstIndex(of: id) {
             pageFolderIDs.removeSubrange((index + 1)...)
@@ -450,7 +456,7 @@ extension NotebookSceneState {
                return (frame.minY..<frame.maxY).contains(click.location.y)
            })?.id,
            browserSelection.click(id, click.kind, proposed: ids,
-                                  in: visibleActiveRows.map(\.id), openNoteID: selectedID) {
+                                  in: visibleActiveRows.map(\.id), openNoteID: shownNoteID) {
             return
         }
         #elseif os(macOS)
@@ -462,7 +468,7 @@ extension NotebookSceneState {
            let kind: NotebookBrowserSelection.Click = event.modifierFlags.contains(.shift)
                ? .shift : event.modifierFlags.contains(.command) ? .command : nil,
            browserSelection.click(id, kind, proposed: ids, in: visibleActiveRows.map(\.id),
-                                  openNoteID: selectedID) {
+                                  openNoteID: shownNoteID) {
             return
         }
         #endif
@@ -533,6 +539,12 @@ extension NotebookSceneState {
     /// else the open note.
     var currentSidebarID: UUID? {
         (isCompact ? nil : pageFolderID) ?? selectedID
+    }
+
+    /// The open note, unless a page covers it. A covered note isn't marked
+    /// anywhere, so ⌘ and ⇧ clicks don't start from it either.
+    var shownNoteID: UUID? {
+        isCompact || pageFolderID == nil ? selectedID : nil
     }
 
     func toggleFolder(_ id: UUID) {

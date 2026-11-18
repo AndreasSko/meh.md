@@ -87,8 +87,8 @@
         "FolderPagesUITests/testDraggingSelectedRowsOntoAFolderOfThePageMovesThem",
         "FolderPagesUITests/testDraggingSelectedCardsOntoAFolderOfThePageMovesThem",
         "FolderPagesUITests/testSwipeRightOnAPageRowStartsSelection",
-        "FolderPagesUITests/testIPadCommandClickSelectsFromTheOpenNote",
-        "FolderPagesUITests/testIPadCommandClickSelectsCardsFromTheOpenNote"
+        "FolderPagesUITests/testIPadCommandClickSelectsWithoutTheCoveredNote",
+        "FolderPagesUITests/testIPadCommandClickSelectsCardsWithoutTheCoveredNote"
       ]
     }
   ],
