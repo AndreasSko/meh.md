@@ -193,6 +193,8 @@ public final class NotebookSyncCoordinator {
                 counts: [
                     "durationMilliseconds": Self.durationMilliseconds(since: startedAt),
                     "pending": isPending ? 1 : 0,
+                    "receivedRecords": progress?.receivedRecords ?? 0,
+                    "uploadedNotes": progress?.completedNotes ?? 0,
                 ]
             )
             if isPending { diagnosticLog?.record("pass_pending") }
