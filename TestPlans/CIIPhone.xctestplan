@@ -38,6 +38,8 @@
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",
         "NotebookDragUITests/testSelectedNotesDragTogetherAndKeepTheirSource",
+        "NotebookOpenNoteUITests/testIPhoneBackKeepsATitleThatCantBeSaved",
+        "NotebookOpenNoteUITests/testIPhoneBackSavesTheTitleBeingTyped",
         "NotebookOpenNoteUITests/testIPhoneMarksTheNoteOnlyBesideFiles",
         "NotebookSyncStatusUITests/testAutomaticSyncRecoversAfterExtendedBackground",
         "NotebookSyncStatusUITests/testNoteNavigationAfterClosingSyncRecoversToolbarPresentation",

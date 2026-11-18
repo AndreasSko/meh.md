@@ -111,6 +111,45 @@ final class NotebookOpenNoteUITests: XCTestCase {
         }
         XCTAssertTrue(marked, "Turned sideways, the open note isn't marked")
     }
+
+    /// Back used to leave a title that was still being typed unsaved:
+    /// Files kept the old name, and relaunching lost the new one.
+    func testIPhoneBackSavesTheTitleBeingTyped() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Goes back to Files")
+        let app = launch(orientation: .portrait)
+        activate(app.newNoteButton)
+        let field = app.textFields["title-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        field.typeText("Lantern inventory")
+        XCTAssertEqual(field.value as? String, "Lantern inventory")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        let lanternID = row(titled: "Lantern inventory", in: app).identifier
+        capture(app, name: "Typed title in Files after Back")
+        app.terminate()
+        app.launch()
+        XCTAssertEqual(row(titled: "Lantern inventory", in: app).identifier, lanternID,
+                       "The typed title was lost after relaunch")
+    }
+
+    /// A title that can't be saved keeps the note open to correct it.
+    /// Back used to reach Files anyway, where every note retried it.
+    func testIPhoneBackKeepsATitleThatCantBeSaved() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Goes back to Files")
+        let app = launch(orientation: .portrait)
+        activate(app.newNoteButton)
+        let field = app.textFields["title-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        field.typeText("Tide/table")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "No error for the title")
+        capture(app, name: "Title can't be saved")
+        alert.buttons.firstMatch.tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "Back left the title behind")
+        XCTAssertEqual(field.value as? String, "Tide/table")
+    }
     #endif
 
     // On iPad the test runner delivers this Command-click above the row.
