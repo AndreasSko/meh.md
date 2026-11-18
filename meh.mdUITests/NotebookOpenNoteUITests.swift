@@ -81,6 +81,38 @@ final class NotebookOpenNoteUITests: XCTestCase {
     }
     #endif
 
+    #if os(iOS)
+    /// In portrait Files covers the note, so going back leaves no row
+    /// marked. Turned sideways the note shows beside Files again.
+    @MainActor
+    func testIPhoneMarksTheNoteOnlyBesideFiles() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Turns an iPhone")
+        let app = launch(orientation: .portrait)
+        let journal = row(titled: "Field journal", in: app)
+        journal.tap()
+        XCTAssertTrue(waitForEditor(in: app, prefix: "# Field journal"))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(journal.waitForExistence(timeout: 5))
+        let harbor = row(titled: "Harbor log", in: app)
+        XCTAssertTrue(waitForValue(of: journal, notContaining: "Current note"),
+                      "Files marked a note that isn't on screen")
+        XCTAssertEqual(fill(of: journal), fill(of: harbor), "The closed note's row stayed gray")
+        capture(app, name: "Nothing marked in portrait")
+
+        var marked = false
+        // Once a test turns the device, XCTest waits a minute for animations
+        // to finish before every step; wait explicitly instead.
+        app.withoutIdleWait {
+            XCUIDevice.shared.orientation = .landscapeLeft
+            marked = waitForEditor(in: app, prefix: "# Field journal")
+                && waitForValue(of: journal, containing: "Current note")
+                && fill(of: journal) != fill(of: harbor)
+            capture(app, name: "Open note marked beside Files")
+        }
+        XCTAssertTrue(marked, "Turned sideways, the open note isn't marked")
+    }
+    #endif
+
     // On iPad the test runner delivers this Command-click above the row.
     #if os(macOS)
     func testCommandClickAddsToANoteOpenedElsewhere() throws {
@@ -182,14 +214,25 @@ final class NotebookOpenNoteUITests: XCTestCase {
     }
     #endif
 
-    private func launch(fixture: String = "rendering") -> XCUIApplication {
-        continueAfterFailure = false
-        #if os(iOS)
-        // The note and Files stay side by side only in landscape. Other
-        // tests on this simulator expect portrait.
-        XCUIDevice.shared.orientation = .landscapeLeft
+    #if os(iOS)
+    // The note and Files stay side by side only in landscape. Other tests on
+    // this simulator expect portrait.
+    private func launch(
+        fixture: String = "rendering",
+        orientation: UIDeviceOrientation = .landscapeLeft
+    ) -> XCUIApplication {
+        XCUIDevice.shared.orientation = orientation
         addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
-        #endif
+        return launchApp(fixture: fixture)
+    }
+    #else
+    private func launch(fixture: String = "rendering") -> XCUIApplication {
+        launchApp(fixture: fixture)
+    }
+    #endif
+
+    private func launchApp(fixture: String) -> XCUIApplication {
+        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
         app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] =

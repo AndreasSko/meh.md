@@ -536,15 +536,17 @@ extension NotebookSceneState {
     }
 
     /// The row Files marks as what the big side shows: a folder's page, or
-    /// else the open note.
+    /// else the open note. On a compact screen Files and the note are never
+    /// on screen together, so nothing is marked there.
     var currentSidebarID: UUID? {
-        (isCompact ? nil : pageFolderID) ?? selectedID
+        isCompact ? nil : pageFolderID ?? selectedID
     }
 
-    /// The open note, unless a page covers it. A covered note isn't marked
-    /// anywhere, so ⌘ and ⇧ clicks don't start from it either.
+    /// The open note while it's on screen beside Files. A note that a page
+    /// covers, or one left open behind Files on a compact screen, isn't
+    /// marked anywhere, so ⌘ and ⇧ clicks don't start from it either.
     var shownNoteID: UUID? {
-        isCompact || pageFolderID == nil ? selectedID : nil
+        isCompact || pageFolderID != nil ? nil : selectedID
     }
 
     func toggleFolder(_ id: UUID) {
