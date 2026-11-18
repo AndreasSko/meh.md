@@ -1316,7 +1316,7 @@ private struct NotebookFileRow: View {
             .simultaneousGesture(SpatialTapGesture().onEnded { tap in
                 guard scene.editingID != row.id,
                       !scene.selectingItems, !scene.busy,
-                      NSEvent.modifierFlags.intersection([.command, .shift]).isEmpty
+                      NotebookPointerClick.current == .plain
                 else { return }
                 // The disclosure button opens the folder in place instead.
                 if placement.item.kind == .folder,
