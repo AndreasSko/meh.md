@@ -49,6 +49,8 @@
         "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",
         "NotebookDragUITests/testSelectedNotesDragTogetherAndKeepTheirSource",
         "NotebookOpenNoteUITests",
+        "NotebookOpenNoteUITests/testIPhoneBackKeepsATitleThatCantBeSaved",
+        "NotebookOpenNoteUITests/testIPhoneBackSavesTheTitleBeingTyped",
         "NotebookOpenNoteUITests/testIPhoneMarksTheNoteOnlyBesideFiles",
         "NotebookReleaseMenuUITests/testFileMenuPickersAndNewWindowPreserveWriting",
         "NotebookReleaseMenuUITests/testSelectionCommandsRespectEditorAndTitleFocus",

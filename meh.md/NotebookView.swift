@@ -434,6 +434,8 @@ private struct NotebookScenePresentation: ViewModifier {
                 scene.rememberEditorPosition()
                 NotebookWidgetSnapshotWriter.shared.flush(scene.replica)
             }
+            // The system may end the app while it's away.
+            if phase == .background { scene.saveDetailTitleDraft() }
         }
         .onChange(of: scene.quickActionRequests.pendingActionCount, initial: true) { _, _ in
             scene.handlePendingQuickAction()

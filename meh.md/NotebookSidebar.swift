@@ -568,7 +568,6 @@ private struct NotebookLibraryBrowser: View {
 
     private func recentsSection(hidesCompactRows: Bool) -> some View {
         let navigationState = scene.navigationState
-        let recentPlacements = scene.recentPlacements
         return Section {
             #if os(macOS)
             NotebookMacRecentsCompactHeader(
@@ -580,105 +579,118 @@ private struct NotebookLibraryBrowser: View {
             ))
             .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
                               value: .bounds) { [$0] }
-            #endif
-            if navigationState.isRecentsExpanded {
-                if recentPlacements.isEmpty {
-                    Text("Notes you edit or rename appear here.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        #if os(macOS)
-                        .background(NotebookRecentCardBackground(position: .last))
-                        .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
-                                          value: .bounds) { [$0] }
-                        #else
-                        .background(NotebookRecentCardBackground(position: .only))
-                        #endif
-                } else {
-                    #if os(iOS)
-                    VStack(spacing: 0) {
-                        NotebookRecentUIKitList(
-                            items: Array(allRecentUIKitItems.prefix(recentPlacements.count)),
-                            rowContent: { id in
-                                if let index = recentPlacements.firstIndex(where: {
-                                    $0.item.id == id
-                                }) {
-                                    recentRow(recentPlacements[index], index: index,
-                                              count: recentPlacements.count)
-                                }
-                            },
-                            onTogglePin: { id in
-                                scene.setRecentPinned(!scene.replica.isPinnedInRecents(id),
-                                                      for: id)
-                            },
-                            onTrash: { id, completion in
-                                scene.trashItems([id], onCompletion: completion)
-                            },
-                            onHide: { id, completion in
-                                scene.setRecentHidden(true, for: id, onCompletion: completion)
-                            },
-                            contextMenu: recentUIKitMenu,
-                            accessibilityHidden: hidesCompactRows
-                        )
-                        if scene.replica.allRecentNotes.count > recentPlacements.count {
-                            NotebookRecentsFooterSpacer()
-                        }
-                    }
-                    .background(NotebookSidebarPalette.recents)
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                    .opacity(hidesCompactRows ? 0 : 1)
-                    .accessibilityHidden(hidesCompactRows)
-                    .anchorPreference(key: NotebookRecentsAnchorKey.self,
-                                      value: .bounds) { $0 }
-                    #else
-                    let hasMoreRecents = scene.hasMoreRecents
-                    ForEach(Array(recentPlacements.enumerated()), id: \.element.item.id) {
-                        index, placement in
-                        recentRow(placement, index: index + 1,
-                                  count: recentPlacements.count + 1 + (hasMoreRecents ? 1 : 0))
-                            .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
-                                              value: .bounds) { [$0] }
-                    }
-                    if hasMoreRecents {
-                        Button {
-                            scene.browsingAllRecents = true
-                        } label: {
-                            Label("More", systemImage: "chevron.down")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .focused(focus.recentsMore)
-                        .accessibilityLabel("Browse all recent notes")
-                        .accessibilityIdentifier("notebook-recents-more")
-                        .background(NotebookRecentCardBackground(position: .last))
-                        .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
-                                          value: .bounds) { [$0] }
-                    }
-                    #endif
-                }
+            recentsRows(hidesCompactRows: hidesCompactRows)
+            #else
+            // In the card's row rather than the section's header, which
+            // the plain list pins over the notes scrolling under it. A row
+            // of its own would be taller than the header was.
+            VStack(spacing: 0) {
+                NotebookSectionToggle(
+                    title: "Recents",
+                    isExpanded: navigationState.isRecentsExpanded,
+                    identifier: "notebook-recents-toggle"
+                ) { navigationState.isRecentsExpanded.toggle() }
+                .accessibilityAddTraits(.isHeader)
+                .opacity(hidesCompactRows ? 0 : 1)
+                .accessibilityHidden(hidesCompactRows)
+                recentsRows(hidesCompactRows: hidesCompactRows)
             }
-        } header: {
-            #if os(iOS)
-            NotebookSectionToggle(
-                title: "Recents",
-                isExpanded: navigationState.isRecentsExpanded,
-                identifier: "notebook-recents-toggle"
-            ) { navigationState.isRecentsExpanded.toggle() }
-            .opacity(hidesCompactRows ? 0 : 1)
-            .accessibilityHidden(hidesCompactRows)
-            .textCase(nil)
-            .listRowInsets(sidebarSectionInsets)
+            // Collapsed, the list still makes the row 8 points taller
+            // than the label, so the label stays where the header was.
+            .frame(maxHeight: .infinity, alignment: .top)
             #endif
         }
         .selectionDisabled()
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
         .listRowInsets(recentSectionInsets)
+    }
+
+    @ViewBuilder
+    private func recentsRows(hidesCompactRows: Bool) -> some View {
+        let navigationState = scene.navigationState
+        let recentPlacements = scene.recentPlacements
+        if navigationState.isRecentsExpanded {
+            if recentPlacements.isEmpty {
+                Text("Notes you edit or rename appear here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    #if os(macOS)
+                    .background(NotebookRecentCardBackground(position: .last))
+                    .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
+                                      value: .bounds) { [$0] }
+                    #else
+                    .background(NotebookRecentCardBackground(position: .only))
+                    #endif
+            } else {
+                #if os(iOS)
+                VStack(spacing: 0) {
+                    NotebookRecentUIKitList(
+                        items: Array(allRecentUIKitItems.prefix(recentPlacements.count)),
+                        rowContent: { id in
+                            if let index = recentPlacements.firstIndex(where: {
+                                $0.item.id == id
+                            }) {
+                                recentRow(recentPlacements[index], index: index,
+                                          count: recentPlacements.count)
+                            }
+                        },
+                        onTogglePin: { id in
+                            scene.setRecentPinned(!scene.replica.isPinnedInRecents(id),
+                                                  for: id)
+                        },
+                        onTrash: { id, completion in
+                            scene.trashItems([id], onCompletion: completion)
+                        },
+                        onHide: { id, completion in
+                            scene.setRecentHidden(true, for: id, onCompletion: completion)
+                        },
+                        contextMenu: recentUIKitMenu,
+                        accessibilityHidden: hidesCompactRows
+                    )
+                    if scene.replica.allRecentNotes.count > recentPlacements.count {
+                        NotebookRecentsFooterSpacer()
+                    }
+                }
+                .background(NotebookSidebarPalette.recents)
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .opacity(hidesCompactRows ? 0 : 1)
+                .accessibilityHidden(hidesCompactRows)
+                .anchorPreference(key: NotebookRecentsAnchorKey.self,
+                                  value: .bounds) { $0 }
+                #else
+                let hasMoreRecents = scene.hasMoreRecents
+                ForEach(Array(recentPlacements.enumerated()), id: \.element.item.id) {
+                    index, placement in
+                    recentRow(placement, index: index + 1,
+                              count: recentPlacements.count + 1 + (hasMoreRecents ? 1 : 0))
+                        .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
+                                          value: .bounds) { [$0] }
+                }
+                if hasMoreRecents {
+                    Button {
+                        scene.browsingAllRecents = true
+                    } label: {
+                        Label("More", systemImage: "chevron.down")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focused(focus.recentsMore)
+                    .accessibilityLabel("Browse all recent notes")
+                    .accessibilityIdentifier("notebook-recents-more")
+                    .background(NotebookRecentCardBackground(position: .last))
+                    .anchorPreference(key: NotebookMacRecentsAnchorKey.self,
+                                      value: .bounds) { [$0] }
+                }
+                #endif
+            }
+        }
     }
 
     private var activeTree: some View {
@@ -1194,13 +1206,18 @@ private struct NotebookFileRow: View {
             .foregroundStyle(.secondary)
     }
 
-    private var nameField: some View {
-        #if os(macOS)
-        NotebookInlineNameField(text: Bindable(scene).proposedName, isEnabled: !scene.busy)
-        #else
-        TextField("Name", text: Bindable(scene).proposedName)
-            .focused(focusedNameID, equals: row.id)
-        #endif
+    private func nameField(_ placement: NotebookPlacement) -> some View {
+        Group {
+            #if os(macOS)
+            NotebookInlineNameField(text: Bindable(scene).proposedName, isEnabled: !scene.busy)
+            #else
+            TextField("Name", text: Bindable(scene).proposedName)
+                .focused(focusedNameID, equals: row.id)
+            #endif
+        }
+        // Leaving the field accepts a suggestion unseen, turning "Map"
+        // into "Mal". Note titles are prose and keep it.
+        .autocorrectionDisabled(placement.item.kind == .folder)
     }
 
     @ViewBuilder
@@ -1236,7 +1253,7 @@ private struct NotebookFileRow: View {
                     Color.clear.frame(width: disclosureWidth, height: 1)
                 }
                 if scene.editingID == row.id {
-                    nameField
+                    nameField(placement)
                         .textFieldStyle(.plain)
                         .accessibilityIdentifier("notebook-inline-name")
                         .disabled(scene.busy)
@@ -1299,7 +1316,7 @@ private struct NotebookFileRow: View {
             .simultaneousGesture(SpatialTapGesture().onEnded { tap in
                 guard scene.editingID != row.id,
                       !scene.selectingItems, !scene.busy,
-                      NSEvent.modifierFlags.intersection([.command, .shift]).isEmpty
+                      NotebookPointerClick.current == .plain
                 else { return }
                 // The disclosure button opens the folder in place instead.
                 if placement.item.kind == .folder,

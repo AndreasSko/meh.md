@@ -328,6 +328,21 @@ final class NotebookSceneState {
                 return
             }
             rememberEditorPosition()
+            if detailEditingID != nil {
+                // Files shows the note's name, so a title still being
+                // typed is saved. The split view goes back regardless, so
+                // one that can't be saved brings the note back, with its
+                // error, to correct it.
+                preferredCompactColumn = column
+                perform { [self] in
+                    try await commitDetailTitleIfNeeded()
+                } onSuccess: { [self] in
+                    newTemplateNoteID = nil
+                } onCompletion: { [self] saved in
+                    if !saved, detailEditingID != nil { preferredCompactColumn = .detail }
+                }
+                return
+            }
         }
         #endif
         preferredCompactColumn = column
@@ -814,18 +829,54 @@ final class NotebookSceneState {
 
     private func commitDetailTitleIfNeeded() async throws {
         guard let id = detailEditingID else { return }
-        let filename = NotebookNoteName.filename(
-            for: detailProposedTitle,
-            preservingExtensionFrom: detailOriginalName
-        )
-        let changed = replica.placements.first { $0.item.id == id }?.item.name != filename
-        if changed {
+        // A note deleted elsewhere meanwhile has nothing left to rename.
+        if replica.placements.contains(where: { $0.item.id == id }),
+           let filename = changedDetailFilename(),
+           replica.placements.first(where: { $0.item.id == id })?.item.name != filename {
             try await replica.rename(id, to: filename)
         }
         detailEditingID = nil
         detailTitleFocusRequest = nil
         detailOriginalName = ""
         detailProposedTitle = ""
+    }
+
+    /// The filename for the title being typed, or nil when it's untouched.
+    /// An untouched title mustn't undo a rename synced meanwhile, and some
+    /// names, like "..md", don't survive the trip to a title and back.
+    private func changedDetailFilename() -> String? {
+        guard detailProposedTitle != NotebookNoteName.title(from: detailOriginalName) else {
+            return nil
+        }
+        let filename = NotebookNoteName.filename(
+            for: detailProposedTitle,
+            preservingExtensionFrom: detailOriginalName
+        )
+        return filename == detailOriginalName ? nil : filename
+    }
+
+    /// Saves a title still being typed but keeps it in its field, for
+    /// when the app goes away and the system may end it.
+    func saveDetailTitleDraft() {
+        guard let id = detailEditingID, !busy, let filename = changedDetailFilename() else { return }
+        #if os(iOS)
+        // Keeps the app running until the rename is written.
+        var lease = UIBackgroundTaskIdentifier.invalid
+        let end = {
+            guard lease != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(lease)
+            lease = .invalid
+        }
+        lease = UIApplication.shared.beginBackgroundTask(
+            withName: "Save note title", expirationHandler: end)
+        #else
+        let end = {}
+        #endif
+        perform { [self] in
+            guard detailEditingID == id else { return }
+            try await replica.rename(id, to: filename)
+            detailOriginalName = filename
+        } onCompletion: { _ in end() }
     }
 
     func cancelDetailTitle() {
