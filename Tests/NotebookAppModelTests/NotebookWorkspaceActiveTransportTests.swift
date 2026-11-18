@@ -47,6 +47,24 @@ final class NotebookWorkspaceActiveTransportTests: XCTestCase {
         workspace.localStorageResetWasScheduled()
     }
 
+    func testBackgroundSyncChecksTheServerAndUploadsSavedEdits() async throws {
+        let transport = ActiveTestTransport(scope: "background-sync")
+        let workspace = makeWorkspace(transport: transport)
+        await workspace.start()
+        try await waitUntil { await !workspace.isRefreshing && !workspace.hasPendingRefresh }
+        let before = await transport.serverCheckCount
+        _ = try await workspace.replica?.createNote(name: "offline.md", text: "Offline edit")
+
+        await workspace.syncInBackground()
+
+        let after = await transport.serverCheckCount
+        XCTAssertEqual(after, before + 1)
+        XCTAssertFalse(workspace.isRefreshing || workspace.hasPendingRefresh)
+        let pass = workspace.syncEventLog.entries.last { $0.event == "pass_end" }
+        XCTAssertEqual(pass?.counts["uploadedNotes"], 1)
+        workspace.localStorageResetWasScheduled()
+    }
+
     private func makeWorkspace(
         transport: ActiveTestTransport, automaticSync: Bool = true
     ) -> NotebookWorkspace {

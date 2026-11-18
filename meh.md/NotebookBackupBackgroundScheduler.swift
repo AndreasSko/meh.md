@@ -46,7 +46,7 @@ enum NotebookBackupBackgroundScheduler {
     }
 
     private nonisolated static func handle(_ task: BGProcessingTask) {
-        let completion = BackgroundBackupCompletion(task: task)
+        let completion = BackgroundTaskCompletion(task: task)
         task.expirationHandler = { completion.expire() }
         let work = Task { @MainActor in
             if !Task.isCancelled {
@@ -61,13 +61,13 @@ enum NotebookBackupBackgroundScheduler {
 
 /// Called from BackgroundTasks' expiration handler on an arbitrary thread,
 /// so it is not main-actor isolated; the lock guards its state.
-private nonisolated final class BackgroundBackupCompletion: @unchecked Sendable {
+nonisolated final class BackgroundTaskCompletion: @unchecked Sendable {
     private let lock = NSLock()
-    private let task: BGProcessingTask
+    private let task: BGTask
     private var work: Task<Void, Never>?
     private var isComplete = false
 
-    init(task: BGProcessingTask) {
+    init(task: BGTask) {
         self.task = task
     }
 

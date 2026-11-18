@@ -26,6 +26,7 @@ final class NotebookAppDelegate: NSObject, UIApplicationDelegate {
             UIApplication.LaunchOptionsKey: Any
         ]? = nil
     ) -> Bool {
+        NotebookSyncBackgroundScheduler.register()
         NotebookBackupBackgroundScheduler.register()
         NotebookBackupBackgroundScheduler.scheduleNext()
         guard RemoteNotificationLaunch.isEnabled else { return true }

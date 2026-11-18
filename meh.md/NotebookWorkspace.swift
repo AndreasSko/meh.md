@@ -1065,6 +1065,29 @@ final class NotebookWorkspace {
         scheduleRefresh(trigger: trigger)
     }
 
+    var allowsBackgroundSync: Bool {
+        usesSync && automaticSync && !isResetPending
+    }
+
+    /// One sync pass that also asks the server for changes a silent push
+    /// may have missed. It runs as its own task, so a background wake that
+    /// expires leaves the pass to finish at the next launch instead of
+    /// cancelling it midway.
+    func syncInBackground() async {
+        guard allowsBackgroundSync else { return }
+        if replica == nil {
+            // Startup's first pass checks the server with a new transport.
+            if !isLoading { startRefresh { await self.start() } }
+        } else {
+            pendingServerCheck = true
+            // Joins a running pass as an immediate follow-up.
+            startRefresh { await self.refresh(trigger: "background task") }
+        }
+        while isLoading || isRefreshing || hasPendingRefresh {
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+        }
+    }
+
     func contentDidSave(trigger: String = "saved content or catalog update") {
         guard !isResetPending, !isPreview else { return }
         scheduleRefresh(trigger: trigger)
@@ -1285,13 +1308,17 @@ final class NotebookWorkspace {
             pendingServerCheck = true
             requestAutomaticRefresh(trigger: "foreground activation")
         } else {
-            // The engine owns background scheduling. App retry timers resume
-            // at the next activation; their durable pending work stays saved.
+            // App retry timers stop here. CloudKit pushes and the scheduled
+            // background task can sync until the next activation.
             scheduledRefresh?.cancel()
             scheduledRefresh = nil
             storagePollTask?.cancel()
             storagePollTask = nil
             if usesSync {
+                #if os(iOS)
+                // Ask before the final exchange, which may not finish in time.
+                if self === Self.shared { NotebookSyncBackgroundScheduler.scheduleNext() }
+                #endif
                 startRefresh {
                     do { try await self.replica?.flushOpenNotes() }
                     catch { self.errorMessage = error.localizedDescription; return }
@@ -1543,6 +1570,10 @@ final class NotebookWorkspace {
             }
             endSyncPresentation()
             armStoragePoll()
+            #if os(iOS)
+            // A pass in the background now knows whether changes are left.
+            if !isForeground, self === Self.shared { NotebookSyncBackgroundScheduler.scheduleNext() }
+            #endif
             syncEventLog.record("refresh ended", counts: [
                 "duration_ms": Int(syncClock.now().timeIntervalSince(refreshStarted) * 1_000)
             ])
