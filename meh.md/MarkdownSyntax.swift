@@ -81,6 +81,9 @@ struct MarkdownSyntaxResult: Equatable {
     // visible spans, these account for unmatched delimiters as well.
     let restartOffsets: [Int]
     let canRestartAtEnd: Bool
+    /// The link parser's block context at each restart offset, so a
+    /// partial parse can resume inside a list.
+    var restartContexts: [NotebookLinkParser.BlockContext] = []
     var tables: [MarkdownTable] = []
     var linkContextRanges: [NSRange] = []
 }
@@ -94,7 +97,8 @@ enum MarkdownSyntax {
     /// `timeSums` leaves out underline headings, so the time calculator can
     /// read `=` lines as sums and a `---` separator doesn't end a sum.
     static func parse(
-        _ text: String, isDocumentStart: Bool = true, timeSums: Bool = false
+        _ text: String, isDocumentStart: Bool = true, timeSums: Bool = false,
+        blockContext: NotebookLinkParser.BlockContext = .init()
     ) -> MarkdownSyntaxResult {
         let source = contiguousSource(text)
         let fences = fencedCodeRanges(in: source)
@@ -121,7 +125,7 @@ enum MarkdownSyntax {
             source: source
         )
         let linkContext = NotebookLinkParser.incrementalContext(
-            in: text, allowFrontmatter: isDocumentStart
+            in: text, allowFrontmatter: isDocumentStart, context: blockContext
         )
         let rules = appendRuleSpans(
             in: source, lines: lines, fenced: fenced, tableLines: tableLines,
@@ -137,7 +141,7 @@ enum MarkdownSyntax {
             paragraphRuns: &paragraphRuns
         )
         let addresses = appendLinkSpans(in: source, excluding: codeRanges, spans: &spans,
-                                        allowFrontmatter: isDocumentStart)
+                                        allowFrontmatter: isDocumentStart, context: blockContext)
         appendEscapeSpans(
             in: source, excluding: [codeRanges, linkContext.ranges, addresses], spans: &spans
         )
@@ -218,6 +222,12 @@ enum MarkdownSyntax {
         )
         result.tables = tables
         result.linkContextRanges = linkContext.ranges
+        // Restart offsets follow line feeds, so each one starts a line.
+        var line = 0
+        result.restartContexts = restartOffsets.map { offset in
+            while linkContext.lineContexts[line].offset < offset { line += 1 }
+            return linkContext.lineContexts[line].context
+        }
         return result
     }
 
@@ -236,7 +246,8 @@ enum MarkdownSyntax {
         let source = contiguousSource(text)
         let code = inlineCodeRanges(in: source, excluding: [])
         var spans = code.map { MarkdownStyleSpan(range: $0, role: .code) }
-        appendLinkSpans(in: source, excluding: code, spans: &spans, allowFrontmatter: false)
+        appendLinkSpans(in: source, excluding: code, spans: &spans, allowFrontmatter: false,
+                        readsBlocks: false)
         _ = appendEmphasisSpans(
             in: source, excluding: code, blockBoundaries: [], spans: &spans
         )
@@ -312,9 +323,13 @@ enum MarkdownSyntax {
         let oldAffected = syntaxLineRange(
             containing: previousEditedRange, in: previousSource
         )
-        let start = previousResult.restartOffsets.last(where: {
+        guard previousResult.restartContexts.count == previousResult.restartOffsets.count
+        else { return nil }
+        let startIndex = previousResult.restartOffsets.lastIndex(where: {
             $0 <= oldAffected.location
-        }) ?? 0
+        })
+        let start = startIndex.map { previousResult.restartOffsets[$0] } ?? 0
+        let startContext = startIndex.map { previousResult.restartContexts[$0] } ?? .init()
         let ends = previousResult.restartOffsets.filter {
             $0 >= NSMaxRange(oldAffected) && $0 > start
         }
@@ -337,7 +352,7 @@ enum MarkdownSyntax {
             guard newEnd - start <= 65_536 else { return nil }
             let region = NSRange(location: start, length: newEnd - start)
             let local = parse(source.substring(with: region), isDocumentStart: start == 0,
-                              timeSums: timeSums)
+                              timeSums: timeSums, blockContext: startContext)
             // A distant fence edit can expose a table within this region.
             // Tables are not spliced into incremental results yet.
             guard local.tables.isEmpty else { return nil }
@@ -347,7 +362,10 @@ enum MarkdownSyntax {
             let unresolvedFrontmatter = start == 0
                 && beginsWithFrontmatter
                 && local.linkContextRanges.first?.location != 0
-            if (local.canRestartAtEnd && !unresolvedFrontmatter)
+            // The unchanged suffix must resume in the same list context.
+            if (local.canRestartAtEnd && !unresolvedFrontmatter
+                && resumesAlike(local.restartContexts.last, oldEnd, in: previousResult,
+                                at: newEnd, source: source))
                 || oldEnd == previousSource.length {
                 replacement = (
                     NSRange(location: start, length: oldEnd - start),
@@ -426,6 +444,11 @@ enum MarkdownSyntax {
                 canRestartAtEnd: NSMaxRange(previousLine) == previousSource.length
                     ? local.canRestartAtEnd : previousResult.canRestartAtEnd
             )
+        result.restartContexts = zip(previousResult.restartOffsets, previousResult.restartContexts)
+            .filter { $0.0 < start }.map(\.1)
+            + local.restartContexts
+            + zip(previousResult.restartOffsets, previousResult.restartContexts)
+                .filter { $0.0 > NSMaxRange(previousLine) }.map(\.1)
         result.tables = tables
         result.linkContextRanges = previousResult.linkContextRanges.compactMap { range in
             if NSIntersectionRange(range, previousLine).length > 0 { return nil }
@@ -436,6 +459,32 @@ enum MarkdownSyntax {
             result: result,
             invalidatedRange: line
         )
+    }
+
+    private static func resumesAlike(
+        _ context: NotebookLinkParser.BlockContext?, _ oldEnd: Int,
+        in previousResult: MarkdownSyntaxResult, at newEnd: Int, source: NSString
+    ) -> Bool {
+        guard let context, let previous = restartContext(at: oldEnd, in: previousResult)
+        else { return false }
+        var contentsEnd = 0
+        source.getLineStart(nil, end: nil, contentsEnd: &contentsEnd,
+                            for: NSRange(location: newEnd, length: 0))
+        let line = source.substring(with: NSRange(location: newEnd, length: contentsEnd - newEnd))
+        return context.resumes(like: previous, before: line)
+    }
+
+    private static func restartContext(
+        at offset: Int, in result: MarkdownSyntaxResult
+    ) -> NotebookLinkParser.BlockContext? {
+        var low = 0
+        var high = result.restartOffsets.count
+        while low < high {
+            let middle = (low + high) / 2
+            if result.restartOffsets[middle] < offset { low = middle + 1 } else { high = middle }
+        }
+        guard low < result.restartOffsets.count, result.restartOffsets[low] == offset else { return nil }
+        return result.restartContexts[low]
     }
 
     /// An underline heading reaches across lines: a reparsed region next to
@@ -1041,11 +1090,15 @@ enum MarkdownSyntax {
         in source: NSString,
         excluding codeRanges: [NSRange],
         spans: inout [MarkdownStyleSpan],
-        allowFrontmatter: Bool = true
+        allowFrontmatter: Bool = true,
+        context: NotebookLinkParser.BlockContext = .init(),
+        readsBlocks: Bool = true
     ) -> [NSRange] {
         var addresses: [NSRange] = []
         for link in NotebookLinkParser.parse(source as String, includingIncomplete: true,
-                                              allowFrontmatter: allowFrontmatter) where !link.isEmbed {
+                                              allowFrontmatter: allowFrontmatter,
+                                              context: context,
+                                              readsBlocks: readsBlocks) where !link.isEmbed {
             guard !codeRanges.contains(where: {
                 NSLocationInRange(link.range.location, $0)
             }) else { continue }

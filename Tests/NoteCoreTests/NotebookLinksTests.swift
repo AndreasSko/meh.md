@@ -45,6 +45,85 @@ final class NotebookLinksTests: XCTestCase {
         XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination), ["Visible", "Visible.md"])
     }
 
+    func testCodeIndentIsRelativeToTheContainingBlock() {
+        let text = [
+            "    [literal](TopLevel.md)",
+            "\t[[Literal tab]]",
+            "",
+            "Café 🪐",
+            "    [paragraph continuation](Paragraph.md)",
+            "",
+            "- Project",
+            "  - Section",
+            "    - [nested item](Nested.md)",
+            "\t  [[Tab continuation]]",
+            "",
+            "      [item paragraph](ItemParagraph.md)",
+            "",
+            "          [list code](ListCode.md)",
+            "    - [next item](Next.md)",
+            "1. [ordered](Ordered.md)",
+            "",
+            "   [ordered paragraph](OrderedParagraph.md)",
+            "",
+            "# Heading",
+            "    [after heading](AfterHeading.md)",
+        ].joined(separator: "\r\n")
+        let links = NotebookLinkParser.parse(text)
+        XCTAssertEqual(links.map(\.destination),
+                       ["Paragraph.md", "Nested.md", "Tab continuation", "ItemParagraph.md",
+                        "Next.md", "Ordered.md", "OrderedParagraph.md"])
+    }
+
+    func testFencesInsideNestedListsStayLiteral() {
+        let text = "- Root\n  - Section\n    ```\n    [[Literal]]\n    ```\n    [[Visible]]"
+        XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination), ["Visible"])
+        let unclosed = "- A\n  - B\n    ~~~\n    code\n[Read](Map.md)\n"
+        XCTAssertEqual(NotebookLinkParser.parse(unclosed).map(\.destination), ["Map.md"])
+    }
+
+    func testCodeCanStartOnTheListMarkerLine() {
+        for text in [
+            "-     code\n      [Literal](X.md)\n",
+            "- A\n  - ~~~\n    [Literal](X.md)\n    ~~~\n",
+        ] {
+            XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination), [], text)
+        }
+    }
+
+    func testInlineLinesKeepTheParagraphOpen() {
+        for text in [
+            "- Item\n  <https://example.com>\n      [Read](Map.md)\n",
+            "-    item\n    - text\n\n     [Read](Map.md)\n",
+        ] {
+            XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination).last, "Map.md", text)
+        }
+        XCTAssertEqual(NotebookLinkParser.parse("-     [Read](Map.md)", readsBlocks: false)
+            .map(\.destination), ["Map.md"])
+    }
+
+    func testLongMarkerRunsStayLinear() {
+        let text = String(repeating: "- ", count: 20_000) + "[Read](Map.md)"
+        let start = ContinuousClock.now
+        XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination), ["Map.md"])
+        XCTAssertLessThan(start.duration(to: .now), .seconds(1))
+    }
+
+    func testParagraphEndsOnlyWhereCommonMarkEndsIt() {
+        for text in [
+            "Heading\n===\n    [Literal](X.md)\n",
+            "Heading\n--\n    [Literal](X.md)\n",
+            "Intro\n2. same paragraph\n\n    [Literal](X.md)\n",
+            "Intro\n-\n\n    [Literal](X.md)\n",
+            "<!-- comment -->\n    [Literal](X.md)\n",
+            "-\n\n    [Literal](X.md)\n",
+            "-\t~~~\n    [Literal](X.md)\n",
+            "<!--\ncomment\n-->\n    [Literal](X.md)\n",
+        ] {
+            XCTAssertEqual(NotebookLinkParser.parse(text).map(\.destination), [], text)
+        }
+    }
+
     func testEmbedsAreIdentifiedAndUnsupported() {
         let source = NotebookLinkNote(id: UUID(), name: "Source.md", path: "")
         for link in NotebookLinkParser.parse("![[Target]] ![picture](picture.png)") {
@@ -135,6 +214,7 @@ final class NotebookLinksTests: XCTestCase {
         XCTAssertEqual(block.map { ns.substring(with: $0) }, "A decision. ^decision-1")
         XCTAssertNil(NotebookLinkParser.targetRange(for: "Fake heading", in: text))
         XCTAssertNotNil(NotebookLinkParser.targetRange(for: "Setext title", in: text))
+        XCTAssertNil(NotebookLinkParser.targetRange(for: "Fake", in: "Intro\n    # Fake"))
     }
 
     func testBacklinksContainOccurrencesButExcludeSelfAndEmbeds() {

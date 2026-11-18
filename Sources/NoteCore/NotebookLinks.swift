@@ -30,10 +30,13 @@ public struct NotebookLinkOccurrence: Sendable, Equatable {
 /// resolving, indexing, or rewriting links must use the complete default.
 public enum NotebookLinkParser {
     public static func parse(_ text: String, includingIncomplete: Bool = false,
-                             allowFrontmatter: Bool = true) -> [NotebookLinkOccurrence] {
+                             allowFrontmatter: Bool = true,
+                             context: BlockContext = BlockContext(),
+                             readsBlocks: Bool = true) -> [NotebookLinkOccurrence] {
         let source = text as NSString
         let units = Array(text.utf16)
-        let blocked = excludedUnits(text, allowFrontmatter: allowFrontmatter)
+        let blocked = excludedUnits(text, allowFrontmatter: allowFrontmatter, context: context,
+                                    readsBlocks: readsBlocks)
         var result: [NotebookLinkOccurrence] = []
         var i = 0
         func escaped(_ offset: Int) -> Bool {
@@ -415,7 +418,7 @@ public enum NotebookLinkParser {
                 continue
             }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasPrefix("#") else { continue }
+            guard trimmed.hasPrefix("#"), indentation(of: line) <= 3 else { continue }
             let prefix = trimmed.prefix(while: { $0 == "#" })
             guard prefix.count <= 6,
                   trimmed.dropFirst(prefix.count).first?.isWhitespace == true else { continue }
@@ -447,27 +450,239 @@ public enum NotebookLinkParser {
     }
 
     /// Neutral boundaries for incremental editor parsing. A substring must
-    /// never restart inside frontmatter or a multiline HTML comment.
+    /// never restart inside frontmatter or a multiline HTML comment. A
+    /// substring that starts at a line resumes from that line's context.
     public static func incrementalContext(
-        in text: String, allowFrontmatter: Bool = true
-    ) -> (ranges: [NSRange], hasOpenComment: Bool) {
+        in text: String, allowFrontmatter: Bool = true, context: BlockContext = BlockContext()
+    ) -> (ranges: [NSRange], hasOpenComment: Bool, lineContexts: [(offset: Int, context: BlockContext)]) {
         var ranges: [NSRange] = []
         var open = false
-        _ = excludedUnits(text, allowFrontmatter: allowFrontmatter,
-                          contextRanges: &ranges, hasOpenComment: &open)
-        return (ranges, open)
+        var lines: [(offset: Int, context: BlockContext)] = []
+        _ = excludedUnits(text, allowFrontmatter: allowFrontmatter, context: context,
+                          contextRanges: &ranges, hasOpenComment: &open, lineContexts: &lines)
+        return (ranges, open, lines)
     }
 
-    private static func excludedUnits(_ text: String, allowFrontmatter: Bool = true) -> [Bool] {
-        var ranges: [NSRange] = []
-        var open = false
-        return excludedUnits(text, allowFrontmatter: allowFrontmatter,
-                             contextRanges: &ranges, hasOpenComment: &open)
+    /// The open blocks at a line start that decide whether an indented
+    /// line is code: list items, a paragraph, or a fence.
+    public struct BlockContext: Equatable, Sendable {
+        struct Fence: Equatable, Sendable {
+            let marker: Character
+            let run: Int
+            let base: Int
+        }
+
+        var fence: Fence?
+        var paragraph = false
+        /// Content columns of the open list items, innermost last.
+        var items: [Int] = []
+        /// The innermost item has no content yet, so a blank line ends it.
+        var emptyItem = false
+        /// Inside an HTML comment that started a line.
+        var comment = false
+
+        public init() {}
+
+        /// Whether `line`, without its line break, and the text after it
+        /// read the same after this context as after `other`. A blank line
+        /// ends any paragraph, so then only the open blocks matter.
+        public func resumes(like other: BlockContext, before line: String) -> Bool {
+            self == other || paragraph != other.paragraph && emptyItem == other.emptyItem
+                && fence == other.fence && items == other.items
+                && line.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+
+        /// Moves past `line` and returns whether it is code.
+        mutating func read(_ line: BlockLine) -> Bool {
+            if let open = fence {
+                // A fence also ends with the list item that holds it.
+                if line.marker == nil || line.indentation >= open.base {
+                    if line.indentation - open.base <= 3, line.marker == open.marker,
+                       line.run >= open.run, line.isBareRun { fence = nil }
+                    return true
+                }
+                fence = nil
+            }
+            if comment {
+                if line.trimmed.contains("-->") { comment = false }
+                return false
+            }
+            guard let marker = line.marker else {
+                paragraph = false
+                if emptyItem { items.removeLast(); emptyItem = false }
+                return false
+            }
+            emptyItem = false
+            var block = line.block
+            // A plain line right after paragraph text continues it, even
+            // when it is less indented than the list item it belongs to.
+            let open = items.count
+            var remaining = items
+            while let last = remaining.last, last > line.indentation { remaining.removeLast() }
+            // A marker too indented to start a block continues the paragraph.
+            if paragraph, block != nil, line.indentation - (remaining.last ?? 0) > 3 { block = nil }
+            if block != nil || !paragraph { items = remaining }
+            let base = items.last ?? 0
+            if paragraph, items.count == open {
+                if case .listItem(_, false, _) = block { block = nil }
+                // An underline ends the paragraph as a heading.
+                if (marker == "=" || marker == "-"), line.isBareRun,
+                   (0...3).contains(line.indentation - base) {
+                    paragraph = false
+                    return false
+                }
+            }
+            // Indented code needs four columns past the enclosing list
+            // item's content and cannot interrupt a paragraph.
+            if !paragraph, line.indentation - base >= 4 { return true }
+            guard line.indentation - base <= 3 else { paragraph = true; return false }
+            return enter(block, at: line.indentation, base: base)
+        }
+
+        private mutating func enter(_ block: BlockStart?, at column: Int, base: Int) -> Bool {
+            switch block {
+            case nil:
+                paragraph = true
+            case .blank:
+                paragraph = false
+                emptyItem = true
+            case .headingOrRule:
+                paragraph = false
+            case .htmlComment(let isClosed):
+                paragraph = false
+                comment = !isClosed
+            case .indentedCode:
+                paragraph = false
+                return true
+            case .fence(let marker, let run):
+                fence = Fence(marker: marker, run: run, base: base)
+                paragraph = false
+                return true
+            case .listItem(let width, _, let content):
+                items.append(column + width)
+                return enter(content, at: column + width, base: column + width)
+            }
+            return false
+        }
+    }
+
+    struct BlockLine {
+        let indentation: Int
+        let marker: Character?
+        let run: Int
+        let isBareRun: Bool
+        let block: BlockStart?
+
+        let trimmed: String
+
+        init(_ value: String, trimmed: String) {
+            let column = NotebookLinkParser.indentation(of: value)
+            self.trimmed = trimmed
+            let marker = trimmed.first
+            let run = marker.map { m in trimmed.prefix(while: { $0 == m }).count } ?? 0
+            indentation = column
+            self.marker = marker
+            self.run = run
+            isBareRun = (run >= 3 || marker == "=" || marker == "-")
+                && trimmed.dropFirst(run).trimmingCharacters(in: .whitespaces).isEmpty
+            block = NotebookLinkParser.blockStart(trimmed, at: column)
+        }
+    }
+
+    static func indentation(of line: String) -> Int {
+        var column = 0
+        for character in line {
+            if character == " " { column += 1 }
+            else if character == "\t" { column += 4 - column % 4 }
+            else { break }
+        }
+        return column
+    }
+
+    indirect enum BlockStart {
+        case blank
+        case fence(Character, Int)
+        case headingOrRule
+        case htmlComment(isClosed: Bool)
+        case indentedCode
+        /// `width` reaches the item's content. Only a nonempty bullet or
+        /// a list starting at 1 can interrupt a paragraph.
+        case listItem(width: Int, canInterrupt: Bool, content: BlockStart?)
+    }
+
+    /// Lines that end a paragraph. `trimmed` has no surrounding whitespace
+    /// and starts at `column`.
+    private static func blockStart<S: StringProtocol>(
+        _ trimmed: S, at column: Int, depth: Int = 0
+    ) -> BlockStart? {
+        guard let marker = trimmed.first,
+              "`~#-*_+<".contains(marker) || marker.isASCII && marker.isNumber else { return nil }
+        // HTML blocks are not parsed here, but they also end a paragraph.
+        // Autolinks such as <https://example.com> are inline text.
+        if marker == "<" {
+            let rest = trimmed.dropFirst()
+            if rest.hasPrefix("!--") { return .htmlComment(isClosed: rest.dropFirst(3).contains("-->")) }
+            if rest.first == "!" || rest.first == "?" { return .headingOrRule }
+            let name = rest.first == "/" ? rest.dropFirst() : rest
+            guard let first = name.first, first.isASCII, first.isLetter else { return nil }
+            let after = name.drop(while: { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") })
+            guard after.first.map({ " \t>/".contains($0) }) ?? true else { return nil }
+            return .headingOrRule
+        }
+        let run = trimmed.prefix(while: { $0 == marker }).count
+        if (marker == "`" || marker == "~"), run >= 3 {
+            // A backtick fence's info string cannot contain backticks.
+            if marker == "`", trimmed.dropFirst(run).contains("`") { return nil }
+            return .fence(marker, run)
+        }
+        if marker == "#", run <= 6, trimmed.dropFirst(run).first?.isWhitespace ?? true { return .headingOrRule }
+        if "-*_".contains(marker), trimmed.allSatisfy({ $0 == marker || $0 == " " || $0 == "\t" }),
+           trimmed.filter({ $0 == marker }).count >= 3 { return .headingOrRule }
+        let width: Int
+        let startsAtOne: Bool
+        if "-*+".contains(marker) {
+            width = 1
+            startsAtOne = true
+        } else {
+            let digits = trimmed.prefix(while: { $0.isASCII && $0.isNumber })
+            guard (1...9).contains(digits.count), let delimiter = trimmed.dropFirst(digits.count).first,
+                  delimiter == "." || delimiter == ")" else { return nil }
+            width = digits.count + 1
+            startsAtOne = Int(digits) == 1
+        }
+        let rest = trimmed.dropFirst(width)
+        var index = rest.startIndex
+        var contentColumn = column + width
+        while index < rest.endIndex, rest[index] == " " || rest[index] == "\t" {
+            contentColumn += rest[index] == "\t" ? 4 - contentColumn % 4 : 1
+            index = rest.index(after: index)
+        }
+        let spaces = contentColumn - column - width
+        if index == rest.endIndex { return .listItem(width: width + 1, canInterrupt: false, content: .blank) }
+        guard spaces > 0 else { return nil }
+        // Five or more spaces start indented code inside the item.
+        if spaces >= 5 { return .listItem(width: width + 1, canInterrupt: startsAtOne, content: .indentedCode) }
+        // Bound the nesting on one line so long marker runs stay linear.
+        let content = depth < 8 ? blockStart(rest[index...], at: contentColumn, depth: depth + 1) : nil
+        return .listItem(width: width + spaces, canInterrupt: startsAtOne, content: content)
     }
 
     private static func excludedUnits(
-        _ text: String, allowFrontmatter: Bool,
-        contextRanges: inout [NSRange], hasOpenComment: inout Bool
+        _ text: String, allowFrontmatter: Bool = true, context: BlockContext = BlockContext(),
+        readsBlocks: Bool = true
+    ) -> [Bool] {
+        var ranges: [NSRange] = []
+        var open = false
+        var lines: [(offset: Int, context: BlockContext)] = []
+        return excludedUnits(text, allowFrontmatter: allowFrontmatter, context: context,
+                             readsBlocks: readsBlocks, contextRanges: &ranges,
+                             hasOpenComment: &open, lineContexts: &lines)
+    }
+
+    private static func excludedUnits(
+        _ text: String, allowFrontmatter: Bool, context: BlockContext, readsBlocks: Bool = true,
+        contextRanges: inout [NSRange], hasOpenComment: inout Bool,
+        lineContexts: inout [(offset: Int, context: BlockContext)]
     ) -> [Bool] {
         let source = text as NSString
         let units = Array(text.utf16)
@@ -475,7 +690,7 @@ public enum NotebookLinkParser {
         func mark(_ range: NSRange) {
             for offset in range.location..<min(NSMaxRange(range), blocked.count) { blocked[offset] = true }
         }
-        var fence: (Character, Int)?
+        var state = context
         var frontmatter = false
         var firstLine = true
         var frontmatterEnd = 0
@@ -488,9 +703,11 @@ public enum NotebookLinkParser {
             let line = $0.trimmingCharacters(in: .whitespaces)
             return line == "---" || line == "..."
         }
+        var lines: [(offset: Int, context: BlockContext)] = []
         source.enumerateSubstrings(in: NSRange(location: 0, length: source.length), options: .byLines) { line, _, enclosing, _ in
             let value = line ?? ""
             let trimmed = value.trimmingCharacters(in: .whitespaces)
+            lines.append((enclosing.location, state))
             if allowFrontmatter && firstLine && trimmed == "---" && hasFrontmatterEnd { frontmatter = true; mark(enclosing); firstLine = false; return }
             firstLine = false
             if frontmatter {
@@ -501,20 +718,11 @@ public enum NotebookLinkParser {
                 }
                 return
             }
-            let indentation = value.prefix(while: { $0 == " " }).count
-            let marker = trimmed.first
-            let run = marker.map { m in trimmed.prefix(while: { $0 == m }).count } ?? 0
-            if let open = fence {
-                mark(enclosing)
-                if indentation <= 3, marker == open.0, run >= open.1,
-                   trimmed.dropFirst(run).trimmingCharacters(in: .whitespaces).isEmpty { fence = nil }
-                return
-            }
-            if indentation <= 3, (marker == "`" || marker == "~"), run >= 3 {
-                fence = (marker!, run); mark(enclosing); return
-            }
-            if indentation >= 4 || value.hasPrefix("\t") { mark(enclosing) }
+            // Table cells hold inline text only.
+            if readsBlocks, state.read(BlockLine(value, trimmed: trimmed)) { mark(enclosing) }
         }
+        lines.append((source.length, state))
+        lineContexts = lines
         if frontmatterEnd > 0 {
             contextRanges.append(NSRange(location: 0, length: frontmatterEnd))
         }
