@@ -1206,13 +1206,18 @@ private struct NotebookFileRow: View {
             .foregroundStyle(.secondary)
     }
 
-    private var nameField: some View {
-        #if os(macOS)
-        NotebookInlineNameField(text: Bindable(scene).proposedName, isEnabled: !scene.busy)
-        #else
-        TextField("Name", text: Bindable(scene).proposedName)
-            .focused(focusedNameID, equals: row.id)
-        #endif
+    private func nameField(_ placement: NotebookPlacement) -> some View {
+        Group {
+            #if os(macOS)
+            NotebookInlineNameField(text: Bindable(scene).proposedName, isEnabled: !scene.busy)
+            #else
+            TextField("Name", text: Bindable(scene).proposedName)
+                .focused(focusedNameID, equals: row.id)
+            #endif
+        }
+        // Leaving the field accepts a suggestion unseen, turning "Map"
+        // into "Mal". Note titles are prose and keep it.
+        .autocorrectionDisabled(placement.item.kind == .folder)
     }
 
     @ViewBuilder
@@ -1248,7 +1253,7 @@ private struct NotebookFileRow: View {
                     Color.clear.frame(width: disclosureWidth, height: 1)
                 }
                 if scene.editingID == row.id {
-                    nameField
+                    nameField(placement)
                         .textFieldStyle(.plain)
                         .accessibilityIdentifier("notebook-inline-name")
                         .disabled(scene.busy)

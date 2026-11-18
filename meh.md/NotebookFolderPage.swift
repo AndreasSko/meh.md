@@ -670,6 +670,7 @@ private struct NotebookFolderItemName: View {
                 .focused($focused)
                 .onSubmit { scene.submitInlineName() }
                 .onAppear { focused = true }
+                .autocorrectionDisabled(placement.item.kind == .folder)
                 .accessibilityIdentifier("notebook-folder-page-name")
         } else {
             Text(placement.item.kind == .note
