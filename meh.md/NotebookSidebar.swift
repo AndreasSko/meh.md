@@ -82,7 +82,7 @@ struct NotebookSidebar: View {
                             onMutation: scene.trashDidChange,
                             onOpenNote: scene.openNoteFromTrash,
                             onClose: { scene.showingTrash = false },
-                            openNoteID: scene.selectedID,
+                            openNoteID: scene.shownNoteID,
                             afterMutation: { scene.editorNavigation.resumeEditing?() }
                         )
                     } else if isCompact && scene.isLibraryEmpty {
