@@ -86,6 +86,42 @@ final class MarkdownLinkContextIncrementalTests: XCTestCase {
     }
 
     @discardableResult
+    func testIndentedLinksFollowBlockContextWhenEditing() {
+        for (previous, target, replacement) in [
+            ("Heading\n    [Read](Map.md)\n", "Heading", "# Heading"),
+            ("# Heading\n    [Read](Map.md)\n", "# Heading", "Heading"),
+            ("- Root\n  - Section\n    - [Read](Map.md)\n", "Read", "Open"),
+            ("- Root\n  - Section\n    - [Read](Map.md)\n", "- Root\n  - Section", "# Heading"),
+            ("- Root\n\n      [Read](Map.md)\n", "- Root", "Root"),
+            ("Intro\n\n- Root\n\n      [Read](Map.md)\n", "\n\n- Root", "\n- Root"),
+            ("- Root\n\nText\n\n    [Read](Map.md)\n", "\n\nText", "\n  Text"),
+            ("# Heading\n    \u{0B}\n    [Read](Map.md)\n", "# ", ""),
+            ("# Heading\n    \u{0C}\n    [Read](Map.md)\n", "# ", ""),
+        ] {
+            check(previous, replacing: target, with: replacement)
+        }
+    }
+
+    func testEveryEditInNestedListsMatchesFullParse() {
+        let previous = "Intro [[Top]]\n- Root\n  - Section\n    - [Read](Map.md)\n"
+            + "lazy\n\n      [[Item]]\n\n# Heading\n    [[Code]]\n1. One\n   two\n"
+        let units = previous.utf16.count
+        for location in 0..<units {
+            for replacement in [" ", "-", "\n", "#"] {
+                check(previous, edit: NSRange(location: location, length: 0),
+                      replacement: replacement)
+            }
+            check(previous, edit: NSRange(location: location, length: 1), replacement: "")
+        }
+    }
+
+    func testEditsDeepInLongListsStayLocal() throws {
+        let items = (1...100).map { "    - [Item \($0)](Item\($0).md)" }
+        let previous = "- Root\n  - Section\n" + items.joined(separator: "\n") + "\nAfter\n"
+        let update = try XCTUnwrap(check(previous, replacing: "Item 100]", with: "Item 100 done]"))
+        XCTAssertLessThan(update.invalidatedRange.length, 100)
+    }
+
     private func check(
         _ previous: String, replacing target: String, with replacement: String,
         file: StaticString = #filePath, line: UInt = #line

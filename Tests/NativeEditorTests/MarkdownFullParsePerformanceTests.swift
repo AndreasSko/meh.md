@@ -50,7 +50,10 @@ final class MarkdownFullParsePerformanceTests: XCTestCase {
             let paragraph = "A fictional café e\u{0301} 🪐 note with 日本語, ==light== and ~~old~~.\n\n"
             let text = String(repeating: paragraph, count: size / paragraph.utf8.count + 1)
             let expected = MarkdownSyntax.parse(text)
-            let fingerprint = SHA256.hash(data: Data(String(reflecting: expected).utf8))
+            // Fingerprint the syntax output independently of incremental restart state.
+            let syntax = (expected.spans, expected.fontRuns, expected.paragraphRuns,
+                          expected.tables, expected.linkContextRanges)
+            let fingerprint = SHA256.hash(data: Data(String(reflecting: syntax).utf8))
                 .map { String(format: "%02x", $0) }.joined()
             var samples: [Double] = []
             for _ in 0..<21 {
