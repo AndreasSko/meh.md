@@ -60,6 +60,7 @@ struct NotebookWindowValue: Codable, Hashable {
         .commands {
             NotebookMenuCommands()
             #if os(macOS)
+            NotebookWindowCommands()
             NotebookFormatCommands()
             #endif
             NotebookSearchCommands()
@@ -77,14 +78,16 @@ struct NotebookWindowValue: Codable, Hashable {
 @MainActor @Observable final class NotebookMenuState {
     var newNoteRequest = 0
     var newFolderRequest = 0
+    #if os(iOS)
     var newWindowRequest = 0
+    var canOpenWindow = false
+    #endif
     var importRequest = 0
     var exportRequest = 0
     var moveRequest = 0
     var trashRequest = 0
     var canManageSelection = false
     var canExport = false
-    var canOpenWindow = false
     var isAvailable = false
 }
 
@@ -94,6 +97,9 @@ extension FocusedValues {
 
 struct NotebookMenuCommands: Commands {
     @FocusedValue(\.notebookMenu) private var menu
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -103,9 +109,18 @@ struct NotebookMenuCommands: Commands {
             Button("New Folder") { menu?.newFolderRequest += 1 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(menu?.isAvailable != true)
+            #if os(macOS)
+            // Opens without a focused notebook, so it works once the last
+            // window is closed.
+            Button("New Window") {
+                openWindow(id: "notebook", value: NotebookWindowValue())
+            }
+            .keyboardShortcut("n", modifiers: [.command, .option])
+            #else
             Button("New Window") { menu?.newWindowRequest += 1 }
                 .keyboardShortcut("n", modifiers: [.command, .option])
                 .disabled(menu?.isAvailable != true || menu?.canOpenWindow != true)
+            #endif
             Divider()
             Button("Import Markdown…") { menu?.importRequest += 1 }
                 .disabled(menu?.isAvailable != true)
@@ -127,6 +142,38 @@ struct NotebookMenuCommands: Commands {
         #endif
     }
 }
+
+#if os(macOS)
+/// Brings back the notebook from the Window menu, also after its last
+/// window was closed, like Notes' Window ▸ Notes.
+struct NotebookWindowCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(before: .windowList) {
+            Button("meh.md") { showNotebook() }
+                .keyboardShortcut("0", modifiers: .command)
+            Divider()
+        }
+    }
+
+    private func showNotebook() {
+        // SwiftUI names a group's windows after its id, as "notebook-AppWindow-1".
+        let notebooks = NSApp.windows.filter {
+            $0.identifier?.rawValue.hasPrefix("notebook") == true
+        }
+        // Minimised windows aren't in the front-to-back order.
+        let window = NSApp.orderedWindows.first { notebooks.contains($0) && $0.isVisible }
+            ?? notebooks.first(where: \.isMiniaturized)
+        guard let window else {
+            openWindow(id: "notebook", value: NotebookWindowValue())
+            return
+        }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+    }
+}
+#endif
 
 extension FocusedValues {
     @Entry var notebookEditor: MarkdownEditorNavigation?

@@ -349,8 +349,10 @@ private struct NotebookSearchNavigation: ViewModifier {
 /// Handles the menu bar's notebook commands.
 private struct NotebookMenuNavigation: ViewModifier {
     let scene: NotebookSceneState
+    #if os(iOS)
     @Environment(\.openWindow) private var openWindow
     @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
+    #endif
 
     func body(content: Content) -> some View {
         let menu = scene.menu
@@ -375,17 +377,21 @@ private struct NotebookMenuNavigation: ViewModifier {
         .onChange(of: scene.isLibraryEmpty, initial: true) { _, empty in
             menu.canExport = !empty
         }
+        #if os(iOS)
         .onChange(of: supportsMultipleWindows, initial: true) { _, supported in
             menu.canOpenWindow = supported
         }
+        #endif
         .onChange(of: menu.newFolderRequest) { _, _ in
             guard scene.menuAvailable else { return }
             scene.createItem(kind: .folder, parentID: nil)
         }
+        #if os(iOS)
         .onChange(of: menu.newWindowRequest) { _, _ in
             guard scene.menuAvailable, supportsMultipleWindows else { return }
             openWindow(id: "notebook", value: NotebookWindowValue())
         }
+        #endif
         .onChange(of: menu.importRequest) { _, _ in
             guard scene.menuAvailable else { return }
             scene.requestImport()
