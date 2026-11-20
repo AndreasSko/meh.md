@@ -1,4 +1,5 @@
 import Foundation
+import MehWidgetData
 import NoteCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -675,7 +676,18 @@ extension NotebookSceneState {
                     itemID: $0.item.id, parentID: $0.item.parentID
                 )
             }
-        ))
+        ), link: windowLink(for: roots))
+    }
+
+    /// A single note can be dragged into a window of its own.
+    private func windowLink(for roots: [NotebookPlacement]) -> URL? {
+        #if os(iOS)
+        guard UIApplication.shared.supportsMultipleScenes, roots.count == 1,
+              let note = roots.first, note.item.kind == .note else { return nil }
+        return MehWidgetLink.note(note.item.id).url
+        #else
+        return nil
+        #endif
     }
 
     func browserDropInteraction() -> NotebookBrowserDropInteraction {

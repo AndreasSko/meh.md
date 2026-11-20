@@ -1,4 +1,5 @@
 import Foundation
+import MehWidgetData
 import NoteCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -763,12 +764,14 @@ private struct NotebookFolderCards<Header: View>: View {
                       scene.beginBrowserDrag(first, selection: ids)
                           .hasItemConformingToTypeIdentifier(UTType.mehNotebookItem.identifier),
                       let token = scene.browserDrag.drag?.token else { return [] }
-                return ids.map { NotebookPageDragItem(id: $0, token: token) }
+                let link = scene.browserDrag.link
+                return ids.map { NotebookPageDragItem(id: $0, token: token, link: link) }
             }
             .dragContainerSelection(selection.orderedIDs(in: displayOrder))
+            // As in Files, no outside-app setting, so a single card's link
+            // can open a new window.
             .dragConfiguration(DragConfiguration(
-                operationsWithinApp: .init(allowMove: true),
-                operationsOutsideApp: .init(allowCopy: false)))
+                operationsWithinApp: .init(allowMove: true)))
             #endif
         }
         .scrollContentBackground(.hidden)
@@ -1231,13 +1234,7 @@ private extension View {
     /// As in Files, a drag that ends without a drop leaves nothing behind.
     func notebookPageDragSession(_ scene: NotebookSceneState) -> some View {
         #if os(iOS)
-        onDragSessionUpdated { session in
-            switch session.phase {
-            case .initial, .active: scene.browserDrag.isSessionActive = true
-            case .ended, .dataTransferCompleted: scene.browserDrag.reset()
-            default: break
-            }
-        }
+        onDragSessionUpdated { scene.browserDrag.sessionUpdated($0) }
         #else
         self
         #endif
@@ -1249,12 +1246,17 @@ private extension View {
 private struct NotebookPageDragItem: Transferable, Identifiable {
     let id: UUID
     let token: UUID
+    /// A single note's link, as in Files.
+    let link: URL?
 
     static var transferRepresentation: some TransferRepresentation {
         DataRepresentation(exportedContentType: .mehNotebookItem) {
             Data($0.token.uuidString.utf8)
         }
         .visibility(.ownProcess)
+        // SwiftUI also asks for the proxy of items it won't export.
+        ProxyRepresentation { (item: Self) in item.link ?? MehWidgetLink.note(item.id).url }
+            .exportingCondition { $0.link != nil }
     }
 }
 

@@ -935,13 +935,7 @@ private struct NotebookLibraryBrowser: View {
         }
         .focused(focus.browser)
         #if os(iOS)
-        .onDragSessionUpdated { session in
-            switch session.phase {
-            case .initial, .active: scene.browserDrag.isSessionActive = true
-            case .ended, .dataTransferCompleted: scene.browserDrag.reset()
-            default: break
-            }
-        }
+        .onDragSessionUpdated { scene.browserDrag.sessionUpdated($0) }
         #endif
         .onKeyPress { press in handleKeyPress(press) }
         #if os(iOS)

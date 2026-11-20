@@ -597,6 +597,70 @@ final class FolderPagesUITests: XCTestCase {
         #endif
     }
 
+#if os(iOS)
+    /// The windows a drop at the screen's edge opens outlive the app, so
+    /// they would change the layout of every test after it. Run by hand.
+    func testIPadDraggingNotesToTheScreenEdgeOpensThemInNewWindows() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad)
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["MEH_WINDOW_DRAG_TESTS"] == "1",
+            "Set MEH_WINDOW_DRAG_TESTS=1 on a fresh iPad simulator"
+        )
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        app.revealNotebookSidebar(timeout: 30)
+
+        openFolderPage(named: "Resources", in: app)
+        chooseView("Cards", in: app)
+        dragToNewWindow(pageItem("Book notes", in: app), showing: "Book notes",
+                        edge: 0.95, in: app)
+        // The page the card came from stays in its own window.
+        waitForPageTitle("Resources", in: app)
+
+        // The new window covers the page now, but Files stays in view, so
+        // its row goes to the other edge.
+        let packing = itemID(named: "Packing list", in: app, expanding: "Resources")
+        dragToNewWindow(app.staticTexts["notebook-sidebar-title-" + packing],
+                        showing: "Packing list", edge: 0.03, in: app)
+        let bookNotes = app.windows.containing(NSPredicate(
+            format: "identifier == %@ AND label == %@", "note-title", "Book notes"))
+        XCTAssertTrue(bookNotes.firstMatch.exists, "The first new window must keep its note")
+    }
+
+    /// Drags to a screen edge, where the system offers a new window, and
+    /// waits for one more window that shows the note.
+    private func dragToNewWindow(
+        _ element: XCUIElement, showing title: String, edge x: CGFloat,
+        in app: XCUIApplication
+    ) {
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"), object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [hittable], timeout: 5), .completed,
+                       "\(title) must be in view to drag it")
+        let edge = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            .coordinate(withNormalizedOffset: CGVector(dx: x, dy: 0.45))
+        app.withoutIdleWait {
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.5, thenDragTo: edge, withVelocity: .slow,
+                       thenHoldForDuration: 4)
+        }
+        // The note's own window, not the one with Files and the page.
+        let noteWindow = app.windows.containing(NSPredicate(
+            format: "identifier == %@ AND label == %@", "note-title", title))
+        let opened = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let window = noteWindow.firstMatch
+            return window.exists
+                && !window.descendants(matching: .any)["notebook-folder-page-title"].exists
+                && !window.staticTexts.matching(NSPredicate(
+                    format: "identifier BEGINSWITH %@", "notebook-sidebar-title-")
+                ).firstMatch.exists
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 10), .completed,
+                       "No new window shows \(title)")
+    }
+#endif
+
     // MARK: Helpers
 
     private func pageItem(_ name: String, in app: XCUIApplication) -> XCUIElement {
