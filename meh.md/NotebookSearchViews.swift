@@ -12,6 +12,10 @@ struct NotebookSearchResults: View {
     @Binding var selection: UUID?
     let open: (NotebookSearchResult) -> Void
     @State private var scrollPosition = ScrollPosition(idType: UUID.self)
+    #if os(iOS)
+    @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
+    @State private var windowDragFrames = NotebookNoteWindowDragFrames()
+    #endif
 
     var body: some View {
         Group {
@@ -42,6 +46,14 @@ struct NotebookSearchResults: View {
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, 16)
+                    #if os(iOS)
+                    .coordinateSpace(.named(NotebookNoteWindowDragFrames.space))
+                    .background {
+                        if supportsMultipleWindows {
+                            NotebookNoteWindowDragReader(frames: windowDragFrames)
+                        }
+                    }
+                    #endif
                     #if os(macOS)
                     .background(NotebookMacOverlayScrollbar())
                     #endif
@@ -86,6 +98,9 @@ struct NotebookSearchResults: View {
                 }
                 .buttonStyle(.plain)
                 .contextMenu { menu(for: result.id) }
+                #if os(iOS)
+                .notebookNoteWindowDragFrame(result.id, in: windowDragFrames)
+                #endif
                 // The button keeps its first label while the same note stays
                 // in the results, so a new excerpt needs a new identity.
                 .id(NotebookSearchRow.Content(result))

@@ -54,6 +54,7 @@
         "NotebookOpenNoteUITests/testIPhoneMarksTheNoteOnlyBesideFiles",
         "NotebookReleaseMenuUITests/testFileMenuPickersAndNewWindowPreserveWriting",
         "NotebookReleaseMenuUITests/testSelectionCommandsRespectEditorAndTitleFocus",
+        "NotebookSearchUITests/testDroppingSearchResultOnTheOpenNotePastesNothing",
         "NotebookSearchUITests/testSearchResultMenuShowsNoteInFiles",
         "NotebookStorageUITests/testCaptureSettingsBeforeStorage",
         "NotebookStorageUITests/testEmptyStorageCanCloseAndReopen",
