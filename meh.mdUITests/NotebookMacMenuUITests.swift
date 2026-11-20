@@ -81,6 +81,58 @@ final class NotebookMacMenuUITests: XCTestCase {
         XCTAssertEqual(sidebarNoteCount(in: app), 2)
     }
 
+    func testMenusReopenClosedNotebookWindow() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW"] = "1"
+        app.launchEnvironment["MEH_NOTEBOOK_PREVIEW_RUN"] = UUID().uuidString
+        app.launchEnvironment["MEH_SYNC_AUTOMATIC"] = "0"
+        app.launch()
+
+        XCTAssertTrue(app.newNoteButton.waitForExistence(timeout: 15))
+        // A minimised notebook comes back instead of a second one opening.
+        app.typeKey("m", modifierFlags: .command)
+        XCTAssertTrue(waitForHittable(false, app.newNoteButton, timeout: 5))
+        app.typeKey("0", modifierFlags: .command)
+        XCTAssertTrue(waitForHittable(true, app.newNoteButton, timeout: 10))
+        XCTAssertEqual(notebookCount(in: app), 1)
+
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(app.newNoteButton.waitForNonExistence(timeout: 5))
+        let windowMenu = app.menuBars.menuBarItems["Window"]
+        XCTAssertTrue(windowMenu.waitForExistence(timeout: 5))
+        windowMenu.click()
+        let notebookItem = windowMenu.menuItems["meh.md"]
+        XCTAssertTrue(notebookItem.waitForExistence(timeout: 5))
+        notebookItem.click()
+        XCTAssertTrue(app.newNoteButton.waitForExistence(timeout: 10))
+        XCTAssertEqual(notebookCount(in: app), 1)
+
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(app.newNoteButton.waitForNonExistence(timeout: 5))
+        let fileMenu = app.menuBars.menuBarItems["File"]
+        fileMenu.click()
+        let newWindowItem = fileMenu.menuItems["New Window"]
+        XCTAssertTrue(newWindowItem.waitForExistence(timeout: 5))
+        XCTAssertTrue(newWindowItem.isEnabled)
+        newWindowItem.click()
+        XCTAssertTrue(app.newNoteButton.waitForExistence(timeout: 10))
+    }
+
+    private func waitForHittable(
+        _ hittable: Bool, _ element: XCUIElement, timeout: TimeInterval
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == %@", NSNumber(value: hittable)),
+            object: element
+        )
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func notebookCount(in app: XCUIApplication) -> Int {
+        app.windows.containing(.any, identifier: "notebook-new-item").count
+    }
+
     private func sidebarNoteCount(in app: XCUIApplication) -> Int {
         app.descendants(matching: .any).matching(
             NSPredicate(
