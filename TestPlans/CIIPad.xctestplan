@@ -24,6 +24,7 @@
       },
       "parallelizable": false,
       "selectedTests": [
+        "NotebookSearchUITests/testSearchResultMenuShowsNoteInFiles",
         "NotebookDragUITests/testReorderUndoSortAndRelaunchPreserveOrderAndSource",
         "NotebookDragUITests/testFolderSubtreeRejectsDescendantAndRecoversAfterCancelledDrag",
         "NotebookDragUITests/testLongListDragAutoscrollsAndPersists",

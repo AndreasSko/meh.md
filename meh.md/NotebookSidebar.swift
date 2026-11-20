@@ -97,7 +97,7 @@ struct NotebookSidebar: View {
                     .accessibilityHidden(search.isPresented)
                 if search.isPresented {
                     NotebookSearchResults(
-                        results: search.results, query: search.query,
+                        scene: scene, results: search.results, query: search.query,
                         isPreparing: search.isPreparing,
                         unavailableCount: search.unavailableCount, error: search.error,
                         selection: Bindable(search).selectedResultID,
