@@ -3,6 +3,7 @@ import Observation
 import SwiftUI
 
 struct NotebookSearchResults: View {
+    let scene: NotebookSceneState
     let results: [NotebookSearchResult]
     let query: String
     let isPreparing: Bool
@@ -11,6 +12,10 @@ struct NotebookSearchResults: View {
     @Binding var selection: UUID?
     let open: (NotebookSearchResult) -> Void
     @State private var scrollPosition = ScrollPosition(idType: UUID.self)
+    #if os(iOS)
+    @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
+    @State private var windowDragFrames = NotebookNoteWindowDragFrames()
+    #endif
 
     var body: some View {
         Group {
@@ -41,6 +46,14 @@ struct NotebookSearchResults: View {
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, 16)
+                    #if os(iOS)
+                    .coordinateSpace(.named(NotebookNoteWindowDragFrames.space))
+                    .background {
+                        if supportsMultipleWindows {
+                            NotebookNoteWindowDragReader(frames: windowDragFrames)
+                        }
+                    }
+                    #endif
                     #if os(macOS)
                     .background(NotebookMacOverlayScrollbar())
                     #endif
@@ -84,6 +97,10 @@ struct NotebookSearchResults: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .contextMenu { menu(for: result.id) }
+                #if os(iOS)
+                .notebookNoteWindowDragFrame(result.id, in: windowDragFrames)
+                #endif
                 // The button keeps its first label while the same note stays
                 // in the results, so a new excerpt needs a new identity.
                 .id(NotebookSearchRow.Content(result))
@@ -93,6 +110,21 @@ struct NotebookSearchResults: View {
                 .accessibilityIdentifier("search-result-\(result.id)")
                 .id(result.id)
             }
+        }
+    }
+
+    /// The Files menu, without what search can't show: a renamed row
+    /// and new items beside it.
+    @ViewBuilder
+    private func menu(for id: UUID) -> some View {
+        if scene.editingID == nil,
+           let placement = scene.replica.placements.first(where: {
+               $0.item.id == id && !$0.isInTrash
+           }) {
+            NotebookItemActions(
+                scene: scene, placement: placement, allowsCreation: false,
+                allowsRename: false, allowsShowInFiles: true
+            )
         }
     }
 }

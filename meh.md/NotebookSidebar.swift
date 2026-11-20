@@ -97,7 +97,7 @@ struct NotebookSidebar: View {
                     .accessibilityHidden(search.isPresented)
                 if search.isPresented {
                     NotebookSearchResults(
-                        results: search.results, query: search.query,
+                        scene: scene, results: search.results, query: search.query,
                         isPreparing: search.isPreparing,
                         unavailableCount: search.unavailableCount, error: search.error,
                         selection: Bindable(search).selectedResultID,
@@ -935,13 +935,7 @@ private struct NotebookLibraryBrowser: View {
         }
         .focused(focus.browser)
         #if os(iOS)
-        .onDragSessionUpdated { session in
-            switch session.phase {
-            case .initial, .active: scene.browserDrag.isSessionActive = true
-            case .ended, .dataTransferCompleted: scene.browserDrag.reset()
-            default: break
-            }
-        }
+        .onDragSessionUpdated { scene.browserDrag.sessionUpdated($0) }
         #endif
         .onKeyPress { press in handleKeyPress(press) }
         #if os(iOS)

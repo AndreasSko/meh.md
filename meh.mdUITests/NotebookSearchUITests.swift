@@ -52,6 +52,142 @@ final class NotebookSearchUITests: XCTestCase {
         )
     }
 
+    func testSearchResultMenuShowsNoteInFiles() throws {
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+
+        let marker = "comet-\(UUID().uuidString.prefix(8))"
+        let title = "Fictional Comet Log"
+        createNote(in: app, title: title, body: "A bright \(marker) tail.")
+        showSidebar(in: app)
+        let search = revealGlobalSearch(in: app)
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        activate(search)
+        search.typeText(marker)
+        let result = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+            "search-result-", marker
+        )).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+
+#if os(macOS)
+        result.rightClick()
+        let showInFiles = app.menuItems["Show in Files"]
+        XCTAssertTrue(showInFiles.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.menuItems["Open in New Window"].exists)
+        XCTAssertTrue(app.menuItems["Move…"].exists)
+        XCTAssertFalse(app.menuItems["Rename…"].exists,
+                       "Search has no row to rename in")
+        showInFiles.click()
+#else
+        // The open menu keeps a drag-lift animation running.
+        app.withoutIdleWait {
+            result.press(forDuration: 1)
+            let showInFiles = app.buttons["notebook-show-in-files"]
+            XCTAssertTrue(showInFiles.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Move…"].exists)
+            XCTAssertFalse(app.buttons["Rename…"].exists,
+                           "Search has no row to rename in")
+            XCTAssertEqual(
+                app.buttons["Open in New Window"].exists,
+                UIDevice.current.userInterfaceIdiom == .pad,
+                "Only iPad opens more windows"
+            )
+            showInFiles.tap()
+        }
+#endif
+
+        // The Mac reads a static text's words as its label or its value.
+        let row = app.staticTexts.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND (label == %@ OR value == %@)",
+            "notebook-sidebar-title-", title, title
+        )).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        XCTAssertTrue(row.isHittable, "Show in Files must close search")
+    }
+
+#if os(iOS)
+    func testDroppingSearchResultOnTheOpenNotePastesNothing() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad)
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        let result = searchResultBesideOtherNote(in: app)
+        let editor = app.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        app.withoutIdleWait {
+            result.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.5, thenDragTo: editor.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)),
+                       withVelocity: .slow, thenHoldForDuration: 1)
+        }
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "Nothing here.",
+                       "The drag carries the note's link, which the note must not paste")
+    }
+
+    /// The window a drop at the screen's edge opens outlives the app, so
+    /// it would change the layout of every test after it. Run by hand.
+    func testDraggingSearchResultToEdgeOpensWindow() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad)
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["MEH_WINDOW_DRAG_TESTS"] == "1",
+            "Set MEH_WINDOW_DRAG_TESTS=1 on a fresh iPad simulator"
+        )
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        let result = searchResultBesideOtherNote(in: app)
+        let windows = app.windows.count
+        // The screen's right edge, where the system offers a new window.
+        let edge = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.45))
+        app.withoutIdleWait {
+            result.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.5, thenDragTo: edge, withVelocity: .slow,
+                       thenHoldForDuration: 4)
+        }
+        let title = app.buttons.matching(NSPredicate(
+            format: "identifier == %@ AND label == %@", "note-title", "Fictional Meteor Log"
+        )).firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(app.windows.count, windows)
+        let noteWindow = try XCTUnwrap(app.windows.allElementsBoundByIndex.first {
+            $0.buttons["note-title"].exists
+                && $0.buttons["note-title"].label == "Fictional Meteor Log"
+        })
+        let editor = noteWindow.textViews["markdown-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertTrue((editor.value as? String)?.hasSuffix("trail.") == true)
+        // The note opens in the new window, not in place of the search.
+        XCTAssertFalse(noteWindow.descendants(matching: .any)[result.identifier].exists)
+        let sourceWindow = app.windows.containing(.button, identifier: result.identifier)
+            .firstMatch
+        XCTAssertTrue(sourceWindow.exists, "The window with the search must stay")
+        XCTAssertEqual(sourceWindow.buttons["note-title"].label, "Fictional Other Note")
+    }
+
+    /// "Fictional Meteor Log" as a search result, while "Fictional Other
+    /// Note" is open beside it.
+    private func searchResultBesideOtherNote(in app: XCUIApplication) -> XCUIElement {
+        let marker = "meteor-\(UUID().uuidString.prefix(8))"
+        createNote(in: app, title: "Fictional Meteor Log", body: "A \(marker) trail.")
+        createNote(in: app, title: "Fictional Other Note", body: "Nothing here.")
+        showSidebar(in: app)
+        let search = revealGlobalSearch(in: app)
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        activate(search)
+        search.typeText(marker)
+        let result = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+            "search-result-", marker
+        )).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 10))
+        return result
+    }
+#endif
+
     func testFindInNoteOpensNativeFind() throws {
         continueAfterFailure = false
         let app = makeApp()

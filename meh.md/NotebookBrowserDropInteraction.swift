@@ -42,6 +42,9 @@ final class NotebookBrowserDragState {
         rowAnchors.removeValue(forKey: itemID)
     }
     @ObservationIgnored private var provider: NSItemProvider?
+    /// The dragged note's link, which opens it in a new window when the
+    /// drag ends at the screen's edge.
+    @ObservationIgnored private(set) var link: URL?
     @ObservationIgnored private(set) var latestToken: UUID?
     @ObservationIgnored var isSessionActive = false
     @ObservationIgnored private var springTask: Task<Void, Never>?
@@ -78,7 +81,7 @@ final class NotebookBrowserDragState {
         rowAnchors.keys.first { rowFrame(for: $0)?.contains(point) == true }
     }
 
-    func begin(_ drag: NotebookBrowserDrag) -> NSItemProvider {
+    func begin(_ drag: NotebookBrowserDrag, link: URL? = nil) -> NSItemProvider {
         if let current = self.drag, current.notebookID == drag.notebookID,
            current.sources == drag.sources, let provider { return provider }
         // A different source cannot inherit or replace an active gesture.
@@ -96,6 +99,8 @@ final class NotebookBrowserDragState {
             completion(data, nil)
             return nil
         }
+        if let link { provider.registerObject(link as NSURL, visibility: .all) }
+        self.link = link
         self.provider = provider
         return provider
     }
@@ -114,12 +119,33 @@ final class NotebookBrowserDragState {
         }
     }
 
+    #if os(iOS)
+    @ObservationIgnored private var sessionID: DragSession.ID?
+
+    /// A drag's state belongs to its session. A copy that finishes late in
+    /// another app must not clear a newer drag.
+    func sessionUpdated(_ session: DragSession) {
+        switch session.phase {
+        case .initial, .active:
+            sessionID = session.id
+            isSessionActive = true
+        case .ended, .dataTransferCompleted:
+            if sessionID == nil || sessionID == session.id { reset() }
+        default: break
+        }
+    }
+    #endif
+
     func reset() {
+        #if os(iOS)
+        sessionID = nil
+        #endif
         springTask?.cancel()
         springTask = nil
         target = nil
         drag = nil
         provider = nil
+        link = nil
         isSessionActive = false
     }
 }
@@ -179,10 +205,12 @@ extension View {
         self
         #else
         if enabled {
+            // No outside-app setting: with copying forbidden outright, the
+            // system doesn't open a single note's link in a new window at the
+            // screen's edge.
             onDrag(provider)
                 .dragConfiguration(DragConfiguration(
-                    operationsWithinApp: .init(allowMove: true),
-                    operationsOutsideApp: .init(allowCopy: false)
+                    operationsWithinApp: .init(allowMove: true)
                 ))
         } else { self }
         #endif

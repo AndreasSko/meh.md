@@ -2704,7 +2704,22 @@ private final class MarkdownTextViewState: NSObject {
     var managesHorizontalInsets = false
 }
 
+/// Drags the app keeps for itself, such as a note on its way to a new
+/// window, carry a link the open note must not paste. The app decides which
+/// drags those are.
+extension MarkdownEditor.Coordinator: UITextDropDelegate {
+    func textDroppableView(
+        _ textDroppableView: UIView & UITextDroppable,
+        proposalForDrop drop: UITextDropRequest
+    ) -> UITextDropProposal {
+        let items = drop.dropSession.localDragSession?.items ?? []
+        return items.contains(where: MarkdownEditor.refusesDrop)
+            ? UITextDropProposal(operation: .cancel) : drop.suggestedProposal
+    }
+}
+
 struct MarkdownEditor: UIViewRepresentable {
+    @MainActor static var refusesDrop: (UIDragItem) -> Bool = { _ in false }
     @Binding var text: String
     var isReadOnly = false
     var editRevision: Data?
@@ -2802,6 +2817,7 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         textView.delegate = context.coordinator
+        textView.textDropDelegate = context.coordinator
         textView.isFindInteractionEnabled = true
         textView.keyboardLayoutGuide.usesBottomSafeArea = false
         textView.alwaysBounceVertical = true

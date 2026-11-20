@@ -25,6 +25,9 @@ struct NotebookWindowValue: Codable, Hashable {
     @State private var workspace = NotebookWorkspace.shared
 
     init() {
+        #if os(iOS)
+        MarkdownEditor.refusesDrop = NotebookNoteWindowDrag.isNote
+        #endif
         #if DEBUG
         // UI tests see tips only when a test asks for them.
         let environment = ProcessInfo.processInfo.environment
