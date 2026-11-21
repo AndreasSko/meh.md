@@ -1,5 +1,6 @@
 import NoteCore
 import SwiftUI
+import TestSupport
 import XCTest
 
 @testable import NativeEditor
@@ -543,7 +544,7 @@ final class RemoteEditorTests: XCTestCase {
         XCTAssertEqual(model.errorCount, 2)
     }
 
-    func testFontChangesAfterFailedSavePreservePendingEdit() throws {
+    func testFontChangesAfterFailedSavePreservePendingEdit() async throws {
         enum TestError: Error { case failed }
         let model = EditorModel(text: "hello", revision: revision(0))
         model.commitResult = { _, _ in throw TestError.failed }
@@ -553,22 +554,26 @@ final class RemoteEditorTests: XCTestCase {
 
         moveInsertionPointToEnd(of: textView)
         insert("!", in: textView)
-        mounted.flushUpdates()
-        let originalSize = try XCTUnwrap(textView.font).pointSize
+        XCTAssertEqual(model.errorCount, 1)
+
+        let expectedFont = MarkdownPresentation.bodyFont(for: .serif, pointSize: 24)
+        let textStorage = try XCTUnwrap(textView.textStorage)
         model.fontSize = 24
         model.fontFamily = .serif
         model.receiveRemote(text: "remote replacement", revision: revision(9))
-        mounted.flushUpdates()
-        mounted.flushUpdates()
 
-        XCTAssertGreaterThan(try XCTUnwrap(textView.font).pointSize, originalSize)
-        XCTAssertEqual(
-            try XCTUnwrap(textView.font).fontName,
-            MarkdownPresentation.bodyFont(
-                for: .serif,
-                pointSize: 24
-            ).fontName
-        )
+        try await waitUntil("Expected the new font on the pending edit and at the caret") {
+            guard textStorage.length > 0 else { return false }
+            let pendingFont = textStorage.attribute(
+                .font, at: textStorage.length - 1, effectiveRange: nil
+            )
+            let typingFont = textView.typingAttributes[.font]
+            return [pendingFont, typingFont].allSatisfy {
+                guard let font = $0 as? PlatformFont else { return false }
+                return font.fontName == expectedFont.fontName
+                    && font.pointSize == expectedFont.pointSize
+            }
+        }
         XCTAssertEqual(nativeText(in: textView), "hello!")
         XCTAssertEqual(selectedRange(in: textView), NSRange(location: 6, length: 0))
         XCTAssertTrue(textView.undoManager?.canUndo == true)
