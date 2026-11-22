@@ -18,24 +18,50 @@ public struct NotebookOrderKey: Equatable, Hashable, Sendable, Comparable {
 
     let rawValue: String
     fileprivate let components: [UInt16]
+    var debugComponents: [UInt16] { components }
 
+    /// Accepts exactly what `%04x` writes: dot-separated groups of four
+    /// lowercase hex digits. Parsed on UTF-8 bytes; a catalog decodes one
+    /// key per item, and Foundation formatting dominated large catalogs.
     init?(rawValue: String) {
-        let parts = rawValue.split(separator: ".", omittingEmptySubsequences: false)
-        guard !parts.isEmpty, parts.count <= Self.maximumComponentCount else {
-            return nil
-        }
         var components: [UInt16] = []
-        components.reserveCapacity(parts.count)
-        for part in parts {
-            guard part.count == 4,
-                  let component = UInt16(part, radix: 16),
-                  String(format: "%04x", component) == part else {
-                return nil
-            }
-            components.append(component)
-        }
+        let valid = rawValue.utf8.withContiguousStorageIfAvailable {
+            Self.parse($0, into: &components)
+        } ?? Self.parse(Array(rawValue.utf8), into: &components)
+        guard valid else { return nil }
         self.rawValue = rawValue
         self.components = components
+    }
+
+    private static func parse<Bytes: RandomAccessCollection<UInt8>>(
+        _ bytes: Bytes, into components: inout [UInt16]
+    ) -> Bool where Bytes.Index == Int {
+        // Four digits per component plus a separator between components.
+        guard (bytes.count + 1).isMultiple(of: 5) else { return false }
+        let count = (bytes.count + 1) / 5
+        guard count <= maximumComponentCount else { return false }
+        components.reserveCapacity(count)
+        var index = bytes.startIndex
+        for position in 0..<count {
+            if position > 0 {
+                guard bytes[index] == UInt8(ascii: ".") else { return false }
+                index += 1
+            }
+            var value: UInt16 = 0
+            for _ in 0..<4 {
+                let byte = bytes[index]
+                let digit: UInt8
+                switch byte {
+                case UInt8(ascii: "0")...UInt8(ascii: "9"): digit = byte - UInt8(ascii: "0")
+                case UInt8(ascii: "a")...UInt8(ascii: "f"): digit = byte - UInt8(ascii: "a") + 10
+                default: return false
+                }
+                value = value << 4 | UInt16(digit)
+                index += 1
+            }
+            components.append(value)
+        }
+        return true
     }
 
     fileprivate init(components: [UInt16]) {
