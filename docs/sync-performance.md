@@ -269,6 +269,61 @@ On the same iPhone, the history check fell from 2.0 s to 0.95 s of CPU on a
 launch that trusted its saved state, and the whole startup sync from 4.6 s to
 3.7 s. What remains is decoding each note and listing its history.
 
+## Receiving a small change after launch
+
+A note edited on one device could take a while to show up when the app
+opened on another. This benchmark measures that case without iCloud: two
+devices sync over the in-process fake CloudKit server, the sender edits
+one note and adds one, and the receiver restarts like a fresh app
+process and syncs. Times are counted from the start of the receiving
+pass, with opening the saved state reported separately.
+
+```sh
+MEH_RECEIVE_BENCHMARK=1 \
+MEH_RECEIVE_BENCHMARK_CASES=1000x3,1000x3c,1000x3@150 \
+swift test -c release --disable-sandbox --filter CloudKitReceivePerformanceTests
+```
+
+A case is `notes x versions`. A trailing `c` runs snapshot cleanup on
+the sender after its change, so the receiver also confirms retired
+snapshots. `@150` adds a 150 ms delay to every fake server request.
+`MEH_RECEIVE_BENCHMARK_TRACE=1` prints the sync log of the last pass.
+
+Profiling the pass showed that most of the time went to reading the
+same data again, not to new work:
+
+- Each catalog read parsed one order key per item with `String(format:)`,
+  about 40% of reading a large catalog. It now parses the bytes.
+- One launch validated the same catalog bytes three times. The catalog
+  now reuses the items of exactly equal bytes it validated before.
+- The history check decoded every note's full history. A note whose
+  recorded heads equal the heads just read from its file is now skipped.
+- Notebook scans read note files one after another. They now read up to
+  16 at once.
+- Confirming retired snapshots read every stored catalog version in full
+  to find deletion markers and history. Stored records already passed
+  full validation, so only the needed fields are read.
+- Record IDs were hex-encoded with `String(format:)` per byte.
+
+Medians of five runs, release build, macOS 27.2 on an M3 Max, before
+(`31bf2274`) and after this change:
+
+| Case | Change applied | Whole pass | Opening state |
+| --- | ---: | ---: | ---: |
+| 100 notes | 134 → 45 ms | 163 → 60 ms | 32 → 16 ms |
+| 1,000 notes | 1,574 → 362 ms | 1,869 → 501 ms | 413 → 152 ms |
+| 2,000 notes | 3,864 → 721 ms | 4,710 → 1,029 ms | 1,026 → 309 ms |
+| 1,000 notes, cleanup | 2,761 → 451 ms | 3,069 → 589 ms | 410 → 154 ms |
+| 1,000 notes, 150 ms per request | 2,892 → 1,679 ms | 3,195 → 1,814 ms | 748 → 502 ms |
+
+These are Mac measurements with a fake server, not iPhone or iCloud
+timings. With a network delay, the nine sequential requests before the
+first change applies now take most of the time. They check the account
+and the notebook's format twice on purpose: once to join, and again
+right before receiving. Overlapping the direct server read with the
+local checks could shorten this, but it would need to hold the fetched
+changes until both checks pass in the same pass.
+
 ## Scope and next layers
 
 The follow-up [local exchange benchmark](notebook-exchange-performance.md)
