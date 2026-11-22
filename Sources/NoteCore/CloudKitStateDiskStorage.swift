@@ -167,7 +167,7 @@ final class CloudKitStateDiskStorage {
     }
 
     private static func digest(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: data).lowercaseHex
     }
 
     /// The Mach-O UUID of the image containing this code. It changes with

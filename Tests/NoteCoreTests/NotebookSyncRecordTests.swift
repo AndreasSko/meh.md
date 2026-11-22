@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 
@@ -73,4 +74,32 @@ final class NotebookSyncRecordTests: XCTestCase {
         return try JSONDecoder().decode(
             SyncRecord.self, from: JSONSerialization.data(withJSONObject: json))
     }
+
+    func testRecordIDsMatchTheFormattedDigest() throws {
+        // Record IDs name cloud records, so they must never change.
+        func reference(_ snapshot: NoteSnapshot, kind: String, notebookID: UUID?) -> String {
+            var bytes = Data()
+            if let notebookID {
+                bytes.append(Data(
+                    "meh-notebook-v2\n\(kind)\n\(notebookID.uuidString)\n\(snapshot.noteID.uuidString)\n"
+                        .utf8))
+            }
+            bytes.append(snapshot.data)
+            return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        }
+        let notebookID = UUID()
+        for text in ["", "Fictional", String(repeating: "Long fictional text. ", count: 500)] {
+            let note = try NoteDocument(text: text).snapshot()
+            XCTAssertEqual(SyncRecord(snapshot: note).id,
+                           reference(note, kind: "note", notebookID: nil))
+            XCTAssertEqual(SyncRecord(snapshot: note, notebookID: notebookID).id,
+                           reference(note, kind: "note", notebookID: notebookID))
+        }
+        let catalog = try NotebookCatalogDocument(notebookID: notebookID).snapshot()
+        let record = SyncRecord(catalog: catalog)
+        XCTAssertEqual(record.id, reference(record.snapshot, kind: "catalog", notebookID: notebookID))
+        XCTAssertEqual(Data(0...255).lowercaseHex,
+                       (0...255).map { String(format: "%02x", $0) }.joined())
+    }
 }
+

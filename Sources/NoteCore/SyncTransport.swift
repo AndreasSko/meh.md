@@ -110,15 +110,14 @@ public struct SyncRecord: Codable, Equatable, Sendable {
     private static func digest(snapshot: NoteSnapshot, kind: SyncDocumentKind, notebookID: UUID?)
         -> String
     {
-        var bytes = Data()
+        var hasher = SHA256()
         if let notebookID {
-            bytes.append(
-                Data(
-                    "meh-notebook-v2\n\(kind.rawValue)\n\(notebookID.uuidString)\n\(snapshot.noteID.uuidString)\n"
-                        .utf8))
+            hasher.update(data: Data(
+                "meh-notebook-v2\n\(kind.rawValue)\n\(notebookID.uuidString)\n\(snapshot.noteID.uuidString)\n"
+                    .utf8))
         }
-        bytes.append(snapshot.data)
-        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        hasher.update(data: snapshot.data)
+        return hasher.finalize().lowercaseHex
     }
 
     private enum CodingKeys: String, CodingKey {
