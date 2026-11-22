@@ -1396,6 +1396,37 @@ final class NotebookCatalogDocument {
 
     func items() throws -> [NotebookItem] { try readItems().map(\.item) }
 
+    /// Items `snapshot` marks permanently deleted, read without the full
+    /// item validation. Only for bytes that already passed it, such as the
+    /// sync transport's stored records. Like a full read, an item counts as
+    /// deleted when any of its copies is marked.
+    static func permanentlyDeletedIDs(
+        inValidated snapshot: NotebookCatalogSnapshot
+    ) throws -> Set<UUID> {
+        let document = try Document(snapshot.data)
+        let items = try validatedRoot(of: document).items
+        var deleted = Set<UUID>()
+        for key in try document.keys(obj: items) {
+            for value in try document.getAll(obj: items, key: key) {
+                guard case .Object(let copy, .Map) = value else {
+                    throw NotebookCatalogError.duplicateIdentity
+                }
+                let markers = try document.getAll(obj: copy, key: "permanentlyDeleted")
+                guard markers.allSatisfy({ $0 == .Scalar(.Boolean(true)) }) else {
+                    throw NotebookCatalogError.invalidDocument
+                }
+                if !markers.isEmpty {
+                    guard let id = UUID(uuidString: key) else {
+                        throw NotebookCatalogError.duplicateIdentity
+                    }
+                    deleted.insert(id)
+                    break
+                }
+            }
+        }
+        return deleted
+    }
+
     func placements() throws -> [NotebookPlacement] {
         let entries = try readItems().filter { !$0.item.isPermanentlyDeleted }
         let byID = Dictionary(uniqueKeysWithValues: entries.map { ($0.item.id, $0.item) })
