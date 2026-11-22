@@ -1967,8 +1967,15 @@ public final class NotebookReplica {
         progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
     ) async throws -> Bool {
         let records = try await records(includeUnlisted: true, progress: scanProgress)
+        // This scan read every record's heads from its own bytes, and a
+        // document's heads are part of its history. Only checkpoints that
+        // differ from them need the full history.
+        let heads = Dictionary(uniqueKeysWithValues: records.map {
+            ($0.documentKey, $0.snapshot.heads)
+        })
+        let unmatched = checkpoints.filter { heads[$0.key] != $0.value }
         return try await historyChecker.containsHistory(
-            checkpoints, records: records, deleted: deleted, progress: progress
+            unmatched, records: records, deleted: deleted, progress: progress
         )
     }
 

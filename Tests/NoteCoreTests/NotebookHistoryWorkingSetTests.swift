@@ -5,6 +5,43 @@ import XCTest
 
 @MainActor
 final class NotebookHistoryWorkingSetTests: XCTestCase {
+    func testReplicaChecksOnlyCheckpointsThatDifferFromTheFiles() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "history-matching-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replica = NotebookReplica(directory: directory)
+        try await replica.createLocalNotebook()
+        let first = try await replica.createNote(name: "First.md", text: "One")
+        let second = try await replica.createNote(name: "Second.md", text: "Two")
+        let session = try await replica.openNote(first)
+        let older = try await replica.records(includeUnlisted: true)
+        try session.replaceAll(with: "One, edited")
+        try await session.flush()
+        let current = try await replica.records(includeUnlisted: true)
+
+        let matching = heads(for: current)
+        let olderFirst = matching.merging(
+            heads(for: older.filter { $0.snapshot.noteID == first })) { $1 }
+        XCTAssertNotEqual(olderFirst, matching)
+        let contains = { (checkpoints: [String: Set<String>]) in
+            try await replica.containsHistory(checkpoints, deleted: [])
+        }
+        let matched = try await contains(matching)
+        XCTAssertTrue(matched)
+        let olderVersion = try await contains(olderFirst)
+        XCTAssertTrue(olderVersion)
+
+        var foreign = matching
+        foreign["note:\(second.uuidString)"] = [String(repeating: "ab", count: 32)]
+        let foreignHead = try await contains(foreign)
+        XCTAssertFalse(foreignHead)
+
+        try FileManager.default.removeItem(
+            at: directory.appending(path: "notes/\(second.uuidString)"))
+        let missing = try await contains(matching)
+        XCTAssertFalse(missing)
+    }
+
     func testDefaultCacheRetainsAThousandNoteSweep() async throws {
         let checker = NotebookHistoryChecker()
         let catalog = try NotebookCatalogDocument(notebookID: notebookID)
