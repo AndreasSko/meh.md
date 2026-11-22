@@ -1924,15 +1924,21 @@ public final class NotebookReplica {
         let total = ids.count + 1 // The catalog is appended after note bodies.
         let progressInterval = max(1, (total + 99) / 100)
         progress?(0, total)
+        var loads: [ScannedNote] = []
         for (index, id) in ids.enumerated() {
-            let loaded = await noteStorage(id).load(reusing: recordReadCache[id])
+            if index.isMultiple(of: Self.scanWindow) {
+                loads = await scanWindow(
+                    ids[index..<min(index + Self.scanWindow, ids.count)],
+                    notebookID: catalog.notebookID)
+            }
+            let loaded = loads[index % Self.scanWindow]
             switch loaded.result {
             case .current(let snapshot):
                 guard snapshot.noteID == id else { throw SyncError.identityConflict }
                 // Its open editor could not load it, so received versions
                 // cannot be applied either.
                 if brokenSessions.contains(id) { break }
-                records.append(SyncRecord(snapshot: snapshot, notebookID: catalog.notebookID))
+                records.append(loaded.record!)
                 // Keep one bounded set of successfully decoded current files.
                 // The next scan still reads bytes, even on a cache hit. Using
                 // a stable subset avoids LRU thrashing on larger notebooks.
@@ -1960,6 +1966,46 @@ public final class NotebookReplica {
         return records
     }
 
+    private struct ScannedNote: Sendable {
+        let result: NoteLoadResult
+        let validated: NoteFileStorage.ValidatedSnapshot?
+        let record: SyncRecord?
+    }
+
+    /// Notes a scan reads at once. Each file has its own storage actor, so
+    /// reading and hashing them in parallel leaves every result unchanged.
+    private static let scanWindow = 16
+
+    /// Loads these notes concurrently and returns them in the given order.
+    private func scanWindow(
+        _ ids: ArraySlice<UUID>, notebookID: UUID
+    ) async -> [ScannedNote] {
+        let jobs = ids.map { (noteStorage($0), recordReadCache[$0]) }
+        return await withTaskGroup(of: (Int, ScannedNote).self) { group in
+            for (offset, job) in jobs.enumerated() {
+                group.addTask {
+                    (offset, await Self.scan(job.0, reusing: job.1, notebookID: notebookID))
+                }
+            }
+            var results = [ScannedNote?](repeating: nil, count: jobs.count)
+            for await (offset, note) in group { results[offset] = note }
+            return results.map { $0! }
+        }
+    }
+
+    @concurrent nonisolated private static func scan(
+        _ storage: NoteFileStorage,
+        reusing previous: NoteFileStorage.ValidatedSnapshot?,
+        notebookID: UUID
+    ) async -> ScannedNote {
+        let loaded = await storage.load(reusing: previous)
+        var record: SyncRecord?
+        if case .current(let snapshot) = loaded.result {
+            record = SyncRecord(snapshot: snapshot, notebookID: notebookID)
+        }
+        return ScannedNote(result: loaded.result, validated: loaded.validated, record: record)
+    }
+
     func containsHistory(
         _ checkpoints: [String: Set<String>],
         deleted: Set<UUID>,
@@ -1967,8 +2013,15 @@ public final class NotebookReplica {
         progress: (@MainActor @Sendable (Int, Int) -> Void)? = nil
     ) async throws -> Bool {
         let records = try await records(includeUnlisted: true, progress: scanProgress)
+        // This scan read every record's heads from its own bytes, and a
+        // document's heads are part of its history. Only checkpoints that
+        // differ from them need the full history.
+        let heads = Dictionary(uniqueKeysWithValues: records.map {
+            ($0.documentKey, $0.snapshot.heads)
+        })
+        let unmatched = checkpoints.filter { heads[$0.key] != $0.value }
         return try await historyChecker.containsHistory(
-            checkpoints, records: records, deleted: deleted, progress: progress
+            unmatched, records: records, deleted: deleted, progress: progress
         )
     }
 

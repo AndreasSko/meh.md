@@ -355,4 +355,84 @@ final class NotebookCatalogCacheTests: XCTestCase {
         XCTAssertThrowsError(try NotebookCatalogDocument(serializedData: left.save()))
     }
 
+
+    func testEqualBytesReuseValidatedItemsAndOtherBytesReadAgain() throws {
+        let catalog = try NotebookCatalogDocument()
+        _ = try catalog.add(kind: .note, name: "First.md")
+        let first = catalog.snapshot()
+        NotebookCatalogDocument.forgetValidatedBytes()
+        let decoded = try NotebookCatalogDocument(snapshot: first)
+        XCTAssertEqual(decoded.readItemsDecodeCount, 1)
+
+        let again = try NotebookCatalogDocument(snapshot: first)
+        XCTAssertEqual(again.readItemsDecodeCount, 0)
+        XCTAssertEqual(try again.placements(), try decoded.placements())
+        let fromData = try NotebookCatalogDocument(serializedData: first.data)
+        XCTAssertEqual(fromData.readItemsDecodeCount, 0)
+        XCTAssertEqual(try fromData.placements(), try decoded.placements())
+
+        _ = try catalog.add(kind: .note, name: "Second.md")
+        let second = try NotebookCatalogDocument(snapshot: catalog.snapshot())
+        XCTAssertEqual(second.readItemsDecodeCount, 1)
+        XCTAssertEqual(try second.items().map(\.name).sorted(), ["First.md", "Second.md"])
+    }
+
+    func testInvalidBytesAreNeverRemembered() throws {
+        let catalog = try NotebookCatalogDocument()
+        _ = try catalog.add(kind: .note, name: "First.md")
+        var data = catalog.snapshot().data
+        data[data.count / 2] ^= 0xff
+        NotebookCatalogDocument.forgetValidatedBytes()
+        XCTAssertThrowsError(try NotebookCatalogDocument(serializedData: data))
+        XCTAssertThrowsError(try NotebookCatalogDocument(serializedData: data))
+    }
+
+    func testPermanentMarkersMatchAFullRead() throws {
+        let base = try NotebookCatalogDocument()
+        var ids: [UUID] = []
+        for index in 0..<40 {
+            ids.append(try base.add(kind: index.isMultiple(of: 5) ? .folder : .note,
+                                    name: "Fictional \(index).md"))
+        }
+        let left = try base.fork()
+        let right = try base.fork()
+        let shared = UUID()
+        try left.add(id: shared, kind: .note, name: "Shared.md")
+        try right.add(id: shared, kind: .note, name: "Shared.md")
+        try left.markPermanentlyDeleted([ids[1], ids[7], shared])
+        try right.markPermanentlyDeleted([ids[12]])
+        try left.merge(right)
+        for catalog in [base, left, right] {
+            let full = Set(try catalog.items().filter(\.isPermanentlyDeleted).map(\.id))
+            XCTAssertEqual(
+                try NotebookCatalogDocument.permanentlyDeletedIDs(inValidated: catalog.snapshot()),
+                full)
+        }
+        XCTAssertEqual(
+            try NotebookCatalogDocument.permanentlyDeletedIDs(inValidated: left.snapshot()),
+            [ids[1], ids[7], ids[12], shared])
+        // A marker other than `true` fails like a full read does.
+        let valid = try NotebookCatalogDocument()
+        let item = try valid.add(kind: .note, name: "Invalid.md")
+        let raw = try Document(valid.snapshot().data)
+        guard case .Object(let items, .Map)? = try raw.get(obj: .ROOT, key: "items"),
+              case .Object(let copy, .Map)? = try raw.get(obj: items, key: item.uuidString)
+        else { return XCTFail("Missing item") }
+        try raw.put(obj: copy, key: "permanentlyDeleted", value: .Boolean(false))
+        let invalid = NotebookCatalogSnapshot(
+            data: raw.save(), heads: Set(raw.heads().map(\.hex)), notebookID: valid.notebookID)
+        XCTAssertThrowsError(try NotebookCatalogDocument(snapshot: invalid))
+        XCTAssertThrowsError(
+            try NotebookCatalogDocument.permanentlyDeletedIDs(inValidated: invalid))
+        for catalog in [base, left, right] {
+            let snapshot = catalog.snapshot()
+            XCTAssertEqual(
+                try NotebookCatalogDocument.historyHeads(inValidated: snapshot),
+                try NotebookCatalogDocument(snapshot: snapshot).historyHeads)
+        }
+        let mismatched = NotebookCatalogSnapshot(
+            data: left.snapshot().data, heads: base.heads, notebookID: left.notebookID)
+        XCTAssertThrowsError(try NotebookCatalogDocument.historyHeads(inValidated: mismatched))
+    }
 }
+

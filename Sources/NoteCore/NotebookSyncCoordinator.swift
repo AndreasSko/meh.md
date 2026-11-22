@@ -465,6 +465,7 @@ public final class NotebookSyncCoordinator {
                     completedUnits: applied, totalUnits: page.records.count
                 )
             }
+            diagnosticLog?.record("page_applied")
             if page.hasMore && page.cursor == state.cursor { throw SyncError.invalidCursor }
             let persisted = try await replica.records(includeUnlisted: true)
             let persistedByKey = Dictionary(

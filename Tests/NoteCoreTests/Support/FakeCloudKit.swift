@@ -537,10 +537,23 @@ final class FakeCloudKitServer: @unchecked Sendable, CloudKitAccountClient,
 
     // MARK: Engine support
 
+    /// Benchmarks only: every server request blocks this long, standing in
+    /// for a network round trip.
+    var requestLatency: TimeInterval {
+        get { locked { latency } }
+        set { locked { latency = newValue } }
+    }
+    private var latency: TimeInterval = 0
+    private var requests = 0
+    var requestCount: Int { locked { requests } }
+
     func checkReachable() throws {
-        try locked {
+        let delay = try locked {
             if isOffline { throw CKError(.networkUnavailable) }
+            requests += 1
+            return latency
         }
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
     }
 
     func takeFault(where matches: (Fault) -> Bool) -> Fault? {

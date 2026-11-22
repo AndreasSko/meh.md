@@ -64,9 +64,8 @@ struct CloudKitRecordEvidenceCache<Value> {
     }
 }
 
+/// For records the transport stored, which all passed full validation.
 func catalogPermanentMarkers(_ record: SyncRecord) throws -> Set<UUID> {
     guard let snapshot = record.catalogSnapshot else { throw SyncError.invalidRecord }
-    return Set(try NotebookCatalogDocument(snapshot: snapshot).items().lazy.filter {
-        $0.isPermanentlyDeleted
-    }.map(\.id))
+    return try NotebookCatalogDocument.permanentlyDeletedIDs(inValidated: snapshot)
 }

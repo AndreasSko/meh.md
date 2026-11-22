@@ -329,4 +329,46 @@ final class NotebookOrderingTests: XCTestCase {
         XCTAssertEqual(try left.placements(), try right.placements())
         XCTAssertEqual(left.heads, right.heads)
     }
+
+    func testOrderKeyParsingMatchesFormattedReference() {
+        // The parser before it moved to bytes; it accepted exactly the keys
+        // `%04x` writes.
+        func reference(_ raw: String) -> [UInt16]? {
+            let parts = raw.split(separator: ".", omittingEmptySubsequences: false)
+            guard !parts.isEmpty, parts.count <= NotebookOrderKey.maximumComponentCount
+            else { return nil }
+            var components: [UInt16] = []
+            for part in parts {
+                guard part.count == 4, let component = UInt16(part, radix: 16),
+                      String(format: "%04x", component) == part else { return nil }
+                components.append(component)
+            }
+            return components
+        }
+        var fixed = [
+            "", ".", "0000", "ffff", "FFFF", "000g", "+abc", "-abc", "00000",
+            "000", "0000.", ".0000", "0000..0000", "0000.ffff.8000", "abcd.ABCD",
+            "000a\u{301}", "é000", "0000 ", " 0000", "0x00", "8000.0001",
+            Array(repeating: "0001", count: 4_096).joined(separator: "."),
+            Array(repeating: "0001", count: 4_097).joined(separator: "."),
+        ]
+        var generator = SystemRandomNumberGenerator()
+        let alphabet = Array("0123456789abcdefABCDEF.+-g é\u{301}")
+        for _ in 0..<20_000 {
+            let length = Int.random(in: 0...16, using: &generator)
+            fixed.append(String((0..<length).map { _ in alphabet.randomElement(using: &generator)! }))
+        }
+        for _ in 0..<5_000 {
+            let count = Int.random(in: 1...6, using: &generator)
+            fixed.append((0..<count).map { _ in
+                String(format: "%04x", UInt16.random(in: .min ... .max, using: &generator))
+            }.joined(separator: "."))
+        }
+        for raw in fixed {
+            let parsed = NotebookOrderKey(rawValue: raw)
+            XCTAssertEqual(parsed.map { $0.debugComponents }, reference(raw), raw)
+            XCTAssertEqual(parsed?.rawValue, reference(raw).map { _ in raw }, raw)
+        }
+    }
 }
+

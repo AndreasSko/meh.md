@@ -46,6 +46,7 @@ final class SyncRecordValidationCacheTests: XCTestCase {
 /// Full catalog reads `body` caused, across all catalogs.
 @MainActor
 func countingCatalogDecodes(_ body: () async throws -> Void) async throws -> Int {
+    NotebookCatalogDocument.forgetValidatedBytes()
     let before = NotebookCatalogDocument.itemDecodes.load(ordering: .relaxed)
     try await body()
     return NotebookCatalogDocument.itemDecodes.load(ordering: .relaxed) - before
@@ -53,6 +54,7 @@ func countingCatalogDecodes(_ body: () async throws -> Void) async throws -> Int
 
 @MainActor
 func countingCatalogDecodes(_ body: () throws -> Void) throws -> Int {
+    NotebookCatalogDocument.forgetValidatedBytes()
     let before = NotebookCatalogDocument.itemDecodes.load(ordering: .relaxed)
     try body()
     return NotebookCatalogDocument.itemDecodes.load(ordering: .relaxed) - before
@@ -63,6 +65,7 @@ func countingCatalogDecodes(_ body: () throws -> Void) throws -> Int {
 func countingMainThreadCatalogDecodes(
     _ body: () async throws -> Void
 ) async throws -> Int {
+    NotebookCatalogDocument.forgetValidatedBytes()
     let before = NotebookCatalogDocument.mainThreadItemDecodes.load(ordering: .relaxed)
     try await body()
     return NotebookCatalogDocument.mainThreadItemDecodes.load(ordering: .relaxed) - before
