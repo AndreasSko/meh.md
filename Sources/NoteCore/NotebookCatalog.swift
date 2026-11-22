@@ -1396,6 +1396,16 @@ final class NotebookCatalogDocument {
 
     func items() throws -> [NotebookItem] { try readItems().map(\.item) }
 
+    /// The change history of `snapshot`, without the full item validation.
+    /// Only for bytes that already passed it.
+    static func historyHeads(inValidated snapshot: NotebookCatalogSnapshot) throws -> Set<String> {
+        let document = try Document(snapshot.data)
+        guard Set(document.heads().map(\.hex)) == snapshot.heads else {
+            throw NotebookCatalogError.identityMismatch
+        }
+        return Set(document.getHistory().map(\.hex))
+    }
+
     /// Items `snapshot` marks permanently deleted, read without the full
     /// item validation. Only for bytes that already passed it, such as the
     /// sync transport's stored records. Like a full read, an item counts as

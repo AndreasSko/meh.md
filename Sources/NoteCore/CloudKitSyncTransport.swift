@@ -770,7 +770,7 @@ actor CloudKitTransportStateStore {
         var cache = historyCache
         defer { historyCache = cache }
         return try state.retirementCandidates { record in
-            try cache.value(for: record, compute: snapshotHistoryChangeHashes)
+            try cache.value(for: record, compute: storedSnapshotHistoryChangeHashes)
         }
     }
 
@@ -779,7 +779,7 @@ actor CloudKitTransportStateStore {
         defer { historyCache = cache }
         try update { state in
             try state.resolveSnapshotRetirements(confirmedRecords: confirmedRecords) {
-                try cache.value(for: $0, compute: snapshotHistoryChangeHashes)
+                try cache.value(for: $0, compute: storedSnapshotHistoryChangeHashes)
             }
         }
     }

@@ -74,6 +74,15 @@ func snapshotHistoryIdentityMatches(
         && lhs.snapshot.noteID == rhs.snapshot.noteID
 }
 
+/// For records that already passed full validation, as the transport
+/// stores them: a catalog's history without reading its items again.
+func storedSnapshotHistoryChangeHashes(_ record: SyncRecord) throws -> Set<String> {
+    if let catalog = record.catalogSnapshot {
+        return try NotebookCatalogDocument.historyHeads(inValidated: catalog)
+    }
+    return try NoteDocument(snapshot: record.snapshot).historyHeads
+}
+
 func snapshotHistoryChangeHashes(_ record: SyncRecord) throws -> Set<String> {
     if let catalog = record.catalogSnapshot {
         return try NotebookCatalogDocument(snapshot: catalog).historyHeads

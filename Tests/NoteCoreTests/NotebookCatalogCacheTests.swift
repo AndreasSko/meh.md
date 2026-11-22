@@ -424,6 +424,15 @@ final class NotebookCatalogCacheTests: XCTestCase {
         XCTAssertThrowsError(try NotebookCatalogDocument(snapshot: invalid))
         XCTAssertThrowsError(
             try NotebookCatalogDocument.permanentlyDeletedIDs(inValidated: invalid))
+        for catalog in [base, left, right] {
+            let snapshot = catalog.snapshot()
+            XCTAssertEqual(
+                try NotebookCatalogDocument.historyHeads(inValidated: snapshot),
+                try NotebookCatalogDocument(snapshot: snapshot).historyHeads)
+        }
+        let mismatched = NotebookCatalogSnapshot(
+            data: left.snapshot().data, heads: base.heads, notebookID: left.notebookID)
+        XCTAssertThrowsError(try NotebookCatalogDocument.historyHeads(inValidated: mismatched))
     }
 }
 
