@@ -45,6 +45,9 @@ struct NotebookTitleField: View {
                 NotebookTitleReadiness { isReady = $0 }
                     .allowsHitTesting(false)
             }
+            #if os(iOS)
+            .background { NotebookTitleDropGuard().allowsHitTesting(false) }
+            #endif
             .task(id: FocusReadiness(
                 request: focusRequest, isEnabled: isEnabled, isReady: isReady
             )) {
@@ -165,6 +168,80 @@ private final class NotebookTitleReadinessView: UIView {
             guard let self, self.attachmentGeneration == generation else { return }
             self.onReady?(ready)
         }
+    }
+}
+
+/// A note dragged toward a new window carries its link. Dropped on the
+/// title being edited, it would end up in the note's name, so the title
+/// turns it down like the editor does.
+private struct NotebookTitleDropGuard: UIViewRepresentable {
+    func makeUIView(context: Context) -> NotebookTitleDropGuardView {
+        let view = NotebookTitleDropGuardView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: NotebookTitleDropGuardView, context: Context) {}
+}
+
+private final class NotebookTitleDropGuardView: UIView, UITextDropDelegate {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        // SwiftUI can replace the field's text view without laying this view
+        // out again. Once editing begins, the current one is in place.
+        for name in [UITextView.textDidBeginEditingNotification,
+                     UITextField.textDidBeginEditingNotification] {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(install), name: name, object: nil)
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unused") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        install()
+    }
+
+    @objc private func install() {
+        guard window != nil, let field = titleField() else { return }
+        // Never take over a delegate someone else set.
+        if field.textDropDelegate == nil { field.textDropDelegate = self }
+    }
+
+    /// SwiftUI draws the field beside this view. The title host sits inside
+    /// the editor's text view, so a text view around this one is the editor.
+    private func titleField() -> (UIView & UITextDroppable)? {
+        let center = convert(CGPoint(x: bounds.midX, y: bounds.midY), to: nil)
+        var ancestor = superview
+        for _ in 0..<4 {
+            guard let root = ancestor else { return nil }
+            if let field = droppable(in: root, containing: center) { return field }
+            ancestor = root.superview
+        }
+        return nil
+    }
+
+    private func droppable(
+        in view: UIView, containing point: CGPoint
+    ) -> (UIView & UITextDroppable)? {
+        for subview in view.subviews where !isDescendant(of: subview) {
+            if let field = subview as? UIView & UITextDroppable,
+               field.convert(field.bounds, to: nil).contains(point) {
+                return field
+            }
+            if let field = droppable(in: subview, containing: point) { return field }
+        }
+        return nil
+    }
+
+    func textDroppableView(
+        _ textDroppableView: UIView & UITextDroppable,
+        proposalForDrop drop: UITextDropRequest
+    ) -> UITextDropProposal {
+        let items = drop.dropSession.localDragSession?.items ?? []
+        return items.contains(where: NotebookNoteWindowDrag.isNote)
+            ? UITextDropProposal(operation: .cancel) : drop.suggestedProposal
     }
 }
 #else

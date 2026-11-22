@@ -233,6 +233,21 @@ final class RecentNotesUITests: XCTestCase {
         XCTAssertTrue(recent.waitForExistence(timeout: 5))
         XCTAssertEqual(editor.value as? String, "Fictional open note",
                        "The drag carries the note's link, which the note must not paste")
+
+        // Nor may the title being renamed take it into the note's name.
+        let title = app.buttons["note-title"]
+        let name = title.label
+        title.tap()
+        let field = app.textFields["title-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        app.withoutIdleWait {
+            recent.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.5, thenDragTo: field.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+                       withVelocity: .slow, thenHoldForDuration: 1)
+        }
+        XCTAssertTrue(recent.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, name)
     }
 
     /// The window a drop at the screen's edge opens outlives the app, so
