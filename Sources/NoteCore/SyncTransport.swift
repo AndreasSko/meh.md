@@ -56,6 +56,12 @@ public struct SyncRecord: Codable, Equatable, Sendable {
     private static let validated = Mutex(CloudKitRecordEvidenceCache<Void>(
         maximumEntries: 1_024, maximumPayloadBytes: 32 * 1_024 * 1_024))
 
+    /// Benchmarks start a device as a fresh process would.
+    static func forgetValidatedRecords() {
+        validated.withLock { $0 = CloudKitRecordEvidenceCache<Void>(
+            maximumEntries: 1_024, maximumPayloadBytes: 32 * 1_024 * 1_024) }
+    }
+
     public func validate() throws {
         if Self.validated.withLock({ $0.cachedValue(for: self) }) != nil { return }
         _ = try validatedContents()
