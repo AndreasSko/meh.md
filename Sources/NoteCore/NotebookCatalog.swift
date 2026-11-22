@@ -133,6 +133,23 @@ final class NotebookCatalogDocument {
         var conflictedKeys: Set<String>
     }
     private var itemsCache: ItemsCache?
+    /// Items of the catalogs this process validated last, by their exact
+    /// bytes. One load validates the same file several times: reading it,
+    /// installing it and checking sync history. Equal bytes always decode
+    /// to equal items, so a match skips reading them item by item.
+    private struct ValidatedBytes: Sendable {
+        let data: Data
+        let entries: [ItemEntry]
+        let conflictedKeys: Set<String>
+    }
+    private static let validatedBytes = Mutex<[ValidatedBytes]>([])
+    private static let validatedBytesLimit = 3
+    /// Larger catalogs aren't kept, which bounds the memory held to 24 MiB.
+    private static let validatedBytesMaximum = 8 * 1_024 * 1_024
+    /// Tests that bound full reads start without remembered catalogs.
+    static func forgetValidatedBytes() {
+        validatedBytes.withLock { $0.removeAll() }
+    }
     private(set) var readItemsDecodeCount = 0
     private(set) var readItemsUpdateCount = 0
     /// Full item decodes across all catalogs, so tests can bound how often
@@ -171,17 +188,18 @@ final class NotebookCatalogDocument {
     convenience init(snapshot: NotebookCatalogSnapshot, forSync: Bool = false) throws {
         let document = try Document(snapshot.data)
         if forSync { try NotebookSyncFormat.validateIdentity(of: document, snapshot: snapshot) }
-        try self.init(validating: document, forSync: forSync)
+        try self.init(validating: document, data: snapshot.data, forSync: forSync)
         guard notebookID == snapshot.notebookID, heads == snapshot.heads else {
             throw NotebookCatalogError.identityMismatch
         }
     }
 
     convenience init(serializedData: Data, forSync: Bool = false) throws {
-        try self.init(validating: Document(serializedData), forSync: forSync)
+        try self.init(
+            validating: Document(serializedData), data: serializedData, forSync: forSync)
     }
 
-    private init(validating document: Document, forSync: Bool = false) throws {
+    private init(validating document: Document, data: Data, forSync: Bool = false) throws {
         if forSync {
             try NotebookSyncFormat.requireSupported(NotebookSyncFormat.version(of: document))
         }
@@ -189,7 +207,24 @@ final class NotebookCatalogDocument {
         self.document = document
         self.itemsObject = root.items
         self.notebookID = root.notebookID
+        let validated = Self.validatedBytes.withLock { list in
+            list.first { $0.data == data }
+        }
+        if let validated {
+            itemsCache = ItemsCache(
+                heads: Set(document.heads()), entries: validated.entries,
+                conflictedKeys: validated.conflictedKeys)
+        }
         try validateContents()
+        guard validated == nil, let cache = itemsCache,
+              data.count <= Self.validatedBytesMaximum
+        else { return }
+        let entry = ValidatedBytes(
+            data: data, entries: cache.entries, conflictedKeys: cache.conflictedKeys)
+        Self.validatedBytes.withLock { list in
+            list.insert(entry, at: 0)
+            if list.count > Self.validatedBytesLimit { list.removeLast() }
+        }
     }
 
     /// Runs the checks of a full load on this catalog, reading through its

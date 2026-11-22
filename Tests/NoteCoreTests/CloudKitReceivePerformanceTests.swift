@@ -93,6 +93,7 @@ final class CloudKitReceivePerformanceTests: XCTestCase {
             // Both devices share this process; start the receiver without
             // what the sender validated, as a fresh app would.
             SyncRecord.forgetValidatedRecords()
+            NotebookCatalogDocument.forgetValidatedBytes()
             let openStart = clock.now
             receiver = try await receiver.restarted(server: server)
             signposter.endInterval("receiver open", openInterval)

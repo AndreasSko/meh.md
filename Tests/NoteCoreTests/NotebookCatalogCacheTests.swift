@@ -355,4 +355,36 @@ final class NotebookCatalogCacheTests: XCTestCase {
         XCTAssertThrowsError(try NotebookCatalogDocument(serializedData: left.save()))
     }
 
+
+    func testEqualBytesReuseValidatedItemsAndOtherBytesReadAgain() throws {
+        let catalog = try NotebookCatalogDocument()
+        _ = try catalog.add(kind: .note, name: "First.md")
+        let first = catalog.snapshot()
+        NotebookCatalogDocument.forgetValidatedBytes()
+        let decoded = try NotebookCatalogDocument(snapshot: first)
+        XCTAssertEqual(decoded.readItemsDecodeCount, 1)
+
+        let again = try NotebookCatalogDocument(snapshot: first)
+        XCTAssertEqual(again.readItemsDecodeCount, 0)
+        XCTAssertEqual(try again.placements(), try decoded.placements())
+        let fromData = try NotebookCatalogDocument(serializedData: first.data)
+        XCTAssertEqual(fromData.readItemsDecodeCount, 0)
+        XCTAssertEqual(try fromData.placements(), try decoded.placements())
+
+        _ = try catalog.add(kind: .note, name: "Second.md")
+        let second = try NotebookCatalogDocument(snapshot: catalog.snapshot())
+        XCTAssertEqual(second.readItemsDecodeCount, 1)
+        XCTAssertEqual(try second.items().map(\.name).sorted(), ["First.md", "Second.md"])
+    }
+
+    func testInvalidBytesAreNeverRemembered() throws {
+        let catalog = try NotebookCatalogDocument()
+        _ = try catalog.add(kind: .note, name: "First.md")
+        var data = catalog.snapshot().data
+        data[data.count / 2] ^= 0xff
+        NotebookCatalogDocument.forgetValidatedBytes()
+        XCTAssertThrowsError(try NotebookCatalogDocument(serializedData: data))
+        XCTAssertThrowsError(try NotebookCatalogDocument(serializedData: data))
+    }
 }
+
