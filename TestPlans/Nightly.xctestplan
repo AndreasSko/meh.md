@@ -71,6 +71,7 @@
         "NotebookSyncStatusUITests/testNotebookNavigationAllowsToolbarPopoversToReopen",
         "NotebookSyncStatusUITests/testSettingsContainsTheSyncEventLog",
         "NotebookSyncStatusUITests/testToolbarOpensStatusAndShowsActiveFilesDuringSync",
+        "RecentNotesUITests/testIPadDroppingRecentOnTheOpenNotePastesNothing",
         "ReadmeScreenshotUITests",
         "UIReleasePolishUITests/testBrowserActionsExposeSettingsImportAndCreateAnotherNote",
         "UIReleasePolishUITests/testEmptyLibraryCanCreateAndEditItsFirstNote",

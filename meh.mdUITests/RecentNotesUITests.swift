@@ -217,6 +217,90 @@ final class RecentNotesUITests: XCTestCase {
         XCTAssertEqual(editor.value as? String, secondSource + " suffix")
     }
 
+    func testIPadDroppingRecentOnTheOpenNotePastesNothing() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad)
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        let recent = recentBesideOpenNote(in: app)
+        let editor = app.textViews["markdown-editor"]
+        app.withoutIdleWait {
+            recent.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.5, thenDragTo: editor.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)),
+                       withVelocity: .slow, thenHoldForDuration: 1)
+        }
+        XCTAssertTrue(recent.waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "Fictional open note",
+                       "The drag carries the note's link, which the note must not paste")
+
+        // Nor may the title being renamed take it into the note's name.
+        let title = app.buttons["note-title"]
+        let name = title.label
+        title.tap()
+        let field = app.textFields["title-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        app.withoutIdleWait {
+            recent.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.5, thenDragTo: field.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+                       withVelocity: .slow, thenHoldForDuration: 1)
+        }
+        XCTAssertTrue(recent.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, name)
+    }
+
+    /// The window a drop at the screen's edge opens outlives the app, so
+    /// it would change the layout of every test after it. Run by hand.
+    func testIPadDraggingRecentToEdgeOpensWindow() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad)
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["MEH_WINDOW_DRAG_TESTS"] == "1",
+            "Set MEH_WINDOW_DRAG_TESTS=1 on a fresh iPad simulator"
+        )
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        let recent = recentBesideOpenNote(in: app)
+        let windows = app.windows.count
+        // The screen's right edge, where the system offers a new window.
+        let edge = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            .coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.45))
+        app.withoutIdleWait {
+            recent.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.5, thenDragTo: edge, withVelocity: .slow,
+                       thenHoldForDuration: 4)
+        }
+        let noteWindow = app.windows.containing(NSPredicate(
+            format: "identifier == %@ AND value == %@",
+            "markdown-editor", "Fictional dragged note"
+        )).firstMatch
+        XCTAssertTrue(noteWindow.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(app.windows.count, windows)
+        // The note opens in a window of its own; the first one keeps its note.
+        let sourceWindow = app.windows.containing(NSPredicate(
+            format: "identifier == %@ AND value == %@",
+            "markdown-editor", "Fictional open note"
+        )).firstMatch
+        XCTAssertTrue(sourceWindow.exists, "The window with Recents must keep its note")
+    }
+
+    /// The Recents row of "Fictional dragged note", while "Fictional open
+    /// note" is open beside it.
+    private func recentBesideOpenNote(in app: XCUIApplication) -> XCUIElement {
+        createRecentNote(in: app, source: "Fictional dragged note")
+        createRecentNote(in: app, source: "Fictional open note")
+        showSidebar(app)
+        let recent = recentButtons(app).matching(NSPredicate(
+            format: "label CONTAINS %@", "Fictional dragged note"
+        )).firstMatch
+        XCTAssertTrue(recent.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntilHittable(recent))
+        XCTAssertEqual(app.textViews["markdown-editor"].value as? String,
+                       "Fictional open note")
+        return recent
+    }
+
     @discardableResult
     private func waitForRecent(
         in recents: XCUIElementQuery, at index: Int,

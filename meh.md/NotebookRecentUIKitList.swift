@@ -1,4 +1,5 @@
 #if os(iOS)
+import MehWidgetData
 import SwiftUI
 import UIKit
 
@@ -71,6 +72,12 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
         table.showsHorizontalScrollIndicator = false
         table.register(UITableViewCell.self, forCellReuseIdentifier: "Recent")
         table.delegate = context.coordinator
+        // As in Files, a note dragged to the screen's edge opens in a new
+        // window.
+        if UIApplication.shared.supportsMultipleScenes {
+            table.dragDelegate = context.coordinator
+            table.dragInteractionEnabled = true
+        }
 
         let coordinator = context.coordinator
         let source = UITableViewDiffableDataSource<Int, UUID>(tableView: table) {
@@ -127,7 +134,7 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
         return CGSize(width: width, height: table.reportedHeight)
     }
 
-    final class Coordinator: NSObject, UITableViewDelegate {
+    final class Coordinator: NSObject, UITableViewDelegate, UITableViewDragDelegate {
         var dataSource: UITableViewDiffableDataSource<Int, UUID>?
         private var items: [NotebookRecentUIKitItem] = []
         private var itemByID: [UUID: NotebookRecentUIKitItem] = [:]
@@ -212,6 +219,28 @@ struct NotebookRecentUIKitList<RowContent: View>: UIViewRepresentable {
                 rowContent(id)
             }
             .margins(.all, 0)
+        }
+
+        func tableView(
+            _ tableView: UITableView, itemsForBeginning session: UIDragSession,
+            at indexPath: IndexPath
+        ) -> [UIDragItem] {
+            guard let id = dataSource?.itemIdentifier(for: indexPath),
+                  itemByID[id] != nil else { return [] }
+            let item = UIDragItem(itemProvider: NSItemProvider(
+                object: MehWidgetLink.note(id).url as NSURL))
+            item.localObject = NotebookNoteWindowDrag(noteID: id)
+            return [item]
+        }
+
+        func tableView(
+            _ tableView: UITableView, dragPreviewParametersForRowAt indexPath: IndexPath
+        ) -> UIDragPreviewParameters? {
+            guard let cell = tableView.cellForRow(at: indexPath) else { return nil }
+            let parameters = UIDragPreviewParameters()
+            parameters.visiblePath = UIBezierPath(
+                roundedRect: cell.bounds, cornerRadius: 12)
+            return parameters
         }
 
         func tableView(
