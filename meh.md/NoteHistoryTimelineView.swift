@@ -481,7 +481,9 @@ struct NoteHistoryTimelineView: View {
     static func sizeLabel(added: Int, removed: Int) -> String {
         switch (added, removed) {
         case (0, 0): String(localized: "no text changes")
+        case (1, 0): String(localized: "1 character added")
         case (_, 0): String(localized: "\(added.formatted()) characters added")
+        case (0, 1): String(localized: "1 character removed")
         case (0, _): String(localized: "\(removed.formatted()) characters removed")
         default: String(localized: "\(added.formatted()) added, \(removed.formatted()) removed")
         }
