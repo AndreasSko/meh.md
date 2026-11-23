@@ -42,7 +42,9 @@ second and its own size.
 
 Each version is compared with the one before it at the rail's current level:
 the previous session, or the previous step. Changing the level
-compares again. The text stays clean. A highlighter line in the margin marks
+compares again. The Now dot is the session still being written, so it
+compares the current text with the last finished session and shows the
+latest edits too. The text stays clean. A highlighter line in the margin marks
 changed lines, and a small ring marks where lines were removed; tapping or
 clicking the ring shows the removed text. An edited line gets only the
 highlighter line, but when an edit leaves fewer lines than it replaced, a
