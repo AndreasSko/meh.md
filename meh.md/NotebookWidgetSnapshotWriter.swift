@@ -125,7 +125,8 @@ final class NotebookWidgetSnapshotWriter {
             ink: preferences.string(forKey: MehPalette.inkKey)
                 ?? MehPalette.Ink.black.rawValue,
             highlighter: preferences.string(forKey: MehPalette.highlighterKey)
-                ?? MehPalette.Highlighter.yellow.rawValue
+                ?? MehPalette.Highlighter.yellow.rawValue,
+            font: preferences.string(forKey: "editor.fontFamily")
         )
         if (try? store.save(snapshot)) == true {
             WidgetCenter.shared.reloadAllTimelines()

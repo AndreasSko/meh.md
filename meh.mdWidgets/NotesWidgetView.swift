@@ -231,7 +231,10 @@ private struct NotesSingleNoteView: View {
         if let id, let note = snapshot.note(id) {
             VStack(alignment: .leading, spacing: 6) {
                 header(for: note)
-                NotesNoteBody(content: snapshot.content(id), textSize: textSize)
+                NotesNoteBody(
+                    content: snapshot.content(id), textSize: textSize,
+                    design: NotesNoteText.design(for: snapshot.font)
+                )
                     .privacySensitive()
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
@@ -278,6 +281,7 @@ private struct NotesSingleNoteView: View {
 private struct NotesNoteBody: View {
     let content: MehWidgetSnapshot.Content?
     let textSize: NotesWidgetTextSize
+    let design: Font.Design
     @Environment(\.widgetFamily) private var family
     @Environment(\.notesWidgetPens) private var pens
     // Follows the system text size like the caption text of Small does.
@@ -299,22 +303,22 @@ private struct NotesNoteBody: View {
                         if blocks.count <= MehWidgetNoteText.autoMostBlocks {
                             ForEach(MehWidgetNoteText.autoSizes(for: .init(family)), id: \.self) {
                                 NotesBlockColumns(
-                                    blocks: blocks, text: .points($0 * scale, lineLimit: nil)
+                                    blocks: blocks, text: .points($0 * scale, design: design, lineLimit: nil)
                                 )
                             }
-                            NotesBlockColumns(blocks: blocks, text: .small(lineLimit: nil))
+                            NotesBlockColumns(blocks: blocks, text: .small(design: design, lineLimit: nil))
                         }
-                        NotesBlockColumns(blocks: shown, text: .small())
+                        NotesBlockColumns(blocks: shown, text: .small(design: design))
                     }
                 case .small:
-                    NotesBlockColumns(blocks: shown, text: .small())
+                    NotesBlockColumns(blocks: shown, text: .small(design: design))
                 case .medium:
                     NotesBlockColumns(
-                        blocks: shown, text: .points(MehWidgetNoteText.medium * scale)
+                        blocks: shown, text: .points(MehWidgetNoteText.medium * scale, design: design)
                     )
                 case .large:
                     NotesBlockColumns(
-                        blocks: shown, text: .points(MehWidgetNoteText.large * scale)
+                        blocks: shown, text: .points(MehWidgetNoteText.large * scale, design: design)
                     )
                 }
             }
@@ -358,21 +362,47 @@ private struct NotesNoteText {
     let checkbox: Font
     let spacing: CGFloat
     let lineLimit: Int?
+    /// Rounded has no italic face, so SwiftUI draws its italics upright.
+    /// Emphasis then takes the system italic, for the body and headings.
+    var italic: (body: Font, heading: Font)?
+
+    /// The font chosen for notes in Settings, so the widget matches the editor.
+    static func design(for family: String?) -> Font.Design {
+        switch family {
+        case "serif": .serif
+        case "rounded": .rounded
+        case "monospaced": .monospaced
+        default: .default
+        }
+    }
 
     /// The caption text the widget had before Text Size.
-    static func small(lineLimit: Int? = 2) -> NotesNoteText {
+    static func small(design: Font.Design, lineLimit: Int? = 2) -> NotesNoteText {
         NotesNoteText(
-            body: .caption, heading: .footnote.weight(.semibold), checkbox: .caption2,
-            spacing: 3, lineLimit: lineLimit
+            body: .system(.caption, design: design),
+            heading: .system(.footnote, design: design, weight: .semibold),
+            checkbox: .caption2,
+            spacing: 3, lineLimit: lineLimit,
+            italic: design == .rounded
+                ? (.caption.italic(), .footnote.weight(.semibold).italic())
+                : nil
         )
     }
 
-    static func points(_ size: CGFloat, lineLimit: Int? = 2) -> NotesNoteText {
+    static func points(
+        _ size: CGFloat, design: Font.Design, lineLimit: Int? = 2
+    ) -> NotesNoteText {
         NotesNoteText(
-            body: .system(size: size),
-            heading: .system(size: (size * 1.12).rounded(), weight: .semibold),
+            body: .system(size: size, design: design),
+            heading: .system(size: (size * 1.12).rounded(), weight: .semibold, design: design),
             checkbox: .system(size: (size * 0.85).rounded()),
-            spacing: (size / 4).rounded(), lineLimit: lineLimit
+            spacing: (size / 4).rounded(), lineLimit: lineLimit,
+            italic: design == .rounded
+                ? (
+                    .system(size: size).italic(),
+                    .system(size: (size * 1.12).rounded(), weight: .semibold).italic()
+                )
+                : nil
         )
     }
 }
@@ -417,7 +447,7 @@ private struct NotesBlockView: View {
     var body: some View {
         switch block.block {
         case .heading:
-            line(font: text.heading).padding(.top, text.spacing * 2 / 3)
+            line(heading: true).padding(.top, text.spacing * 2 / 3)
         case .task(_, let done):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: done ? "checkmark.square.fill" : "square")
@@ -450,9 +480,18 @@ private struct NotesBlockView: View {
         }
     }
 
-    private func line(font: Font? = nil) -> some View {
-        Text(block.text)
-            .font(font ?? text.body)
+    private func line(heading: Bool = false) -> some View {
+        var styled = block.text
+        if let italic = text.italic {
+            for run in styled.runs
+            where run.inlinePresentationIntent?.contains(.emphasized) == true {
+                let font = heading ? italic.heading : italic.body
+                styled[run.range].font = run.inlinePresentationIntent?
+                    .contains(.stronglyEmphasized) == true ? font.bold() : font
+            }
+        }
+        return Text(styled)
+            .font(heading ? text.heading : text.body)
             .lineLimit(text.lineLimit)
             .fixedSize(horizontal: false, vertical: true)
     }
