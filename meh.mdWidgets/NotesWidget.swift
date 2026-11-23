@@ -30,7 +30,7 @@ struct NotesWidget: Widget {
 struct NotesEntry: TimelineEntry {
     enum Content {
         case recents(count: Int, previews: Bool)
-        case note(UUID?)
+        case note(UUID?, textSize: NotesWidgetTextSize)
     }
 
     let date: Date
@@ -60,7 +60,7 @@ struct NotesProvider: AppIntentTimelineProvider {
         let first = entry(
             for: configuration, at: now, family: context.family, preview: false
         )
-        if case .note(let id?) = first.content, let store = MehWidgetStore(),
+        if case .note(let id?, _) = first.content, let store = MehWidgetStore(),
            first.snapshot?.note(id) != nil, first.snapshot?.content(id) == nil {
             try? store.requestContent(for: id)
         }
@@ -81,7 +81,10 @@ struct NotesProvider: AppIntentTimelineProvider {
             count: configuration.count(for: .init(family)),
             previews: configuration.previews
         )
-        case .note: .note(configuration.note?.id ?? (preview ? snapshot?.recents.first?.id : nil))
+        case .note: .note(
+            configuration.note?.id ?? (preview ? snapshot?.recents.first?.id : nil),
+            textSize: configuration.textSize
+        )
         }
         return NotesEntry(date: date, snapshot: snapshot, content: content)
     }
