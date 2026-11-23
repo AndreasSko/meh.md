@@ -22,6 +22,12 @@ struct NotebookDetail: View {
         MarkdownEditorMode.livePreview.rawValue
     @AppStorage(MarkdownTimeCalculator.enabledKey, store: NotebookEditorPreferences.store)
     private var timeCalculatorLabs = false
+    @AppStorage(Self.hidesControlsOnScrollKey, store: NotebookEditorPreferences.store)
+    private var hidesControlsOnScroll = true
+
+    /// The Settings › Appearance key for hiding the note's buttons while
+    /// reading down a note.
+    static let hidesControlsOnScrollKey = "editor.hidesControlsOnScroll"
 
     private var editorMode: MarkdownEditorMode {
         MarkdownEditorMode(rawValue: editorModeRaw) ?? .livePreview
@@ -56,6 +62,12 @@ struct NotebookDetail: View {
 
     /// Beside Files a folder's page covers the note, which waits underneath.
     private var showsFolderPage: Bool { !isCompact && scene.pageFolderID != nil }
+
+    /// Only reading the note itself tucks the bar away. History and a
+    /// folder's page keep their buttons, such as Done and Restore, in view.
+    private var minimizesControls: Bool {
+        hidesControlsOnScroll && scene.historyBrowser == nil && !showsFolderPage
+    }
 
     var body: some View {
         ZStack {
@@ -219,6 +231,9 @@ struct NotebookDetail: View {
                     .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                     #else
                     .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+                    .toolbarMinimizationBehavior(
+                        minimizesControls ? .onScrollDown : .never, for: .navigationBar
+                    )
                     #endif
                     .task(id: EditorAttachmentID(
                         noteID: selectedID, isEditingEnabled: session.isEditingEnabled,

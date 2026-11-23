@@ -416,6 +416,8 @@ private struct NotebookAppearanceSection: View {
     private var recentCount = NotebookNavigationState.defaultRecentCount
     @AppStorage(NotebookNavigationState.filePreviewsKey, store: NotebookEditorPreferences.store)
     private var showsFilePreviews = false
+    @AppStorage(NotebookDetail.hidesControlsOnScrollKey, store: NotebookEditorPreferences.store)
+    private var hidesControlsOnScroll = true
 
     var body: some View {
         pens
@@ -466,10 +468,18 @@ private struct NotebookAppearanceSection: View {
             recents
             Toggle("Previews in Files", isOn: $showsFilePreviews)
                 .accessibilityIdentifier("notebook-appearance-file-previews")
+            #if os(iOS)
+            Toggle("Hide Controls While Scrolling", isOn: $hidesControlsOnScroll)
+                .accessibilityIdentifier("notebook-appearance-hide-controls")
+            #endif
         } header: {
             Text("Appearance")
         } footer: {
+            #if os(iOS)
+            Text("Ink colors checkboxes, links and buttons. The highlighter marks highlights, folders and the New Note button. Recent Notes is how many notes Recents shows; pinned notes always show. Previews in Files shows a note's first words under its name. Hide Controls While Scrolling tucks a note's buttons away as you scroll down, and scrolling up brings them back.")
+            #else
             Text("Ink colors checkboxes, links and buttons. The highlighter marks highlights, folders and the New Note button. Recent Notes is how many notes Recents shows; pinned notes always show. Previews in Files shows a note's first words under its name.")
+            #endif
         }
     }
 }
