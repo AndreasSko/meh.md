@@ -60,16 +60,20 @@ public struct MehWidgetSnapshot: Codable, Equatable, Sendable {
     /// The chosen pens, as stored in Settings > Appearance.
     public let ink: String
     public let highlighter: String
+    /// The editor's font family, as stored in Settings. Snapshots written
+    /// before widgets followed it have none.
+    public let font: String?
 
     public init(
         notes: [Note], recents: [Recent], contents: [Content],
-        ink: String, highlighter: String
+        ink: String, highlighter: String, font: String?
     ) {
         self.notes = notes
         self.recents = recents
         self.contents = contents
         self.ink = ink
         self.highlighter = highlighter
+        self.font = font
     }
 
     public func note(_ id: UUID) -> Note? {

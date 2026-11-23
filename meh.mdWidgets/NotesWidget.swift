@@ -145,7 +145,7 @@ extension MehWidgetSnapshot {
                     modifiedAt: now.addingTimeInterval(age)
                 )
             },
-            ink: "black", highlighter: "yellow"
+            ink: "black", highlighter: "yellow", font: nil
         )
     }()
 }

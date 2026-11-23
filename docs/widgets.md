@@ -38,6 +38,7 @@ they don't get cut off. With fewer notes in Recents than chosen, the list
 keeps the same row height and leaves the rest of the widget empty.
 
 The widget follows the paper, the chosen highlighter and ink, and dark mode.
+One Note shows the note in the font chosen in Settings, like the editor.
 Recents leaves out hidden and trashed notes, as in the app. The One Note
 picker offers every note outside Trash, including notes hidden from Recents,
 because picking one is a deliberate choice. Note titles and text are marked

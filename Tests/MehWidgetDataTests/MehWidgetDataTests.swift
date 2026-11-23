@@ -40,7 +40,7 @@ import Testing
                 .init(id: older.id, isPinned: false),
             ],
             contents: [.init(id: recent.id, text: "- [ ] lemons", excerpt: "lemons", modifiedAt: nil)],
-            ink: "black", highlighter: "yellow"
+            ink: "black", highlighter: "yellow", font: nil
         )
     }
 
@@ -72,12 +72,42 @@ import Testing
         defer { try? FileManager.default.removeItem(at: store.directory) }
         let snapshot = MehWidgetSnapshot(
             notes: [.init(id: UUID(), title: "A", folders: [])], recents: [],
-            contents: [], ink: "black", highlighter: "pink"
+            contents: [], ink: "black", highlighter: "pink", font: "serif"
         )
         #expect(store.load() == nil)
         #expect(try store.save(snapshot))
         #expect(try !store.save(snapshot))
         #expect(store.load() == snapshot)
+    }
+
+    @Test func fontChangeIsAChange() throws {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        func snapshot(font: String?) -> MehWidgetSnapshot {
+            MehWidgetSnapshot(
+                notes: [], recents: [], contents: [],
+                ink: "black", highlighter: "yellow", font: font
+            )
+        }
+        #expect(try store.save(snapshot(font: nil)))
+        #expect(try store.save(snapshot(font: "rounded")))
+        #expect(store.load()?.font == "rounded")
+    }
+
+    @Test func snapshotWithoutFontStillLoads() throws {
+        // Written by a version from before widgets followed the font.
+        let json = #"""
+        {"notes":[],"recents":[],"contents":[],"ink":"blue","highlighter":"pink"}
+        """#
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        try FileManager.default.createDirectory(
+            at: store.directory, withIntermediateDirectories: true
+        )
+        try Data(json.utf8).write(to: store.directory.appendingPathComponent("snapshot.json"))
+        let snapshot = try #require(store.load())
+        #expect(snapshot.ink == "blue")
+        #expect(snapshot.font == nil)
     }
 
     @Test func requestsAccumulateAndArePruned() throws {
