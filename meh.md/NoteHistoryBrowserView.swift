@@ -258,15 +258,27 @@ struct NoteHistoryBrowserView: View {
                 .accessibilityHidden(true)
             }
             .popover(item: $removal, attachmentAnchor: .rect(.rect(removal?.rect ?? .zero))) { removal in
-                Text(removal.text)
-                    .strikethrough()
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
-                    .padding()
-                    .frame(maxWidth: 320, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel(Text("Removed: \(removal.text)"))
-                    .presentationCompactAdaptation(.popover)
+                // Old lines an edit rewrote are not all gone, so they read
+                // as the previous text rather than as struck-out deletions.
+                VStack(alignment: .leading, spacing: 4) {
+                    if removal.isEdit {
+                        Text("Previous text")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(removal.text)
+                        .strikethrough(!removal.isEdit)
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                }
+                .padding()
+                .frame(maxWidth: 320, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(removal.isEdit
+                    ? Text("Previous text: \(removal.text)")
+                    : Text("Removed: \(removal.text)"))
+                .presentationCompactAdaptation(.popover)
             }
             // Fill the area behind the floating controls. The safe-area
             // inset still keeps the last lines reachable above them.
@@ -363,7 +375,9 @@ struct NoteHistoryBrowserView: View {
                 if viewport?.range != range { viewport?.range = range }
             }
             navigation.removalTapped = { removal, rect in
-                self.removal = NoteHistoryRemovalPopover(text: removal.text, rect: rect)
+                self.removal = NoteHistoryRemovalPopover(
+                    text: removal.text, isEdit: removal.isEdit, rect: rect
+                )
             }
             navigation.whenAttached { [weak navigation, weak browser] in
                 // At the top, the editor's offset includes the note title,
@@ -381,6 +395,7 @@ struct NoteHistoryBrowserView: View {
 private struct NoteHistoryRemovalPopover: Identifiable {
     let id = UUID()
     let text: String
+    let isEdit: Bool
     let rect: CGRect
 }
 

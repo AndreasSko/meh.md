@@ -65,7 +65,9 @@ final class NoteHistoryChangesTests: XCTestCase {
     func testFewerLinesInPlaceOfOldOnesKeepTheOldText() {
         let changes = NoteHistoryChanges(from: "A\nB\nC\nD", to: "A\nX\nD")
         XCTAssertEqual(changes.changed, [NSRange(location: 2, length: 1)])
-        XCTAssertEqual(changes.removed, [.init(location: 4, text: "B\nC")])
+        XCTAssertEqual(changes.removed, [.init(
+            location: 4, text: "B\nC", isEdit: true
+        )])
     }
 
     func testCRLFLinesCompareOneByOne() {

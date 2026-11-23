@@ -114,10 +114,12 @@ struct NoteHistoryTimelineView: View {
             .accessibilityActions {
                 if !changes.removed.isEmpty {
                     Button("Read Removed Text") {
-                        let text = changes.removed.map(\.text).joined(separator: "\n")
-                        AccessibilityNotification.Announcement(
-                            String(localized: "Removed: \(text)")
-                        ).post()
+                        let text = changes.removed.map { removal in
+                            removal.isEdit
+                                ? String(localized: "Previous text: \(removal.text)")
+                                : String(localized: "Removed: \(removal.text)")
+                        }.joined(separator: "\n")
+                        AccessibilityNotification.Announcement(text).post()
                     }
                 }
             }

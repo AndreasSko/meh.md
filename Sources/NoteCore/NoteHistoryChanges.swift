@@ -9,6 +9,9 @@ public struct NoteHistoryChanges: Equatable, Sendable {
         /// end of the text.
         public let location: Int
         public let text: String
+        /// Whether fewer new lines took the old lines' place. The text is
+        /// then what an edit replaced, not only what was deleted.
+        public var isEdit = false
     }
 
     /// Runs of added or edited lines, each without its final line break.
@@ -118,7 +121,8 @@ public struct NoteHistoryChanges: Equatable, Sendable {
             if oldIndex - oldFirst > newIndex - newFirst {
                 removed.append(Removal(
                     location: newStarts[newIndex],
-                    text: oldLines[oldFirst ..< oldIndex].joined(separator: "\n")
+                    text: oldLines[oldFirst ..< oldIndex].joined(separator: "\n"),
+                    isEdit: newIndex > newFirst
                 ))
             }
         }
