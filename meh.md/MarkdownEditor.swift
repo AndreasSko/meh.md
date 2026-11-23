@@ -3403,31 +3403,50 @@ struct MarkdownEditor: UIViewRepresentable {
                 from: textView.beginningOfDocument,
                 offset: range.location
             ) else { return }
-            let targetRect = textView.caretRect(for: start)
+            // TextKit 2 places text far from the viewport by estimate, and
+            // a long note can be thousands of points taller than estimated.
+            // Lay out everything above the target, then measure again after
+            // scrolling until the target stays put.
+            if let layoutManager = textView.textLayoutManager,
+               let contentManager = layoutManager.textContentManager,
+               let end = contentManager.location(
+                   contentManager.documentRange.location,
+                   offsetBy: range.location
+               ),
+               let above = NSTextRange(
+                   location: contentManager.documentRange.location, end: end
+               ) {
+                layoutManager.ensureLayout(for: above)
+            }
             let inset = textView.adjustedContentInset
             let visibleHeight = max(
                 0, textView.bounds.height - inset.top - inset.bottom
             )
             guard visibleHeight > 0 else { return }
             destinationCenterGeometry = centerGeometry(for: textView)
-            let minimumY = -inset.top
-            let maximumY = max(
-                minimumY,
-                textView.contentSize.height - textView.bounds.height
-                    + inset.bottom
-            )
-            let targetY = min(
-                maximumY,
-                max(
+            for _ in 0..<4 {
+                let targetRect = textView.caretRect(for: start)
+                let minimumY = -inset.top
+                let maximumY = max(
                     minimumY,
-                    targetRect.midY - inset.top - visibleHeight / 2
+                    textView.contentSize.height - textView.bounds.height
+                        + inset.bottom
                 )
-            )
-            if abs(textView.contentOffset.y - targetY) > 0.5 {
+                let targetY = min(
+                    maximumY,
+                    max(
+                        minimumY,
+                        targetRect.midY - inset.top - visibleHeight / 2
+                    )
+                )
+                guard abs(textView.contentOffset.y - targetY) > 0.5 else {
+                    break
+                }
                 textView.setContentOffset(
                     CGPoint(x: textView.contentOffset.x, y: targetY),
                     animated: false
                 )
+                textView.layoutIfNeeded()
             }
             parent.navigation?.searchLandingPosition = capturePosition(
                 in: textView

@@ -277,6 +277,58 @@ final class MarkdownEditorPositionTests: XCTestCase {
         XCTAssertEqual(completionCount, 1)
     }
 
+    #if os(iOS)
+    func testRevealLandsOnDistantEndOfLongReadOnlyNoteInOneCall()
+        async throws {
+        // Shaped like History's large fictional fixture: the far end of the
+        // note is still estimated layout when the reveal starts.
+        let edits = (0..<600).map { $0 % 19 == 0 ? "\n" : "x" }.joined()
+        let source = "# Fictional Observatory\n" + String(
+            repeating: "Café e\u{301} 👋🏽 observations from a fictional "
+                + "mountain station.\n",
+            count: 1_800
+        ) + edits
+        let navigation = MarkdownEditorNavigation()
+        let mounted = mount(
+            text: source, navigation: navigation,
+            size: CGSize(width: 402, height: 639), isReadOnly: true
+        )
+        defer { mounted.tearDown() }
+        let textView = try XCTUnwrap(mounted.textView)
+        await flushMainQueue()
+        XCTAssertEqual(verticalScrollOffset(in: textView),
+                       -textView.adjustedContentInset.top, accuracy: 1)
+
+        let target = source.utf16.count - edits.utf16.count + 300
+        navigation.revealSearchMatch?(NSRange(location: target, length: 0))
+        await flushMainQueue()
+        layout(mounted)
+        await flushMainQueue()
+
+        try assertVisible(target, in: textView)
+    }
+
+    private func assertVisible(
+        _ location: Int, in textView: UITextView,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        textView.layoutIfNeeded()
+        let position = try XCTUnwrap(textView.position(
+            from: textView.beginningOfDocument, offset: location
+        ))
+        let caret = textView.caretRect(for: position)
+        let inset = textView.adjustedContentInset
+        let top = textView.contentOffset.y + inset.top
+        let bottom = textView.contentOffset.y + textView.bounds.height
+            - inset.bottom
+        XCTAssertTrue(
+            caret.minY >= top && caret.maxY <= bottom,
+            "Caret \(caret) is outside the visible span \(top)...\(bottom)",
+            file: file, line: line
+        )
+    }
+    #endif
+
     func testRestorationCompletionWaitsForFreshEditorViewport() async throws {
         let source = (0..<180).map {
             "Fictional observation \($0) with enough text to wrap."
