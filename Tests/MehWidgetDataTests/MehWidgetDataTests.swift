@@ -236,3 +236,46 @@ import Testing
         #expect(covered(3, gap: 40) == 0)
     }
 }
+
+@Suite struct MehWidgetNoteTextTests {
+    typealias NoteText = MehWidgetNoteText
+
+    @Test func autoTriesLargestFirst() {
+        for size in [MehWidgetRecentsLayout.Size.small, .medium, .large, .extraLarge] {
+            let sizes = NoteText.autoSizes(for: size)
+            #expect(sizes == sizes.sorted(by: >))
+            #expect(sizes.last == 12)
+        }
+    }
+
+    @Test func biggerWidgetsGoBigger() {
+        #expect(NoteText.autoSizes(for: .small).first == 18)
+        #expect(NoteText.autoSizes(for: .medium).first == 22)
+        #expect(NoteText.autoSizes(for: .large).first == 28)
+        #expect(NoteText.autoSizes(for: .extraLarge).first == 28)
+    }
+
+    @Test func autoReachesTheFixedSizes() {
+        for size in [MehWidgetRecentsLayout.Size.small, .medium, .large, .extraLarge] {
+            #expect(NoteText.autoSizes(for: size).contains(NoteText.medium))
+        }
+        #expect(NoteText.autoSizes(for: .large).contains(NoteText.large))
+    }
+}
+
+@Suite struct MehWidgetNoteColumnTests {
+    @Test func evenBlocksSplitInHalf() {
+        #expect(MehWidgetNoteText.firstColumnCount(lengths: [10, 10, 10, 10]) == 2)
+        #expect(MehWidgetNoteText.firstColumnCount(lengths: [10, 10, 10]) == 2)
+    }
+
+    @Test func longBlocksGetAColumnOfTheirOwn() {
+        #expect(MehWidgetNoteText.firstColumnCount(lengths: [400, 400, 4]) == 1)
+        #expect(MehWidgetNoteText.firstColumnCount(lengths: [5, 5, 5, 5, 300]) == 4)
+    }
+
+    @Test func fewBlocksStayInTheFirstColumn() {
+        #expect(MehWidgetNoteText.firstColumnCount(lengths: []) == 0)
+        #expect(MehWidgetNoteText.firstColumnCount(lengths: [50]) == 1)
+    }
+}

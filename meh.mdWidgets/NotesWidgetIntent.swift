@@ -13,6 +13,21 @@ enum NotesWidgetContent: String, AppEnum {
     ]
 }
 
+enum NotesWidgetTextSize: String, AppEnum {
+    case auto
+    case small
+    case medium
+    case large
+
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Text Size"
+    static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
+        .auto: "Auto",
+        .small: "Small",
+        .medium: "Medium",
+        .large: "Large",
+    ]
+}
+
 struct NotesWidgetIntent: WidgetConfigurationIntent {
     static let title: LocalizedStringResource = "Notes"
     static let description = IntentDescription("Shows Recents or one note.")
@@ -42,9 +57,15 @@ struct NotesWidgetIntent: WidgetConfigurationIntent {
     @Parameter(title: "Note")
     var note: NoteEntity?
 
+    @Parameter(title: "Text Size", default: .auto)
+    var textSize: NotesWidgetTextSize
+
     static var parameterSummary: some ParameterSummary {
         When(\.$content, .equalTo, .note) {
-            Summary("Show \(\.$content)") { \.$note }
+            Summary("Show \(\.$content)") {
+                \.$note
+                \.$textSize
+            }
         } otherwise: {
             When(\.$previews, .equalTo, true) {
                 When(widgetFamily: .oneOf, [.systemLarge, .systemExtraLarge]) {
