@@ -453,6 +453,33 @@ enum MarkdownPresentation {
         attributes[.paragraphStyle] = style
         textView.typingAttributes = attributes
     }
+
+    /// The space above the empty line after a final line break that
+    /// TextKit applies again from the last paragraph's style, minus the
+    /// space that line keeps once it has text.
+    static func repeatedEndLineGap(in textView: UITextView) -> CGFloat {
+        let storage = textView.textStorage
+        let source = storage.string as NSString
+        let length = source.length
+        guard length > 0,
+              [0x0A, 0x0D, 0x2029].contains(source.character(at: length - 1)),
+              let style = storage.attribute(
+                  .paragraphStyle, at: length - 1, effectiveRange: nil
+              ) as? NSParagraphStyle else { return 0 }
+        // In an open code fence the new line is code as well.
+        guard let result = syntaxCache(for: textView).currentPresentation?
+                .result,
+              !result.canRestartAtEnd,
+              let run = result.paragraphRuns.last(where: {
+                  NSLocationInRange(length - 1, $0.range)
+              }),
+              run.kind == .codeBlock,
+              let bodyFont = textView.typingAttributes[.font] as? PlatformFont
+        else { return style.paragraphSpacingBefore }
+        return style.paragraphSpacingBefore - paragraphStyle(
+            for: run, text: source, bodyFont: bodyFont, isTask: false
+        ).paragraphSpacingBefore
+    }
 #endif
 
     /// Draws the decorations beside one line, before the line's text.

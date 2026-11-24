@@ -2594,6 +2594,19 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         super.insertText(text)
     }
 
+    /// TextKit lays out the empty line after a final line break with the
+    /// last paragraph's style, so that line repeats the paragraph's space
+    /// above. Below a heading the caret then sits far below where the
+    /// first typed character appears. Show it where that character goes.
+    override func caretRect(for position: UITextPosition) -> CGRect {
+        let rect = super.caretRect(for: position)
+        guard offset(from: beginningOfDocument, to: position)
+            == textStorage.length else { return rect }
+        return rect.offsetBy(
+            dx: 0, dy: -MarkdownPresentation.repeatedEndLineGap(in: self)
+        )
+    }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         if !markdownCellController.forwarding { markdownCellController.end() }
         super.touchesBegan(touches, with: event)
