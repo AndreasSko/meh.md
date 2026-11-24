@@ -247,6 +247,66 @@ final class EditorNavigationTests: XCTestCase {
         XCTAssertNotEqual(navigation.capturePosition?(), resizedLanding)
     }
 
+    func testRevealLandsOnDistantEndOfLongReadOnlyNote() throws {
+        // Shaped like History's large fictional fixture.
+        let edits = (0..<600).map { $0 % 19 == 0 ? "\n" : "x" }.joined()
+        let source = "# Fictional Observatory\n" + String(
+            repeating: "Café e\u{301} 👋🏽 observations from a fictional "
+                + "mountain station.\n",
+            count: 1_800
+        ) + edits
+        let navigation = MarkdownEditorNavigation()
+        let editor = MarkdownEditor(
+            text: .constant(source), isReadOnly: true, navigation: navigation
+        )
+        let host = NSHostingView(rootView: editor)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 360),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = host
+        window.layoutIfNeeded()
+        let textView = try XCTUnwrap(findTextView(in: host))
+        let target = (source as NSString).length - (edits as NSString).length + 300
+
+        navigation.revealSearchMatch?(NSRange(location: target, length: 0))
+        window.layoutIfNeeded()
+
+        assertCentered(NSRange(location: target, length: 0), in: textView, accuracy: 60)
+    }
+
+    func testVisibleRangeStartsAtTheTopOfTheNote() throws {
+        let source = "# Fictional trip\n\n" + (0..<120).map {
+            "Day \($0) has enough fictional plans for a stable layout."
+        }.joined(separator: "\n")
+        let navigation = MarkdownEditorNavigation()
+        var visible: NSRange?
+        navigation.visibleRangeChanged = { visible = $0 }
+        let editor = MarkdownEditor(
+            text: .constant(source), isReadOnly: true, navigation: navigation
+        )
+        let host = NSHostingView(rootView: editor)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 360),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = host
+        window.layoutIfNeeded()
+        let textView = try XCTUnwrap(findTextView(in: host))
+        let scrollView = try XCTUnwrap(textView.enclosingScrollView)
+        scrollView.contentView.scroll(to: NSPoint(
+            x: 0, y: scrollView.contentView.bounds.minY + 1
+        ))
+        scrollView.contentView.scroll(to: .zero)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        window.layoutIfNeeded()
+
+        let range = try XCTUnwrap(visible)
+        XCTAssertEqual(range.location, 0)
+        XCTAssertGreaterThan(range.length, 0)
+        XCTAssertLessThan(NSMaxRange(range), (source as NSString).length)
+    }
+
     private func makeFixture(_ model: NavigationEditorModel) -> NavigationFixture {
         let navigation = MarkdownEditorNavigation()
         let editor = MarkdownEditor(

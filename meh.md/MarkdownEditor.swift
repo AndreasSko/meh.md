@@ -1288,9 +1288,13 @@ struct MarkdownEditor: NSViewRepresentable {
         private func reportVisibleRange(in textView: NSTextView) {
             guard let report = parent.navigation?.visibleRangeChanged else { return }
             let visible = textView.visibleRect
-            let start = textView.characterIndexForInsertion(
-                at: CGPoint(x: visible.minX + 40, y: visible.minY)
-            )
+            // Above the text, AppKit can return a character far down the
+            // note, which made History's jumper point up at the top.
+            let start = visible.minY <= textView.textContainerOrigin.y
+                ? 0
+                : textView.characterIndexForInsertion(
+                    at: CGPoint(x: visible.minX + 40, y: visible.minY)
+                )
             let covered = parent.navigation?.coveredBottomHeight ?? 0
             let end = textView.characterIndexForInsertion(
                 at: CGPoint(x: visible.maxX - 1, y: max(visible.minY, visible.maxY - covered))
@@ -2915,6 +2919,13 @@ struct MarkdownEditor: UIViewRepresentable {
         private var pendingSearchMatch: NSRange?
         private var destinationHighlightRange: NSRange?
         private var destinationCenterGeometry: DestinationCenterGeometry?
+        private struct VisibleRangeViewport: Equatable {
+            var offset: CGFloat
+            var size: CGSize
+            var length: Int
+        }
+        private var visibleRangeRetry: (viewport: VisibleRangeViewport?, count: Int) = (nil, 0)
+        private var visibleRangeRetryScheduled = false
         private var pendingPositionCompletion: (() -> Void)?
         private var pendingInitialPreviewPosition: MarkdownEditorPosition?
         private var initialPreviewGeometry: DestinationCenterGeometry?
@@ -2941,14 +2952,40 @@ struct MarkdownEditor: UIViewRepresentable {
             let inset = textView.adjustedContentInset
             let bottom = max(inset.bottom, parent.navigation?.coveredBottomHeight ?? 0)
             let x = textView.textContainerInset.left + 8
-            guard let start = textView.closestPosition(to: CGPoint(
-                      x: x, y: textView.contentOffset.y + inset.top
-                  )),
+            let top = textView.contentOffset.y + inset.top
+            let bottomY = textView.contentOffset.y + textView.bounds.height - bottom
+            guard let start = textView.closestPosition(to: CGPoint(x: x, y: top)),
                   let end = textView.closestPosition(to: CGPoint(
-                      x: textView.bounds.width - 1,
-                      y: textView.contentOffset.y + textView.bounds.height - bottom
+                      x: textView.bounds.width - 1, y: bottomY
                   )) else { return }
-            let lower = textView.offset(from: textView.beginningOfDocument, to: start)
+            // Before layout settles, a probe can land on the end of the
+            // note. At the top that made History's jumper point up; at the
+            // bottom it hid the jumper. Measure again once layout is done.
+            // After three tries the estimate is the best there is.
+            let endRect = textView.caretRect(for: end)
+            let viewport = VisibleRangeViewport(
+                offset: textView.contentOffset.y, size: textView.bounds.size,
+                length: (textView.text as NSString).length
+            )
+            if visibleRangeRetry.viewport != viewport {
+                visibleRangeRetry = (viewport, 0)
+            }
+            if endRect.minY > bottomY + max(endRect.height, 1) * 2,
+               visibleRangeRetry.count < 3 {
+                guard !visibleRangeRetryScheduled else { return }
+                visibleRangeRetry.count += 1
+                visibleRangeRetryScheduled = true
+                DispatchQueue.main.async { [weak self, weak textView] in
+                    guard let self else { return }
+                    self.visibleRangeRetryScheduled = false
+                    guard let textView else { return }
+                    textView.layoutIfNeeded()
+                    self.reportVisibleRange(in: textView)
+                }
+                return
+            }
+            let lower = top <= textView.textContainerInset.top
+                ? 0 : textView.offset(from: textView.beginningOfDocument, to: start)
             let upper = textView.offset(from: textView.beginningOfDocument, to: end)
             report(NSRange(location: lower, length: max(0, upper - lower)))
         }
@@ -3403,31 +3440,50 @@ struct MarkdownEditor: UIViewRepresentable {
                 from: textView.beginningOfDocument,
                 offset: range.location
             ) else { return }
-            let targetRect = textView.caretRect(for: start)
+            // TextKit 2 places text far from the viewport by estimate, and
+            // a long note can be thousands of points taller than estimated.
+            // Lay out everything above the target, then measure again after
+            // scrolling until the target stays put.
+            if let layoutManager = textView.textLayoutManager,
+               let contentManager = layoutManager.textContentManager,
+               let end = contentManager.location(
+                   contentManager.documentRange.location,
+                   offsetBy: range.location
+               ),
+               let above = NSTextRange(
+                   location: contentManager.documentRange.location, end: end
+               ) {
+                layoutManager.ensureLayout(for: above)
+            }
             let inset = textView.adjustedContentInset
             let visibleHeight = max(
                 0, textView.bounds.height - inset.top - inset.bottom
             )
             guard visibleHeight > 0 else { return }
             destinationCenterGeometry = centerGeometry(for: textView)
-            let minimumY = -inset.top
-            let maximumY = max(
-                minimumY,
-                textView.contentSize.height - textView.bounds.height
-                    + inset.bottom
-            )
-            let targetY = min(
-                maximumY,
-                max(
+            for _ in 0..<4 {
+                let targetRect = textView.caretRect(for: start)
+                let minimumY = -inset.top
+                let maximumY = max(
                     minimumY,
-                    targetRect.midY - inset.top - visibleHeight / 2
+                    textView.contentSize.height - textView.bounds.height
+                        + inset.bottom
                 )
-            )
-            if abs(textView.contentOffset.y - targetY) > 0.5 {
+                let targetY = min(
+                    maximumY,
+                    max(
+                        minimumY,
+                        targetRect.midY - inset.top - visibleHeight / 2
+                    )
+                )
+                guard abs(textView.contentOffset.y - targetY) > 0.5 else {
+                    break
+                }
                 textView.setContentOffset(
                     CGPoint(x: textView.contentOffset.x, y: targetY),
                     animated: false
                 )
+                textView.layoutIfNeeded()
             }
             parent.navigation?.searchLandingPosition = capturePosition(
                 in: textView

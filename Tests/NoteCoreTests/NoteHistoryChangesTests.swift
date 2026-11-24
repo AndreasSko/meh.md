@@ -65,7 +65,9 @@ final class NoteHistoryChangesTests: XCTestCase {
     func testFewerLinesInPlaceOfOldOnesKeepTheOldText() {
         let changes = NoteHistoryChanges(from: "A\nB\nC\nD", to: "A\nX\nD")
         XCTAssertEqual(changes.changed, [NSRange(location: 2, length: 1)])
-        XCTAssertEqual(changes.removed, [.init(location: 4, text: "B\nC")])
+        XCTAssertEqual(changes.removed, [.init(
+            location: 4, text: "B\nC", isEdit: true
+        )])
     }
 
     func testCRLFLinesCompareOneByOne() {
@@ -112,5 +114,10 @@ final class NoteHistoryChangesTests: XCTestCase {
         XCTAssertEqual(readsAfterRepeat, reads)
         let first = try await reader.changes(for: versions[0], since: nil)
         XCTAssertEqual(first.changed, [NSRange(location: 0, length: 3)])
+        // The current text's session has no version yet; Now compares the
+        // text itself with the last finished session.
+        let current = try await reader.changes(to: "A\nC", since: versions[1])
+        XCTAssertEqual(current.changed, [])
+        XCTAssertEqual(current.removed, [.init(location: 2, text: "B")])
     }
 }

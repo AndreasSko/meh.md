@@ -30,6 +30,9 @@ final class NoteHistoryBrowserState {
     @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var detailTask: Task<Void, Never>?
     @ObservationIgnored private var selectionGeneration = 0
+    /// Counts text changes only. New marks for the same text must not
+    /// cancel the reading position a text change is about to restore.
+    @ObservationIgnored private var textGeneration = 0
 
     init(
         noteID: UUID,
@@ -105,24 +108,41 @@ final class NoteHistoryBrowserState {
         let target = versions.indices.contains(index) ? versions[index] : nil
         let targetID = target?.id ?? ""
         guard targetID != requestedTextID || index != selectedIndex
-                || (target != nil && base != comparedBase) else { return }
+                || base != comparedBase else { return }
         // The same version at another level of detail only needs new marks.
         let isSameText = targetID == shownTextID
         requestedTextID = targetID
         cancelPreview()
-        if !isSameText { loadDetails(near: target) }
+        if !isSameText {
+            loadDetails(near: target)
+            textGeneration += 1
+        }
         let generation = selectionGeneration
+        let textGeneration = textGeneration
         let previousPosition = isSameText ? nil : navigation.capturePosition?()
         selectedIndex = index
         comparedBase = base
+        let baseVersion = base.flatMap { versions.indices.contains($0) ? versions[$0] : nil }
         if isViewingCurrent {
-            isLoadingPreview = false
             changes = .none
-            installText(currentText, of: "", position: previousPosition, generation: generation)
+            installText(currentText, of: "", position: previousPosition, generation: textGeneration)
+            guard let baseVersion else {
+                isLoadingPreview = false
+                return
+            }
+            isLoadingPreview = true
+            previewTask = Task { @MainActor [weak self, reader, currentText] in
+                // Marks are a hint here; without them the current text still
+                // reads fine, so a failed comparison shows none.
+                let nextChanges = try? await reader.changes(to: currentText, since: baseVersion)
+                guard !Task.isCancelled, let self, selectionGeneration == generation else { return }
+                changes = nextChanges ?? .none
+                isLoadingPreview = false
+                previewTask = nil
+            }
             return
         }
         let version = versions[index]
-        let baseVersion = base.flatMap { versions.indices.contains($0) ? versions[$0] : nil }
         isLoadingPreview = true
         previewTask = Task { @MainActor [weak self, reader] in
             do {
@@ -135,7 +155,7 @@ final class NoteHistoryBrowserState {
                 changes = nextChanges
                 if let nextText {
                     installText(nextText, of: version.id, position: previousPosition,
-                                generation: generation)
+                                generation: textGeneration)
                 }
                 isLoadingPreview = false
                 previewTask = nil
@@ -171,7 +191,7 @@ final class NoteHistoryBrowserState {
             )
             Task { @MainActor [weak self] in
                 await Task.yield()
-                guard self?.selectionGeneration == generation else { return }
+                guard self?.textGeneration == generation else { return }
                 self?.navigation.restorePosition?(position)
             }
         }
@@ -238,15 +258,27 @@ struct NoteHistoryBrowserView: View {
                 .accessibilityHidden(true)
             }
             .popover(item: $removal, attachmentAnchor: .rect(.rect(removal?.rect ?? .zero))) { removal in
-                Text(removal.text)
-                    .strikethrough()
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
-                    .padding()
-                    .frame(maxWidth: 320, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel(Text("Removed: \(removal.text)"))
-                    .presentationCompactAdaptation(.popover)
+                // Old lines an edit rewrote are not all gone, so they read
+                // as the previous text rather than as struck-out deletions.
+                VStack(alignment: .leading, spacing: 4) {
+                    if removal.isEdit {
+                        Text("Previous text")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(removal.text)
+                        .strikethrough(!removal.isEdit)
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                }
+                .padding()
+                .frame(maxWidth: 320, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(removal.isEdit
+                    ? Text("Previous text: \(removal.text)")
+                    : Text("Removed: \(removal.text)"))
+                .presentationCompactAdaptation(.popover)
             }
             // Fill the area behind the floating controls. The safe-area
             // inset still keeps the last lines reachable above them.
@@ -343,7 +375,9 @@ struct NoteHistoryBrowserView: View {
                 if viewport?.range != range { viewport?.range = range }
             }
             navigation.removalTapped = { removal, rect in
-                self.removal = NoteHistoryRemovalPopover(text: removal.text, rect: rect)
+                self.removal = NoteHistoryRemovalPopover(
+                    text: removal.text, isEdit: removal.isEdit, rect: rect
+                )
             }
             navigation.whenAttached { [weak navigation, weak browser] in
                 // At the top, the editor's offset includes the note title,
@@ -361,6 +395,7 @@ struct NoteHistoryBrowserView: View {
 private struct NoteHistoryRemovalPopover: Identifiable {
     let id = UUID()
     let text: String
+    let isEdit: Bool
     let rect: CGRect
 }
 

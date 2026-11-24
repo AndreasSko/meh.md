@@ -146,6 +146,16 @@ public actor NoteHistoryReader {
         return changes
     }
 
+    /// Compares the current text, which has no version of its own yet,
+    /// with an earlier version.
+    public func changes(
+        to text: String, since base: NoteHistoryVersion
+    ) throws -> NoteHistoryChanges {
+        let baseText = try historicalText(for: base)
+        try Task.checkCancellation()
+        return NoteHistoryChanges(from: baseText, to: text)
+    }
+
     private func touchPreview(_ id: String) {
         previewOrder.removeAll { $0 == id }
         previewOrder.append(id)

@@ -114,10 +114,12 @@ struct NoteHistoryTimelineView: View {
             .accessibilityActions {
                 if !changes.removed.isEmpty {
                     Button("Read Removed Text") {
-                        let text = changes.removed.map(\.text).joined(separator: "\n")
-                        AccessibilityNotification.Announcement(
-                            String(localized: "Removed: \(text)")
-                        ).post()
+                        let text = changes.removed.map { removal in
+                            removal.isEdit
+                                ? String(localized: "Previous text: \(removal.text)")
+                                : String(localized: "Removed: \(removal.text)")
+                        }.joined(separator: "\n")
+                        AccessibilityNotification.Announcement(text).post()
                     }
                 }
             }
@@ -128,12 +130,15 @@ struct NoteHistoryTimelineView: View {
         }
         // Each level compares with its own previous version.
         .onChange(of: showsDetail) { _, detailed in
-            guard selectedIndex < versions.count else { return }
             select(selectedIndex, base(of: selectedIndex, detailed: detailed))
         }
-        // Loaded details can put a new state before the selected one.
-        .onChange(of: versions.count) {
-            guard selectedIndex < versions.count else { return }
+        // Loaded details can put a new state before the selected one, and
+        // the index adds the sessions the current text compares with. A
+        // quick index can finish before the rail appears.
+        .onChange(of: versions.count, initial: true) {
+            select(selectedIndex, base(of: selectedIndex, detailed: showsDetail))
+        }
+        .onChange(of: isLoading) {
             select(selectedIndex, base(of: selectedIndex, detailed: showsDetail))
         }
         // Like the jumper, loading floats so the preview does not shift
@@ -420,11 +425,13 @@ struct NoteHistoryTimelineView: View {
 
     /// The caption, then what the preview's margin shows.
     private var accessibilityValue: String {
-        guard versions.indices.contains(selectedIndex) else {
-            return String(localized: "Current version")
+        var parts: [String] = []
+        if versions.indices.contains(selectedIndex) {
+            parts.append(captionTitle)
+            if let captionDetail { parts.append(captionDetail) }
+        } else {
+            parts.append(String(localized: "Current version"))
         }
-        var parts = [captionTitle]
-        if let captionDetail { parts.append(captionDetail) }
         if !changes.changed.isEmpty {
             parts.append(String(localized: "Changed places: \(changes.changed.count)"))
         }
@@ -474,7 +481,9 @@ struct NoteHistoryTimelineView: View {
     static func sizeLabel(added: Int, removed: Int) -> String {
         switch (added, removed) {
         case (0, 0): String(localized: "no text changes")
+        case (1, 0): String(localized: "1 character added")
         case (_, 0): String(localized: "\(added.formatted()) characters added")
+        case (0, 1): String(localized: "1 character removed")
         case (0, _): String(localized: "\(removed.formatted()) characters removed")
         default: String(localized: "\(added.formatted()) added, \(removed.formatted()) removed")
         }
@@ -582,11 +591,19 @@ struct NoteHistoryTimelineView: View {
     }
 
     /// Sessions compare with the session before; single states with the
-    /// state before.
+    /// state before. The current text is the session still being written,
+    /// so it compares with the last finished one.
     private func base(of index: Int, detailed: Bool) -> Int? {
-        if !detailed, timeline.isSessionEnd(index),
-           case let .session(session) = timeline.item(containing: index) {
-            return timeline.baseVersionIndex(ofSession: session)
+        // While the index loads, the last version so far is not the last
+        // one, so Now waits rather than marking older edits.
+        if index == versions.count, isLoading { return nil }
+        if !detailed, timeline.isSessionEnd(index) {
+            switch timeline.item(containing: index) {
+            case let .session(session):
+                return timeline.baseVersionIndex(ofSession: session)
+            case .current:
+                return timeline.sessions.last?.last
+            }
         }
         return index > 0 ? index - 1 : nil
     }
