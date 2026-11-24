@@ -74,16 +74,18 @@ with the confidence that everything will be fine. That's pretty cool 😎
 
 ## Where can I get it?
 
-The app is still a work-in-progress, and I'm HEAVILY using AI for it. But
-I already trust it as my only note taking app - across iPhone, Mac, and iPad.
-For now it is available via TestFlight,
-while I iron out things and make the experience nice.
-If you are curious, feel free to
-[join that group](https://testflight.apple.com/join/NRAvtpSJ). But keep
+First of all: The app is still a work-in-progress, in the sense that I
+actively improve it and HEAVILY use AI for it. But I (and a few of my
+friends) already trust it as our only note taking app - across iPhone, Mac,
+and iPad.
+
+You can get it for iPhone and iPad on the
+[App Store](https://apps.apple.com/app/apple-store/id6813143320?pt=901560&ct=Github&mt=8). The Mac app is still
+waiting for Apple's review. Until then, you can try it via
+[TestFlight](https://testflight.apple.com/join/NRAvtpSJ). But keep
 in mind: Use it at your own risk 🤞
 
-For the long run I plan to make it available on the App Store, and I want
-to keep it free (I'm sick of yet another forced subscription service). If
+I want to keep it free (I'm sick of yet another forced subscription service). If
 you'd like to support it anyway, see
 [Can I support meh.md?](#can-i-support-mehmd)
 
