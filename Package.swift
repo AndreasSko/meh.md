@@ -227,7 +227,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NativeEditorTests",
-            dependencies: ["NativeEditor"],
+            dependencies: ["NativeEditor", "TestSupport"],
             path: "Tests/NativeEditorTests"
         ),
     ]
