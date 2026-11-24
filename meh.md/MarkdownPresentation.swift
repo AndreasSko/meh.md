@@ -116,17 +116,7 @@ enum MarkdownPresentation {
         if let textStorage = textView.textStorage {
             syntaxCache.observeCharacterEdits(in: textStorage)
         }
-        layoutManager.renderingAttributesValidator = {
-            manager, fragment in
-            guard let presentation = syntaxCache.currentPresentation else {
-                return
-            }
-            _ = applyRenderingAttributes(
-                to: manager,
-                fragment: fragment,
-                presentation: presentation
-            )
-        }
+        installRenderingValidator(on: layoutManager, syntaxCache: syntaxCache)
         let font = bodyFont(
             for: fontFamily,
             pointSize: normalizedFontSize(fontSize)
@@ -211,7 +201,8 @@ enum MarkdownPresentation {
             text: text,
             syntaxCache: syntaxCache,
             presentation: presentation,
-            invalidatedRange: layoutRange
+            invalidatedRange: layoutRange,
+            skippedRanges: syntaxCache.takeSkippedRenderingRanges()
         )
         textView.needsDisplay = true
         textView.window?.invalidateCursorRects(for: textView)
@@ -283,17 +274,7 @@ enum MarkdownPresentation {
         )
         let syntaxCache = syntaxCache(for: textView)
         syntaxCache.observeCharacterEdits(in: textView.textStorage)
-        layoutManager.renderingAttributesValidator = {
-            manager, fragment in
-            guard let presentation = syntaxCache.currentPresentation else {
-                return
-            }
-            _ = applyRenderingAttributes(
-                to: manager,
-                fragment: fragment,
-                presentation: presentation
-            )
-        }
+        installRenderingValidator(on: layoutManager, syntaxCache: syntaxCache)
         let font = bodyFont(
             for: fontFamily,
             pointSize: normalizedFontSize(fontSize)
@@ -383,7 +364,8 @@ enum MarkdownPresentation {
             text: text,
             syntaxCache: syntaxCache,
             presentation: presentation,
-            invalidatedRange: renderingRange
+            invalidatedRange: renderingRange,
+            skippedRanges: syntaxCache.takeSkippedRenderingRanges()
         )
         textView.setNeedsDisplay()
         if let textView = textView as? MarkdownTextView {
@@ -1326,6 +1308,29 @@ enum MarkdownPresentation {
         }
     }
 
+    private static func installRenderingValidator(
+        on layoutManager: NSTextLayoutManager,
+        syntaxCache: MarkdownSyntaxCache
+    ) {
+        layoutManager.renderingAttributesValidator = { manager, fragment in
+            guard let presentation = syntaxCache.currentPresentation else {
+                if let contentManager = manager.textContentManager {
+                    syntaxCache.recordSkippedRendering(nsRange(
+                        for: fragment.rangeInElement,
+                        documentStart: contentManager.documentRange.location,
+                        contentManager: contentManager
+                    ))
+                }
+                return
+            }
+            _ = applyRenderingAttributes(
+                to: manager,
+                fragment: fragment,
+                presentation: presentation
+            )
+        }
+    }
+
     private static func applyRenderingAttributes(
         to layoutManager: NSTextLayoutManager,
         fragment: NSTextLayoutFragment,
@@ -1370,13 +1375,16 @@ enum MarkdownPresentation {
         syntaxCache: MarkdownSyntaxCache? = nil,
         presentation suppliedPresentation: MarkdownRenderingPresentation? = nil,
         hiddenRanges: [NSRange] = [],
-        invalidatedRange: NSRange? = nil
+        invalidatedRange: NSRange? = nil,
+        skippedRanges: [NSRange] = []
     ) -> Int {
         guard let layoutManager,
               let contentManager = layoutManager.textContentManager else {
             return 0
         }
-        if let invalidatedRange {
+        let documentLength = NSRange(location: 0, length: (text as NSString).length)
+        if let requestedRange = invalidatedRange {
+            let invalidatedRange = NSIntersectionRange(requestedRange, documentLength)
             if invalidatedRange.length > 0,
                let range = textRange(
                 for: invalidatedRange,
@@ -1390,9 +1398,6 @@ enum MarkdownPresentation {
         }
         let viewportController = layoutManager.textViewportLayoutController
         viewportController.layoutViewport()
-        guard let viewportRange = viewportController.viewportRange else {
-            return 0
-        }
 
         let result = suppliedPresentation?.result
             ?? syntaxCache?.result(for: text)
@@ -1403,32 +1408,67 @@ enum MarkdownPresentation {
                 hiddenRanges: hiddenRanges
             )
         let documentStart = contentManager.documentRange.location
-        let viewport = nsRange(
-            for: viewportRange,
-            documentStart: documentStart,
-            contentManager: contentManager
-        )
-        var appliedCount = 0
+        // TextKit asks for rendering attributes only when it lays a line out.
+        // It keeps the last line laid out from the first layout on, before
+        // any presentation exists, and lines it skipped while the
+        // presentation was out of date may stay laid out too.
+        var targets = skippedRanges
+            .map { NSIntersectionRange($0, documentLength) }
+            .filter { $0.length > 0 }
+        if let viewportRange = viewportController.viewportRange {
+            targets.insert(nsRange(
+                for: viewportRange,
+                documentStart: documentStart,
+                contentManager: contentManager
+            ), at: 0)
+        }
         layoutManager.enumerateTextLayoutFragments(
-            from: viewportRange.location,
-            options: []
+            from: contentManager.documentRange.endLocation,
+            options: [.reverse]
         ) { fragment in
-            let fragmentRange = nsRange(
+            targets.append(nsRange(
                 for: fragment.rangeInElement,
                 documentStart: documentStart,
                 contentManager: contentManager
-            )
-            guard fragmentRange.location < NSMaxRange(viewport) else {
-                return false
-            }
-            if NSIntersectionRange(fragmentRange, viewport).length > 0 {
-                appliedCount += applyRenderingAttributes(
-                    to: layoutManager,
-                    fragment: fragment,
-                    presentation: presentation
+            ))
+            return false
+        }
+        // The installed validator also adds what other features layer on top,
+        // like a search destination's highlight.
+        let validator = syntaxCache?.currentPresentation == nil
+            ? nil : layoutManager.renderingAttributesValidator
+        var appliedCount = 0
+        var visited = Set<ObjectIdentifier>()
+        for target in targets {
+            guard let start = textRange(
+                for: NSRange(location: target.location, length: 0),
+                documentStart: documentStart,
+                contentManager: contentManager
+            )?.location else { continue }
+            layoutManager.enumerateTextLayoutFragments(from: start, options: []) { fragment in
+                let fragmentRange = nsRange(
+                    for: fragment.rangeInElement,
+                    documentStart: documentStart,
+                    contentManager: contentManager
                 )
+                guard fragmentRange.location < NSMaxRange(target) else {
+                    return false
+                }
+                if NSIntersectionRange(fragmentRange, target).length > 0,
+                   visited.insert(ObjectIdentifier(fragment)).inserted {
+                    if let validator {
+                        validator(layoutManager, fragment)
+                        appliedCount += 1
+                    } else {
+                        appliedCount += applyRenderingAttributes(
+                            to: layoutManager,
+                            fragment: fragment,
+                            presentation: presentation
+                        )
+                    }
+                }
+                return true
             }
-            return true
         }
         return appliedCount
     }
@@ -3123,6 +3163,39 @@ final class MarkdownSyntaxCache: NSObject {
         } else {
             characterEdit = CharacterEdit(range: range, delta: delta)
         }
+        if !skippedRenderingRanges.isEmpty {
+            let replaced = NSRange(location: range.location, length: range.length - delta)
+            skippedRenderingRanges = skippedRenderingRanges.map { skipped in
+                if NSMaxRange(skipped) <= replaced.location { return skipped }
+                if skipped.location >= NSMaxRange(replaced) {
+                    return NSRange(location: skipped.location + delta, length: skipped.length)
+                }
+                let start = min(skipped.location, replaced.location)
+                let end = max(NSMaxRange(skipped), NSMaxRange(replaced))
+                return NSRange(location: start, length: max(0, end - start + delta))
+            }
+        }
+    }
+
+    /// Lines TextKit lays out while the presentation is out of date get no
+    /// rendering attributes, and TextKit doesn't ask for them again. The next
+    /// refresh applies them directly. Kept apart, since skipped lines can lie
+    /// far from each other.
+    private var skippedRenderingRanges: [NSRange] = []
+
+    func recordSkippedRendering(_ range: NSRange) {
+        if let index = skippedRenderingRanges.firstIndex(where: {
+            NSMaxRange($0) >= range.location && NSMaxRange(range) >= $0.location
+        }) {
+            skippedRenderingRanges[index] = NSUnionRange(skippedRenderingRanges[index], range)
+        } else {
+            skippedRenderingRanges.append(range)
+        }
+    }
+
+    func takeSkippedRenderingRanges() -> [NSRange] {
+        defer { skippedRenderingRanges = [] }
+        return skippedRenderingRanges
     }
 
     deinit {
