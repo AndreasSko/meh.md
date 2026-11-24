@@ -190,6 +190,11 @@ final class MarkdownParagraphGapTests: XCTestCase {
     func testEmptyEndCaretKeepsNativePositionWhenTypingStarts() throws {
         let fixtures: [(String, CGFloat)] = [
             ("Body\n", 6.3), ("- Item\n", 3), ("- [ ] Task\n", 8.25),
+            // The empty end line must not repeat the space above the last
+            // paragraph, which is largest below a heading.
+            ("Body\nMore\n", 6.3), ("### Title\n", 1.5),
+            ("Body\n### Title\n", 1.5), ("Body\n# Title\n", 2.25),
+            ("Body\n```\ncode\n", 4.5),
         ]
         for (source, gap) in fixtures {
             let view = editor(source)
@@ -202,13 +207,16 @@ final class MarkdownParagraphGapTests: XCTestCase {
             let original = NSMutableAttributedString(
                 attributedString: view.textStorage
             )
+            let last = (source as NSString).paragraphRange(
+                for: NSRange(location: original.length - 1, length: 0)
+            )
             let style = try XCTUnwrap(original.attribute(
-                .paragraphStyle, at: 0, effectiveRange: nil
+                .paragraphStyle, at: last.location, effectiveRange: nil
             ) as? NSParagraphStyle).mutableCopy() as! NSMutableParagraphStyle
             style.paragraphSpacing = gap
-            original.addAttribute(.paragraphStyle, value: style,
-                                  range: NSRange(location: 0,
-                                                 length: original.length))
+            // UIKit's own empty end line repeats this space above.
+            style.paragraphSpacingBefore = 0
+            original.addAttribute(.paragraphStyle, value: style, range: last)
             native.attributedText = original
             native.typingAttributes = view.typingAttributes
             let nativeMovement = try caretMovement(in: native) {}
