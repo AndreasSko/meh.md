@@ -128,6 +128,12 @@ final class NotebookSceneState {
     /// The link picker's New Note row was chosen with the arrow keys.
     var linkNewNoteChosen = false
 
+    // MARK: Speaker Mode
+
+    /// The talk timer in this window's toolbar while Speaker Mode is on.
+    var speakerTimer: SpeakerTimer?
+    var speakerIsland = SpeakerIslandPlacement()
+
     // MARK: History
 
     var historyBrowser: NoteHistoryBrowserState?

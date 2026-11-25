@@ -24,6 +24,10 @@ struct NotebookDetail: View {
     private var timeCalculatorLabs = false
     @AppStorage(Self.hidesControlsOnScrollKey, store: NotebookEditorPreferences.store)
     private var hidesControlsOnScroll = true
+    @AppStorage(SpeakerTimer.enabledKey, store: NotebookEditorPreferences.store)
+    private var speakerModeLabs = false
+    @AppStorage(SpeakerTimer.lengthKey, store: NotebookEditorPreferences.store)
+    private var speakerLength = 0
 
     /// The Settings › Appearance key for hiding the note's buttons while
     /// reading down a note.
@@ -63,10 +67,16 @@ struct NotebookDetail: View {
     /// Beside Files a folder's page covers the note, which waits underneath.
     private var showsFolderPage: Bool { !isCompact && scene.pageFolderID != nil }
 
+    private var speakerTimer: SpeakerTimer? {
+        speakerModeLabs ? scene.speakerTimer : nil
+    }
+
     /// Only reading the note itself tucks the bar away. History and a
-    /// folder's page keep their buttons, such as Done and Restore, in view.
+    /// folder's page keep their buttons, such as Done and Restore, in view,
+    /// and Speaker Mode keeps its timer in view during a talk.
     private var minimizesControls: Bool {
         hidesControlsOnScroll && scene.historyBrowser == nil && !showsFolderPage
+            && speakerTimer == nil
     }
 
     var body: some View {
@@ -332,6 +342,12 @@ struct NotebookDetail: View {
             }
             #endif
             #if os(macOS)
+            if let speakerTimer, scene.speakerIsland.spot == nil {
+                ToolbarItem {
+                    SpeakerToolbarIsland(timer: speakerTimer, placement: scene.speakerIsland)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
             ToolbarItem {
                 EditorWritingControls(
                     navigation: scene.editorNavigation,
@@ -401,6 +417,20 @@ struct NotebookDetail: View {
                         }
                     } label: {
                         Label("Editor Display", systemImage: "textformat")
+                    }
+                    if speakerModeLabs {
+                        Toggle(isOn: Binding(
+                            get: { scene.speakerTimer != nil },
+                            set: { isOn in
+                                scene.speakerTimer = isOn
+                                    ? SpeakerTimer(lengthMinutes: speakerLength > 0 ? speakerLength : nil)
+                                    : nil
+                                scene.speakerIsland = SpeakerIslandPlacement()
+                            }
+                        )) {
+                            Label("Speaker Mode", systemImage: "stopwatch")
+                        }
+                        .accessibilityIdentifier("notebook-speaker-mode")
                     }
                     Divider()
                     NotebookItemActions(

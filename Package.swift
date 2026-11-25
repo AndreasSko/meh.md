@@ -109,6 +109,7 @@ let package = Package(
                 "NotebookRecentUIKitList.swift",
                 "NotebookRecentsExpansion.swift",
                 "NotebookMacRecentsExpansion.swift",
+                "SpeakerMode.swift",
                 "iOS-iCloud.entitlements", "iOS.entitlements",
                 "macOS-iCloud.entitlements", "macOS.entitlements",
             ],
@@ -134,6 +135,7 @@ let package = Package(
                 "UnavailableDevelopmentTransport.swift",
                 "NoteHistoryTimeline.swift",
                 "OpenSourceLicenses.swift",
+                "SpeakerTimer.swift",
             ],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
@@ -202,6 +204,7 @@ let package = Package(
                 "NotebookWidgetSnapshotWriter.swift",
                 "CreateNoteIntent.swift",
                 "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",
+                "SpeakerTimer.swift", "SpeakerMode.swift",
             ],
             sources: [
                 "MarkdownEditor.swift",
