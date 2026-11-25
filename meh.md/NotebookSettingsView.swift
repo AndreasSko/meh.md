@@ -360,6 +360,8 @@ private struct NotebookSettingsSignature: View {
 private struct NotebookLabsView: View {
     @AppStorage(MarkdownTimeCalculator.enabledKey, store: NotebookEditorPreferences.store)
     private var timeCalculator = false
+    @AppStorage(SpeakerTimer.enabledKey, store: NotebookEditorPreferences.store)
+    private var speakerMode = false
 
     var body: some View {
         Form {
@@ -378,6 +380,14 @@ private struct NotebookLabsView: View {
                 NotebookTimeCalculatorSample()
             } footer: {
                 Text("End a line with = to add up the times above it. Turn it on for a note in … › Editor Display.")
+            }
+            Section {
+                Toggle(isOn: $speakerMode) {
+                    Label("Speaker Mode", systemImage: "stopwatch")
+                }
+                .accessibilityIdentifier("notebook-labs-speaker-mode")
+            } footer: {
+                Text("A small talk timer in the note’s toolbar: a stopwatch, or a countdown from 5 to 60 minutes. Drag it anywhere in the window. Turn it on in … › Speaker Mode. The screen stays on until you reset it.")
             }
         }
         .formStyle(.grouped)

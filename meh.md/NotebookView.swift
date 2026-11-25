@@ -67,6 +67,7 @@ struct NotebookView: View {
             .modifier(NotebookSearchNavigation(scene: scene))
             .modifier(NotebookScenePresentation(scene: scene))
             .modifier(NotebookMoveUndoMirror(scene: scene))
+            .modifier(SpeakerKeepsScreenAwake(scene: scene))
             .onChange(of: isCompact, initial: true) { _, compact in
                 scene.isCompact = compact
             }
@@ -147,10 +148,27 @@ private struct NotebookNavigationContainer: View {
                 if !isCompact { NotebookTrashUndoBar(scene: scene) }
             }
         }
+        // Over the whole window, sidebar and bars included, so the island can
+        // be dragged anywhere, out of the toolbar and back in. Once out, it
+        // stays when the note closes; docked, it leaves with the note's bar.
+        .overlay {
+            if let timer = scene.speakerTimer {
+                SpeakerFloatingIsland(timer: timer, placement: scene.speakerIsland,
+                                      canDock: showsSpeakerToolbar) {
+                    scene.speakerTimer = nil
+                }
+            }
+        }
     }
 
     private var showsFilesColumn: Bool {
         isCompact && scene.preferredCompactColumn == .sidebar
+    }
+
+    /// Whether the open note's toolbar, where the island docks, is showing.
+    private var showsSpeakerToolbar: Bool {
+        scene.selectedPlacement != nil && scene.historyBrowser == nil && !showsFilesColumn
+            && (isCompact || scene.pageFolderID == nil)
     }
 }
 
@@ -168,6 +186,8 @@ private struct NotebookLinkScreen: View {
     @AppStorage("editor.mode", store: NotebookEditorPreferences.store)
     private var editorModeRaw =
         MarkdownEditorMode.livePreview.rawValue
+    @AppStorage(SpeakerTimer.enabledKey, store: NotebookEditorPreferences.store)
+    private var speakerModeLabs = false
 
     var body: some View {
         let title = route.flatMap { route in
@@ -226,9 +246,17 @@ private struct NotebookLinkScreen: View {
         .toolbar {
             // Keep the title in the native Back menu, while the document's
             // existing title remains the only visible heading.
+            // Speaker Mode's island takes the same spot on the open note.
             ToolbarItem(placement: .principal) {
-                Color.clear.frame(width: 1, height: 1).accessibilityHidden(true)
+                if showsLiveEditor, speakerModeLabs, let timer = scene.speakerTimer,
+                   scene.speakerIsland.spot == nil, isCompact || scene.pageFolderID == nil,
+                   scene.selectedPlacement != nil, scene.historyBrowser == nil {
+                    SpeakerIsland(timer: timer, placement: scene.speakerIsland)
+                } else {
+                    Color.clear.frame(width: 1, height: 1).accessibilityHidden(true)
+                }
             }
+            .sharedBackgroundVisibility(.hidden)
         }
     }
 }
