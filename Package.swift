@@ -136,6 +136,7 @@ let package = Package(
                 "NoteHistoryTimeline.swift",
                 "OpenSourceLicenses.swift",
                 "SpeakerTimer.swift",
+                "SpeakerIslandLayout.swift",
             ],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
@@ -204,7 +205,7 @@ let package = Package(
                 "NotebookWidgetSnapshotWriter.swift",
                 "CreateNoteIntent.swift",
                 "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",
-                "SpeakerTimer.swift", "SpeakerMode.swift",
+                "SpeakerTimer.swift", "SpeakerMode.swift", "SpeakerIslandLayout.swift",
             ],
             sources: [
                 "MarkdownEditor.swift",
