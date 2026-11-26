@@ -92,6 +92,38 @@ final class SpeakerModeUITests: XCTestCase {
         XCTAssertTrue(island.waitForNonExistence(timeout: 5), "× turns Speaker Mode off")
     }
 
+    func testControlsOpenAwayFromTheScreenEdge() {
+        let app = launch()
+        let island = turnOnSpeakerMode(in: app)
+        let window = app.windows.firstMatch
+        let length = app.otherElements["speaker-length"]
+
+        drag(island, to: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.14)))
+        XCTAssertTrue(app.buttons["speaker-close"].waitForExistence(timeout: 5))
+        island.tap()
+        XCTAssertTrue(length.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(length.frame.minY, island.frame.maxY,
+                             "High up, the controls open below the island")
+        let fullWidth = length.frame.width
+        island.tap()
+        XCTAssertTrue(length.waitForNonExistence(timeout: 5))
+
+        drag(island, to: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+        XCTAssertTrue(app.buttons["speaker-close"].waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(island.frame.maxY, window.frame.height * 0.85,
+                             "The island should land near the bottom edge")
+        island.tap()
+        XCTAssertTrue(length.waitForExistence(timeout: 5))
+        XCTAssertLessThan(length.frame.maxY, island.frame.minY,
+                          "Low down, the controls open above the island")
+        XCTAssertEqual(length.frame.width, fullWidth, accuracy: 1,
+                       "The controls keep their size near the bottom edge")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Controls above the island"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
     private func drag(_ island: XCUIElement, to target: XCUICoordinate) {
         island.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.05, thenDragTo: target, withVelocity: .slow,
