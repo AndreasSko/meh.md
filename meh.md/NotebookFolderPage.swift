@@ -275,7 +275,7 @@ struct NotebookPathLine: View {
             ViewThatFits(in: .horizontal) {
                 line(parts)
                 line(Array(parts.suffix(2)), hiding: Array(parts.dropLast(2)))
-                line(Array(parts.suffix(1)), hiding: Array(parts.dropLast(1)))
+                line(Array(parts.suffix(1)), hiding: Array(parts.dropLast(1)), truncates: true)
             }
             .font(.subheadline)
             .accessibilityElement(children: .contain)
@@ -285,9 +285,11 @@ struct NotebookPathLine: View {
     }
 
     /// A path too long for the line shows its end; "…" lists the folders it
-    /// hides, Top Level included.
+    /// hides, Top Level included. A last folder too long even on its own
+    /// truncates, so it never widens the title below it.
     private func line(
-        _ parts: [(id: UUID?, name: String)], hiding hidden: [(id: UUID?, name: String)] = []
+        _ parts: [(id: UUID?, name: String)], hiding hidden: [(id: UUID?, name: String)] = [],
+        truncates: Bool = false
     ) -> some View {
         HStack(spacing: 4) {
             if !hidden.isEmpty {
@@ -313,7 +315,7 @@ struct NotebookPathLine: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .fixedSize()
+                .fixedSize(horizontal: !truncates, vertical: true)
                 .disabled(scene.busy)
                 .accessibilityIdentifier("notebook-path-" + (part.id?.uuidString ?? "top-level"))
             }

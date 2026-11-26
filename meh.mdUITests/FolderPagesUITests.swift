@@ -45,6 +45,67 @@ final class FolderPagesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["notebook-path-" + resources].waitForExistence(timeout: 5))
     }
 
+    /// A folder name too long for the path line used to push the line, and
+    /// the note's title below it, past the edges of the note's column.
+    func testLongFolderNameKeepsTheTitleInItsColumn() throws {
+        #if os(iOS)
+        continueAfterFailure = false
+        let app = makeApp()
+        app.launch()
+        app.revealNotebookSidebar(timeout: 30)
+
+        let resources = itemID(named: "Resources", in: app)
+        let long = "Talk 54 – How faith in God and his promises grows stronger"
+        app.chooseRowAction(
+            "Rename…", on: app.staticTexts["notebook-sidebar-title-" + resources])
+        let name = app.textFields["notebook-inline-name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap()
+        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20))
+        name.typeText(long + "\n")
+
+        openFolderPage(named: long, in: app)
+        let packing = pageItem("Packing list", in: app)
+        XCTAssertTrue(packing.waitForExistence(timeout: 5))
+        activate(packing)
+        let pathPart = app.buttons["notebook-path-" + resources]
+        XCTAssertTrue(pathPart.waitForExistence(timeout: 10))
+        // On iPhone, the path starts at Top Level. Even on its own after
+        // "…", the folder's name is too long to fit.
+        if isCompact(app) {
+            XCTAssertTrue(app.buttons["notebook-path-more"].exists)
+        }
+        capture(app, name: "Long folder above the note")
+
+        // The title sits inside the editor, which spans the note's column.
+        let column = app.textViews["markdown-editor"].frame
+        func assertInColumn(_ elements: [XCUIElement], line: UInt = #line) {
+            for element in elements {
+                XCTAssertGreaterThanOrEqual(element.frame.minX, column.minX, line: line)
+                XCTAssertLessThanOrEqual(element.frame.maxX, column.maxX, line: line)
+            }
+        }
+        let title = app.buttons["note-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        assertInColumn([pathPart, title])
+
+        // A long title of the note itself wraps, while editing it and after.
+        title.tap()
+        let field = app.textFields["title-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.typeText(long)
+        capture(app, name: "Editing a long note title")
+        assertInColumn([pathPart, field])
+        let typed = field.value as? String ?? ""
+        XCTAssertTrue(typed.contains(long))
+        field.typeText("\n")
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.label, typed)
+        capture(app, name: "Long note title")
+        assertInColumn([pathPart, title])
+        #endif
+    }
+
     func testEachFolderKeepsItsView() throws {
         continueAfterFailure = false
         let app = makeApp()
