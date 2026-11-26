@@ -38,7 +38,7 @@ final class CloudKitSnapshotCleanupChainRaceTests: XCTestCase {
         _ = try catalogDocument.add(id: document.noteID, kind: .note,
                                     name: "Fictional journal")
         let catalog = SyncRecord(catalog: catalogDocument.snapshot())
-        let gate = CloudKitRaceGate()
+        let gate = RaceGate()
         let database = CloudKitRaceDatabase(
             base: server,
             afterRead: beforeDelete ? nil : (middle.id, gate),
