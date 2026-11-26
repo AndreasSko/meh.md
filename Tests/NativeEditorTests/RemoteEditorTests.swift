@@ -93,7 +93,7 @@ final class RemoteEditorTests: XCTestCase {
         moveInsertionPointToEnd(of: textView)
         let remote = source.replacingOccurrences(of: "09:00", with: "10:30")
         model.receiveRemote(text: remote, revision: revision(9))
-        mounted.flushUpdates()
+        mounted.flushUpdates { nativeText(in: textView) == remote }
         MarkdownPresentation.refresh(textView, mode: .livePreview)
         XCTAssertEqual(nativeText(in: textView), remote)
         XCTAssertTrue(model.requests.isEmpty)
@@ -113,7 +113,7 @@ final class RemoteEditorTests: XCTestCase {
         let textView = try XCTUnwrap(mounted.textView)
         defer { mounted.tearDown() }
         model.receiveRemote(text: "* Remote Moon", revision: revision(9))
-        mounted.flushUpdates()
+        mounted.flushUpdates { nativeText(in: textView) == "* Remote Moon" }
         moveInsertionPointToEnd(of: textView)
         model.navigation.performCommand?(.continueLine)
         XCTAssertEqual(nativeText(in: textView), "* Remote Moon\n* ")
@@ -173,7 +173,7 @@ final class RemoteEditorTests: XCTestCase {
         let remote = "Intro\n\n| Name | Time |\n| --- | --- |\n"
             + "| Walk | 10:30 |\n\nRemote outside"
         model.receiveRemote(text: remote, revision: revision(9))
-        mounted.flushUpdates()
+        mounted.flushUpdates { nativeText(in: textView) == remote }
         let cell = (remote as NSString).range(of: "Walk")
         setSelection(NSRange(location: cell.location + 1, length: 0),
                      in: textView)
@@ -231,7 +231,7 @@ final class RemoteEditorTests: XCTestCase {
         )
         let remote = "| Name | Time |\n| --- | --- |\n| Ride | 10:30 |"
         model.receiveRemote(text: remote, revision: revision(9))
-        mounted.flushUpdates()
+        mounted.flushUpdates { nativeText(in: textView) == remote }
         confirm()
 
         XCTAssertEqual(nativeText(in: textView), remote)
@@ -273,11 +273,7 @@ final class RemoteEditorTests: XCTestCase {
         let markdownView = try XCTUnwrap(textView as? MarkdownTextView)
         func waitForPublishedCommands(_ expected: Set<MarkdownEditingCommand>) {
             // Availability publishes asynchronously after native selection.
-            let deadline = Date().addingTimeInterval(1)
-            while model.navigation.tableCommands.available != expected,
-                  Date() < deadline {
-                mounted.flushUpdates()
-            }
+            mounted.flushUpdates { model.navigation.tableCommands.available == expected }
             XCTAssertEqual(model.navigation.tableCommands.available, expected,
                            "Table commands did not follow native selection: "
                             + "\(selectedRange(in: textView))")
@@ -356,7 +352,7 @@ final class RemoteEditorTests: XCTestCase {
         XCTAssertTrue(textView.undoManager?.canUndo == true)
 
         model.receiveRemote(text: "Remote hello!", revision: revision(9))
-        mounted.flushUpdates()
+        mounted.flushUpdates { nativeText(in: textView) == "Remote hello!" }
         XCTAssertEqual(nativeText(in: textView), "Remote hello!")
         XCTAssertFalse(textView.undoManager?.canUndo == true)
 
@@ -374,7 +370,7 @@ final class RemoteEditorTests: XCTestCase {
 
         XCTAssertFalse(isFirstResponder(textView))
         model.receiveRemote(text: "Remote hello", revision: revision(9))
-        mounted.flushUpdates()
+        mounted.flushUpdates { nativeText(in: textView) == "Remote hello" }
 
         XCTAssertEqual(nativeText(in: textView), "Remote hello")
         XCTAssertFalse(textView.undoManager?.canUndo == true)
@@ -426,7 +422,7 @@ final class RemoteEditorTests: XCTestCase {
         XCTAssertTrue(textView.undoManager?.canUndo == true)
 
         model.receiveRemote(text: "Remote hello!", revision: revision(9))
-        mounted.flushUpdates()
+        mounted.flushUpdates { nativeText(in: textView) == "Remote hello!" }
         let undoManager = try XCTUnwrap(textView.undoManager)
         XCTAssertFalse(undoManager.canUndo)
         XCTAssertFalse(undoManager.canRedo)
@@ -476,10 +472,11 @@ final class RemoteEditorTests: XCTestCase {
         let model = EditorModel(text: "hello", revision: revision(0))
         let mounted = mount(model)
         let textView = try XCTUnwrap(mounted.textView)
+        let coordinator = try XCTUnwrap(textView.delegate as? MarkdownEditor.Coordinator)
         defer { mounted.tearDown() }
 
         model.receiveRemote(text: "hello", revision: revision(9))
-        mounted.flushUpdates()
+        mounted.flushUpdates { coordinator.displayedRevision == revision(9) }
         moveInsertionPointToEnd(of: textView)
         insert("!", in: textView)
 
@@ -496,7 +493,7 @@ final class RemoteEditorTests: XCTestCase {
 
         setSelection(NSRange(location: 3, length: 0), in: textView)
         model.receiveRemote(text: "X A😀B", revision: revision(9))
-        mounted.flushUpdates()
+        mounted.flushUpdates { nativeText(in: textView) == "X A😀B" }
 
         XCTAssertEqual(selectedRange(in: textView), NSRange(location: 5, length: 0))
         insert("!", in: textView)
@@ -513,7 +510,9 @@ final class RemoteEditorTests: XCTestCase {
 
         moveInsertionPointToEnd(of: textView)
         model.receiveRemote(text: decomposed, revision: revision(9))
-        mounted.flushUpdates()
+        mounted.flushUpdates {
+            nativeText(in: textView).utf8.elementsEqual(decomposed.utf8)
+        }
 
         XCTAssertEqual(selectedRange(in: textView), NSRange(location: 2, length: 0))
         insert("!", in: textView)
@@ -663,12 +662,38 @@ private struct EditorHost: View {
     }
 }
 
+@MainActor
+private protocol FlushingEditor {
+    func flushUpdates()
+}
+
+private extension FlushingEditor {
+    /// SwiftUI applies a model change on a later run loop turn, and the editor
+    /// defers some work by another turn, so a fixed wait can end too early on
+    /// a slow runner. The timeout only bounds a real failure.
+    @MainActor func flushUpdates(
+        until condition: () -> Bool,
+        timeout: TimeInterval = 10,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else {
+                XCTFail("The editor did not update in time", file: file, line: line)
+                return
+            }
+            flushUpdates()
+        }
+    }
+}
+
 #if os(macOS)
 @MainActor
 private extension RemoteEditorTests {
     typealias NativeTextView = NSTextView
 
-    struct MountedEditor {
+    struct MountedEditor: FlushingEditor {
         let window: NSWindow
         let host: NSHostingView<EditorHost>
         let textView: NSTextView?
@@ -756,7 +781,7 @@ private extension RemoteEditorTests {
 private extension RemoteEditorTests {
     typealias NativeTextView = UITextView
 
-    struct MountedEditor {
+    struct MountedEditor: FlushingEditor {
         let window: UIWindow
         let host: UIHostingController<EditorHost>
         let textView: UITextView?

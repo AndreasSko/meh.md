@@ -229,12 +229,14 @@ final class NoteHistoryReaderTests: XCTestCase {
         let storage = HistoryRestoreTestStorage(snapshot: snapshot)
         let session = NoteSession(storage: storage, saveScheduling: .immediate)
         await session.load()
+        let reading = RaceGate()
+        session.restoreDidReadVersion = { try await reading.pause() }
         let restore = Task { @MainActor in
             try await session.restoreHistoryVersion(version, expectedHeads: snapshot.heads)
         }
-        // The restore runs until it awaits the reader's preview.
-        await Task.yield()
+        try await reading.waitUntilPaused()
         try session.replaceAll(with: "New fictional edit during restore")
+        await reading.release()
         do {
             try await restore.value
             XCTFail("An edit during the awaited index must reject replacement")

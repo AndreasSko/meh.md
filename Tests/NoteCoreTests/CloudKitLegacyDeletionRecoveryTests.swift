@@ -268,7 +268,7 @@ final class CloudKitLegacyDeletionRecoveryTests: XCTestCase {
     func testSurvivorDeletionDuringConfirmationKeepsLegacyHalt() async throws {
         let fixture = try await haltedFixture()
         let original = try Data(contentsOf: stateURL)
-        let gate = CloudKitRaceGate()
+        let gate = RaceGate()
         let database = CloudKitRaceDatabase(base: server,
             afterRead: (name: fixture.latestNote.id, gate: gate))
         let services = database.services(base: server.services)
@@ -290,7 +290,7 @@ final class CloudKitLegacyDeletionRecoveryTests: XCTestCase {
 
     func testCoveringSuccessorDuringConfirmationCanRecover() async throws {
         let fixture = try await haltedFixture()
-        let gate = CloudKitRaceGate()
+        let gate = RaceGate()
         let database = CloudKitRaceDatabase(base: server,
             afterRead: (name: fixture.latestNote.id, gate: gate))
         let services = database.services(base: server.services)
@@ -364,7 +364,7 @@ final class CloudKitLegacyDeletionRecoveryTests: XCTestCase {
         let fixture = try await haltedFixture()
         let original = try Data(contentsOf: stateURL)
         let mutations = server.mutationCount
-        let gate = CloudKitRaceGate()
+        let gate = RaceGate()
         let database = CloudKitRaceDatabase(base: server,
             afterRead: (name: fixture.latestNote.id, gate: gate))
         let services = database.services(base: server.services)

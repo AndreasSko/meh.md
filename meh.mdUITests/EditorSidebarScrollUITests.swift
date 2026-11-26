@@ -37,7 +37,7 @@ final class EditorSidebarScrollUITests: XCTestCase {
             ).firstMatch
             XCTAssertTrue(toggle.waitForExistence(timeout: 5))
             toggle.tap()
-            _ = settledFrame(of: editor)
+            _ = settledValue { editor.frame }
         }
         toggleSidebar()
         toggleSidebar()
@@ -46,7 +46,7 @@ final class EditorSidebarScrollUITests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         let top = title.frame.minY
         for _ in 0..<3 { editor.swipeUp() }
-        let scrolled = settledFrame(of: title).minY
+        let scrolled = settledValue { title.frame }.minY
         XCTAssertLessThan(scrolled, top - 100, "The note did not scroll")
         let jumped = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in abs(title.frame.minY - scrolled) > 2 },
@@ -54,19 +54,6 @@ final class EditorSidebarScrollUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [jumped], timeout: 2), .timedOut,
                        "The note jumped after scrolling")
-    }
-
-    private func settledFrame(of element: XCUIElement) -> CGRect {
-        var previous = element.frame
-        let deadline = Date().addingTimeInterval(10)
-        repeat {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
-            let current = element.frame
-            if current == previous { return current }
-            previous = current
-        } while Date() < deadline
-        XCTFail("\(element) kept moving")
-        return previous
     }
 }
 #endif

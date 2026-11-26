@@ -37,6 +37,8 @@ public final class NoteSession {
         case loadFailed(message: String)
     }
 
+    /// Lets tests hold a restore after it read the version's text.
+    @ObservationIgnored var restoreDidReadVersion: (() async throws -> Void)?
     public private(set) var isPermanentlyDeleted = false
     public private(set) var isEditingSuspended = false
     public private(set) var text = ""
@@ -325,6 +327,7 @@ public final class NoteSession {
         }
         // The reader resolves any version of these heads, indexed or not.
         let restoredText = try await makeHistoryReader().historicalText(for: version)
+        try await restoreDidReadVersion?()
         try Task.checkCancellation()
         // Reading a frozen preview suspends. A new edit, merge, recovery or
         // reset must be checked against the live document after that await.

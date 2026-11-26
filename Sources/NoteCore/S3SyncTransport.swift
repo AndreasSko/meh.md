@@ -407,12 +407,14 @@ public actor S3SyncTransport: SyncTransport {
     private func notePurged(_ id: UUID, of total: Int, busySince busyBefore: Int) async {
         device?.unswept.remove(id)
         purgedInPass += 1
+        // Other notes finish while this one awaits its progress report.
+        let done = purgedInPass
         await cleanupProgress?(
             SyncCleanupProgress(stage: .deletion, completedCount: purgedInPass, totalCount: total)
         )
-        if purgedInPass.isMultiple(of: 50), purgedInPass < total {
+        if done.isMultiple(of: 50), done < total {
             await diagnostics?("s3_purge_progress", [
-                "done": purgedInPass, "total": total,
+                "done": done, "total": total,
                 "busy": client.busyReplyCount - busyBefore,
             ])
         }

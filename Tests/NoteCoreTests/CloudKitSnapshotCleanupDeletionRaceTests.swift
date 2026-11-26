@@ -30,7 +30,7 @@ final class CloudKitSnapshotCleanupDeletionRaceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let server = try FakeCloudKitServer(directory: root)
         let fixture = try fixture()
-        let gate = CloudKitRaceGate()
+        let gate = RaceGate()
         let database = CloudKitRaceDatabase(
             base: server,
             afterRead: beforeDelete ? nil : (fixture.current.id, gate),

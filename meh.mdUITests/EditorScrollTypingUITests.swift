@@ -97,10 +97,11 @@ final class EditorScrollTypingUITests: XCTestCase {
             app.activate()
             XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
             XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
-            // The keyboard slides back in; let any scrolling settle.
-            Thread.sleep(forTimeInterval: 1.5)
+            // The keyboard slides back in; measure once the note stops moving.
+            let after = try settledFrame {
+                try requireText("TARGET", in: app, editor: editor, last: true)
+            }
             capture(app, name: "After switching apps \(round)")
-            let after = try requireText("TARGET", in: app, editor: editor, last: true)
             XCTAssertEqual(after.midY, before.midY, accuracy: 4,
                            "Switching apps must not move the note (round \(round))")
         }
