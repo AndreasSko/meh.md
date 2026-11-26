@@ -73,8 +73,8 @@ final class SpeakerModeUITests: XCTestCase {
                       "The floating island still opens its controls")
         app.buttons["speaker-start-pause"].tap()
 
-        // Dropped near the bottom centre, it clicks into place there.
-        drag(island, to: window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.9)))
+        // Dropped near the top centre, it clicks into place there.
+        drag(island, to: window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.14)))
         XCTAssertEqual(island.frame.midX, window.frame.midX, accuracy: 2)
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "Floating island"

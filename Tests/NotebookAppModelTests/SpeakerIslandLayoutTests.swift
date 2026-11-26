@@ -5,9 +5,18 @@ import XCTest
 @MainActor
 final class SpeakerIslandLayoutTests: XCTestCase {
     /// An iPhone-sized area with the island docked in the middle of the bar.
+    /// It reaches 8 points below the area, into the home indicator's room.
     private let layout = SpeakerIslandLayout(
-        areaSize: CGSize(width: 402, height: 778), islandSize: CGSize(width: 146, height: 80),
-        margin: 16, snapDistance: 40, dock: CGRect(x: 146, y: 0, width: 110, height: 44))
+        areaSize: CGSize(width: 402, height: 778), islandSize: CGSize(width: 110, height: 44),
+        insets: .init(top: 34, side: 8, bottom: -8), snapDistance: 40,
+        dock: CGRect(x: 146, y: 0, width: 110, height: 44))
+
+    func testTheIslandReachesCloseToTheSidesAndBottom() {
+        let corner = layout.point(for: CGPoint(x: 0, y: 1))
+        XCTAssertEqual(corner.x - 55, 8)
+        XCTAssertEqual(778 - (corner.y + 22), -8)
+        XCTAssertEqual(layout.point(for: CGPoint(x: 1, y: 0)).y - 22, 34)
+    }
 
     func testSlowDropStaysWhereItWasLeft() {
         let landing = layout.landing(from: CGPoint(x: 150, y: 400), velocity: .zero,
@@ -19,18 +28,29 @@ final class SpeakerIslandLayoutTests: XCTestCase {
         XCTAssertEqual(layout.point(for: spot).y, 400, accuracy: 0.001)
     }
 
-    func testDropNearASpotClicksIntoIt() {
-        let bottom = layout.point(for: CGPoint(x: 0.5, y: 1))
-        let landing = layout.landing(from: CGPoint(x: bottom.x + 20, y: bottom.y - 20),
+    func testDropNearATopSpotClicksIntoIt() {
+        let top = layout.point(for: CGPoint(x: 0.5, y: 0))
+        let landing = layout.landing(from: CGPoint(x: top.x + 20, y: top.y + 20),
                                      velocity: .zero, wasOverDock: false)
-        XCTAssertEqual(landing, .snap(CGPoint(x: 0.5, y: 1)))
+        XCTAssertEqual(landing, .snap(CGPoint(x: 0.5, y: 0)))
+    }
+
+    func testNearTheBottomItStaysWhereItWasLeft() {
+        let bottom = layout.point(for: CGPoint(x: 0.5, y: 1))
+        let landing = layout.landing(from: CGPoint(x: bottom.x + 20, y: bottom.y - 10),
+                                     velocity: .zero, wasOverDock: false)
+        guard case .free(let spot) = landing else {
+            return XCTFail("Expected a free landing, got \(landing)")
+        }
+        XCTAssertEqual(layout.point(for: spot).x, bottom.x + 20, accuracy: 0.001)
     }
 
     func testFlingCarriesTheIslandOnToWhereItWasHeading() {
-        // Flung towards the bottom trailing corner from the middle.
+        // Flung towards the bottom trailing corner from the middle, it stops
+        // in the corner.
         let landing = layout.landing(from: CGPoint(x: 260, y: 520),
                                      velocity: CGVector(dx: 1500, dy: 2500), wasOverDock: false)
-        XCTAssertEqual(landing, .snap(CGPoint(x: 1, y: 1)))
+        XCTAssertEqual(landing, .free(CGPoint(x: 1, y: 1)))
     }
 
     func testFlingPastTheEdgeStopsInside() {

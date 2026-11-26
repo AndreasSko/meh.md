@@ -6,13 +6,19 @@ import CoreGraphics
 /// of where it fits.
 struct SpeakerIslandLayout {
     var areaSize: CGSize
-    /// The island with the room its × takes.
     var islandSize: CGSize
-    var margin: CGFloat
+    /// How close the island comes to the area's top, sides and bottom.
+    var insets: Insets
     /// Landing this close to a snap spot clicks it into place.
     var snapDistance: CGFloat
     /// The island's frame in the toolbar, or nil with no toolbar to dock in.
     var dock: CGRect?
+
+    struct Insets: Equatable {
+        var top: CGFloat
+        var side: CGFloat
+        var bottom: CGFloat
+    }
 
     enum Landing: Equatable {
         case dock
@@ -22,9 +28,10 @@ struct SpeakerIslandLayout {
         case free(CGPoint)
     }
 
+    /// Only along the top: near the bottom the island stays exactly where
+    /// it's left.
     static let snapSpots: [CGPoint] = [
         CGPoint(x: 0, y: 0), CGPoint(x: 0.5, y: 0), CGPoint(x: 1, y: 0),
-        CGPoint(x: 0, y: 1), CGPoint(x: 0.5, y: 1), CGPoint(x: 1, y: 1),
     ]
     /// How quickly a flung island slows down, as for a scroll view: a
     /// fling travels about a tenth of its speed per second further.
@@ -35,11 +42,11 @@ struct SpeakerIslandLayout {
 
     /// Where the island's centre can go.
     var range: CGRect {
-        let inset = CGSize(width: margin + islandSize.width / 2,
-                           height: margin + islandSize.height / 2)
-        return CGRect(x: inset.width, y: inset.height,
-                      width: max(areaSize.width - inset.width * 2, 0),
-                      height: max(areaSize.height - inset.height * 2, 0))
+        let half = CGSize(width: islandSize.width / 2, height: islandSize.height / 2)
+        let minY = insets.top + half.height
+        return CGRect(x: insets.side + half.width, y: minY,
+                      width: max(areaSize.width - (insets.side + half.width) * 2, 0),
+                      height: max(areaSize.height - insets.bottom - half.height - minY, 0))
     }
 
     func point(for spot: CGPoint) -> CGPoint {

@@ -149,8 +149,17 @@ final class SpeakerIslandPlacement {
     /// The island's place in the toolbar while it's out, where the toolbar
     /// keeps one.
     @ObservationIgnored let slot = SpeakerWindowAnchor()
-    var areaSize = CGSize.zero
+    var areaSize = CGSize.zero {
+        // The window's frames are only right once laid out.
+        didSet {
+            DispatchQueue.main.async {
+                self.reachesHomeIndicator = self.area.reachesHomeIndicator
+            }
+        }
+    }
     var islandSize = CGSize.zero
+    /// Whether the area ends at the home indicator rather than the keyboard.
+    var reachesHomeIndicator = false
     /// The island's last frame in the toolbar, in the area's space, and the
     /// area's width then.
     @ObservationIgnored private var dock: (frame: CGRect, areaWidth: CGFloat)?
@@ -162,17 +171,23 @@ final class SpeakerIslandPlacement {
 
     #if os(macOS)
     static let snapDistance: CGFloat = 28
-    static let margin: CGFloat = 12
+    /// Below the toolbar, with room for the ×.
+    static let topInset: CGFloat = 12 + SpeakerMetrics.closeReach
     #else
     static let snapDistance: CGFloat = 40
-    static let margin: CGFloat = 16
+    static let topInset: CGFloat = 16 + SpeakerMetrics.closeReach
     #endif
+    static let edgeInset: CGFloat = 8
 
     var isMoving: Bool { dragCenter != nil || dockingPoint != nil }
 
     var layout: SpeakerIslandLayout {
-        SpeakerIslandLayout(areaSize: areaSize, islandSize: islandSize, margin: Self.margin,
-                            snapDistance: Self.snapDistance, dock: canDock ? dockFrame : nil)
+        SpeakerIslandLayout(
+            areaSize: areaSize, islandSize: islandSize,
+            // Down to just above the home indicator.
+            insets: .init(top: Self.topInset, side: Self.edgeInset,
+                          bottom: reachesHomeIndicator ? -Self.edgeInset : Self.edgeInset),
+            snapDistance: Self.snapDistance, dock: canDock ? dockFrame : nil)
     }
 
     /// Where the island sits in the toolbar: around its slot there, or
@@ -331,18 +346,20 @@ struct SpeakerFloatingIsland: View {
                     // The × sits just off the island's corner: where it overlaps
                     // the glass, taps fall through to the note.
                     SpeakerIsland(timer: timer, placement: placement, isFloating: true)
+                        .onGeometryChange(for: CGSize.self, of: \.size) {
+                            placement.islandSize = $0
+                        }
                         .scaleEffect(isLifted ? 1.04 : 1)
                         .shadow(color: .black.opacity(isLifted ? 0.15 : 0),
                                 radius: isLifted ? 12 : 0, y: isLifted ? 6 : 0)
                         .animation(.smooth(duration: 0.25), value: isLifted)
-                        .padding(SpeakerMetrics.closeSize * 0.75)
-                        .overlay(alignment: .topLeading) {
+                        .padding(SpeakerMetrics.closeReach)
+                        // On the inner corner, so it stays in the window.
+                        .overlay(alignment: point.x < placement.areaSize.width / 2
+                                 ? .topTrailing : .topLeading) {
                             // Only once it's settled: shown earlier, it would
                             // wait at the landing spot ahead of the island.
                             if !placement.isMoving && !placement.isLanding { closeButton }
-                        }
-                        .onGeometryChange(for: CGSize.self, of: \.size) {
-                            placement.islandSize = $0
                         }
                         .position(point)
                 }
@@ -403,6 +420,20 @@ final class SpeakerWindowAnchor {
         return frame
         #endif
     }
+
+    /// Whether the view ends at the home indicator, not the keyboard, so
+    /// the island can sit a little lower, just above the indicator.
+    var reachesHomeIndicator: Bool {
+        #if os(iOS)
+        guard let view, let window = view.window, window.safeAreaInsets.bottom > 0 else {
+            return false
+        }
+        let bottom = view.convert(view.bounds, to: nil).maxY
+        return abs(window.bounds.height - window.safeAreaInsets.bottom - bottom) < 1
+        #else
+        false
+        #endif
+    }
 }
 
 #if os(iOS)
@@ -450,6 +481,8 @@ private enum SpeakerMetrics {
     static let sliderFont = Font.system(size: 12, weight: .semibold).monospacedDigit()
     static let sliderIconFont = Font.system(size: 13, weight: .semibold)
     static let closeSize: CGFloat = 18
+    /// How far the × reaches out past the island's corner.
+    static let closeReach = closeSize * 0.75
     /// Opens the controls below the island, unless there's no room. The Mac
     /// default is above.
     static let popoverEdge = Edge.bottom
@@ -464,6 +497,7 @@ private enum SpeakerMetrics {
     static let sliderFont = Font.subheadline.weight(.semibold).monospacedDigit()
     static let sliderIconFont = Font.body.weight(.semibold)
     static let closeSize: CGFloat = 24
+    static let closeReach = closeSize * 0.75
     /// iOS already opens them below; `.bottom` would cover the island.
     static let popoverEdge = Edge.top
     static let edgeFeedback = SensoryFeedback.selection
