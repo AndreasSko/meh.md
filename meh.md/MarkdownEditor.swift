@@ -346,6 +346,9 @@ final class MarkdownTextView: NSTextView {
         }
     }
     fileprivate var markdownLayoutDelegate: MarkdownLayoutManagerDelegate?
+    /// Reading Mode: Live Preview keeps every line rendered, even the
+    /// one holding the selection.
+    var markdownIsReading = false
     /// Whether this note shows time calculator results.
     var markdownTimeCalculator = false {
         didSet {
@@ -859,6 +862,10 @@ final class MarkdownTextView: NSTextView {
 struct MarkdownEditor: NSViewRepresentable {
     @Binding var text: String
     var isReadOnly = false
+    /// Reading Mode: the open note, locked against edits. Unlike
+    /// `isReadOnly`, it stays the live editor and can unlock in place.
+    var isReading = false
+    private var allowsEditing: Bool { !isReadOnly && !isReading }
     var editRevision: Data?
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
     var commitNativeEdit: ((String, Data, NoteEditorTextChange?) throws -> MarkdownEditorCommit)?
@@ -893,6 +900,7 @@ struct MarkdownEditor: NSViewRepresentable {
     init(
         text: Binding<String>,
         isReadOnly: Bool = false,
+        isReading: Bool = false,
         editRevision: Data? = nil,
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
         commitNativeEdit: ((String, Data, NoteEditorTextChange?) throws -> MarkdownEditorCommit)? = nil,
@@ -912,6 +920,7 @@ struct MarkdownEditor: NSViewRepresentable {
     ) {
         _text = text
         self.isReadOnly = isReadOnly
+        self.isReading = isReading
         self.editRevision = editRevision
         self.commitEdit = commitEdit
         self.commitNativeEdit = commitNativeEdit
@@ -949,7 +958,8 @@ struct MarkdownEditor: NSViewRepresentable {
         // user moves it; otherwise edits elsewhere scroll to the end.
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.isRichText = false
-        textView.isEditable = !isReadOnly
+        textView.isEditable = allowsEditing
+        textView.markdownIsReading = isReading
         textView.isSelectable = true
         textView.allowsUndo = true
         textView.drawsBackground = false
@@ -1122,8 +1132,9 @@ struct MarkdownEditor: NSViewRepresentable {
                 _ = (textView as? MarkdownTextView)?
                     .performMarkdownCommand(command)
             }
-            parent.navigation?.resumeEditing = { [weak textView] in
-                textView?.isEditable = true
+            parent.navigation?.resumeEditing = { [weak self, weak textView] in
+                guard let self else { return }
+                textView?.isEditable = self.parent.allowsEditing
             }
             parent.navigation?.setCovered = { [weak textView] covered in
                 guard let textView else { return }
@@ -1189,6 +1200,7 @@ struct MarkdownEditor: NSViewRepresentable {
         }
 
         func update(parent: MarkdownEditor, textView: NSTextView) {
+            let readingChanged = self.parent.isReading != parent.isReading
             self.parent = parent
             (textView as? MarkdownTextView)?.markdownHistoryChanges = parent.historyChanges
             if let nativeView = textView as? MarkdownTextView,
@@ -1202,7 +1214,12 @@ struct MarkdownEditor: NSViewRepresentable {
                 attachNavigation(to: nativeView)
                 if nativeView.window != nil { parent.navigation?.didAttach() }
             }
-            textView.isEditable = !parent.isReadOnly
+            textView.isEditable = parent.allowsEditing
+            if readingChanged {
+                (textView as? MarkdownTextView)?.markdownIsReading = parent.isReading
+                // Live Preview reveals the caret's line only while editing.
+                schedulePresentationRefresh(for: textView)
+            }
             guard !textView.hasMarkedText(),
                   !((textView as? MarkdownTextView)?.markdownCellController.hasMarkedText ?? false)
             else { return }
@@ -2271,6 +2288,24 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         }
     }
 
+    /// Reading Mode: Live Preview keeps every line rendered, even the
+    /// one holding the selection.
+    var markdownIsReading: Bool {
+        get { markdownState.isReading }
+        set {
+            guard newValue != markdownState.isReading else { return }
+            markdownState.isReading = newValue
+            reloadInputViews()
+        }
+    }
+
+    /// UIKit gives focus back to the note when a menu closes, and a note
+    /// selected for copying keeps it. Reading shows no writing bar then.
+    override var inputAccessoryView: UIView? {
+        get { markdownState.isReading ? nil : super.inputAccessoryView }
+        set { super.inputAccessoryView = newValue }
+    }
+
     /// Whether this note shows time calculator results.
     var markdownTimeCalculator: Bool {
         get { markdownState.timeCalculator }
@@ -2708,6 +2743,7 @@ private final class MarkdownTextViewState: NSObject {
     var tappedRemoval: MarkdownHistoryMarks.Ring?
     var historyChanges = NoteHistoryChanges.none
     var timeCalculator = false
+    var isReading = false
     var timeSums: [MarkdownTimeSum] = []
     var linkPointer: UIPointerInteraction?
     var linkPointerGeometry: [CGRect] = []
@@ -2739,6 +2775,10 @@ struct MarkdownEditor: UIViewRepresentable {
     @MainActor static var refusesDrop: (UIDragItem) -> Bool = { _ in false }
     @Binding var text: String
     var isReadOnly = false
+    /// Reading Mode: the open note, locked against edits. Unlike
+    /// `isReadOnly`, it stays the live editor and can unlock in place.
+    var isReading = false
+    private var allowsEditing: Bool { !isReadOnly && !isReading }
     var editRevision: Data?
     var commitEdit: ((String, Data) throws -> MarkdownEditorCommit)?
     var commitNativeEdit: ((String, Data, NoteEditorTextChange?) throws -> MarkdownEditorCommit)?
@@ -2776,6 +2816,7 @@ struct MarkdownEditor: UIViewRepresentable {
     init(
         text: Binding<String>,
         isReadOnly: Bool = false,
+        isReading: Bool = false,
         editRevision: Data? = nil,
         commitEdit: ((String, Data) throws -> MarkdownEditorCommit)? = nil,
         commitNativeEdit: ((String, Data, NoteEditorTextChange?) throws -> MarkdownEditorCommit)? = nil,
@@ -2798,6 +2839,7 @@ struct MarkdownEditor: UIViewRepresentable {
     ) {
         _text = text
         self.isReadOnly = isReadOnly
+        self.isReading = isReading
         self.editRevision = editRevision
         self.commitEdit = commitEdit
         self.commitNativeEdit = commitNativeEdit
@@ -2840,7 +2882,8 @@ struct MarkdownEditor: UIViewRepresentable {
         textView.alwaysBounceVertical = true
         textView.text = text
         textView.allowsEditingTextAttributes = false
-        textView.isEditable = !isReadOnly
+        textView.isEditable = allowsEditing
+        textView.markdownIsReading = isReading
         textView.isSelectable = true
         textView.font = MarkdownPresentation.bodyFont(
             for: fontFamily,
@@ -3076,8 +3119,9 @@ struct MarkdownEditor: UIViewRepresentable {
                 _ = (textView as? MarkdownTextView)?
                     .performMarkdownCommand(command)
             }
-            parent.navigation?.resumeEditing = { [weak textView] in
-                textView?.isEditable = true
+            parent.navigation?.resumeEditing = { [weak self, weak textView] in
+                guard let self else { return }
+                textView?.isEditable = self.parent.allowsEditing
             }
             parent.navigation?.setCovered = { [weak textView] covered in
                 guard let textView else { return }
@@ -3155,6 +3199,7 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func update(parent: MarkdownEditor, textView: UITextView) {
+            let readingChanged = self.parent.isReading != parent.isReading
             if parent.isReadOnly,
                parent.initialPreviewPosition != self.parent.initialPreviewPosition
                 || parent.initialPreviewInsets != self.parent.initialPreviewInsets
@@ -3179,7 +3224,13 @@ struct MarkdownEditor: UIViewRepresentable {
                 attachNavigation(to: nativeView)
                 if nativeView.window != nil { parent.navigation?.didAttach() }
             }
-            textView.isEditable = !parent.isReadOnly
+            textView.isEditable = parent.allowsEditing
+            if readingChanged {
+                (textView as? MarkdownTextView)?.markdownIsReading = parent.isReading
+                if parent.isReading { textView.resignFirstResponder() }
+                // Live Preview reveals the caret's line only while editing.
+                schedulePresentationRefresh(for: textView)
+            }
             guard textView.markedTextRange == nil,
                   !((textView as? MarkdownTextView)?.markdownCellController.hasMarkedText ?? false)
             else { return }

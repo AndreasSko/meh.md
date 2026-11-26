@@ -128,6 +128,13 @@ final class NotebookSceneState {
     /// The link picker's New Note row was chosen with the arrow keys.
     var linkNewNoteChosen = false
 
+    // MARK: Reading Mode
+
+    /// Locks the note against edits in this window, so a stray tap while
+    /// reading or presenting doesn't bring up the keyboard. It lasts only
+    /// as long as the window, so a note never stays locked by surprise.
+    var isReading = false
+
     // MARK: Speaker Mode
 
     /// The talk timer in this window's toolbar while Speaker Mode is on.
@@ -780,6 +787,14 @@ final class NotebookSceneState {
             if succeeded { onSuccess() }
             onCompletion(succeeded)
         }
+    }
+
+    // MARK: Reading Mode
+
+    func setReading(_ isOn: Bool) {
+        // The title is part of the note, so a rename in progress ends too.
+        if isOn, detailEditingID != nil { submitDetailTitle(focusBody: false) }
+        isReading = isOn
     }
 
     // MARK: Detail title

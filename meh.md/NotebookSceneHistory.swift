@@ -141,6 +141,8 @@ extension NotebookSceneState {
                 )
                 if self.historyBrowser === historyBrowser { closeHistory() }
                 try await selectNote(id)
+                // A new note is for writing.
+                isReading = false
             } catch {
                 errorMessage = error.localizedDescription
             }

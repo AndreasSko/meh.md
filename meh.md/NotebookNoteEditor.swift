@@ -17,6 +17,7 @@ struct NotebookNoteEditor: View {
     var fontFamily: EditorFontFamily = .system
     var mode: MarkdownEditorMode = .source
     var timeCalculator = false
+    var isReading = false
     var knownLinkNames: Set<String>? = nil
     @State private var editError: String?
     @State private var unrecordedText: String?
@@ -43,6 +44,7 @@ struct NotebookNoteEditor: View {
                                 hasUnrecordedEdit = true
                             }
                         }),
+                    isReading: isReading,
                     editRevision: session.editorRevision,
                     commitNativeEdit: { text, revision, change in
                         let changed = text != session.text

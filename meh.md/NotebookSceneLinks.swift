@@ -634,6 +634,8 @@ extension NotebookSceneState {
             let id = try await replica.createNote(name: name, parentID: parentID)
             missingLink = nil
             try await visitLinkedNote(id, fragment: nil)
+            // A new note is for writing.
+            isReading = false
         }
     }
 }

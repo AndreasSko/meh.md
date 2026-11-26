@@ -60,7 +60,8 @@ struct NotebookDetail: View {
             scene: scene, placement: placement,
             font: NotebookDetailTitle.font(family: editorFontFamily, size: editorFontSize),
             isEditing: scene.detailEditingID == placement.item.id,
-            isEnabled: !scene.busy, focusRequest: scene.detailTitleFocusRequest
+            isEnabled: !scene.busy, isReading: scene.isReading,
+            focusRequest: scene.detailTitleFocusRequest
         )
     }
 
@@ -142,6 +143,7 @@ struct NotebookDetail: View {
                             mode: editorMode,
                             timeCalculator: timeCalculatorLabs
                                 && scene.replica.timeCalculatorNoteIDs.contains(selectedID),
+                            isReading: scene.isReading,
                             knownLinkNames: scene.knownLinkNames
                         )
                         }
@@ -308,6 +310,32 @@ struct NotebookDetail: View {
         .accessibilityIdentifier("notebook-version-history")
     }
 
+    private func readingToggle(session: NoteSession, title: LocalizedStringKey) -> some View {
+        Toggle(isOn: Binding(
+            get: { scene.isReading },
+            set: { scene.setReading($0) }
+        )) {
+            Label(title, systemImage: "eyeglasses")
+        }
+        .disabled(!session.isEditingEnabled)
+        .accessibilityIdentifier("notebook-reading-mode")
+    }
+
+    /// Shows that Reading Mode is on, and turns it off.
+    private var readingButton: some View {
+        Button { scene.setReading(false) } label: {
+            // Toolbars show a Label's icon only; Edit needs its word.
+            HStack(spacing: 6) {
+                Image(systemName: "eyeglasses")
+                Text("Edit")
+            }
+        }
+        .accessibilityLabel("Edit Note")
+        .accessibilityHint("Turns off Reading Mode")
+        .help("Turn off Reading Mode to edit the note")
+        .accessibilityIdentifier("notebook-reading-edit")
+    }
+
     @ToolbarContentBuilder
     private func toolbar(session: NoteSession, selectedID: UUID) -> some ToolbarContent {
         if !showsFolderPage {
@@ -332,9 +360,12 @@ struct NotebookDetail: View {
         #endif
         if let placement = scene.selectedPlacement, scene.historyBrowser == nil {
             #if os(iOS)
-            // iPhone, and iPad with Files hidden, would otherwise have no
-            // way to start a note without a keyboard.
-            if isCompact || scene.columnVisibility == .detailOnly {
+            if scene.isReading {
+                ToolbarItem { readingButton }
+                ToolbarSpacer(.fixed)
+            } else if isCompact || scene.columnVisibility == .detailOnly {
+                // iPhone, and iPad with Files hidden, would otherwise have no
+                // way to start a note without a keyboard.
                 ToolbarItem {
                     NotebookLibraryNewNote(scene: scene)
                 }
@@ -348,13 +379,17 @@ struct NotebookDetail: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
-            ToolbarItem {
-                EditorWritingControls(
-                    navigation: scene.editorNavigation,
-                    isEnabled: session.isEditingEnabled
-                        && !scene.busy
-                        && scene.detailEditingID != selectedID
-                )
+            if scene.isReading {
+                ToolbarItem { readingButton }
+            } else {
+                ToolbarItem {
+                    EditorWritingControls(
+                        navigation: scene.editorNavigation,
+                        isEnabled: session.isEditingEnabled
+                            && !scene.busy
+                            && scene.detailEditingID != selectedID
+                    )
+                }
             }
             #endif
             ToolbarItem {
@@ -366,6 +401,8 @@ struct NotebookDetail: View {
                         shareButton(session: session)
                         findButton(session: session, title: "Find")
                         historyButton(session: session, title: "History")
+                        // In the row, it keeps Move to Trash in view too.
+                        readingToggle(session: session, title: "Reading")
                     }
                     .controlGroupStyle(.compactMenu)
                     backlinksButton(session: session)
@@ -418,6 +455,9 @@ struct NotebookDetail: View {
                     } label: {
                         Label("Editor Display", systemImage: "textformat")
                     }
+                    #if os(macOS)
+                    readingToggle(session: session, title: "Reading Mode")
+                    #endif
                     if speakerModeLabs {
                         Toggle(isOn: Binding(
                             get: { scene.speakerTimer != nil },
@@ -426,6 +466,8 @@ struct NotebookDetail: View {
                                     ? SpeakerTimer(lengthMinutes: speakerLength > 0 ? speakerLength : nil)
                                     : nil
                                 scene.speakerIsland = SpeakerIslandPlacement()
+                                // A talk is read, not written.
+                                if isOn { scene.setReading(true) }
                             }
                         )) {
                             Label("Speaker Mode", systemImage: "stopwatch")
@@ -470,6 +512,7 @@ struct NotebookDetailTitle: View {
     let font: Font
     let isEditing: Bool
     let isEnabled: Bool
+    var isReading = false
     let focusRequest: NotebookTitleFocusRequest?
 
     static func font(family: EditorFontFamily, size: Double) -> Font {
@@ -502,7 +545,12 @@ struct NotebookDetailTitle: View {
 
     private var title: some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
-            if isEditing {
+            // Reading wins over a rename that failed while turning it on.
+            if isReading {
+                titleText
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("note-title")
+            } else if isEditing {
                 NotebookTitleField(
                     noteID: placement.item.id,
                     text: Binding(
@@ -524,19 +572,24 @@ struct NotebookDetailTitle: View {
                 Button {
                     scene.beginDetailRenaming(placement)
                 } label: {
-                    Text(NotebookNoteName.title(from: placement.displayName))
-                        .font(font)
-                        .foregroundStyle(.primary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                    titleText.contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!isEnabled)
                 .accessibilityIdentifier("note-title")
             }
         }
+    }
+}
+
+private extension NotebookDetailTitle {
+    var titleText: some View {
+        Text(NotebookNoteName.title(from: placement.displayName))
+            .font(font)
+            .foregroundStyle(.primary)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

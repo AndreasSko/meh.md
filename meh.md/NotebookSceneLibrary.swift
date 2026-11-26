@@ -808,6 +808,7 @@ extension NotebookSceneState {
 
     /// Selects a new note's title, so typing names it right away.
     func beginNamingNewNote(_ id: UUID, name: String) {
+        isReading = false
         detailEditingID = id
         detailOriginalName = name
         detailProposedTitle = NotebookNoteName.title(from: name)
@@ -845,6 +846,8 @@ extension NotebookSceneState {
                         name: name, parentID: parentID, position: position))
                 reveal(id)
                 try await selectNote(id)
+                // A new note is for writing.
+                isReading = false
                 if !startsWriting { beginNamingNewNote(id, name: name) }
             case .folder:
                 createdFolderID = try await replica.createFolder(
