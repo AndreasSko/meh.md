@@ -380,8 +380,24 @@ extension XCUIApplication {
         let files = buttons["notebook-tree-toggle"]
         guard !files.isHittable else { return }
         let back = navigationBars.buttons.firstMatch
-        XCTAssertTrue(
-            back.waitForExistence(timeout: timeout),
+        let editor = textViews["markdown-editor"]
+        let hittable = NSPredicate(format: "hittable == true")
+        // A note hides its bar while scrolled down; scrolling up a little
+        // brings it back.
+        for _ in 0..<3 where editor.exists && !back.isHittable {
+            let start = editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 120)))
+            _ = XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(predicate: hittable, object: back)],
+                timeout: 2
+            )
+        }
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [XCTNSPredicateExpectation(predicate: hittable, object: back)],
+                timeout: timeout
+            ),
+            .completed,
             "Expected a navigation control that reveals the sidebar"
         )
         back.tap()

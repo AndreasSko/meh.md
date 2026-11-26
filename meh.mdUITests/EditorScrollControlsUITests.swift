@@ -22,6 +22,12 @@ final class EditorScrollControlsUITests: XCTestCase {
         editor.swipeDown()
         XCTAssertTrue(wait(for: actions, hittable: true),
                       "Scrolling up should bring the note's controls back")
+        let back = app.navigationBars.buttons.firstMatch
+        XCTAssertTrue(wait(for: back, hittable: true),
+                      "Scrolling up should show Back again")
+        back.tap()
+        XCTAssertTrue(wait(for: app.buttons["notebook-tree-toggle"], hittable: true),
+                      "Back should still lead to the notebook")
     }
 
     func testControlsStayWhenTheSettingIsOff() {
