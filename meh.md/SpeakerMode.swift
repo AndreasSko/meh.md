@@ -26,6 +26,7 @@ struct SpeakerIsland: View {
             SpeakerIslandContent(
                 timer: timer, reading: timer.reading(at: context.date),
                 showsControls: $showsControls,
+                isDragged: placement.dragCenter != nil,
                 move: !isFloating
                     ? (Text("Move Over Note"), {
                         withAnimation(.snappy) { placement.spot = .topTrailing }
@@ -155,6 +156,9 @@ final class SpeakerIslandPlacement {
     @ObservationIgnored private var dock: (frame: CGRect, areaWidth: CGFloat)?
     /// Counts the trips back into the toolbar, so only the latest hands over.
     @ObservationIgnored private var docking = 0
+    /// Whether the dropped island is still on its way to where it settles.
+    var isLanding = false
+    @ObservationIgnored private var landings = 0
 
     #if os(macOS)
     static let snapDistance: CGFloat = 28
@@ -216,6 +220,8 @@ final class SpeakerIslandPlacement {
 
     func drag(to center: CGPoint) {
         cancelDocking()
+        landings += 1
+        isLanding = false
         dragCenter = center
         if let dragPoint {
             isOverDock = layout.isOverDock(dragPoint, wasOver: isOverDock)
@@ -244,10 +250,16 @@ final class SpeakerIslandPlacement {
         case .free(let free):
             spot = free
         }
+        landings += 1
+        let trip = landings
+        isLanding = true
         withAnimation(Self.settle(from: start, to: layout.point(for: spot), velocity: velocity,
                                   reduceMotion: reduceMotion)) {
             dragCenter = nil
             self.spot = UnitPoint(x: spot.x, y: spot.y)
+        } completion: { [weak self] in
+            guard let self, landings == trip else { return }
+            isLanding = false
         }
     }
 
@@ -288,7 +300,7 @@ final class SpeakerIslandPlacement {
                                reduceMotion: Bool) -> Animation {
         if reduceMotion { return .easeOut(duration: 0.2) }
         return .interpolatingSpring(
-            Spring(duration: 0.4, bounce: 0.2),
+            Spring(duration: 0.4, bounce: 0.15),
             initialVelocity: SpeakerIslandLayout.springVelocity(from: start, to: end,
                                                                 velocity: velocity))
     }
@@ -319,13 +331,15 @@ struct SpeakerFloatingIsland: View {
                     // The × sits just off the island's corner: where it overlaps
                     // the glass, taps fall through to the note.
                     SpeakerIsland(timer: timer, placement: placement, isFloating: true)
-                        .scaleEffect(isLifted ? 1.08 : 1)
-                        .shadow(color: .black.opacity(isLifted ? 0.18 : 0),
-                                radius: isLifted ? 14 : 0, y: isLifted ? 8 : 0)
-                        .animation(.spring(duration: 0.3, bounce: 0.3), value: isLifted)
+                        .scaleEffect(isLifted ? 1.04 : 1)
+                        .shadow(color: .black.opacity(isLifted ? 0.15 : 0),
+                                radius: isLifted ? 12 : 0, y: isLifted ? 6 : 0)
+                        .animation(.smooth(duration: 0.25), value: isLifted)
                         .padding(SpeakerMetrics.closeSize * 0.75)
                         .overlay(alignment: .topLeading) {
-                            if !placement.isMoving { closeButton }
+                            // Only once it's settled: shown earlier, it would
+                            // wait at the landing spot ahead of the island.
+                            if !placement.isMoving && !placement.isLanding { closeButton }
                         }
                         .onGeometryChange(for: CGSize.self, of: \.size) {
                             placement.islandSize = $0
@@ -461,6 +475,8 @@ private struct SpeakerIslandContent: View {
     let timer: SpeakerTimer
     let reading: SpeakerTimerReading
     @Binding var showsControls: Bool
+    /// While dragged, the glass doesn't stretch after the finger.
+    let isDragged: Bool
     /// Moves the island in or out of the toolbar without dragging.
     let move: (title: Text, action: () -> Void)?
     @State private var pulse = false
@@ -503,7 +519,7 @@ private struct SpeakerIslandContent: View {
             }
         }
         .accessibilityIdentifier("speaker-island")
-        .glassEffect(style.glass, in: .capsule)
+        .glassEffect(isDragged ? style.glass.interactive(false) : style.glass, in: .capsule)
         .scaleEffect(pulse ? 1.1 : 1)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: reading.phase)
         .popover(isPresented: $showsControls, arrowEdge: SpeakerMetrics.popoverEdge) {
