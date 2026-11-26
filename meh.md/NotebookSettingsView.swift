@@ -43,7 +43,7 @@ struct NotebookSettingsView: View {
                 )
                 Section {
                     NavigationLink {
-                        NotebookLabsView()
+                        NotebookLabsView(replica: replica)
                     } label: {
                         Label("Labs", systemImage: "flask")
                     }
@@ -163,7 +163,8 @@ struct NotebookMacSettingsView: View {
                 }
             }
             Tab("Labs", systemImage: "flask", value: .labs) {
-                NotebookLabsView()
+                // Text Rules open their own pages.
+                NavigationStack { NotebookLabsView(replica: replica) }
             }
         }
         .frame(width: 520, height: 600)
@@ -358,6 +359,7 @@ private struct NotebookSettingsSignature: View {
 
 /// Experiments that are off until someone turns them on on this device.
 private struct NotebookLabsView: View {
+    let replica: NotebookReplica
     @AppStorage(MarkdownTimeCalculator.enabledKey, store: NotebookEditorPreferences.store)
     private var timeCalculator = false
     @AppStorage(SpeakerTimer.enabledKey, store: NotebookEditorPreferences.store)
@@ -389,6 +391,7 @@ private struct NotebookLabsView: View {
             } footer: {
                 Text("A small talk timer in the note’s toolbar: a stopwatch, or a countdown from 5 to 60 minutes. Drag it anywhere in the window. Turn it on in … › Speaker Mode. The screen stays on until you reset it.")
             }
+            NotebookTextRulesLabsSection(replica: replica)
         }
         .formStyle(.grouped)
         .navigationTitle("Labs")

@@ -29,7 +29,11 @@ final class NotebookSceneState {
     // MARK: Scene
 
     var busy = false
-    var errorMessage: String?
+    var errorMessage: String? {
+        didSet { if errorMessage == nil { errorTitle = nil } }
+    }
+    /// A title for `errorMessage` when the generic one says too little.
+    var errorTitle: LocalizedStringResource?
     var restoredNavigation = false
     var editorNavigation = MarkdownEditorNavigation()
     var bodyFocusRequest = 0

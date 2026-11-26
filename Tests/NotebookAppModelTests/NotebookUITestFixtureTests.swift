@@ -46,6 +46,7 @@ final class NotebookUITestFixtureTests: XCTestCase {
                 expected = ["Projects", "Areas", "Resources", "Archive"]
             case .conflicts:
                 expected = ["Inbox", "Projects", "Archive", "Rome 2023.md"]
+            case .textRules: expected = ["Bible study.md", "Travel day.md"]
             case .dragLongList:
                 expected = (1 ... 48).map {
                     String(format: "%02d Field observation.md", $0)

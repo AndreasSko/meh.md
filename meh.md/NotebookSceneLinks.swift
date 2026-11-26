@@ -22,13 +22,14 @@ struct NotebookLinkVisitPreview {
 #endif
 
 enum NotebookLinkUIError: LocalizedError {
-    case changed, unsupported, missingFragment, missingFolder
+    case changed, unsupported, missingFragment, missingFolder, noApp
     var errorDescription: String? {
         switch self {
         case .changed: "This link changed. Open it again to use its current destination."
         case .unsupported: "This link points to content that meh.md does not support yet."
         case .missingFragment: "The note opened, but its linked heading or block could not be found."
         case .missingFolder: "Create the destination folder in Files before creating this linked note."
+        case .noApp: "No app on this device opens this link. You can change where it opens in Settings › Labs › Text Rules."
         }
     }
 }
@@ -39,6 +40,15 @@ extension NotebookSceneState {
         let navigation = editorNavigation
         navigation.openLink = { [weak self] link in
             self?.openNoteLink(link, openURL: openURL)
+        }
+        // Text rule links only ever go to the places their rule declared.
+        navigation.openURL = { [weak self] url in
+            // Like a JW Library link when the app isn't installed.
+            openURL(url) { accepted in
+                guard !accepted, let self else { return }
+                self.errorMessage = NotebookLinkUIError.noApp.localizedDescription
+                self.errorTitle = "Couldn’t Open the Link"
+            }
         }
         navigation.requestLink = { [weak self, weak navigation] text, range in
             guard let self, let selectedID, !busy else { return }

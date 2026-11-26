@@ -25,6 +25,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case rendering
     case conflicts
     case trees
+    case textRules = "text-rules"
 
     static let historyOriginalSource = "Morning light over the ridge."
     static let historyCurrentSource = "Morning light over the ridge.\nClear."
@@ -319,6 +320,8 @@ enum NotebookUITestFixture: String, CaseIterable {
             #if !NOTEBOOK_PERFORMANCE_HOST
             try await seedHistoryTour(replica)
             #endif
+        case .textRules:
+            try await seedTextRules(replica)
         case .linkTour:
             try await seedLinkTour(replica)
         case .readingMode:
@@ -353,6 +356,30 @@ enum NotebookUITestFixture: String, CaseIterable {
             _ = try await replica.createFolder(name: "Island", parentID: trips)
             _ = try await replica.createFolder(name: "Archive")
         }
+    }
+
+    /// A study note with Bible references and a travel note with times,
+    /// for Text Rules recordings. The rules themselves are added in the
+    /// recording, in Settings.
+    private func seedTextRules(_ replica: NotebookReplica) async throws {
+        _ = try await replica.createNote(
+            name: "Bible study.md",
+            text: [
+                "# Love and hope",
+                "The main thought comes from John 3:16. Paul describes love in "
+                    + "1 Corinthians 13:4-7, and Romans 8:38, 39 shows that "
+                    + "nothing can separate us from it.",
+                "- Psalm 23 for comfort\n- Hope in Revelation 21:3, 4",
+                "Group meeting on Monday at 7:30 with Mark and Ruth.",
+            ].joined(separator: "\n\n") + "\n")
+        _ = try await replica.createNote(
+            name: "Travel day.md",
+            text: [
+                "# Lisbon",
+                "Drive to the airport 50m\nSecurity and waiting 1h 30m\n"
+                    + "Flight 2h 55m\nTime zone -1h",
+                "Travel day =",
+            ].joined(separator: "\n\n") + "\n")
     }
 
     /// A trip note linking to a packing list that links on, for link
