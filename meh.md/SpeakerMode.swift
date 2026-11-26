@@ -27,6 +27,9 @@ struct SpeakerIsland: View {
                 timer: timer, reading: timer.reading(at: context.date),
                 showsControls: $showsControls,
                 isDragged: placement.dragCenter != nil,
+                // Low on the screen, the controls open above the island, or
+                // they get squeezed against the bottom edge.
+                opensAbove: isFloating && (placement.spot?.y ?? 0) > 0.5,
                 move: !isFloating
                     ? (Text("Move Over Note"), {
                         withAnimation(.snappy) { placement.spot = .topTrailing }
@@ -483,9 +486,8 @@ private enum SpeakerMetrics {
     static let closeSize: CGFloat = 18
     /// How far the × reaches out past the island's corner.
     static let closeReach = closeSize * 0.75
-    /// Opens the controls below the island, unless there's no room. The Mac
-    /// default is above.
-    static let popoverEdge = Edge.bottom
+    /// The Mac names the island's edge the controls open from.
+    static func popoverEdge(opensAbove: Bool) -> Edge { opensAbove ? .top : .bottom }
     static let edgeFeedback = SensoryFeedback.alignment
     static let clickFeedback = SensoryFeedback.alignment
     #else
@@ -498,8 +500,8 @@ private enum SpeakerMetrics {
     static let sliderIconFont = Font.body.weight(.semibold)
     static let closeSize: CGFloat = 24
     static let closeReach = closeSize * 0.75
-    /// iOS already opens them below; `.bottom` would cover the island.
-    static let popoverEdge = Edge.top
+    /// iOS names the controls' edge where the arrow points at the island.
+    static func popoverEdge(opensAbove: Bool) -> Edge { opensAbove ? .bottom : .top }
     static let edgeFeedback = SensoryFeedback.selection
     static let clickFeedback = SensoryFeedback.impact(weight: .light)
     #endif
@@ -511,6 +513,7 @@ private struct SpeakerIslandContent: View {
     @Binding var showsControls: Bool
     /// While dragged, the glass doesn't stretch after the finger.
     let isDragged: Bool
+    let opensAbove: Bool
     /// Moves the island in or out of the toolbar without dragging.
     let move: (title: Text, action: () -> Void)?
     @State private var pulse = false
@@ -556,7 +559,7 @@ private struct SpeakerIslandContent: View {
         .glassEffect(isDragged ? style.glass.interactive(false) : style.glass, in: .capsule)
         .scaleEffect(pulse ? 1.1 : 1)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: reading.phase)
-        .popover(isPresented: $showsControls, arrowEdge: SpeakerMetrics.popoverEdge) {
+        .popover(isPresented: $showsControls, arrowEdge: SpeakerMetrics.popoverEdge(opensAbove: opensAbove)) {
             // Once the talk starts, the island alone keeps the note clear.
             SpeakerControlCard(timer: timer, onStart: { showsControls = false })
                 .presentationCompactAdaptation(.popover)
