@@ -1006,7 +1006,7 @@ struct MarkdownEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MarkdownEditor
         private var displayedText: String
-        private var displayedRevision: Data?
+        private(set) var displayedRevision: Data?
         private var staleParentRevision: Data?
         private var hasUncommittedText = false
         private var isUpdating = false
@@ -2915,7 +2915,7 @@ struct MarkdownEditor: UIViewRepresentable {
 
         var parent: MarkdownEditor
         private var displayedText: String
-        private var displayedRevision: Data?
+        private(set) var displayedRevision: Data?
         private var staleParentRevision: Data?
         private var hasUncommittedText = false
         private var isUpdating = false
