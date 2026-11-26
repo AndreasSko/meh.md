@@ -1,5 +1,54 @@
 import XCTest
 
+/// Reads a value until it stays the same for a second, such as a position
+/// once scrolling or an animation has stopped. The timeout only bounds a
+/// failure.
+func settledValue<T: Equatable>(
+    timeout: TimeInterval = 10,
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ read: () throws -> T
+) rethrows -> T {
+    try settledValue(timeout: timeout, file: file, line: line, read, same: ==)
+}
+
+/// A position found by text recognition varies by a fraction of a point
+/// between screenshots of the same screen.
+func settledFrame(
+    timeout: TimeInterval = 10,
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ read: () throws -> CGRect
+) rethrows -> CGRect {
+    try settledValue(timeout: timeout, file: file, line: line, read) {
+        abs($0.minX - $1.minX) <= 1 && abs($0.minY - $1.minY) <= 1
+    }
+}
+
+/// Compares each read with the first of the still run, so a slow drift
+/// never counts as still.
+private func settledValue<T>(
+    timeout: TimeInterval,
+    file: StaticString,
+    line: UInt,
+    _ read: () throws -> T,
+    same: (T, T) -> Bool
+) rethrows -> T {
+    var still = (value: try read(), since: Date())
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        let current = try read()
+        if !same(current, still.value) {
+            still = (current, Date())
+        } else if Date().timeIntervalSince(still.since) >= 1 {
+            return current
+        }
+    }
+    XCTFail("Kept changing for \(Int(timeout)) seconds: \(still.value)", file: file, line: line)
+    return still.value
+}
+
 extension XCUIElement {
     /// The text a static text shows: its label on iOS, its value on the Mac.
     var text: String {
