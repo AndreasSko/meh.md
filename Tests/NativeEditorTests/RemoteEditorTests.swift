@@ -557,18 +557,18 @@ final class RemoteEditorTests: XCTestCase {
         let originalSize = try XCTUnwrap(textView.font).pointSize
         model.fontSize = 24
         model.fontFamily = .serif
+        // The editor applies the new font after the update, in an edit of
+        // the text's attributes.
+        let serif = MarkdownPresentation.bodyFont(for: .serif, pointSize: 24).fontName
+        let serifApplied = expectation(
+            forNotification: NSTextStorage.didProcessEditingNotification,
+            object: textView.textStorage
+        ) { _ in textView.font?.fontName == serif }
         model.receiveRemote(text: "remote replacement", revision: revision(9))
-        mounted.flushUpdates()
-        mounted.flushUpdates()
+        wait(for: [serifApplied], timeout: 10)
 
         XCTAssertGreaterThan(try XCTUnwrap(textView.font).pointSize, originalSize)
-        XCTAssertEqual(
-            try XCTUnwrap(textView.font).fontName,
-            MarkdownPresentation.bodyFont(
-                for: .serif,
-                pointSize: 24
-            ).fontName
-        )
+        XCTAssertEqual(try XCTUnwrap(textView.font).fontName, serif)
         XCTAssertEqual(nativeText(in: textView), "hello!")
         XCTAssertEqual(selectedRange(in: textView), NSRange(location: 6, length: 0))
         XCTAssertTrue(textView.undoManager?.canUndo == true)
