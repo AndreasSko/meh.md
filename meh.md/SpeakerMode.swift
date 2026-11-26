@@ -17,14 +17,22 @@ struct SpeakerIsland: View {
     @State private var showsControls = false
     @State private var anchor = SpeakerWindowAnchor()
     @GestureState private var isDragging = false
+    /// Whether this copy of the island holds the drag, so only it lets go.
+    @State private var ownsDrag = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.periodic(from: timer.startedAt ?? .now, by: 1)) { context in
             SpeakerIslandContent(
                 timer: timer, reading: timer.reading(at: context.date),
                 showsControls: $showsControls,
-                move: !isFloating ? (Text("Move Over Note"), { placement.spot = .topTrailing })
-                    : placement.canDock ? (Text("Move to Toolbar"), { placement.spot = nil })
+                isDragged: placement.dragCenter != nil,
+                move: !isFloating
+                    ? (Text("Move Over Note"), {
+                        withAnimation(.snappy) { placement.spot = .topTrailing }
+                    })
+                    : placement.canDock && placement.dockingPoint == nil
+                    ? (Text("Move to Toolbar"), { placement.dock(reduceMotion: reduceMotion) })
                     : nil
             )
         }
@@ -32,25 +40,47 @@ struct SpeakerIsland: View {
         .highPriorityGesture(DragGesture(minimumDistance: 6, coordinateSpace: .global)
             .updating($isDragging) { _, dragging, _ in dragging = true }
             .onChanged { value in
-                if placement.dragCenter == nil {
+                if !ownsDrag {
+                    ownsDrag = true
                     showsControls = false
+                    if !isFloating { placement.rememberDock(anchor.frame) }
                     placement.dragStart = anchor.frame.map { CGPoint(x: $0.midX, y: $0.midY) }
                         ?? value.startLocation
                 }
-                placement.dragCenter = CGPoint(x: placement.dragStart.x + value.translation.width,
-                                               y: placement.dragStart.y + value.translation.height)
+                placement.drag(to: center(value))
             }
-            .onEnded { _ in
-                withAnimation(.snappy(duration: 0.25)) { placement.drop() }
+            .onEnded { value in
+                guard ownsDrag else { return }
+                ownsDrag = false
+                placement.drag(to: center(value))
+                placement.drop(velocity: CGVector(dx: value.velocity.width,
+                                                  dy: value.velocity.height),
+                               reduceMotion: reduceMotion)
             })
         // A drag the system cancels never ends; drop the island where it was.
         .onChange(of: isDragging) { _, dragging in
-            if !dragging { withAnimation(.snappy(duration: 0.25)) { placement.drop() } }
+            if !dragging { endDrag() }
         }
-        .onDisappear { placement.drop() }
+        .onDisappear { endDrag() }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { _ in
+            guard !isFloating else { return }
+            // The anchor's window frame is only right once laid out.
+            DispatchQueue.main.async { placement.rememberDock(anchor.frame) }
+        }
         // Dragged from the toolbar, its floating copy follows the
         // pointer while this one keeps the drag going.
-        .opacity(!isFloating && placement.dragCenter != nil ? 0 : 1)
+        .opacity(!isFloating && placement.isMoving ? 0 : 1)
+    }
+
+    private func center(_ value: DragGesture.Value) -> CGPoint {
+        CGPoint(x: placement.dragStart.x + value.translation.width,
+                y: placement.dragStart.y + value.translation.height)
+    }
+
+    private func endDrag() {
+        guard ownsDrag else { return }
+        ownsDrag = false
+        placement.drop(reduceMotion: reduceMotion)
     }
 }
 
@@ -99,37 +129,96 @@ final class SpeakerIslandPlacement {
     var spot: UnitPoint?
     /// The island's centre in the window while it's dragged.
     var dragCenter: CGPoint?
+    /// Where the island is heading as it settles back into the toolbar.
+    var dockingPoint: CGPoint?
+    /// Whether the dragged island is over the toolbar, where letting go
+    /// docks it.
+    var isOverDock = false
+    /// Counts the times the island clicked into a snap spot or the toolbar.
+    var clicks = 0
     /// Whether the note's toolbar is there to take the island back.
-    var canDock = false
+    var canDock = false {
+        didSet {
+            // Its toolbar gone, the island stays out where it was.
+            if !canDock, dockingPoint != nil { withAnimation(.snappy) { cancelDocking() } }
+        }
+    }
     @ObservationIgnored var dragStart = CGPoint.zero
     /// The window's content below the toolbar, where the island floats.
     @ObservationIgnored let area = SpeakerWindowAnchor()
-    var areaSize = CGSize.zero
+    /// The island's place in the toolbar while it's out, where the toolbar
+    /// keeps one.
+    @ObservationIgnored let slot = SpeakerWindowAnchor()
+    var areaSize = CGSize.zero {
+        // The window's frames are only right once laid out.
+        didSet {
+            DispatchQueue.main.async {
+                self.reachesHomeIndicator = self.area.reachesHomeIndicator
+            }
+        }
+    }
     var islandSize = CGSize.zero
+    /// Whether the area ends at the home indicator rather than the keyboard.
+    var reachesHomeIndicator = false
+    /// The island's last frame in the toolbar, in the area's space, and the
+    /// area's width then.
+    @ObservationIgnored private var dock: (frame: CGRect, areaWidth: CGFloat)?
+    /// Counts the trips back into the toolbar, so only the latest hands over.
+    @ObservationIgnored private var docking = 0
+    /// Whether the dropped island is still on its way to where it settles.
+    var isLanding = false
+    @ObservationIgnored private var landings = 0
 
-    /// Dropped near one of these, the island clicks into place.
-    static let snapSpots: [UnitPoint] = [
-        .topLeading, .top, .topTrailing, .bottomLeading, .bottom, .bottomTrailing,
-    ]
     #if os(macOS)
     static let snapDistance: CGFloat = 28
-    static let margin: CGFloat = 12
+    /// Below the toolbar, with room for the ×.
+    static let topInset: CGFloat = 12 + SpeakerMetrics.closeReach
     #else
     static let snapDistance: CGFloat = 40
-    static let margin: CGFloat = 16
+    static let topInset: CGFloat = 16 + SpeakerMetrics.closeReach
     #endif
+    static let edgeInset: CGFloat = 8
 
-    /// Where the island's centre can go, in the area's space.
-    var range: CGRect {
-        let inset = CGSize(width: Self.margin + islandSize.width / 2,
-                           height: Self.margin + islandSize.height / 2)
-        return CGRect(x: inset.width, y: inset.height,
-                      width: max(areaSize.width - inset.width * 2, 0),
-                      height: max(areaSize.height - inset.height * 2, 0))
+    var isMoving: Bool { dragCenter != nil || dockingPoint != nil }
+
+    var layout: SpeakerIslandLayout {
+        SpeakerIslandLayout(
+            areaSize: areaSize, islandSize: islandSize,
+            // Down to just above the home indicator.
+            insets: .init(top: Self.topInset, side: Self.edgeInset,
+                          bottom: reachesHomeIndicator ? -Self.edgeInset : Self.edgeInset),
+            snapDistance: Self.snapDistance, dock: canDock ? dockFrame : nil)
+    }
+
+    /// Where the island sits in the toolbar: around its slot there, or
+    /// where it last was.
+    private var dockFrame: CGRect {
+        let size = dock?.frame.size ?? CGSize(width: 100, height: SpeakerMetrics.islandHeight)
+        if let slot = slot.frame, let area = area.frame {
+            return CGRect(x: slot.midX - area.minX - size.width / 2,
+                          y: slot.midY - area.minY - size.height / 2,
+                          width: size.width, height: size.height)
+        }
+        guard let dock else {
+            return CGRect(origin: CGPoint(x: areaSize.width / 2 - size.width / 2, y: 0),
+                          size: size)
+        }
+        #if os(macOS)
+        // The Mac toolbar keeps no slot; its items stay with the window's
+        // trailing edge as it resizes.
+        return dock.frame.offsetBy(dx: areaSize.width - dock.areaWidth, dy: 0)
+        #else
+        return dock.frame
+        #endif
+    }
+
+    func rememberDock(_ windowFrame: CGRect?) {
+        guard let windowFrame, let area = area.frame else { return }
+        dock = (windowFrame.offsetBy(dx: -area.minX, dy: -area.minY), area.width)
     }
 
     func point(for spot: UnitPoint) -> CGPoint {
-        CGPoint(x: range.minX + range.width * spot.x, y: range.minY + range.height * spot.y)
+        layout.point(for: CGPoint(x: spot.x, y: spot.y))
     }
 
     /// The dragged island's centre in the area's space.
@@ -138,33 +227,97 @@ final class SpeakerIslandPlacement {
         return CGPoint(x: dragCenter.x - frame.minX, y: dragCenter.y - frame.minY)
     }
 
-    /// Where the island is shown: under the pointer, clicked into a snap spot
-    /// it's near, or where it was dropped.
+    /// Where the floating island is shown: under the finger, on its way
+    /// into the toolbar, or where it was dropped.
     var shownPoint: CGPoint? {
-        guard let dragPoint else { return spot.map(point(for:)) }
-        return snapSpot(near: dragPoint).map(point(for:)) ?? dragPoint
+        dragPoint ?? dockingPoint ?? spot.map(point(for:))
     }
 
-    func drop() {
-        defer { dragCenter = nil }
-        guard let dragPoint else { return }
-        // Reaching up into the toolbar docks it again, wherever it was
-        // grabbed.
-        guard !canDock || dragPoint.y - islandSize.height / 2 >= 0 else {
+    func drag(to center: CGPoint) {
+        cancelDocking()
+        landings += 1
+        isLanding = false
+        dragCenter = center
+        if let dragPoint {
+            isOverDock = layout.isOverDock(dragPoint, wasOver: isOverDock)
+        }
+    }
+
+    /// Lets go of the island. It carries on the way it was flung, then
+    /// settles into the toolbar, a snap spot it's near, or where it got to.
+    func drop(velocity: CGVector = .zero, reduceMotion: Bool) {
+        guard let start = dragPoint else {
+            dragCenter = nil
+            isOverDock = false
+            return
+        }
+        let layout = layout
+        let landing = layout.landing(from: start, velocity: velocity, wasOverDock: isOverDock)
+        isOverDock = false
+        let spot: CGPoint
+        switch landing {
+        case .dock:
+            dock(from: start, velocity: velocity, reduceMotion: reduceMotion)
+            return
+        case .snap(let snap):
+            clicks += 1
+            spot = snap
+        case .free(let free):
+            spot = free
+        }
+        landings += 1
+        let trip = landings
+        isLanding = true
+        withAnimation(Self.settle(from: start, to: layout.point(for: spot), velocity: velocity,
+                                  reduceMotion: reduceMotion)) {
+            dragCenter = nil
+            self.spot = UnitPoint(x: spot.x, y: spot.y)
+        } completion: { [weak self] in
+            guard let self, landings == trip else { return }
+            isLanding = false
+        }
+    }
+
+    /// Moves the island back into the toolbar. The floating copy slides
+    /// into the toolbar's spot first and hands over once it's there.
+    func dock(reduceMotion: Bool) {
+        guard dockingPoint == nil, let start = shownPoint else { return }
+        dock(from: start, velocity: .zero, reduceMotion: reduceMotion)
+    }
+
+    private func dock(from start: CGPoint, velocity: CGVector, reduceMotion: Bool) {
+        guard let end = layout.dockPoint else {
+            dragCenter = nil
             spot = nil
             return
         }
-        spot = snapSpot(near: dragPoint) ?? UnitPoint(
-            x: range.width > 0 ? min(max((dragPoint.x - range.minX) / range.width, 0), 1) : 0.5,
-            y: range.height > 0 ? min(max((dragPoint.y - range.minY) / range.height, 0), 1) : 0
-        )
+        clicks += 1
+        docking += 1
+        let trip = docking
+        withAnimation(Self.settle(from: start, to: end, velocity: velocity,
+                                  reduceMotion: reduceMotion)) {
+            dragCenter = nil
+            dockingPoint = end
+        } completion: { [weak self] in
+            // A new drag or a closed note may have stopped it on the way.
+            guard let self, docking == trip, dockingPoint != nil else { return }
+            dockingPoint = nil
+            spot = nil
+        }
     }
 
-    private func snapSpot(near point: CGPoint) -> UnitPoint? {
-        Self.snapSpots.first { spot in
-            let snap = self.point(for: spot)
-            return hypot(snap.x - point.x, snap.y - point.y) < Self.snapDistance
-        }
+    private func cancelDocking() {
+        docking += 1
+        dockingPoint = nil
+    }
+
+    private static func settle(from start: CGPoint, to end: CGPoint, velocity: CGVector,
+                               reduceMotion: Bool) -> Animation {
+        if reduceMotion { return .easeOut(duration: 0.2) }
+        return .interpolatingSpring(
+            Spring(duration: 0.4, bounce: 0.15),
+            initialVelocity: SpeakerIslandLayout.springVelocity(from: start, to: end,
+                                                                velocity: velocity))
     }
 }
 
@@ -176,6 +329,12 @@ struct SpeakerFloatingIsland: View {
     /// Whether the note's toolbar is showing, to dock the island in.
     let canDock: Bool
     let onClose: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Picked up and away from the toolbar, the island lifts off the note.
+    private var isLifted: Bool {
+        placement.dragCenter != nil && !placement.isOverDock && !reduceMotion
+    }
 
     var body: some View {
         Color.clear
@@ -187,16 +346,30 @@ struct SpeakerFloatingIsland: View {
                     // The × sits just off the island's corner: where it overlaps
                     // the glass, taps fall through to the note.
                     SpeakerIsland(timer: timer, placement: placement, isFloating: true)
-                        .padding(SpeakerMetrics.closeSize * 0.75)
-                        .overlay(alignment: .topLeading) {
-                            if placement.dragCenter == nil { closeButton }
-                        }
                         .onGeometryChange(for: CGSize.self, of: \.size) {
                             placement.islandSize = $0
+                        }
+                        .scaleEffect(isLifted ? 1.04 : 1)
+                        .shadow(color: .black.opacity(isLifted ? 0.15 : 0),
+                                radius: isLifted ? 12 : 0, y: isLifted ? 6 : 0)
+                        .animation(.smooth(duration: 0.25), value: isLifted)
+                        .padding(SpeakerMetrics.closeReach)
+                        // On the inner corner, so it stays in the window.
+                        .overlay(alignment: point.x < placement.areaSize.width / 2
+                                 ? .topTrailing : .topLeading) {
+                            // Only once it's settled: shown earlier, it would
+                            // wait at the landing spot ahead of the island.
+                            if !placement.isMoving && !placement.isLanding { closeButton }
                         }
                         .position(point)
                 }
             }
+            // Ticks as the island crosses into or out of the toolbar while
+            // dragged, and as it clicks into place.
+            .sensoryFeedback(SpeakerMetrics.edgeFeedback, trigger: placement.isOverDock) { _, _ in
+                placement.dragCenter != nil
+            }
+            .sensoryFeedback(SpeakerMetrics.clickFeedback, trigger: placement.clicks)
     }
 
     private var closeButton: some View {
@@ -212,6 +385,20 @@ struct SpeakerFloatingIsland: View {
         .accessibilityIdentifier("speaker-close")
     }
 }
+
+#if os(iOS)
+/// Holds the island's place in the toolbar while it floats, so it knows
+/// where to go back to after the toolbar moved.
+struct SpeakerToolbarSlot: View {
+    let placement: SpeakerIslandPlacement
+
+    var body: some View {
+        Color.clear.frame(width: 1, height: 1)
+            .background(SpeakerAnchorView(anchor: placement.slot))
+            .accessibilityHidden(true)
+    }
+}
+#endif
 
 /// Finds a view's frame in its window, from the top left, so the toolbar
 /// and the floating island can share one space.
@@ -231,6 +418,20 @@ final class SpeakerWindowAnchor {
         var frame = view.convert(view.bounds, to: content)
         if !content.isFlipped { frame.origin.y = content.bounds.height - frame.maxY }
         return frame
+        #endif
+    }
+
+    /// Whether the view ends at the home indicator, not the keyboard, so
+    /// the island can sit a little lower, just above the indicator.
+    var reachesHomeIndicator: Bool {
+        #if os(iOS)
+        guard let view, let window = view.window, window.safeAreaInsets.bottom > 0 else {
+            return false
+        }
+        let bottom = view.convert(view.bounds, to: nil).maxY
+        return abs(window.bounds.height - window.safeAreaInsets.bottom - bottom) < 1
+        #else
+        false
         #endif
     }
 }
@@ -280,9 +481,13 @@ private enum SpeakerMetrics {
     static let sliderFont = Font.system(size: 12, weight: .semibold).monospacedDigit()
     static let sliderIconFont = Font.system(size: 13, weight: .semibold)
     static let closeSize: CGFloat = 18
+    /// How far the × reaches out past the island's corner.
+    static let closeReach = closeSize * 0.75
     /// Opens the controls below the island, unless there's no room. The Mac
     /// default is above.
     static let popoverEdge = Edge.bottom
+    static let edgeFeedback = SensoryFeedback.alignment
+    static let clickFeedback = SensoryFeedback.alignment
     #else
     static let islandHeight: CGFloat = 44
     static let controlSize: CGFloat = 44
@@ -292,8 +497,11 @@ private enum SpeakerMetrics {
     static let sliderFont = Font.subheadline.weight(.semibold).monospacedDigit()
     static let sliderIconFont = Font.body.weight(.semibold)
     static let closeSize: CGFloat = 24
+    static let closeReach = closeSize * 0.75
     /// iOS already opens them below; `.bottom` would cover the island.
     static let popoverEdge = Edge.top
+    static let edgeFeedback = SensoryFeedback.selection
+    static let clickFeedback = SensoryFeedback.impact(weight: .light)
     #endif
 }
 
@@ -301,6 +509,8 @@ private struct SpeakerIslandContent: View {
     let timer: SpeakerTimer
     let reading: SpeakerTimerReading
     @Binding var showsControls: Bool
+    /// While dragged, the glass doesn't stretch after the finger.
+    let isDragged: Bool
     /// Moves the island in or out of the toolbar without dragging.
     let move: (title: Text, action: () -> Void)?
     @State private var pulse = false
@@ -343,7 +553,7 @@ private struct SpeakerIslandContent: View {
             }
         }
         .accessibilityIdentifier("speaker-island")
-        .glassEffect(style.glass, in: .capsule)
+        .glassEffect(isDragged ? style.glass.interactive(false) : style.glass, in: .capsule)
         .scaleEffect(pulse ? 1.1 : 1)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: reading.phase)
         .popover(isPresented: $showsControls, arrowEdge: SpeakerMetrics.popoverEdge) {

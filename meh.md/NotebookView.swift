@@ -252,6 +252,8 @@ private struct NotebookLinkScreen: View {
                    scene.speakerIsland.spot == nil, isCompact || scene.pageFolderID == nil,
                    scene.selectedPlacement != nil, scene.historyBrowser == nil {
                     SpeakerIsland(timer: timer, placement: scene.speakerIsland)
+                } else if speakerModeLabs, scene.speakerTimer != nil {
+                    SpeakerToolbarSlot(placement: scene.speakerIsland)
                 } else {
                     Color.clear.frame(width: 1, height: 1).accessibilityHidden(true)
                 }
