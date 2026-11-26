@@ -259,6 +259,8 @@ final class EditorRenderingUITests: XCTestCase {
         var size: CGSize { frame.size }
         var scale: CGFloat { CGFloat(image.width) / frame.width }
         let bytes: [UInt8]
+        /// Pixel rows that must stay the same for the screen to count as still.
+        let stillRows: Int
 
         /// Whether both show the same screen, apart from changes a few
         /// points wide, such as the blinking caret.
@@ -272,7 +274,7 @@ final class EditorRenderingUITests: XCTestCase {
                 other.bytes.withUnsafeBufferPointer { b in
                     a.withMemoryRebound(to: UInt32.self) { a in
                         b.withMemoryRebound(to: UInt32.self) { b in
-                            for row in 0..<image.height {
+                            for row in 0..<min(stillRows, other.stillRows) {
                                 let start = row * width
                                 guard let first = (start..<start + width)
                                     .first(where: { a[$0] != b[$0] }) else { continue }
@@ -350,11 +352,23 @@ final class EditorRenderingUITests: XCTestCase {
         let bytes = [UInt8](UnsafeRawBufferPointer(
             start: try XCTUnwrap(context.data), count: image.width * image.height * 4
         ))
+        var stillRows = image.height
+#if os(iOS)
+        // The formatting bar above the keyboard is glass: the caret blinking
+        // behind it changes more than a few points, so the screen would never
+        // look still. Its soft edge reaches a little above its frame.
+        let formatting = app.collectionViews["editor-keyboard-toolbar"]
+        if formatting.exists {
+            let top = (formatting.frame.minY - 12 - area.minY) * scale
+            stillRows = max(0, min(stillRows, Int(top)))
+        }
+#endif
         return Shot(
             image: try XCTUnwrap(context.makeImage()),
             frame: CGRect(x: area.minX, y: area.minY, width: crop.width / scale,
                           height: crop.height / scale),
-            bytes: bytes
+            bytes: bytes,
+            stillRows: stillRows
         )
     }
 
