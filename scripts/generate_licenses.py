@@ -76,6 +76,16 @@ TEST_FOLDERS = {"test", "tests"}
 # Vendored files whose license is only in their leading comment.
 LICENSE_HEADERS = {"aws-checksums": ["source/external/xxhash.h"]}
 
+# Code copied into the app instead of coming from a package: the
+# JavaScript parser text rules use. Its license text is kept next to this
+# script.
+VENDORED = [
+    {"name": "acorn", "version": "8.19.0", "license": "MIT",
+     "url": "https://github.com/acornjs/acorn",
+     "note": "Reads text rule scripts.", "file": "acorn.txt"},
+]
+VENDORED_LICENSES = ROOT / "scripts" / "vendored-licenses"
+
 # Packages with a prebuilt binary we checked by hand and found covered by
 # the package's own license. Other binaries stop the script.
 CHECKED_BINARIES: set[str] = set()
@@ -397,11 +407,21 @@ def generate() -> dict:
             packages += [crate_entry(package) for package in by_name[name]]
         if std:
             packages.append(rust_std_entry(std))
+    packages += vendored_entries()
     missing = [f"{p['name']} {p['version']}" for p in packages if not p["texts"]]
     if missing:
         sys.exit("No license file found for: " + ", ".join(missing)
                  + ". For crates, add them to LICENSES_IN_REPOSITORY.")
     return deduplicated(packages, sources)
+
+
+def vendored_entries() -> list[dict]:
+    entries = []
+    for item in VENDORED:
+        entry = {key: value for key, value in item.items() if key != "file"}
+        entry["texts"] = [(VENDORED_LICENSES / item["file"]).read_text(encoding="utf-8")]
+        entries.append(entry)
+    return entries
 
 
 def deduplicated(packages: list[dict], sources: dict[str, str]) -> dict:

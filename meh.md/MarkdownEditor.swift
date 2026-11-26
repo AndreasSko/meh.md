@@ -40,6 +40,8 @@ final class MarkdownEditorNavigation {
     var openLink: ((NotebookLinkOccurrence) -> Void)? {
         didSet { linkActivationChanged?() }
     }
+    /// Opens a link a text rule shows, which isn't part of the note.
+    var openURL: ((URL) -> Void)?
     var linkActivationChanged: (() -> Void)?
     var requestLink: ((String, NSRange) -> Void)?
     var selectionChanged: ((String, NSRange, Bool) -> Void)?
@@ -606,6 +608,19 @@ final class MarkdownTextView: NSTextView {
         let source = string as NSString
         let snapshot = MarkdownLivePreview.snapshot(for: self)
         var rects: [NSRect] = []
+        if markdownLinkNavigation?.openURL != nil {
+            for link in markdownSyntaxCache.textRuleDecorations.links where flags == .command
+                || MarkdownLivePreview.conceals(link.range, in: source, snapshot: snapshot) {
+                guard NSMaxRange(link.range) <= source.length else { continue }
+                for frame in MarkdownPresentation.textSegmentFrames(
+                    for: link.range, layoutManager: manager, contentManager: content
+                ) {
+                    let rect = frame.offsetBy(dx: textContainerOrigin.x,
+                        dy: textContainerOrigin.y).intersection(visibleRect)
+                    if !rect.isNull, rect.width > 1, rect.height > 0 { rects.append(rect) }
+                }
+            }
+        }
         for link in noteLinks where !link.isEmbed {
             guard flags == .command || MarkdownLivePreview.conceals(
                 link.range, in: source, snapshot: snapshot
@@ -656,8 +671,25 @@ final class MarkdownTextView: NSTextView {
             item.target = self
             item.representedObject = link
             menu?.insertItem(item, at: 0)
+        } else if markdownLinkNavigation?.openURL != nil,
+                  let link = MarkdownTextRulePresentation.link(
+                      at: offset, in: self, includingEdited: true),
+                  let url = URL(string: link.url) {
+            let item = NSMenuItem(
+                title: link.label.map { String(localized: "Open \($0)") }
+                    ?? String(localized: "Open Link"),
+                action: #selector(openRuleLink(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = url
+            menu?.insertItem(item, at: 0)
         }
         return menu
+    }
+
+    @objc private func openRuleLink(_ sender: NSMenuItem) {
+        if let url = sender.representedObject as? URL {
+            markdownLinkNavigation?.openURL?(url)
+        }
     }
 
     @objc private func openMarkdownLink(_ sender: NSMenuItem) {
@@ -749,6 +781,13 @@ final class MarkdownTextView: NSTextView {
             open(link)
             return
         }
+        if event.clickCount == 1,
+           let open = markdownLinkNavigation?.openURL,
+           let link = ruleLink(at: point, modifiers: event.modifierFlags),
+           let url = URL(string: link.url) {
+            open(url)
+            return
+        }
         super.mouseDown(with: event)
     }
 
@@ -773,6 +812,28 @@ final class MarkdownTextView: NSTextView {
             if flags == .command || MarkdownLivePreview.conceals(
                 link.range, in: source, snapshot: snapshot
             ) { return link }
+        }
+        return nil
+    }
+
+    /// A link a text rule shows under the point. Like note links, it opens
+    /// with a click outside the edited paragraph, or a Command-click.
+    func ruleLink(at point: NSPoint, modifiers: NSEvent.ModifierFlags)
+        -> MarkdownTextRuleDecorations.Link? {
+        guard !hasMarkedText(), let window else { return nil }
+        let flags = modifiers.intersection([.command, .shift, .option, .control])
+        guard flags.isEmpty || flags == .command else { return nil }
+        let source = string as NSString
+        let offset = characterIndexForInsertion(at: point)
+        for candidate in [offset, offset - 1] where candidate >= 0 && candidate < source.length {
+            let character = source.rangeOfComposedCharacterSequence(at: candidate)
+            let screenRect = firstRect(forCharacterRange: character, actualRange: nil)
+            let rect = convert(window.convertFromScreen(screenRect), from: nil)
+            guard rect.width > 1, rect.contains(point),
+                  let link = MarkdownTextRulePresentation.link(
+                      at: candidate, in: self, includingEdited: flags == .command)
+            else { continue }
+            return link
         }
         return nil
     }
@@ -890,6 +951,13 @@ struct MarkdownEditor: NSViewRepresentable {
     var knownLinkNames: Set<String>?
     var historyChanges: NoteHistoryChanges
     var timeCalculator: Bool
+    /// Text rules to run in Live Preview, a Labs experiment.
+    var textRules: [MarkdownTextRuleConfiguration]
+    var noteTitle: String
+    /// The latest problem of each rule, for a page that explains it.
+    var onTextRuleProblems: (([UUID: MarkdownTextRuleError]) -> Void)?
+    /// Off for small sample boxes, where formatting buttons only take room.
+    var showsFormattingBar: Bool
     @AppStorage(EditorLineWidth.key, store: NotebookEditorPreferences.store)
     private var lineWidth = EditorLineWidth.standard
 
@@ -916,7 +984,11 @@ struct MarkdownEditor: NSViewRepresentable {
         palette: MehPalette = MehStyle.palette,
         knownLinkNames: Set<String>? = nil,
         historyChanges: NoteHistoryChanges = .none,
-        timeCalculator: Bool = false
+        timeCalculator: Bool = false,
+        textRules: [MarkdownTextRuleConfiguration] = [],
+        noteTitle: String = "",
+        onTextRuleProblems: (([UUID: MarkdownTextRuleError]) -> Void)? = nil,
+        showsFormattingBar: Bool = true
     ) {
         _text = text
         self.isReadOnly = isReadOnly
@@ -937,6 +1009,10 @@ struct MarkdownEditor: NSViewRepresentable {
         self.knownLinkNames = knownLinkNames
         self.historyChanges = historyChanges
         self.timeCalculator = timeCalculator
+        self.textRules = textRules
+        self.noteTitle = noteTitle
+        self.onTextRuleProblems = onTextRuleProblems
+        self.showsFormattingBar = showsFormattingBar
     }
 
     func makeCoordinator() -> Coordinator {
@@ -983,6 +1059,10 @@ struct MarkdownEditor: NSViewRepresentable {
         MarkdownPresentation.knownLinkNames = knownLinkNames
         // The first parse must already know whether underlines make headings.
         textView.markdownSyntaxCache.timeSums = timeCalculator
+        // The first refresh runs the rules, so they need to be set already.
+        textView.markdownSyntaxCache.textRules.onProblemsChange = onTextRuleProblems
+        textView.markdownSyntaxCache.textRules.configurations = textRules
+        textView.markdownSyntaxCache.textRules.noteTitle = noteTitle
         MarkdownPresentation.configure(
             textView,
             fontSize: fontSize,
@@ -1208,6 +1288,19 @@ struct MarkdownEditor: NSViewRepresentable {
                 // Underline headings come and go with the calculator.
                 nativeView.markdownTimeCalculator = parent.timeCalculator
                 schedulePresentationRefresh(for: textView)
+            }
+            if let nativeView = textView as? MarkdownTextView {
+                let rules = nativeView.markdownSyntaxCache.textRules
+                rules.onProblemsChange = parent.onTextRuleProblems
+                rules.noteTitle = parent.noteTitle
+                if rules.configurations != parent.textRules {
+                    let wasEmpty = rules.configurations.isEmpty
+                    rules.configurations = parent.textRules
+                    // The first rule switches the rules on in the next refresh.
+                    if wasEmpty || parent.textRules.isEmpty {
+                        schedulePresentationRefresh(for: textView)
+                    }
+                }
             }
             if let nativeView = textView as? MarkdownTextView,
                nativeView.markdownLinkNavigation !== parent.navigation {
@@ -2462,6 +2555,25 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         return true
     }
 
+    /// A link a text rule shows under the point, outside the paragraph
+    /// being edited.
+    func ruleLink(at point: CGPoint) -> URL? {
+        guard markedTextRange == nil, markdownLinkNavigation?.openURL != nil,
+              let position = closestPosition(to: point) else { return nil }
+        let offset = self.offset(from: beginningOfDocument, to: position)
+        for candidate in [offset, offset - 1] where candidate >= 0 {
+            guard let link = MarkdownTextRulePresentation.link(at: candidate, in: self),
+                  let start = self.position(from: beginningOfDocument, offset: link.range.location),
+                  let end = self.position(from: start, offset: link.range.length),
+                  let range = textRange(from: start, to: end),
+                  selectionRects(for: range).contains(where: {
+                      $0.rect.insetBy(dx: -4, dy: -4).contains(point)
+                  }) else { continue }
+            return URL(string: link.url)
+        }
+        return nil
+    }
+
     private func noteLink(at point: CGPoint) -> NotebookLinkOccurrence? {
         guard let position = closestPosition(to: point) else { return nil }
         let offset = self.offset(from: beginningOfDocument, to: position)
@@ -2579,6 +2691,11 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         if let link = markdownState.tappedLink {
             markdownState.tappedLink = nil
             markdownLinkNavigation?.openLink?(link)
+            return
+        }
+        if let url = markdownState.tappedRuleLink {
+            markdownState.tappedRuleLink = nil
+            markdownLinkNavigation?.openURL?(url)
             return
         }
         guard let checkbox = MarkdownPresentation.taskCheckbox(
@@ -2710,8 +2827,11 @@ final class MarkdownTextView: UITextView, UIGestureRecognizerDelegate,
         markdownState.tappedRemoval = markdownLinkNavigation?.removalTapped == nil
             ? nil : historyRemoval(at: point)
         markdownState.tappedLink = passiveNoteLink(at: point, modifiers: tap.modifierFlags)
+        markdownState.tappedRuleLink = markdownState.tappedLink == nil
+            ? ruleLink(at: point) : nil
         return MarkdownPresentation.taskCheckbox(at: point, in: self) != nil
             || markdownState.tappedLink != nil
+            || markdownState.tappedRuleLink != nil
             || markdownState.tappedRemoval != nil
     }
 }
@@ -2740,6 +2860,7 @@ private final class MarkdownTextViewState: NSObject {
     let syntaxCache = MarkdownSyntaxCache()
     var taskTap: UITapGestureRecognizer?
     var tappedLink: NotebookLinkOccurrence?
+    var tappedRuleLink: URL?
     var tappedRemoval: MarkdownHistoryMarks.Ring?
     var historyChanges = NoteHistoryChanges.none
     var timeCalculator = false
@@ -2803,6 +2924,13 @@ struct MarkdownEditor: UIViewRepresentable {
     var knownLinkNames: Set<String>?
     var historyChanges: NoteHistoryChanges
     var timeCalculator: Bool
+    /// Text rules to run in Live Preview, a Labs experiment.
+    var textRules: [MarkdownTextRuleConfiguration]
+    var noteTitle: String
+    /// The latest problem of each rule, for a page that explains it.
+    var onTextRuleProblems: (([UUID: MarkdownTextRuleError]) -> Void)?
+    /// Off for small sample boxes, where formatting buttons only take room.
+    var showsFormattingBar: Bool
     var initialPreviewPosition: MarkdownEditorPosition?
     var initialPreviewInsets: UIEdgeInsets?
     var initialPreviewOriginY: CGFloat?
@@ -2833,6 +2961,10 @@ struct MarkdownEditor: UIViewRepresentable {
         knownLinkNames: Set<String>? = nil,
         historyChanges: NoteHistoryChanges = .none,
         timeCalculator: Bool = false,
+        textRules: [MarkdownTextRuleConfiguration] = [],
+        noteTitle: String = "",
+        onTextRuleProblems: (([UUID: MarkdownTextRuleError]) -> Void)? = nil,
+        showsFormattingBar: Bool = true,
         initialPreviewPosition: MarkdownEditorPosition? = nil,
         initialPreviewInsets: UIEdgeInsets? = nil,
         initialPreviewOriginY: CGFloat? = nil
@@ -2856,6 +2988,10 @@ struct MarkdownEditor: UIViewRepresentable {
         self.knownLinkNames = knownLinkNames
         self.historyChanges = historyChanges
         self.timeCalculator = timeCalculator
+        self.textRules = textRules
+        self.noteTitle = noteTitle
+        self.onTextRuleProblems = onTextRuleProblems
+        self.showsFormattingBar = showsFormattingBar
         self.initialPreviewPosition = initialPreviewPosition
         self.initialPreviewInsets = initialPreviewInsets
         self.initialPreviewOriginY = initialPreviewOriginY
@@ -2905,6 +3041,10 @@ struct MarkdownEditor: UIViewRepresentable {
         MarkdownPresentation.knownLinkNames = knownLinkNames
         // The first parse must already know whether underlines make headings.
         textView.markdownSyntaxCache.timeSums = timeCalculator
+        // The first refresh runs the rules, so they need to be set already.
+        textView.markdownSyntaxCache.textRules.onProblemsChange = onTextRuleProblems
+        textView.markdownSyntaxCache.textRules.configurations = textRules
+        textView.markdownSyntaxCache.textRules.noteTitle = noteTitle
         MarkdownPresentation.configure(
             textView,
             fontSize: fontSize,
@@ -3084,7 +3224,11 @@ struct MarkdownEditor: UIViewRepresentable {
         }
 
         func attachNavigation(to textView: MarkdownTextView) {
-            textView.installMarkdownKeyboardToolbar(navigation: parent.navigation)
+            if parent.showsFormattingBar {
+                textView.installMarkdownKeyboardToolbar(navigation: parent.navigation)
+            } else {
+                textView.inputAccessoryView = nil
+            }
             textView.markdownFindPresentation = parent.navigation?.findPresentation
             textView.markdownCellController.onCompositionEnded = { [weak self, weak textView] in
                 guard let self, let textView else { return }
@@ -3214,6 +3358,19 @@ struct MarkdownEditor: UIViewRepresentable {
                 // Underline headings come and go with the calculator.
                 nativeView.markdownTimeCalculator = parent.timeCalculator
                 schedulePresentationRefresh(for: textView)
+            }
+            if let nativeView = textView as? MarkdownTextView {
+                let rules = nativeView.markdownSyntaxCache.textRules
+                rules.onProblemsChange = parent.onTextRuleProblems
+                rules.noteTitle = parent.noteTitle
+                if rules.configurations != parent.textRules {
+                    let wasEmpty = rules.configurations.isEmpty
+                    rules.configurations = parent.textRules
+                    // The first rule switches the rules on in the next refresh.
+                    if wasEmpty || parent.textRules.isEmpty {
+                        schedulePresentationRefresh(for: textView)
+                    }
+                }
             }
             applyInitialPreviewInsets(in: textView)
             // SwiftUI can retain the native view while a navigation visit or
@@ -4074,7 +4231,10 @@ nonisolated private final class MarkdownTextLayoutFragment:
             let sumBounds = MarkdownTimeCalculator.surfaceBounds(
                 of: fragment.value, textView: textView
             ) ?? .null
-            return defaultBounds.union(panelBounds).union(sumBounds)
+            let insertBounds = MarkdownTextRulePresentation.surfaceBounds(
+                of: fragment.value, textView: textView
+            ) ?? .null
+            return defaultBounds.union(panelBounds).union(sumBounds).union(insertBounds)
         }
     }
 
@@ -4096,6 +4256,12 @@ nonisolated private final class MarkdownTextLayoutFragment:
                     context: drawingContext.value
                 )
                 MarkdownTimeCalculator.draw(
+                    in: fragment.value,
+                    textView: textView,
+                    at: point,
+                    context: drawingContext.value
+                )
+                MarkdownTextRulePresentation.draw(
                     in: fragment.value,
                     textView: textView,
                     at: point,
