@@ -10,6 +10,7 @@ enum NotebookUITestFixture: String, CaseIterable {
     case historyRestore = "history-restore"
     case historyTour = "history-tour"
     case linkTour = "link-tour"
+    case readingMode = "reading-mode"
     case dragOrder = "drag-order"
     case dragNested = "drag-nested"
     case dragSubtree = "drag-subtree"
@@ -320,6 +321,31 @@ enum NotebookUITestFixture: String, CaseIterable {
             #endif
         case .linkTour:
             try await seedLinkTour(replica)
+        case .readingMode:
+            // Talk notes that lead with a link and hold tasks, for Reading
+            // Mode's test and recordings.
+            _ = try await replica.createNote(
+                name: "Lightning talk.md",
+                text: """
+                    [[Speaker checklist]] first, then breathe.
+
+                    ## Opening
+
+                    - [x] Thank the hosts
+                    - [ ] Why plain text lasts
+                    - [ ] The lost-draft story
+
+                    ## Demo
+
+                    Open a note and read it out loud. No keyboard, no stray edits.
+
+                    > Slow down. Nobody minds a pause.
+
+                    """)
+            _ = try await replica.createNote(
+                name: "Speaker checklist.md",
+                text: "- [x] Water on the lectern\n- [x] Phone on silent\n"
+                    + "- [ ] Spare clicker batteries\n")
         case .dragSubtree:
             _ = try await replica.createNote(
                 name: "Packing list.md", text: Self.literalSource)

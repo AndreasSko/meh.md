@@ -109,7 +109,8 @@ enum MarkdownPresentation {
             textView,
             mode: mode,
             selection: textView.selectedRange(),
-            isEditing: textView.window?.firstResponder === textView,
+            isEditing: textView.window?.firstResponder === textView
+                && (textView as? MarkdownTextView)?.markdownIsReading != true,
             fontSize: normalizedFontSize(fontSize)
         )
         let syntaxCache = syntaxCache(for: textView)
@@ -143,7 +144,8 @@ enum MarkdownPresentation {
             textView,
             mode: mode,
             selection: selection,
-            isEditing: textView.window?.firstResponder === textView,
+            isEditing: textView.window?.firstResponder === textView
+                && (textView as? MarkdownTextView)?.markdownIsReading != true,
             fontSize: normalizedFontSize(fontSize)
         )
         guard !textView.hasMarkedText(),
@@ -269,7 +271,8 @@ enum MarkdownPresentation {
             textView,
             mode: mode,
             selection: textView.selectedRange,
-            isEditing: textView.isFirstResponder,
+            isEditing: textView.isFirstResponder
+                && (textView as? MarkdownTextView)?.markdownIsReading != true,
             fontSize: normalizedFontSize(fontSize)
         )
         let syntaxCache = syntaxCache(for: textView)
@@ -301,7 +304,8 @@ enum MarkdownPresentation {
             textView,
             mode: mode,
             selection: selection,
-            isEditing: textView.isFirstResponder,
+            isEditing: textView.isFirstResponder
+                && (textView as? MarkdownTextView)?.markdownIsReading != true,
             fontSize: normalizedFontSize(fontSize)
         )
         guard textView.markedTextRange == nil else { return }
