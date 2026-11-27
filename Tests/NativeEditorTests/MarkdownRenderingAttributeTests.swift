@@ -103,8 +103,11 @@ final class MarkdownRenderingAttributeTests: XCTestCase {
         ))
         var value: Any?
         manager.enumerateRenderingAttributes(from: location, reverse: false) {
-            _, attributes, _ in
-            value = attributes[key]
+            _, attributes, range in
+            // A run that starts later means none at this offset.
+            if range.location.compare(location) != .orderedDescending {
+                value = attributes[key]
+            }
             return false
         }
         return value

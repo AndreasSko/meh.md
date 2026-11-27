@@ -213,13 +213,15 @@ private enum MarkdownEditorDestinationHighlight {
 
     static func invalidate(
         _ range: NSRange,
-        in layoutManager: NSTextLayoutManager?
+        in textView: MarkdownTextView?
     ) {
-        guard range.length > 0, let layoutManager,
+        guard range.length > 0, let textView,
+              let layoutManager = textView.textLayoutManager,
               let textRange = textRange(for: range, in: layoutManager)
         else { return }
-        layoutManager.invalidateRenderingAttributes(for: textRange)
-        layoutManager.textViewportLayoutController.layoutViewport()
+        MarkdownPresentation.invalidateRenderingAttributes(
+            for: textRange, in: layoutManager, syntaxCache: textView.markdownSyntaxCache
+        )
     }
 }
 
@@ -346,6 +348,7 @@ final class MarkdownTextView: NSTextView {
         }
     }
     fileprivate var markdownLayoutDelegate: MarkdownLayoutManagerDelegate?
+    fileprivate var markdownViewportDelegate: MarkdownViewportLayoutDelegate?
     /// Reading Mode: Live Preview keeps every line rendered, even the
     /// one holding the selection.
     var markdownIsReading = false
@@ -1464,7 +1467,7 @@ struct MarkdownEditor: NSViewRepresentable {
             destinationCenterGeometry = nil
             parent.navigation?.searchLandingPosition = nil
             MarkdownEditorDestinationHighlight.invalidate(
-                range, in: textView.textLayoutManager
+                range, in: textView as? MarkdownTextView
             )
             textView.needsDisplay = true
         }
@@ -2751,6 +2754,7 @@ private final class MarkdownTextViewState: NSObject {
     var linkPointerRefreshes = 0
     weak var linkNavigation: MarkdownEditorNavigation?
     var layoutDelegate: MarkdownLayoutManagerDelegate?
+    var viewportDelegate: MarkdownViewportLayoutDelegate?
     var titleHost: UIHostingController<AnyView>?
     var titleHeight: CGFloat = 0
     var maxTextWidth: CGFloat?
@@ -3481,7 +3485,7 @@ struct MarkdownEditor: UIViewRepresentable {
             destinationCenterGeometry = nil
             parent.navigation?.searchLandingPosition = nil
             MarkdownEditorDestinationHighlight.invalidate(
-                range, in: textView.textLayoutManager
+                range, in: textView as? MarkdownTextView
             )
             textView.setNeedsDisplay()
         }
@@ -3910,11 +3914,22 @@ extension MarkdownTextView {
         get { markdownState.layoutDelegate }
         set { markdownState.layoutDelegate = newValue }
     }
+    fileprivate var markdownViewportDelegate: MarkdownViewportLayoutDelegate? {
+        get { markdownState.viewportDelegate }
+        set { markdownState.viewportDelegate = newValue }
+    }
 #endif
 
     func installMarkdownLayoutManagerDelegate(
         on layoutManager: NSTextLayoutManager
     ) {
+        let viewportController = layoutManager.textViewportLayoutController
+        if let base = viewportController.delegate,
+           !(base is MarkdownViewportLayoutDelegate) {
+            let delegate = MarkdownViewportLayoutDelegate(textView: self, forwardingTo: base)
+            markdownViewportDelegate = delegate
+            viewportController.delegate = delegate
+        }
         if let installed = markdownLayoutDelegate, layoutManager.delegate === installed {
             return
         }
@@ -4020,6 +4035,74 @@ private final class MarkdownLayoutManagerDelegate:
             textElement: textElement,
             range: nil,
             textView: textView
+        )
+    }
+}
+
+/// Renders the lines the text view is about to show that missed a reset of
+/// their rendering attributes, on every layout of the viewport, such as
+/// on a scroll. Everything else goes to the text view's own delegate.
+private final class MarkdownViewportLayoutDelegate:
+    NSObject, NSTextViewportLayoutControllerDelegate {
+    private weak var textView: MarkdownTextView?
+    nonisolated(unsafe) private weak var forwardedDelegate:
+        (any NSTextViewportLayoutControllerDelegate)?
+
+    init(
+        textView: MarkdownTextView,
+        forwardingTo delegate: any NSTextViewportLayoutControllerDelegate
+    ) {
+        self.textView = textView
+        forwardedDelegate = delegate
+    }
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        super.responds(to: selector)
+            || forwardedDelegate?.responds(to: selector) == true
+    }
+
+    nonisolated override func forwardingTarget(
+        for selector: Selector!
+    ) -> Any? {
+        if forwardedDelegate?.responds(to: selector) == true {
+            return forwardedDelegate
+        }
+        return super.forwardingTarget(for: selector)
+    }
+
+    func viewportBounds(
+        for textViewportLayoutController: NSTextViewportLayoutController
+    ) -> CGRect {
+        forwardedDelegate?.viewportBounds(for: textViewportLayoutController) ?? .zero
+    }
+
+    func textViewportLayoutControllerWillLayout(
+        _ textViewportLayoutController: NSTextViewportLayoutController
+    ) {
+        forwardedDelegate?.textViewportLayoutControllerWillLayout?(
+            textViewportLayoutController
+        )
+    }
+
+    func textViewportLayoutController(
+        _ textViewportLayoutController: NSTextViewportLayoutController,
+        configureRenderingSurfaceFor textLayoutFragment: NSTextLayoutFragment
+    ) {
+        forwardedDelegate?.textViewportLayoutController(
+            textViewportLayoutController,
+            configureRenderingSurfaceFor: textLayoutFragment
+        )
+    }
+
+    func textViewportLayoutControllerDidLayout(
+        _ textViewportLayoutController: NSTextViewportLayoutController
+    ) {
+        forwardedDelegate?.textViewportLayoutControllerDidLayout?(
+            textViewportLayoutController
+        )
+        guard let textView, let layoutManager = textView.textLayoutManager else { return }
+        MarkdownPresentation.renderStaleLines(
+            in: layoutManager, syntaxCache: textView.markdownSyntaxCache
         )
     }
 }
