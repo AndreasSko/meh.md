@@ -3923,6 +3923,11 @@ extension MarkdownTextView {
     func installMarkdownLayoutManagerDelegate(
         on layoutManager: NSTextLayoutManager
     ) {
+        if !(layoutManager.textSelectionNavigation is MarkdownSelectionNavigation) {
+            layoutManager.textSelectionNavigation = MarkdownSelectionNavigation(
+                dataSource: layoutManager
+            )
+        }
         let viewportController = layoutManager.textViewportLayoutController
         if let base = viewportController.delegate,
            !(base is MarkdownViewportLayoutDelegate) {
@@ -4104,6 +4109,72 @@ private final class MarkdownViewportLayoutDelegate:
         MarkdownPresentation.renderStaleLines(
             in: layoutManager, syntaxCache: textView.markdownSyntaxCache
         )
+    }
+}
+
+/// Moving up from the start of a line that follows a line separator
+/// (U+2028), such as in text pasted from a Bible app, TextKit stays at the
+/// same position when the line above is shorter than the caret's place
+/// across, as with the indent of a list item's wrapped lines. TextKit takes
+/// the end of that line to be after its separator. The caret then doesn't
+/// move, and the text view jumps to the start of the note as it does on
+/// the first line. This moves it to the end of the line above instead.
+nonisolated private final class MarkdownSelectionNavigation:
+    NSTextSelectionNavigation {
+    private static let lineSeparators: Set<unichar> = [0x2028, 0x0085]
+
+    override func destinationSelection(
+        for selection: NSTextSelection,
+        direction: NSTextSelectionNavigation.Direction,
+        destination: NSTextSelectionNavigation.Destination,
+        extending: Bool,
+        confined: Bool
+    ) -> NSTextSelection? {
+        let result = super.destinationSelection(
+            for: selection, direction: direction, destination: destination,
+            extending: extending, confined: confined
+        )
+        // Moving up, the start of the selection moves while its end stays,
+        // whether the caret moves or Shift extends the selection upward.
+        guard direction == .up, destination == .character, !confined,
+              let result, let moved = result.textRanges.first,
+              let original = selection.textRanges.first,
+              extending || original.isEmpty,
+              moved.endLocation.compare(original.endLocation) == .orderedSame,
+              let manager = textSelectionDataSource as? NSTextLayoutManager,
+              let content = manager.textContentManager as? NSTextContentStorage,
+              let text = content.attributedString?.string as NSString?
+        else { return result }
+        let offset = content.offset(
+            from: content.documentRange.location, to: moved.location
+        )
+        guard offset > 0, offset <= text.length,
+              Self.lineSeparators.contains(text.character(at: offset - 1))
+        else { return result }
+        // The position after the separator is the start of a line. Only on
+        // the moving edge's own line is it the wrong one.
+        var lineStart: NSTextLocation?
+        textSelectionDataSource?.enumerateCaretOffsetsInLineFragment(
+            at: original.location
+        ) { _, location, _, _ in
+            if lineStart.map({ location.compare($0) == .orderedAscending }) ?? true {
+                lineStart = location
+            }
+        }
+        guard let lineStart,
+              lineStart.compare(moved.location) == .orderedSame,
+              let lineEnd = content.location(moved.location, offsetBy: -1),
+              let range = extending
+                ? NSTextRange(location: lineEnd, end: moved.endLocation)
+                : NSTextRange(location: lineEnd)
+        else { return result }
+        let corrected = NSTextSelection(
+            range: range,
+            affinity: extending ? result.affinity : .downstream,
+            granularity: result.granularity
+        )
+        corrected.anchorPositionOffset = result.anchorPositionOffset
+        return corrected
     }
 }
 
