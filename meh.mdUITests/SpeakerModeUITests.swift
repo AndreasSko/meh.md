@@ -56,6 +56,33 @@ final class SpeakerModeUITests: XCTestCase {
         XCTAssertEqual(length.value as? String, "Stopwatch")
     }
 
+    func testIslandStartsAndPausesWithoutOpeningTheControls() {
+        let app = launch()
+        let island = turnOnSpeakerMode(in: app)
+        let startPause = app.buttons["speaker-island-start-pause"]
+        let length = app.otherElements["speaker-length"]
+        XCTAssertEqual(startPause.label, "Start Timer")
+        let before = island.label
+
+        startPause.tap()
+        XCTAssertEqual(startPause.label, "Pause Timer")
+        XCTAssertFalse(length.waitForExistence(timeout: 1),
+                       "Starting from the island leaves the controls closed")
+        let ticks = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label != %@", before),
+            object: island)
+        XCTAssertEqual(XCTWaiter.wait(for: [ticks], timeout: 5), .completed,
+                       "The countdown should be running")
+
+        startPause.tap()
+        XCTAssertEqual(startPause.label, "Start Timer")
+        XCTAssertTrue(island.label.hasSuffix(", paused"), island.label)
+
+        island.tap()
+        XCTAssertTrue(length.waitForExistence(timeout: 5), "The dial opens the controls")
+        XCTAssertTrue(app.buttons["speaker-reset"].isEnabled)
+    }
+
     func testIslandFloatsOverTheNoteDocksAgainAndCloses() {
         let app = launch()
         let island = turnOnSpeakerMode(in: app)
@@ -73,9 +100,13 @@ final class SpeakerModeUITests: XCTestCase {
                       "The floating island still opens its controls")
         app.buttons["speaker-start-pause"].tap()
 
-        // Dropped near the top centre, it clicks into place there.
-        drag(island, to: window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.14)))
-        XCTAssertEqual(island.frame.midX, window.frame.midX, accuracy: 2)
+        // Dropped near the top centre, it clicks into place there. The drag
+        // grabs the dial, left of the island's centre.
+        let startPause = app.buttons["speaker-island-start-pause"]
+        let grab = island.frame.union(startPause.frame).midX - island.frame.midX
+        drag(island, to: window.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.14))
+            .withOffset(CGVector(dx: -grab, dy: 0)))
+        XCTAssertEqual(island.frame.union(startPause.frame).midX, window.frame.midX, accuracy: 2)
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "Floating island"
         shot.lifetime = .keepAlways

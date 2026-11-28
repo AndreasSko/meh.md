@@ -1,12 +1,14 @@
 import SwiftUI
+import TipKit
 #if os(iOS)
 import UIKit
 #else
 import AppKit
 #endif
 
-/// Speaker Mode's island: a small stopwatch dial and the time. Tapping it
-/// shows Reset, the talk length and Start or Pause in a popover. It starts
+/// Speaker Mode's island: a small stopwatch dial and the time. Tapping the
+/// time starts or pauses the timer; tapping the dial shows Reset, the talk
+/// length and Start or Pause in a popover. It starts
 /// in the note's toolbar and can be dragged out anywhere in the window and
 /// back.
 struct SpeakerIsland: View {
@@ -27,9 +29,7 @@ struct SpeakerIsland: View {
                 timer: timer, reading: timer.reading(at: context.date),
                 showsControls: $showsControls,
                 isDragged: placement.dragCenter != nil,
-                // Low on the screen, the controls open above the island, or
-                // they get squeezed against the bottom edge.
-                opensAbove: isFloating && (placement.spot?.y ?? 0) > 0.5,
+                opensAbove: opensAbove,
                 move: !isFloating
                     ? (Text("Move Over Note"), {
                         withAnimation(.snappy) { placement.spot = .topTrailing }
@@ -74,6 +74,10 @@ struct SpeakerIsland: View {
         // pointer while this one keeps the drag going.
         .opacity(!isFloating && placement.isMoving ? 0 : 1)
     }
+
+    /// Low on the screen, popovers open above the island, or they get
+    /// squeezed against the bottom edge.
+    private var opensAbove: Bool { isFloating && (placement.spot?.y ?? 0) > 0.5 }
 
     private func center(_ value: DragGesture.Value) -> CGPoint {
         CGPoint(x: placement.dragStart.x + value.translation.width,
@@ -332,6 +336,10 @@ struct SpeakerFloatingIsland: View {
     /// Whether the note's toolbar is showing, to dock the island in.
     let canDock: Bool
     let onClose: () -> Void
+    /// Whether the island has been up a moment, so the menu that turned
+    /// Speaker Mode on is gone. A tip asked for while it closes never shows.
+    @State private var isSettled = false
+    private let tip = SpeakerStartPauseTip()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Picked up and away from the toolbar, the island lifts off the note.
@@ -366,6 +374,28 @@ struct SpeakerFloatingIsland: View {
                         }
                         .position(point)
                 }
+            }
+            // The tip points at the island from here, docked too: shown from
+            // the toolbar, it never appears.
+            .overlay {
+                if let point = placement.shownPoint ?? (canDock ? placement.layout.dockPoint : nil) {
+                    Color.clear
+                        .frame(width: 1, height: SpeakerMetrics.islandHeight)
+                        .popoverTip(isSettled && !placement.isMoving && !placement.isLanding
+                                        ? tip : nil,
+                                    arrowEdge: SpeakerMetrics.popoverEdge(
+                                        opensAbove: (placement.spot?.y ?? 0) > 0.5))
+                        // Taps still reach the island while the tip shows.
+                        .tipBackgroundInteraction(.enabled)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                        // Under the time, which the tip is about.
+                        .position(x: point.x + SpeakerMetrics.timeOffset, y: point.y)
+                }
+            }
+            .task {
+                try? await Task.sleep(for: .seconds(1))
+                isSettled = true
             }
             // Ticks as the island crosses into or out of the toolbar while
             // dragged, and as it clicks into place.
@@ -475,6 +505,11 @@ private struct SpeakerAnchorView: NSViewRepresentable {
 #endif
 
 private enum SpeakerMetrics {
+    /// Around the dial, which takes the gap to the time.
+    static let dialLeading: CGFloat = 8
+    static let dialTrailing: CGFloat = 7
+    /// How far the time's centre sits right of the island's.
+    static var timeOffset: CGFloat { (dialLeading + dialSize.width + dialTrailing) / 2 }
     #if os(macOS)
     static let islandHeight: CGFloat = 30
     static let controlSize: CGFloat = 32
@@ -507,6 +542,18 @@ private enum SpeakerMetrics {
     #endif
 }
 
+/// Points out the time as the island's Start and Pause button, which
+/// nothing else on it shows.
+private struct SpeakerStartPauseTip: Tip {
+    #if os(macOS)
+    var title: Text { Text("Click the time to start or pause") }
+    var message: Text? { Text("Click the stopwatch for Reset and the talk length.") }
+    #else
+    var title: Text { Text("Tap the time to start or pause") }
+    var message: Text? { Text("Tap the stopwatch for Reset and the talk length.") }
+    #endif
+}
+
 private struct SpeakerIslandContent: View {
     let timer: SpeakerTimer
     let reading: SpeakerTimerReading
@@ -517,18 +564,48 @@ private struct SpeakerIslandContent: View {
     /// Moves the island in or out of the toolbar without dragging.
     let move: (title: Text, action: () -> Void)?
     @State private var pulse = false
+    /// Counts taps on the time, for their haptic.
+    @State private var toggles = 0
     @Environment(\.mehPalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let style = SpeakerIslandStyle(phase: reading.phase, palette: palette)
-        Button {
-            showsControls.toggle()
-        } label: {
-            HStack(spacing: 7) {
+        HStack(spacing: 0) {
+            Button {
+                showsControls.toggle()
+            } label: {
                 SpeakerDial(reading: reading, style: style)
                     .frame(width: SpeakerMetrics.dialSize.width,
                            height: SpeakerMetrics.dialSize.height)
+                    .padding(.leading, SpeakerMetrics.dialLeading)
+                    // The gap goes to the dial: a near miss opens the
+                    // controls rather than stopping the talk's timer.
+                    .padding(.trailing, SpeakerMetrics.dialTrailing)
+                    .frame(minHeight: SpeakerMetrics.islandHeight)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Self.accessibilityLabel(reading))
+            .accessibilityHint(showsControls ? "Hides the timer controls."
+                                             : "Shows the timer controls.")
+            .accessibilityAddTraits(.updatesFrequently)
+            .accessibilityActions {
+                if let move {
+                    Button { withAnimation(.snappy) { move.action() } } label: { move.title }
+                }
+            }
+            .accessibilityIdentifier("speaker-island")
+            .popover(isPresented: $showsControls, arrowEdge: SpeakerMetrics.popoverEdge(opensAbove: opensAbove)) {
+                // Once the talk starts, the island alone keeps the note clear.
+                SpeakerControlCard(timer: timer, onStart: { showsControls = false })
+                    .presentationCompactAdaptation(.popover)
+            }
+            Button {
+                timer.toggle(at: .now)
+                toggles += 1
+                SpeakerStartPauseTip().invalidate(reason: .actionPerformed)
+            } label: {
                 // Sized for over time's "+", so the island doesn't grow
                 // at zero.
                 ZStack(alignment: .leading) {
@@ -537,33 +614,26 @@ private struct SpeakerIslandContent: View {
                         .modifier(SpeakerPausedBlink(isPaused: reading.isPaused))
                 }
                 .font(SpeakerMetrics.font)
+                .padding(.trailing, 12)
+                .frame(minHeight: SpeakerMetrics.islandHeight)
+                .contentShape(.rect)
             }
-            .padding(.leading, 8)
-            .padding(.trailing, 12)
-            .frame(minHeight: SpeakerMetrics.islandHeight)
-            .contentShape(.capsule)
-            // Set on the label, or the Mac toolbar tints the time blue.
-            .foregroundStyle(style.foreground)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(Self.accessibilityLabel(reading))
-        .accessibilityHint(showsControls ? "Hides the timer controls."
-                                         : "Shows the timer controls.")
-        .accessibilityAddTraits(.updatesFrequently)
-        .accessibilityActions {
-            if let move {
-                Button { withAnimation(.snappy) { move.action() } } label: { move.title }
+            .buttonStyle(.plain)
+            #if os(iOS)
+            // Lighter for a pause, so it can be told apart without looking.
+            .sensoryFeedback(trigger: toggles) { _, _ in
+                .impact(weight: timer.isRunning ? .medium : .light)
             }
+            #endif
+            .accessibilityLabel(timer.isRunning ? Text("Pause Timer") : Text("Start Timer"))
+            .accessibilityValue(Self.accessibilityLabel(reading))
+            .accessibilityIdentifier("speaker-island-start-pause")
         }
-        .accessibilityIdentifier("speaker-island")
+        // Set on the island, or the Mac toolbar tints the time blue.
+        .foregroundStyle(style.foreground)
         .glassEffect(isDragged ? style.glass.interactive(false) : style.glass, in: .capsule)
         .scaleEffect(pulse ? 1.1 : 1)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: reading.phase)
-        .popover(isPresented: $showsControls, arrowEdge: SpeakerMetrics.popoverEdge(opensAbove: opensAbove)) {
-            // Once the talk starts, the island alone keeps the note clear.
-            SpeakerControlCard(timer: timer, onStart: { showsControls = false })
-                .presentationCompactAdaptation(.popover)
-        }
         .onChange(of: reading.phase) { _, phase in
             if phase == .timeUp { playPulse() }
         }
