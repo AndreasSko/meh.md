@@ -213,13 +213,15 @@ private enum MarkdownEditorDestinationHighlight {
 
     static func invalidate(
         _ range: NSRange,
-        in layoutManager: NSTextLayoutManager?
+        in textView: MarkdownTextView?
     ) {
-        guard range.length > 0, let layoutManager,
+        guard range.length > 0, let textView,
+              let layoutManager = textView.textLayoutManager,
               let textRange = textRange(for: range, in: layoutManager)
         else { return }
-        layoutManager.invalidateRenderingAttributes(for: textRange)
-        layoutManager.textViewportLayoutController.layoutViewport()
+        MarkdownPresentation.invalidateRenderingAttributes(
+            for: textRange, in: layoutManager, syntaxCache: textView.markdownSyntaxCache
+        )
     }
 }
 
@@ -346,6 +348,7 @@ final class MarkdownTextView: NSTextView {
         }
     }
     fileprivate var markdownLayoutDelegate: MarkdownLayoutManagerDelegate?
+    fileprivate var markdownViewportDelegate: MarkdownViewportLayoutDelegate?
     /// Reading Mode: Live Preview keeps every line rendered, even the
     /// one holding the selection.
     var markdownIsReading = false
@@ -1464,7 +1467,7 @@ struct MarkdownEditor: NSViewRepresentable {
             destinationCenterGeometry = nil
             parent.navigation?.searchLandingPosition = nil
             MarkdownEditorDestinationHighlight.invalidate(
-                range, in: textView.textLayoutManager
+                range, in: textView as? MarkdownTextView
             )
             textView.needsDisplay = true
         }
@@ -2751,6 +2754,7 @@ private final class MarkdownTextViewState: NSObject {
     var linkPointerRefreshes = 0
     weak var linkNavigation: MarkdownEditorNavigation?
     var layoutDelegate: MarkdownLayoutManagerDelegate?
+    var viewportDelegate: MarkdownViewportLayoutDelegate?
     var titleHost: UIHostingController<AnyView>?
     var titleHeight: CGFloat = 0
     var maxTextWidth: CGFloat?
@@ -3481,7 +3485,7 @@ struct MarkdownEditor: UIViewRepresentable {
             destinationCenterGeometry = nil
             parent.navigation?.searchLandingPosition = nil
             MarkdownEditorDestinationHighlight.invalidate(
-                range, in: textView.textLayoutManager
+                range, in: textView as? MarkdownTextView
             )
             textView.setNeedsDisplay()
         }
@@ -3910,11 +3914,27 @@ extension MarkdownTextView {
         get { markdownState.layoutDelegate }
         set { markdownState.layoutDelegate = newValue }
     }
+    fileprivate var markdownViewportDelegate: MarkdownViewportLayoutDelegate? {
+        get { markdownState.viewportDelegate }
+        set { markdownState.viewportDelegate = newValue }
+    }
 #endif
 
     func installMarkdownLayoutManagerDelegate(
         on layoutManager: NSTextLayoutManager
     ) {
+        if !(layoutManager.textSelectionNavigation is MarkdownSelectionNavigation) {
+            layoutManager.textSelectionNavigation = MarkdownSelectionNavigation(
+                dataSource: layoutManager
+            )
+        }
+        let viewportController = layoutManager.textViewportLayoutController
+        if let base = viewportController.delegate,
+           !(base is MarkdownViewportLayoutDelegate) {
+            let delegate = MarkdownViewportLayoutDelegate(textView: self, forwardingTo: base)
+            markdownViewportDelegate = delegate
+            viewportController.delegate = delegate
+        }
         if let installed = markdownLayoutDelegate, layoutManager.delegate === installed {
             return
         }
@@ -4021,6 +4041,140 @@ private final class MarkdownLayoutManagerDelegate:
             range: nil,
             textView: textView
         )
+    }
+}
+
+/// Renders the lines the text view is about to show that missed a reset of
+/// their rendering attributes, on every layout of the viewport, such as
+/// on a scroll. Everything else goes to the text view's own delegate.
+private final class MarkdownViewportLayoutDelegate:
+    NSObject, NSTextViewportLayoutControllerDelegate {
+    private weak var textView: MarkdownTextView?
+    nonisolated(unsafe) private weak var forwardedDelegate:
+        (any NSTextViewportLayoutControllerDelegate)?
+
+    init(
+        textView: MarkdownTextView,
+        forwardingTo delegate: any NSTextViewportLayoutControllerDelegate
+    ) {
+        self.textView = textView
+        forwardedDelegate = delegate
+    }
+
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        super.responds(to: selector)
+            || forwardedDelegate?.responds(to: selector) == true
+    }
+
+    nonisolated override func forwardingTarget(
+        for selector: Selector!
+    ) -> Any? {
+        if forwardedDelegate?.responds(to: selector) == true {
+            return forwardedDelegate
+        }
+        return super.forwardingTarget(for: selector)
+    }
+
+    func viewportBounds(
+        for textViewportLayoutController: NSTextViewportLayoutController
+    ) -> CGRect {
+        forwardedDelegate?.viewportBounds(for: textViewportLayoutController) ?? .zero
+    }
+
+    func textViewportLayoutControllerWillLayout(
+        _ textViewportLayoutController: NSTextViewportLayoutController
+    ) {
+        forwardedDelegate?.textViewportLayoutControllerWillLayout?(
+            textViewportLayoutController
+        )
+    }
+
+    func textViewportLayoutController(
+        _ textViewportLayoutController: NSTextViewportLayoutController,
+        configureRenderingSurfaceFor textLayoutFragment: NSTextLayoutFragment
+    ) {
+        forwardedDelegate?.textViewportLayoutController(
+            textViewportLayoutController,
+            configureRenderingSurfaceFor: textLayoutFragment
+        )
+    }
+
+    func textViewportLayoutControllerDidLayout(
+        _ textViewportLayoutController: NSTextViewportLayoutController
+    ) {
+        forwardedDelegate?.textViewportLayoutControllerDidLayout?(
+            textViewportLayoutController
+        )
+        guard let textView, let layoutManager = textView.textLayoutManager else { return }
+        MarkdownPresentation.renderStaleLines(
+            in: layoutManager, syntaxCache: textView.markdownSyntaxCache
+        )
+    }
+}
+
+/// Moving up from the start of a line that follows a line separator
+/// (U+2028), such as in text pasted from a Bible app, TextKit stays at the
+/// same position when the line above is shorter than the caret's place
+/// across, as with the indent of a list item's wrapped lines. TextKit takes
+/// the end of that line to be after its separator. The caret then doesn't
+/// move, and the text view jumps to the start of the note as it does on
+/// the first line. This moves it to the end of the line above instead.
+nonisolated private final class MarkdownSelectionNavigation:
+    NSTextSelectionNavigation {
+    private static let lineSeparators: Set<unichar> = [0x2028, 0x0085]
+
+    override func destinationSelection(
+        for selection: NSTextSelection,
+        direction: NSTextSelectionNavigation.Direction,
+        destination: NSTextSelectionNavigation.Destination,
+        extending: Bool,
+        confined: Bool
+    ) -> NSTextSelection? {
+        let result = super.destinationSelection(
+            for: selection, direction: direction, destination: destination,
+            extending: extending, confined: confined
+        )
+        // Moving up, the start of the selection moves while its end stays,
+        // whether the caret moves or Shift extends the selection upward.
+        guard direction == .up, destination == .character, !confined,
+              let result, let moved = result.textRanges.first,
+              let original = selection.textRanges.first,
+              extending || original.isEmpty,
+              moved.endLocation.compare(original.endLocation) == .orderedSame,
+              let manager = textSelectionDataSource as? NSTextLayoutManager,
+              let content = manager.textContentManager as? NSTextContentStorage,
+              let text = content.attributedString?.string as NSString?
+        else { return result }
+        let offset = content.offset(
+            from: content.documentRange.location, to: moved.location
+        )
+        guard offset > 0, offset <= text.length,
+              Self.lineSeparators.contains(text.character(at: offset - 1))
+        else { return result }
+        // The position after the separator is the start of a line. Only on
+        // the moving edge's own line is it the wrong one.
+        var lineStart: NSTextLocation?
+        textSelectionDataSource?.enumerateCaretOffsetsInLineFragment(
+            at: original.location
+        ) { _, location, _, _ in
+            if lineStart.map({ location.compare($0) == .orderedAscending }) ?? true {
+                lineStart = location
+            }
+        }
+        guard let lineStart,
+              lineStart.compare(moved.location) == .orderedSame,
+              let lineEnd = content.location(moved.location, offsetBy: -1),
+              let range = extending
+                ? NSTextRange(location: lineEnd, end: moved.endLocation)
+                : NSTextRange(location: lineEnd)
+        else { return result }
+        let corrected = NSTextSelection(
+            range: range,
+            affinity: extending ? result.affinity : .downstream,
+            granularity: result.granularity
+        )
+        corrected.anchorPositionOffset = result.anchorPositionOffset
+        return corrected
     }
 }
 

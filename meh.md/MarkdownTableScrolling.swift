@@ -74,8 +74,9 @@ extension MarkdownTextView {
                                         offsetBy: range.location),
            let end = content.location(start, offsetBy: range.length),
            let textRange = NSTextRange(location: start, end: end) {
-            manager.invalidateRenderingAttributes(for: textRange)
-            manager.textViewportLayoutController.layoutViewport()
+            MarkdownPresentation.invalidateRenderingAttributes(
+                for: textRange, in: manager, syntaxCache: markdownSyntaxCache
+            )
             redrawMarkdownDecorations(for: textRange)
         }
     }
