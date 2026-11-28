@@ -54,6 +54,9 @@ final class MacSpeakerModeUITests: XCTestCase {
                        "Out of the toolbar, the search field gets its space back")
         attachScreenshot(of: window, named: "speaker-floating")
 
+        let startPause = window.buttons["speaker-island-start-pause"]
+        startPause.click()
+        XCTAssertEqual(startPause.label, "Pause Timer", "The island starts the timer itself")
         island.click()
         XCTAssertTrue(window.buttons["speaker-start-pause"].waitForExistence(timeout: 5))
         app.typeKey(.escape, modifierFlags: [])

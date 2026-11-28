@@ -10,7 +10,9 @@ final class SpeakerTimerTests: XCTestCase {
         let timer = SpeakerTimer(lengthMinutes: 7)
         XCTAssertEqual(timer.lengthMinutes, 7)
         timer.setLength(1)
-        XCTAssertEqual(timer.lengthMinutes, 5)
+        XCTAssertEqual(timer.lengthMinutes, 1)
+        timer.setLength(0)
+        XCTAssertEqual(timer.lengthMinutes, 1)
         timer.setLength(90)
         XCTAssertEqual(timer.lengthMinutes, 60)
         timer.setLength(nil)
@@ -50,6 +52,14 @@ final class SpeakerTimerTests: XCTestCase {
         let over = timer.reading(at: start + 300 + 83)
         XCTAssertEqual(over.phase, .overTime)
         XCTAssertEqual(over.text, "+01:23")
+    }
+
+    func testShortCountdownTurnsToLastMinutesHalfway() {
+        let timer = SpeakerTimer(lengthMinutes: 2)
+        timer.start(at: start)
+        XCTAssertEqual(timer.reading(at: start + 1).phase, .normal)
+        XCTAssertEqual(timer.reading(at: start + 59).phase, .normal)
+        XCTAssertEqual(timer.reading(at: start + 60).phase, .lastMinutes)
     }
 
     func testPauseKeepsElapsedTimeAndResetClearsIt() {
