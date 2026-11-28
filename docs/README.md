@@ -49,6 +49,8 @@ and the evidence collected along the way.
   folders, and destination and filename defaults.
 - [Markdown snippets](notebook-snippets.md): reusable text, folder categories,
   and insertion-time variables.
+- [Readwise sync](readwise-sync.md): proposed design for keeping Readwise
+  highlights as notes that stay up to date, a planned Labs experiment.
 - [Time calculator](time-calculator.md): live time sums in a note, an
   experiment behind a Labs setting.
 - [Widgets](widgets.md): Recents or one note on the Home Screen and the Mac
