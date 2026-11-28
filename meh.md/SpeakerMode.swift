@@ -868,10 +868,10 @@ private struct SpeakerControlCard: View {
 }
 
 /// The talk length as a pill, like the sliders in Control Center. Its left
-/// end is the stopwatch; the rest counts down from 5 to 60 minutes, with a
+/// end is the stopwatch; the rest counts down from 1 to 60 minutes, with a
 /// timer glyph. Dragging snaps to 5 minutes; scrolling, or dragging with
-/// the finger moved off the pill, fine-tunes by one. The
-/// length is locked once the timer has started, until it's reset.
+/// the finger moved off the pill, fine-tunes by one, which also reaches 1
+/// to 4. The length is locked once the timer has started, until it's reset.
 private struct SpeakerLengthSlider: View {
     let timer: SpeakerTimer
     let style: SpeakerIslandStyle

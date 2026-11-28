@@ -11,11 +11,15 @@ final class SpeakerTimer {
     /// The talk length last picked on this device, in minutes. 0 is the
     /// stopwatch.
     static let lengthKey = "speaker.lengthMinutes"
-    static let lengthRange = 5...60
-    /// Dragging the length snaps to this many minutes; scrolling steps by one.
+    static let lengthRange = 1...60
+    /// Dragging the length snaps to this many minutes; scrolling or a fine
+    /// drag steps by one, down to the shortest length.
     static let lengthStep = 5
-    /// The countdown turns to its last-minutes look at this many seconds.
-    static let lastMinutesThreshold: TimeInterval = 120
+    /// The countdown turns to its last-minutes look at this many seconds,
+    /// or halfway through a shorter talk, so it doesn't start in that look.
+    static func lastMinutesThreshold(length: TimeInterval) -> TimeInterval {
+        min(120, length / 2)
+    }
     /// How long "time's up" shows 00:00 before over time counts on.
     static let timeUpDuration: TimeInterval = 3
 
@@ -107,7 +111,8 @@ struct SpeakerTimerReading: Equatable {
         let remaining = length - elapsed
         if remaining > 0 {
             seconds = Int(remaining.rounded(.up))
-            phase = remaining <= SpeakerTimer.lastMinutesThreshold ? .lastMinutes : .normal
+            phase = remaining <= SpeakerTimer.lastMinutesThreshold(length: length)
+                ? .lastMinutes : .normal
             dialFraction = min(remaining / length, 1)
         } else {
             let over = -remaining
