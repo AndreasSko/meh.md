@@ -402,6 +402,93 @@ final class NotebookCatalogDocument {
                          value: .Boolean(enabled))
     }
 
+    // MARK: Text rules
+
+    /// Text rules live in flat registers like the other settings:
+    /// `textRule.<rule>.<field>` and `textRuleNote.<rule>.<note>`, so edits
+    /// on two devices merge field by field. A value in a form this version
+    /// doesn't know, perhaps from a newer one, leaves that rule out instead
+    /// of making the catalog unreadable.
+    func textRuleMetadata() throws -> NotebookTextRuleMetadata {
+        var fields: [UUID: [Substring: ScalarValue]] = [:]
+        var notes: [UUID: Set<UUID>] = [:]
+        for key in document.keys(obj: .ROOT) {
+            if key.hasPrefix("textRule.") {
+                let parts = key.split(separator: ".", maxSplits: 2)
+                guard parts.count == 3, let id = UUID(uuidString: String(parts[1])),
+                      case .Scalar(let value) = try document.get(obj: .ROOT, key: key)
+                else { continue }
+                fields[id, default: [:]][parts[2]] = value
+            } else if key.hasPrefix("textRuleNote.") {
+                let parts = key.split(separator: ".")
+                guard parts.count == 3, let rule = UUID(uuidString: String(parts[1])),
+                      let note = UUID(uuidString: String(parts[2])),
+                      try document.get(obj: .ROOT, key: key) == .Scalar(.Boolean(true))
+                else { continue }
+                notes[rule, default: []].insert(note)
+            }
+        }
+        var result = NotebookTextRuleMetadata()
+        for (id, values) in fields {
+            // Deleting a rule leaves `deleted`, which no edit writes, so an
+            // edit from another device can't bring the rule back.
+            guard values["deleted"] == nil,
+                  case .String(let stored)? = values["source"],
+                  case .Boolean(let enabled)? = values["enabled"],
+                  case .String(let scope)? = values["scope"], ["all", "notes"].contains(scope),
+                  let source = NotebookTextRule.Source.decode(stored) else { continue }
+            var rule = NotebookTextRule(id: id, source: source, isEnabled: enabled,
+                                        appliesToAllNotes: scope == "all")
+            if case .F64(let order)? = values["order"] { rule.order = order }
+            if case .String(let options)? = values["options"] {
+                rule.options = .decodeTextRuleOptions(options)
+            }
+            result.rules.append(rule)
+        }
+        result.rules.sort { ($0.order, $0.id.uuidString) < ($1.order, $1.id.uuidString) }
+        let ids = Set(result.rules.map(\.id))
+        result.noteIDs = notes.filter { ids.contains($0.key) }
+        return result
+    }
+
+    /// Writes only the fields that changed, so an unrelated edit on another
+    /// device survives the merge.
+    func setTextRule(_ rule: NotebookTextRule) throws {
+        let prefix = "textRule.\(rule.id.uuidString)."
+        let values: [(String, ScalarValue)] = [
+            ("source", .String(try rule.source.encoded())),
+            ("enabled", .Boolean(rule.isEnabled)),
+            ("scope", .String(rule.appliesToAllNotes ? "all" : "notes")),
+            ("order", .F64(rule.order)),
+            ("options", .String(try rule.options.encodedTextRuleOptions())),
+        ]
+        for (field, value) in values {
+            let stored = try document.get(obj: .ROOT, key: prefix + field)
+            if stored == .Scalar(value) { continue }
+            // Options this version can't read aren't shown, so they only
+            // change when an option people can see does.
+            if field == "options", case .Scalar(.String(let json))? = stored,
+               Dictionary.decodeTextRuleOptions(json) == rule.options { continue }
+            try document.put(obj: .ROOT, key: prefix + field, value: value)
+        }
+    }
+
+    func deleteTextRule(_ id: UUID) throws {
+        let prefixes = ["textRule.\(id.uuidString).", "textRuleNote.\(id.uuidString)."]
+        for key in document.keys(obj: .ROOT) where prefixes.contains(where: key.hasPrefix) {
+            try document.delete(obj: .ROOT, key: key)
+        }
+        try document.put(obj: .ROOT, key: "textRule.\(id.uuidString).deleted", value: .Boolean(true))
+    }
+
+    func setTextRule(_ ruleID: UUID, note noteID: UUID, enabled: Bool) throws {
+        guard try placements().contains(where: {
+            $0.item.id == noteID && $0.item.kind == .note && !$0.item.isPermanentlyDeleted
+        }) else { throw NotebookCatalogError.itemNotFound }
+        try document.put(obj: .ROOT, key: "textRuleNote.\(ruleID.uuidString).\(noteID.uuidString)",
+                         value: .Boolean(enabled))
+    }
+
     func setTemplateSettings(_ settings: NotebookTemplateSettings, for id: UUID) throws {
         guard let item = try placements().first(where: {
             $0.item.id == id && !$0.isInTrash && !$0.item.isPermanentlyDeleted
@@ -796,17 +883,22 @@ final class NotebookCatalogDocument {
             }
         }
         // These optional registers describe individual items. Keep template
-        // settings, snippet sources, time calculator notes, pins, former links
-        // and the new-note choice.
+        // settings, snippet sources, time calculator notes, text rules, pins,
+        // former links and the new-note choice.
         for key in local.document.keys(obj: .ROOT) where
             key.hasPrefix("template.") || key.hasPrefix("recent.")
                 || key.hasPrefix("snippet.") || key.hasPrefix("timeCalculator.")
+                || key.hasPrefix("textRule.") || key.hasPrefix("textRuleNote.")
                 || key.hasPrefix("recentsHidden.")
                 || key.hasPrefix("linkLocation.") || key == "newNoteParent"
         {
             if omittedKeys.contains(where: key.contains) { continue }
-            guard case .Scalar(let value) = try local.document.get(obj: .ROOT, key: key)
-            else { throw NotebookCatalogError.invalidDocument }
+            guard case .Scalar(let value) = try local.document.get(obj: .ROOT, key: key) else {
+                // A newer version may store a rule field in another form.
+                // Readers skip it, so it mustn't stop the notebook joining.
+                if key.hasPrefix("textRule") { continue }
+                throw NotebookCatalogError.invalidDocument
+            }
             if key != "newNoteParent", let existing = try candidate.document.get(obj: .ROOT, key: key),
                existing != .Scalar(value) { throw SyncError.identityConflict }
             try candidate.document.put(obj: .ROOT, key: key, value: value)
@@ -859,6 +951,29 @@ final class NotebookCatalogDocument {
         {
             guard incomingIDs.contains(where: { key.contains($0.uuidString) }),
                   try candidate.document.get(obj: .ROOT, key: key) == nil,
+                  case .Scalar(let value) = try other.document.get(obj: .ROOT, key: key)
+            else { continue }
+            try candidate.document.put(obj: .ROOT, key: key, value: value)
+        }
+        // Text rules belong to the whole notebook. The other notebook's rules
+        // come along; a rule this notebook has, or deleted, stays as it is
+        // here, field for field. A rule turned on for a note comes along only
+        // with that note.
+        let ownRules = Set(candidate.document.keys(obj: .ROOT).compactMap { key -> Substring? in
+            guard key.hasPrefix("textRule.") else { return nil }
+            return key.split(separator: ".", maxSplits: 2).dropFirst().first
+        })
+        for key in other.document.keys(obj: .ROOT) where
+            key.hasPrefix("textRule.") || key.hasPrefix("textRuleNote.")
+        {
+            if key.hasPrefix("textRule."),
+               let id = key.split(separator: ".", maxSplits: 2).dropFirst().first,
+               ownRules.contains(id) { continue }
+            if key.hasPrefix("textRuleNote.") {
+                guard let note = key.split(separator: ".").last.flatMap({ UUID(uuidString: String($0)) }),
+                      incomingIDs.contains(note) else { continue }
+            }
+            guard try candidate.document.get(obj: .ROOT, key: key) == nil,
                   case .Scalar(let value) = try other.document.get(obj: .ROOT, key: key)
             else { continue }
             try candidate.document.put(obj: .ROOT, key: key, value: value)

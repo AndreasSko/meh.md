@@ -500,7 +500,7 @@ private struct NotebookScenePresentation: ViewModifier {
             scene.rememberEditorPosition()
         }
         .alert(
-            "Couldn’t complete the action",
+            Text(scene.errorTitle ?? "Couldn’t complete the action"),
             isPresented: Binding(
                 get: { scene.errorMessage != nil },
                 set: { if !$0 { scene.errorMessage = nil } }

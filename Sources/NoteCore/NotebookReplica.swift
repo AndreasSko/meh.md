@@ -112,6 +112,10 @@ public final class NotebookReplica {
     @ObservationIgnored private var storedSnippetSourceIDs: Set<UUID> = []
     /// Notes that show time calculator results, a Labs experiment.
     public private(set) var timeCalculatorNoteIDs: Set<UUID> = []
+    /// Text rules in list order, a Labs experiment.
+    public private(set) var textRules: [NotebookTextRule] = []
+    /// For each rule, the notes it was turned on for.
+    public private(set) var textRuleNoteIDs: [UUID: Set<UUID>] = [:]
     public private(set) var recentNotes: [NotebookRecentNote] = []
     /// All eligible recent notes, with pins first and no ordinary-note cap.
     public private(set) var allRecentNotes: [NotebookRecentNote] = []
@@ -649,6 +653,81 @@ public final class NotebookReplica {
             guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
             let next = try catalog.fork()
             try next.setTimeCalculator(id, enabled: enabled)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    /// Adds a text rule, or saves changes to one.
+    public func saveTextRule(_ rule: NotebookTextRule) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.setTextRule(rule)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    /// Adds a rule at the end of the list. Its place is chosen inside the
+    /// write, so rules added meanwhile don't share it.
+    public func addTextRule(_ rule: NotebookTextRule) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            var added = rule
+            added.order = (try next.textRuleMetadata().rules.map(\.order).max() ?? -1) + 1
+            try next.setTextRule(added)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    /// Changes a rule as it is now in the catalog, so a field changed
+    /// meanwhile, perhaps on another device, isn't written back.
+    public func updateTextRule(
+        _ id: UUID, _ change: @escaping (inout NotebookTextRule) -> Void
+    ) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            guard var rule = try next.textRuleMetadata().rules.first(where: { $0.id == id })
+            else { throw NotebookCatalogError.itemNotFound }
+            change(&rule)
+            try next.setTextRule(rule)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    public func deleteTextRule(_ id: UUID) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.deleteTextRule(id)
+            try await self.persistCatalog(next)
+        }
+    }
+
+    /// Puts the rules in this order, keeping rules missing from `ids` after
+    /// them.
+    public func reorderTextRules(_ ids: [UUID]) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            let rules = try next.textRuleMetadata().rules
+            let ordered = ids.compactMap { id in rules.first { $0.id == id } }
+                + rules.filter { !ids.contains($0.id) }
+            for (index, var rule) in ordered.enumerated() {
+                rule.order = Double(index)
+                try next.setTextRule(rule)
+            }
+            try await self.persistCatalog(next)
+        }
+    }
+
+    /// Turns a rule that runs only in chosen notes on or off for one note.
+    public func setTextRule(_ ruleID: UUID, note noteID: UUID, enabled: Bool) async throws {
+        try await withCatalogWrite {
+            guard let catalog = self.catalog else { throw NotebookReplicaError.notJoined }
+            let next = try catalog.fork()
+            try next.setTextRule(ruleID, note: noteID, enabled: enabled)
             try await self.persistCatalog(next)
         }
     }
@@ -2367,6 +2446,10 @@ public final class NotebookReplica {
         storedSnippetSourceIDs = snippetMetadata.sources
         let notes = Set(nextPlacements.lazy.filter { $0.item.kind == .note }.map(\.item.id))
         timeCalculatorNoteIDs = try document.timeCalculatorNoteIDs().intersection(notes)
+        let textRuleMetadata = try document.textRuleMetadata()
+        if textRules != textRuleMetadata.rules { textRules = textRuleMetadata.rules }
+        let textRuleNotes = textRuleMetadata.noteIDs.mapValues { $0.intersection(notes) }
+        if textRuleNoteIDs != textRuleNotes { textRuleNoteIDs = textRuleNotes }
         defaultNewNoteParentID = try document.defaultNewNoteParentID()
         try updateRecentProjection(from: document, placements: nextPlacements)
         searchBodyGeneration &+= 1
@@ -2435,6 +2518,7 @@ public final class NotebookReplica {
         snippetSources = snippetsProjection.sources
         snippets = snippetsProjection.snippets
         timeCalculatorNoteIDs.subtract(rememberedDeletions)
+        textRuleNoteIDs = textRuleNoteIDs.mapValues { $0.subtracting(rememberedDeletions) }
         searchBodyGeneration &+= 1
     }
 

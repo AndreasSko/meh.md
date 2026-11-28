@@ -51,6 +51,9 @@ and the evidence collected along the way.
   and insertion-time variables.
 - [Time calculator](time-calculator.md): live time sums in a note, an
   experiment behind a Labs setting.
+- [Text rules](text-rules.md): scripts that show patterns like Bible
+  references as links or add details, without changing the note; a Labs
+  experiment.
 - [Widgets](widgets.md): Recents or one note on the Home Screen and the Mac
   desktop, and how the app shares notes with them.
 - [Create Note in Shortcuts](shortcuts.md): add a note from any app, and

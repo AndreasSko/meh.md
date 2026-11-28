@@ -153,6 +153,7 @@ enum MarkdownPresentation {
 
         let syntaxCache = suppliedSyntaxCache ?? Self.syntaxCache(for: textView)
         let text = syntaxCache.prepare(in: textStorage)
+        syntaxCache.updateTextRules(in: textStorage, livePreview: mode == .livePreview)
         let snapshot = MarkdownLivePreview.snapshot(for: textView)
         let presentation = syntaxCache.presentation(
             in: textStorage,
@@ -180,6 +181,7 @@ enum MarkdownPresentation {
             guard let textView else { return }
             refresh(textView, fontSize: fontSize, fontFamily: fontFamily, mode: mode)
         }
+        syntaxCache.presentationRefresh = syntaxCache.tableRefresh
         syntaxCache.isApplyingLayoutAttributes = true
         applyLayoutAttributes(
             to: textStorage,
@@ -191,7 +193,8 @@ enum MarkdownPresentation {
             livePreview: mode == .livePreview,
             undoManager: textView.undoManager,
             range: layoutRange,
-            tableLayout: syntaxCache.tableLayout
+            tableLayout: syntaxCache.tableLayout,
+            textRules: presentation.textRules
         )
         syntaxCache.isApplyingLayoutAttributes = false
         if textView.selectedRange() != selection {
@@ -210,6 +213,7 @@ enum MarkdownPresentation {
         if let textView = textView as? MarkdownTextView {
             textView.updateMarkdownTableScrollOverlays()
             MarkdownTimeCalculator.update(textView)
+            MarkdownTextRulePresentation.update(textView)
         }
     }
 
@@ -311,6 +315,7 @@ enum MarkdownPresentation {
 
         let syntaxCache = suppliedSyntaxCache ?? Self.syntaxCache(for: textView)
         let text = syntaxCache.prepare(in: textView.textStorage)
+        syntaxCache.updateTextRules(in: textView.textStorage, livePreview: mode == .livePreview)
         let snapshot = MarkdownLivePreview.snapshot(for: textView)
         let presentation = syntaxCache.presentation(
             in: textView.textStorage,
@@ -344,6 +349,7 @@ enum MarkdownPresentation {
             guard let textView else { return }
             refresh(textView, fontSize: fontSize, fontFamily: fontFamily, mode: mode)
         }
+        syntaxCache.presentationRefresh = syntaxCache.tableRefresh
         syntaxCache.isApplyingLayoutAttributes = true
         applyLayoutAttributes(
             to: textView.textStorage,
@@ -355,7 +361,8 @@ enum MarkdownPresentation {
             livePreview: mode == .livePreview,
             undoManager: textView.undoManager,
             range: layoutRange,
-            tableLayout: syntaxCache.tableLayout
+            tableLayout: syntaxCache.tableLayout,
+            textRules: presentation.textRules
         )
         syntaxCache.isApplyingLayoutAttributes = false
         if textView.selectedRange != selection {
@@ -373,6 +380,7 @@ enum MarkdownPresentation {
         if let textView = textView as? MarkdownTextView {
             textView.updateMarkdownTableScrollOverlays()
             MarkdownTimeCalculator.update(textView)
+            MarkdownTextRulePresentation.update(textView)
         }
     }
 
@@ -1060,7 +1068,8 @@ enum MarkdownPresentation {
         livePreview: Bool,
         undoManager: UndoManager?,
         range: NSRange,
-        tableLayout: MarkdownTableLayout?
+        tableLayout: MarkdownTableLayout?,
+        textRules: MarkdownTextRuleDecorations = .empty
     ) {
         let fullRange = NSRange(location: 0, length: range.length)
         func local(_ source: NSRange) -> NSRange? {
@@ -1198,6 +1207,9 @@ enum MarkdownPresentation {
                 value: PlatformColor.clear,
                 range: range
             )
+        }
+        if livePreview, !textRules.isEmpty {
+            applyTextRuleLayout(textRules, to: desired, range: range, bodyFont: bodyFont)
         }
         tableLayout?.apply(to: desired, sourceRange: range)
         #if os(iOS)
@@ -2353,6 +2365,10 @@ struct MarkdownRenderingPresentation {
         forEachRenderingSpan(intersecting: target) { span, attributes in
             append(span.range, attributes: attributes)
         }
+        // Text rules paint over Markdown, but hidden text stays hidden.
+        for (range, attributes) in textRules.renderingAttributes(intersecting: target) {
+            append(range, attributes: attributes)
+        }
         forEachHiddenRange(intersecting: target) {
             append($0, attributes: hiddenRenderingAttributes)
         }
@@ -2426,6 +2442,8 @@ struct MarkdownRenderingPresentation {
 
     let result: MarkdownSyntaxResult
     let previewRanges: MarkdownLivePreviewRanges
+    /// What text rules show, a Labs experiment.
+    var textRules = MarkdownTextRuleDecorations.empty
     let hiddenRanges: [NSRange]
     let hiddenRenderingAttributes: [NSAttributedString.Key: Any] = [
         .foregroundColor: PlatformColor.clear,
@@ -2766,6 +2784,73 @@ final class MarkdownSyntaxCache: NSObject {
             presentationIsCurrent = false
         }
     }
+    /// The editor's text rules, a Labs experiment. Results arrive later
+    /// from background queues and refresh the presentation then.
+    let textRules = MarkdownTextRuleSession()
+    private(set) var textRuleDecorations = MarkdownTextRuleDecorations.empty
+    private var isUpdatingTextRules = false
+    private var textRuleParse: (characters: UInt64, timeSums: Bool)?
+    private var textRuleRevision: UInt64 = 0
+    private var textRuleRefreshScheduled = false
+    /// Redoes the presentation with the current settings; set by refresh.
+    var presentationRefresh: (() -> Void)?
+    /// The inserted text the layout fragments drew last.
+    var drawnTextRuleInserts: [MarkdownTextRuleDecorations.Insert] = []
+
+    override init() {
+        super.init()
+        textRules.onChange = { [weak self] in self?.textRulesChanged() }
+    }
+
+    /// Lets the rules read the parsed text before the presentation uses
+    /// their decorations. Results already known apply right away.
+    func updateTextRules(in textStorage: NSTextStorage, livePreview: Bool) {
+        textRules.isActive = livePreview && !textRules.configurations.isEmpty
+        guard textRules.isActive || !textRuleDecorations.isEmpty else { return }
+        isUpdatingTextRules = true
+        defer { isUpdatingTextRules = false }
+        let text = prepare(in: textStorage)
+        // Blocks come from the parse, which also changes without an edit
+        // when the time calculator turns on or off.
+        let parse = (characterRevision, timeSums)
+        if textRuleParse.map({ $0 != parse }) ?? true {
+            textRuleParse = parse
+            textRuleRevision &+= 1
+        }
+        textRules.update(text: text, result: cachedResult!, revision: textRuleRevision)
+        textRulesChanged()
+    }
+
+    private func textRulesChanged() {
+        let next = textRules.isActive ? textRules.decorations : .empty
+        guard next != textRuleDecorations else { return }
+        let changed = next.changedRanges(from: textRuleDecorations)
+        textRuleDecorations = next
+        if let dirty = dirtyLayoutRange, let source = cachedText as NSString?,
+           source.length > 0 {
+            // Positions from before an edit may be past the end now. An
+            // insert has no length, but its paragraph needs new layout.
+            dirtyLayoutRange = changed.reduce(dirty) { result, range in
+                let location = min(range.location, source.length - 1)
+                let paragraph = source.paragraphRange(for: NSRange(
+                    location: location,
+                    length: max(0, min(NSMaxRange(range), source.length) - location)))
+                return result.length == 0 ? paragraph : NSUnionRange(result, paragraph)
+            }
+        }
+        presentationIsCurrent = false
+        cachedPreviewRanges = nil
+        cachedPreviewSnapshot = nil
+        cachedRenderingPresentation = nil
+        guard !isUpdatingTextRules, !textRuleRefreshScheduled else { return }
+        textRuleRefreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            textRuleRefreshScheduled = false
+            presentationRefresh?()
+        }
+    }
+
     private var storageSnapshot: String?
     private var snapshotRevision: UInt64?
     private var parsedStorageRevision: UInt64?
@@ -3056,10 +3141,10 @@ final class MarkdownSyntaxCache: NSObject {
            let cachedPreviewRanges {
             previewRanges = cachedPreviewRanges
         } else {
-            previewRanges = MarkdownLivePreview.ranges(
-                in: text,
-                result: result,
-                snapshot: snapshot
+            previewRanges = MarkdownTextRulePresentation.addingHides(
+                textRuleDecorations.hides,
+                to: MarkdownLivePreview.ranges(in: text, result: result, snapshot: snapshot),
+                in: text as NSString, snapshot: snapshot
             )
             cachedPreviewSnapshot = snapshot
             cachedPreviewRanges = previewRanges
@@ -3073,11 +3158,12 @@ final class MarkdownSyntaxCache: NSObject {
             renderingSyntaxIndex = syntaxIndex
             renderingSyntaxIndexBuildCount += 1
         }
-        let presentation = MarkdownRenderingPresentation(
+        var presentation = MarkdownRenderingPresentation(
             result: result,
             previewRanges: previewRanges,
             syntaxIndex: syntaxIndex
         )
+        presentation.textRules = textRuleDecorations
         cachedRenderingPresentation = presentation
         return presentation
     }
@@ -3308,5 +3394,95 @@ final class MarkdownSyntaxCache: NSObject {
             }
         }
         return column
+    }
+}
+
+// MARK: - Text rules
+
+extension MarkdownPresentation {
+    static func textRuleFont(
+        _ font: PlatformFont, style: MarkdownTextRuleDecoration.Style
+    ) -> PlatformFont {
+        switch style {
+        case .strong: strongFont(font)
+        case .emphasis: emphasisFont(font)
+        case .code: codeFont(pointSize: font.pointSize)
+        default: font
+        }
+    }
+
+    /// What text rules change in the layout: link underlines, fonts, and
+    /// room for inserted text inside a line. Colors are rendering
+    /// attributes, set by the presentation's rendering commands.
+    fileprivate static func applyTextRuleLayout(
+        _ rules: MarkdownTextRuleDecorations,
+        to desired: NSMutableAttributedString,
+        range: NSRange,
+        bodyFont: PlatformFont
+    ) {
+        func local(_ source: NSRange) -> NSRange? {
+            let intersection = NSIntersectionRange(source, range)
+            guard intersection.length > 0 else { return nil }
+            return NSRange(location: intersection.location - range.location,
+                           length: intersection.length)
+        }
+        for link in rules.links {
+            guard let local = local(link.range) else { continue }
+            desired.addAttributes([
+                .underlineColor: MehStyle.highlighterStroke,
+                .underlineStyle: NSUnderlineStyle.thick.rawValue,
+            ], range: local)
+        }
+        for style in rules.styles {
+            guard let local = local(style.range) else { continue }
+            switch style.style {
+            case .strong, .emphasis, .code:
+                desired.enumerateAttribute(.font, in: local) { value, run, _ in
+                    let font = value as? PlatformFont ?? bodyFont
+                    desired.addAttribute(.font, value: textRuleFont(font, style: style.style),
+                                         range: run)
+                }
+            case .strike:
+                desired.addAttributes([
+                    .strikethroughColor: secondaryTextColor,
+                    .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                ], range: local)
+            default:
+                break
+            }
+        }
+        let text = desired.string as NSString
+        for insert in rules.inserts {
+            let location = insert.location - range.location
+            guard location >= 0, location <= text.length else { continue }
+            let line = text.lineRange(for: NSRange(location: min(location, max(0, text.length - 1)),
+                                                   length: 0))
+            var lineEnd = NSMaxRange(line)
+            while lineEnd > line.location,
+                  text.character(at: lineEnd - 1) == 10 || text.character(at: lineEnd - 1) == 13 {
+                lineEnd -= 1
+            }
+            // At the end of a line the text goes into the free space after it.
+            guard location < lineEnd else { continue }
+            let fontLocation = location > line.location ? location - 1 : location
+            let font = textRuleFont(
+                desired.attribute(.font, at: fontLocation, effectiveRange: nil)
+                    as? PlatformFont ?? bodyFont,
+                style: insert.style)
+            let width = MarkdownTextRulePresentation.width(of: insert.text, font: font)
+            if location > line.location {
+                let kern = desired.attribute(.kern, at: location - 1, effectiveRange: nil)
+                    as? CGFloat ?? 0
+                desired.addAttribute(.kern, value: kern + width,
+                                     range: NSRange(location: location - 1, length: 1))
+            } else {
+                let current = desired.attribute(.paragraphStyle, at: location, effectiveRange: nil)
+                    as? NSParagraphStyle ?? bodyParagraphStyle(for: bodyFont)
+                guard let style = current.mutableCopy() as? NSMutableParagraphStyle else { continue }
+                style.firstLineHeadIndent += width
+                desired.addAttribute(.paragraphStyle, value: style,
+                                     range: NSRange(location: line.location, length: line.length))
+            }
+        }
     }
 }

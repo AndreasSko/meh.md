@@ -17,6 +17,8 @@ struct NotebookNoteEditor: View {
     var fontFamily: EditorFontFamily = .system
     var mode: MarkdownEditorMode = .source
     var timeCalculator = false
+    var textRules: [MarkdownTextRuleConfiguration] = []
+    var noteTitle = ""
     var isReading = false
     var knownLinkNames: Set<String>? = nil
     @State private var editError: String?
@@ -66,7 +68,9 @@ struct NotebookNoteEditor: View {
                     fontSize: fontSize,
                     fontFamily: fontFamily, mode: mode, palette: palette,
                     knownLinkNames: knownLinkNames,
-                    timeCalculator: timeCalculator
+                    timeCalculator: timeCalculator,
+                    textRules: textRules,
+                    noteTitle: noteTitle
                 )
                 .overlay {
                     // An empty page waits with a faint face until the first

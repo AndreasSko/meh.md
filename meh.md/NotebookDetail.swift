@@ -22,6 +22,8 @@ struct NotebookDetail: View {
         MarkdownEditorMode.livePreview.rawValue
     @AppStorage(MarkdownTimeCalculator.enabledKey, store: NotebookEditorPreferences.store)
     private var timeCalculatorLabs = false
+    @AppStorage(MarkdownTextRules.enabledKey, store: NotebookEditorPreferences.store)
+    private var textRulesLabs = false
     @AppStorage(Self.hidesControlsOnScrollKey, store: NotebookEditorPreferences.store)
     private var hidesControlsOnScroll = true
     @AppStorage(SpeakerTimer.enabledKey, store: NotebookEditorPreferences.store)
@@ -143,6 +145,13 @@ struct NotebookDetail: View {
                             mode: editorMode,
                             timeCalculator: timeCalculatorLabs
                                 && scene.replica.timeCalculatorNoteIDs.contains(selectedID),
+                            textRules: textRulesLabs ? NotebookTextRuleLoader.configurations(
+                                rules: scene.replica.textRules,
+                                noteIDs: scene.replica.textRuleNoteIDs, note: selectedID
+                            ) : [],
+                            noteTitle: scene.selectedPlacement.map {
+                                NotebookTextRuleLoader.title(of: $0.item.name)
+                            } ?? "",
                             isReading: scene.isReading,
                             knownLinkNames: scene.knownLinkNames
                         )
@@ -310,6 +319,30 @@ struct NotebookDetail: View {
         .accessibilityIdentifier("notebook-version-history")
     }
 
+    /// Rules that run only in chosen notes, each turned on or off here.
+    @ViewBuilder
+    private func textRuleToggles(selectedID: UUID, session: NoteSession) -> some View {
+        let rules = scene.replica.textRules.filter { $0.isEnabled && !$0.appliesToAllNotes }
+        if !rules.isEmpty {
+            Divider()
+            ForEach(rules) { rule in
+                Toggle(isOn: Binding(
+                    get: { scene.replica.textRuleNoteIDs[rule.id]?.contains(selectedID) == true },
+                    set: { enabled in
+                        scene.perform {
+                            try await scene.replica.setTextRule(
+                                rule.id, note: selectedID, enabled: enabled)
+                        }
+                    }
+                )) {
+                    Label(NotebookTextRuleLoader.name(of: rule), systemImage: "wand.and.sparkles")
+                }
+                .disabled(!session.isEditingEnabled || scene.busy)
+                .accessibilityIdentifier("notebook-text-rule-\(rule.id.uuidString)")
+            }
+        }
+    }
+
     private func readingToggle(session: NoteSession, title: LocalizedStringKey) -> some View {
         Toggle(isOn: Binding(
             get: { scene.isReading },
@@ -451,6 +484,9 @@ struct NotebookDetail: View {
                             }
                             .disabled(!session.isEditingEnabled || scene.busy)
                             .accessibilityIdentifier("notebook-time-calculator")
+                        }
+                        if textRulesLabs {
+                            textRuleToggles(selectedID: selectedID, session: session)
                         }
                     } label: {
                         Label("Editor Display", systemImage: "textformat")

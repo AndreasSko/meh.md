@@ -79,6 +79,10 @@ let package = Package(
                 "MarkdownPresentation.swift", "MarkdownTablePresentation.swift", "MarkdownSyntax.swift", "MyApp.swift",
                 "MehStyle.swift", "MehFace.swift",
                 "MarkdownHistoryMarks.swift", "MarkdownTimeCalculator.swift",
+                "MarkdownTextRule.swift", "MarkdownTextRuleBlocks.swift",
+                "MarkdownTextRuleRuntime.swift", "MarkdownTextRuleSession.swift",
+                "MarkdownTextRulePresentation.swift", "NotebookTextRulesView.swift",
+                "TextRules",
                 "NotebookAppDelegate.swift", "NotebookApplicationView.swift",
                 "NotebookQuickActionRequests.swift",
                 "NotebookWidgetSnapshotWriter.swift",
@@ -206,6 +210,7 @@ let package = Package(
                 "CreateNoteIntent.swift",
                 "iOS-iCloud.entitlements", "macOS-iCloud.entitlements",
                 "SpeakerTimer.swift", "SpeakerMode.swift", "SpeakerIslandLayout.swift",
+                "NotebookTextRulesView.swift",
             ],
             sources: [
                 "MarkdownEditor.swift",
@@ -225,8 +230,14 @@ let package = Package(
                 "MarkdownSyntax.swift",
                 "MarkdownHistoryMarks.swift",
                 "MarkdownTimeCalculator.swift",
+                "MarkdownTextRule.swift",
+                "MarkdownTextRuleBlocks.swift",
+                "MarkdownTextRuleRuntime.swift",
+                "MarkdownTextRuleSession.swift",
+                "MarkdownTextRulePresentation.swift",
                 "MehStyle.swift",
             ],
+            resources: [.copy("TextRules")],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         .testTarget(
