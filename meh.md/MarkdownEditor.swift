@@ -3202,8 +3202,18 @@ struct MarkdownEditor: UIViewRepresentable {
             }
         }
 
+        /// Locks or unlocks the note for Reading Mode.
+        private func applyEditing(to textView: UITextView) {
+            textView.isEditable = parent.allowsEditing
+            guard let nativeView = textView as? MarkdownTextView,
+                  nativeView.markdownIsReading != parent.isReading else { return }
+            nativeView.markdownIsReading = parent.isReading
+            if parent.isReading { textView.resignFirstResponder() }
+            // Live Preview reveals the caret's line only while editing.
+            schedulePresentationRefresh(for: textView)
+        }
+
         func update(parent: MarkdownEditor, textView: UITextView) {
-            let readingChanged = self.parent.isReading != parent.isReading
             if parent.isReadOnly,
                parent.initialPreviewPosition != self.parent.initialPreviewPosition
                 || parent.initialPreviewInsets != self.parent.initialPreviewInsets
@@ -3228,12 +3238,21 @@ struct MarkdownEditor: UIViewRepresentable {
                 attachNavigation(to: nativeView)
                 if nativeView.window != nil { parent.navigation?.didAttach() }
             }
-            textView.isEditable = parent.allowsEditing
-            if readingChanged {
-                (textView as? MarkdownTextView)?.markdownIsReading = parent.isReading
-                if parent.isReading { textView.resignFirstResponder() }
-                // Live Preview reveals the caret's line only while editing.
-                schedulePresentationRefresh(for: textView)
+            if textView.isFirstResponder,
+               (textView as? MarkdownTextView)?.markdownIsReading != parent.isReading {
+                // Changing the keyboard's bars makes UIKit lay out the
+                // toolbar and size the items this update adds, such as
+                // Speaker Mode's island. Inside the update, that sizing never
+                // finishes with a hardware keyboard on iPad, so the note
+                // locks or unlocks just after. The rest of the update runs
+                // again then, so a table cell ends once the note is locked.
+                DispatchQueue.main.async { [weak self, weak textView] in
+                    guard let self, let textView else { return }
+                    applyEditing(to: textView)
+                    update(parent: self.parent, textView: textView)
+                }
+            } else {
+                applyEditing(to: textView)
             }
             guard textView.markedTextRange == nil,
                   !((textView as? MarkdownTextView)?.markdownCellController.hasMarkedText ?? false)
